@@ -1,0 +1,61 @@
+version: "3"
+
+vars:
+  DEV_COFIG: ./docker/docker-compose.dev.yml
+  PROD_CONFIG: ./docker/docker-compose.prod.yml
+  ENV_FILE: .env
+
+tasks:
+  default:
+    desc: Print a greeting message
+    cmds:
+      - echo "{{.GREETING}}"
+    silent: true
+
+  devup:
+    desc: Start the development environment
+    cmds:
+      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} up
+
+  devdown:
+    desc: Stop the development environment
+    cmds:
+      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} down
+
+  devupd:
+    desc: Start the development environment in detached mode
+    cmds:
+      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} up -d
+
+  devrestart:
+    desc: Restart the development environment
+    cmds:
+      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} down
+      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} up
+
+  devreset:
+    desc: Reset the development environment
+    cmds:
+      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} down
+      - docker compose -f {{.DEV_COFIG}} down --rmi all
+      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} up --build
+
+  gen-env:
+    desc: Generate .env file
+    cmds:
+      - touch {{.ENV_FILE}}
+      - echo "APP_ENV=development" >> {{.ENV_FILE}}
+      - echo "LOG_LEVEL=info" >> {{.ENV_FILE}}
+      - echo "LOG_OUTPUT=standard" >> {{.ENV_FILE}}
+      - echo "LOG_STYLE=json" >> {{.ENV_FILE}}
+      - echo "SERVER_PORT=1323" >> {{.ENV_FILE}}
+  #
+  # transport-env:
+  #   desc: Send the .env file to production
+  #   cmds: 
+  #     - scp {{.ENV_FILE}} lightsail-api:~
+  #
+  # transport-compose:
+  #   desc: Send the docker-compose file to production
+  #   cmds: 
+  #     - scp {{.PROD_CONFIG}} lightsail-api:/opt/ingest/docker-compose.yml

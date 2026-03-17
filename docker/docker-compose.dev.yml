@@ -1,0 +1,14 @@
+services:
+  api:
+    env_file:
+      - ../.env
+    container_name: quicc-api
+    build:
+      context: ../backend
+      target: dev
+    restart: always
+    volumes:
+      - ../backend:/app
+    ports:
+      - "1323:1323"
+    
