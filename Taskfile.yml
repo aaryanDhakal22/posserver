@@ -40,6 +40,18 @@ tasks:
       - docker compose -f {{.DEV_COFIG}} down --rmi all
       - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} up --build
 
+  devmigrate:
+    desc: Run database migrations manually (requires postgres to be running)
+    cmds:
+      - goose -dir backend/internal/migrate/sql postgres "host=localhost port=5432 user={{.DB_USER}} password={{.DB_PASSWORD}} dbname={{.DB_NAME}} sslmode=disable" up
+    vars:
+      DB_USER:
+        sh: grep ^DB_USER {{.ENV_FILE}} | cut -d= -f2
+      DB_PASSWORD:
+        sh: grep ^DB_PASSWORD {{.ENV_FILE}} | cut -d= -f2
+      DB_NAME:
+        sh: grep ^DB_NAME {{.ENV_FILE}} | cut -d= -f2
+
   gen-env:
     desc: Generate .env file
     cmds:

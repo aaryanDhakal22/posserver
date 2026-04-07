@@ -1,9 +1,20 @@
 package transport
 
-import "github.com/labstack/echo/v5"
+import (
+	orderSvc "quiccpos/main/internal/app/order"
+	"quiccpos/main/internal/transport/handler"
 
-func AddRoutes(e *echo.Echo) {
-	e.GET("/", func(c *echo.Context) error {
-		return c.String(200, "Hello, World!")
-	})
+	"github.com/labstack/echo/v5"
+	"github.com/rs/zerolog"
+)
+
+func AddRoutes(e *echo.Echo, svc *orderSvc.Service, logger *zerolog.Logger) {
+	logger.Info().Msg("Adding routes")
+
+	orderHandler := handler.NewOrderHandler(svc, *logger)
+	orders := e.Group("/api/v1/orders")
+	orders.POST("", orderHandler.Create)
+	orders.GET("", orderHandler.GetOrders)
+	orders.GET("/latest", orderHandler.GetLatest)
+	orders.GET("/:id", orderHandler.GetByID)
 }

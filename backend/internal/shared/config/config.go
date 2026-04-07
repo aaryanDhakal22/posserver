@@ -36,12 +36,19 @@ type CacheConfig struct {
 	Host string
 	Port string
 }
+
+type SQSConfig struct {
+	QueueURL string
+	Region   string
+}
+
 type Config struct {
 	AppConfig      AppConfig
 	ServerConfig   ServerConfig
 	DatabaseConfig DatabaseConfig
 	LogConfig      LogConfig
 	CacheConfig    CacheConfig
+	SQSConfig      SQSConfig
 	logger         *zerolog.Logger
 }
 
@@ -74,12 +81,17 @@ func NewConfig(logger *zerolog.Logger) *Config {
 		Host: cfg.GetEnv("CACHE_HOST", false, "localhost"),
 		Port: cfg.GetEnv("CACHE_PORT", false, "6379"),
 	}
+	sqsConfig := SQSConfig{
+		QueueURL: cfg.GetEnv("SQS_QUEUE_URL", false, ""),
+		Region:   cfg.GetEnv("AWS_REGION", false, "us-east-1"),
+	}
 
 	cfg.AppConfig = appConfig
 	cfg.ServerConfig = serverConfig
 	cfg.DatabaseConfig = databaseConfig
 	cfg.LogConfig = logConfig
 	cfg.CacheConfig = cacheConfig
+	cfg.SQSConfig = sqsConfig
 
 	return &cfg
 }

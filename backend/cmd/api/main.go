@@ -1,42 +1,94 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+
+	awscfg "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/sqs"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/labstack/echo/v5"
+
+	orderSvc "quiccpos/main/internal/app/order"
+	"quiccpos/main/internal/infra/database/repositories"
+	sqsconsumer "quiccpos/main/internal/infra/sqs"
+	"quiccpos/main/internal/migrate"
 	"quiccpos/main/internal/shared/config"
 	"quiccpos/main/internal/shared/logger"
 	"quiccpos/main/internal/transport"
-
-	"github.com/labstack/echo/v5"
 )
 
 func main() {
-	// Create a temp logger
+	// Temp logger for bootstrap
 	tmpLogger := logger.TempLogger()
-
-	// Start the main function
 	tmpLogger.Info().Msg("\n\n ==== Starting API ==== \n\n")
 
-	// Get the config
+	// Config
 	cfgLogger := tmpLogger.With().Str("module", "config").Logger()
 	cfg := config.NewConfig(&cfgLogger)
 
-	// Create a default logger
+	// Main logger
 	lgr := logger.NewLogger(cfg.LogConfig.Level, nil, cfg.LogConfig.Style)
-
-	// Create a main module logger
 	mainLogger := lgr.With().Str("module", "main").Logger()
 
-	// Create a new Echo instance
-	mainLogger.Info().Msg("Creating Echo instance")
-	e := echo.New()
+	// Shared cancellable context — drives both the HTTP server and the SQS consumer.
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
 
-	// Add Default middlewares
-	transport.AddDefaultMiddlewares(e)
+	// PostgreSQL DSN
+	dsn := fmt.Sprintf(
+		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
+		cfg.DatabaseConfig.Host,
+		cfg.DatabaseConfig.Port,
+		cfg.DatabaseConfig.User,
+		cfg.DatabaseConfig.Password,
+		cfg.DatabaseConfig.Name,
+	)
 
-	// Add routes
-	transport.AddRoutes(e)
-
-	// Test test
-	if err := e.Start(":1323"); err != nil {
-		panic(err)
+	// Run database migrations before opening the pool.
+	mainLogger.Info().Msg("Running database migrations")
+	if err := migrate.Run(ctx, dsn); err != nil {
+		mainLogger.Fatal().Err(err).Msg("Failed to run database migrations")
 	}
+	mainLogger.Info().Msg("Database migrations complete")
+
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		mainLogger.Fatal().Err(err).Msg("Failed to connect to database")
+	}
+	defer pool.Close()
+	mainLogger.Info().Msg("Connected to database")
+
+	// Dependency injection
+	repo := repositories.NewOrderRepository(pool, lgr)
+	svc := orderSvc.NewOrderService(repo, lgr)
+
+	// SQS consumer (only started when SQS_QUEUE_URL is configured)
+	if cfg.SQSConfig.QueueURL != "" {
+		sqsLogger := lgr.With().Str("module", "sqs").Logger()
+		awsCfg, err := awscfg.LoadDefaultConfig(ctx,
+			awscfg.WithRegion(cfg.SQSConfig.Region),
+		)
+		if err != nil {
+			mainLogger.Fatal().Err(err).Msg("Failed to load AWS config")
+		}
+		sqsClient := sqs.NewFromConfig(awsCfg)
+		consumer := sqsconsumer.NewConsumer(sqsClient, cfg.SQSConfig.QueueURL, svc, sqsLogger)
+		go consumer.Start(ctx)
+		mainLogger.Info().Str("queue", cfg.SQSConfig.QueueURL).Msg("SQS consumer started")
+	} else {
+		mainLogger.Warn().Msg("SQS_QUEUE_URL not set — SQS consumer disabled")
+	}
+
+	// Echo HTTP server
+	e := echo.New()
+	tLogger := lgr.With().Str("module", "transport").Logger()
+	transport.AddDefaultMiddlewares(e, &tLogger)
+	transport.AddRoutes(e, svc, &tLogger)
+
+	serverLogger := lgr.With().Str("module", "server").Logger()
+	transport.StartServer(ctx, e, cfg, &serverLogger)
 }
