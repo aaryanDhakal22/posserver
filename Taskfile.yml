@@ -12,6 +12,18 @@ tasks:
       - echo "{{.GREETING}}"
     silent: true
 
+  produp:
+    desc: Start the production environment
+    cmds:
+      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} up
+
+  prodreset:
+    desc: Reset the production environment
+    cmds:
+      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} down
+      - docker compose -f {{.DEV_COFIG}} down --rmi all
+      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} up --build
+
   devup:
     desc: Start the development environment
     cmds:
