@@ -21,6 +21,7 @@
 ### Go Patch ###
 /vendor/
 /Godeps/
-./backend/tmp/
+backend/tmp/
+/tmp/
 
 CLAUDE.md
