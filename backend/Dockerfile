@@ -29,7 +29,7 @@ FROM builder AS prod
 
 COPY . .
 
-ARG MAIN=./cmd/server
+ARG MAIN=./cmd/api
 ARG BIN=app
 
 RUN --mount=type=cache,target=/go/pkg/mod \
