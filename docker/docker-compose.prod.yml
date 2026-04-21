@@ -22,8 +22,6 @@ services:
     build:
       context: ../backend
       target: runtime
-    env_file:
-      - ../.env
     environment:
       APP_ENV: prod
       DB_HOST: postgres
@@ -50,7 +48,7 @@ services:
       - proxy
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.posserver.rule=Host(`main.rndhkl.com`)"
+      - "traefik.http.routers.posserver.rule=Host(`main.quiccpos.com`)"
       - "traefik.http.routers.posserver.entrypoints=websecure"
       - "traefik.http.routers.posserver.tls=true"
       - "traefik.http.routers.posserver.tls.certresolver=cloudflare"
