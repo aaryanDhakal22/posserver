@@ -15,14 +15,30 @@ tasks:
   produp:
     desc: Start the production environment
     cmds:
-      - podman compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} up
+      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} up
+
+  proddown:
+    desc: Stop the production environment
+    cmds:
+      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} down
+
+  produpd:
+    desc: Start the production environment in detached mode
+    cmds:
+      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} up -d
+
+  prodrestart:
+    desc: Restart the production environment
+    cmds:
+      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} down
+      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} up
 
   prodreset:
     desc: Reset the production environment
     cmds:
-      - podman-compose -f {{.DEV_CONFIG}} down
-      - podman rmi -a -f
-      - podman-compose -f {{.DEV_CONFIG}} up --build
+      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} down
+      - docker compose -f {{.PROD_CONFIG}} down --rmi all
+      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} up --build
 
   devup:
     desc: Start the development environment
