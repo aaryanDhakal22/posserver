@@ -15,30 +15,30 @@ tasks:
   produp:
     desc: Start the production environment
     cmds:
-      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} up
+      - docker compose -f {{.PROD_CONFIG}}  up
 
   proddown:
     desc: Stop the production environment
     cmds:
-      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} down
+      - docker compose -f {{.PROD_CONFIG}}  down
 
   produpd:
     desc: Start the production environment in detached mode
     cmds:
-      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} up -d
+      - docker compose -f {{.PROD_CONFIG}}  up -d
 
   prodrestart:
     desc: Restart the production environment
     cmds:
-      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} down
-      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} up
+      - docker compose -f {{.PROD_CONFIG}}  down
+      - docker compose -f {{.PROD_CONFIG}}  up
 
   prodreset:
     desc: Reset the production environment
     cmds:
-      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} down
+      - docker compose -f {{.PROD_CONFIG}}  down
       - docker compose -f {{.PROD_CONFIG}} down --rmi all
-      - docker compose -f {{.PROD_CONFIG}} --env-file {{.ENV_FILE}} up --build
+      - docker compose -f {{.PROD_CONFIG}}  up --build
 
   devup:
     desc: Start the development environment
