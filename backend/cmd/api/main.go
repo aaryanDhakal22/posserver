@@ -3,8 +3,14 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
+	"quiccpos/main/internal/infra/database/repositories"
+	"quiccpos/main/internal/migrate"
+	"quiccpos/main/internal/shared/config"
+	"quiccpos/main/internal/shared/logger"
+	"quiccpos/main/internal/transport"
 	"syscall"
 
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
@@ -13,12 +19,8 @@ import (
 	"github.com/labstack/echo/v5"
 
 	orderSvc "quiccpos/main/internal/app/order"
-	"quiccpos/main/internal/infra/database/repositories"
+
 	sqsconsumer "quiccpos/main/internal/infra/sqs"
-	"quiccpos/main/internal/migrate"
-	"quiccpos/main/internal/shared/config"
-	"quiccpos/main/internal/shared/logger"
-	"quiccpos/main/internal/transport"
 )
 
 func main() {
@@ -85,6 +87,9 @@ func main() {
 
 	// Echo HTTP server
 	e := echo.New()
+	e.GET("/health", func(c *echo.Context) error {
+		return c.String(http.StatusOK, "OK")
+	})
 	tLogger := lgr.With().Str("module", "transport").Logger()
 	transport.AddDefaultMiddlewares(e, &tLogger)
 	transport.AddRoutes(e, svc, &tLogger)
