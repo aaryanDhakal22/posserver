@@ -1,7 +1,7 @@
 version: "3"
 
 vars:
-  DEV_COFIG: ./docker/docker-compose.dev.yml
+  DEV_CONFIG: ./docker/docker-compose.dev.yml
   PROD_CONFIG: ./docker/docker-compose.prod.yml
   ENV_FILE: .env
 
@@ -15,42 +15,42 @@ tasks:
   produp:
     desc: Start the production environment
     cmds:
-      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} up
+      - podman compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} up
 
   prodreset:
     desc: Reset the production environment
     cmds:
-      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} down
-      - docker compose -f {{.DEV_COFIG}} down --rmi all
-      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} up --build
+      - podman-compose -f {{.DEV_CONFIG}} down
+      - podman rmi -a -f
+      - podman-compose -f {{.DEV_CONFIG}} up --build
 
   devup:
     desc: Start the development environment
     cmds:
-      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} up
+      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} up
 
   devdown:
     desc: Stop the development environment
     cmds:
-      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} down
+      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} down
 
   devupd:
     desc: Start the development environment in detached mode
     cmds:
-      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} up -d
+      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} up -d
 
   devrestart:
     desc: Restart the development environment
     cmds:
-      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} down
-      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} up
+      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} down
+      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} up
 
   devreset:
     desc: Reset the development environment
     cmds:
-      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} down
-      - docker compose -f {{.DEV_COFIG}} down --rmi all
-      - docker compose -f {{.DEV_COFIG}} --env-file {{.ENV_FILE}} up --build
+      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} down
+      - docker compose -f {{.DEV_CONFIG}} down --rmi all
+      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} up --build
 
   devmigrate:
     desc: Run database migrations manually (requires postgres to be running)

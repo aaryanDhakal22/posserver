@@ -26,7 +26,6 @@ services:
       DB_HOST: postgres
     restart: unless-stopped
     volumes:
-      - ../backend:/src
       - ~/.aws:/root/.aws:ro
     ports:
       - "${SERVER_PORT:-1323}:1323"
