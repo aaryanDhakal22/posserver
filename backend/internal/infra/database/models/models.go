@@ -89,6 +89,7 @@ type Modifier struct {
 type Order struct {
 	Tver             pgtype.Int4   `json:"tver"`
 	Orderid          int32         `json:"orderid"`
+	Ordernumber      pgtype.Int4   `json:"ordernumber"`
 	Storeid          pgtype.Int4   `json:"storeid"`
 	Vendorstoreid    pgtype.Text   `json:"vendorstoreid"`
 	Storename        pgtype.Text   `json:"storename"`
@@ -104,6 +105,11 @@ type Order struct {
 	Customer         pgtype.Int4   `json:"customer"`
 	Deliveryaddress  pgtype.Int4   `json:"deliveryaddress"`
 	Deliveryprovider pgtype.Int4   `json:"deliveryprovider"`
+}
+
+type OrderNumberCounter struct {
+	ID    int32 `json:"id"`
+	Value int32 `json:"value"`
 }
 
 type Payment struct {

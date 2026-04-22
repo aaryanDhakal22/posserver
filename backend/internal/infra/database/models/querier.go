@@ -36,6 +36,8 @@ type Querier interface {
 	GetOrdersPage(ctx context.Context, arg GetOrdersPageParams) ([]Order, error)
 	GetPaymentsByOrderID(ctx context.Context, orderid pgtype.Int4) ([]Payment, error)
 	GetTaxesByOrderID(ctx context.Context, orderid pgtype.Int4) ([]Tax, error)
+	IncrementOrderNumber(ctx context.Context) (int32, error)
+	ResetOrderNumber(ctx context.Context) error
 	SetAuthKey(ctx context.Context, key string) error
 }
 

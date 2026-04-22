@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS delivery_providers (
 CREATE TABLE IF NOT EXISTS orders (
     TVer             integer,
     OrderID          integer PRIMARY KEY,
+    OrderNumber      integer,
     StoreID          integer,
     VendorStoreID    text,
     StoreName        text,
@@ -46,6 +47,12 @@ CREATE TABLE IF NOT EXISTS orders (
     Customer         integer REFERENCES customers(id),
     DeliveryAddress  integer REFERENCES delivery_addresses(id),
     DeliveryProvider integer REFERENCES delivery_providers(id)
+);
+
+CREATE TABLE IF NOT EXISTS order_number_counter (
+    id    INTEGER PRIMARY KEY DEFAULT 1,
+    value INTEGER NOT NULL DEFAULT 1099,
+    CONSTRAINT single_row CHECK (id = 1)
 );
 
 CREATE TABLE IF NOT EXISTS payments (

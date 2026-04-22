@@ -48,10 +48,16 @@ ON CONFLICT (Phone) DO UPDATE SET
 RETURNING id;
 
 -- name: CreateOrder :one
-INSERT INTO orders(TVer, OrderID, StoreID, VendorStoreID, StoreName, ServiceType, SubmittedDate, PrintDate, DeferredDate, IsTaxExempt, OrderTotal, BalanceOwing, Notes, Tip, Customer, DeliveryAddress, DeliveryProvider)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+INSERT INTO orders(TVer, OrderID, OrderNumber, StoreID, VendorStoreID, StoreName, ServiceType, SubmittedDate, PrintDate, DeferredDate, IsTaxExempt, OrderTotal, BalanceOwing, Notes, Tip, Customer, DeliveryAddress, DeliveryProvider)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 ON CONFLICT (OrderID) DO NOTHING
 RETURNING OrderID;
+
+-- name: IncrementOrderNumber :one
+UPDATE order_number_counter SET value = value + 1 WHERE id = 1 RETURNING value;
+
+-- name: ResetOrderNumber :exec
+UPDATE order_number_counter SET value = 1099 WHERE id = 1;
 
 -- name: GetAllOrders :many
 SELECT * FROM orders;

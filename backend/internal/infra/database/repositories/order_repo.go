@@ -75,8 +75,16 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 		log.Debug().Msg("no delivery provider")
 	}
 
-	// 4. Order row
-	_, err = q.CreateOrder(ctx, mapper.ToCreateOrderParams(o, customerID, addrID, providerID))
+	// 4. Order number (atomic increment; first order of day = 1100)
+	orderNumber, err := q.IncrementOrderNumber(ctx)
+	if err != nil {
+		log.Error().Err(err).Msg("failed to increment order number")
+		return fmt.Errorf("increment order number: %w", err)
+	}
+	log.Debug().Int32("order_number", orderNumber).Msg("order number assigned")
+
+	// 5. Order row
+	_, err = q.CreateOrder(ctx, mapper.ToCreateOrderParams(o, customerID, addrID, providerID, orderNumber))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// ON CONFLICT DO NOTHING returned no row — order already exists (duplicate SQS delivery).

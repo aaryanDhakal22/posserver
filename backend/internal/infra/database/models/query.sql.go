@@ -148,8 +148,8 @@ type CreateModifierParams struct {
 }
 
 const createOrder = `-- name: CreateOrder :one
-INSERT INTO orders(TVer, OrderID, StoreID, VendorStoreID, StoreName, ServiceType, SubmittedDate, PrintDate, DeferredDate, IsTaxExempt, OrderTotal, BalanceOwing, Notes, Tip, Customer, DeliveryAddress, DeliveryProvider)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+INSERT INTO orders(TVer, OrderID, OrderNumber, StoreID, VendorStoreID, StoreName, ServiceType, SubmittedDate, PrintDate, DeferredDate, IsTaxExempt, OrderTotal, BalanceOwing, Notes, Tip, Customer, DeliveryAddress, DeliveryProvider)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
 ON CONFLICT (OrderID) DO NOTHING
 RETURNING OrderID
 `
@@ -157,6 +157,7 @@ RETURNING OrderID
 type CreateOrderParams struct {
 	Tver             pgtype.Int4   `json:"tver"`
 	Orderid          int32         `json:"orderid"`
+	Ordernumber      pgtype.Int4   `json:"ordernumber"`
 	Storeid          pgtype.Int4   `json:"storeid"`
 	Vendorstoreid    pgtype.Text   `json:"vendorstoreid"`
 	Storename        pgtype.Text   `json:"storename"`
@@ -178,6 +179,7 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) (int32
 	row := q.db.QueryRow(ctx, createOrder,
 		arg.Tver,
 		arg.Orderid,
+		arg.Ordernumber,
 		arg.Storeid,
 		arg.Vendorstoreid,
 		arg.Storename,
@@ -254,7 +256,7 @@ type CreateTaxParams struct {
 }
 
 const getAllOrders = `-- name: GetAllOrders :many
-SELECT tver, orderid, storeid, vendorstoreid, storename, servicetype, submitteddate, printdate, deferreddate, istaxexempt, ordertotal, balanceowing, notes, tip, customer, deliveryaddress, deliveryprovider FROM orders
+SELECT tver, orderid, ordernumber, storeid, vendorstoreid, storename, servicetype, submitteddate, printdate, deferreddate, istaxexempt, ordertotal, balanceowing, notes, tip, customer, deliveryaddress, deliveryprovider FROM orders
 `
 
 func (q *Queries) GetAllOrders(ctx context.Context) ([]Order, error) {
@@ -269,6 +271,7 @@ func (q *Queries) GetAllOrders(ctx context.Context) ([]Order, error) {
 		if err := rows.Scan(
 			&i.Tver,
 			&i.Orderid,
+			&i.Ordernumber,
 			&i.Storeid,
 			&i.Vendorstoreid,
 			&i.Storename,
@@ -432,7 +435,7 @@ func (q *Queries) GetItemsByOrderID(ctx context.Context, orderid pgtype.Int4) ([
 }
 
 const getLatest = `-- name: GetLatest :one
-Select tver, orderid, storeid, vendorstoreid, storename, servicetype, submitteddate, printdate, deferreddate, istaxexempt, ordertotal, balanceowing, notes, tip, customer, deliveryaddress, deliveryprovider FROM orders ORDER BY OrderID DESC LIMIT 1
+Select tver, orderid, ordernumber, storeid, vendorstoreid, storename, servicetype, submitteddate, printdate, deferreddate, istaxexempt, ordertotal, balanceowing, notes, tip, customer, deliveryaddress, deliveryprovider FROM orders ORDER BY OrderID DESC LIMIT 1
 `
 
 func (q *Queries) GetLatest(ctx context.Context) (Order, error) {
@@ -441,6 +444,7 @@ func (q *Queries) GetLatest(ctx context.Context) (Order, error) {
 	err := row.Scan(
 		&i.Tver,
 		&i.Orderid,
+		&i.Ordernumber,
 		&i.Storeid,
 		&i.Vendorstoreid,
 		&i.Storename,
@@ -524,7 +528,7 @@ func (q *Queries) GetModifiersByItemID(ctx context.Context, itemid pgtype.Int4) 
 }
 
 const getOrderByID = `-- name: GetOrderByID :one
-SELECT tver, orderid, storeid, vendorstoreid, storename, servicetype, submitteddate, printdate, deferreddate, istaxexempt, ordertotal, balanceowing, notes, tip, customer, deliveryaddress, deliveryprovider FROM orders WHERE OrderID = $1
+SELECT tver, orderid, ordernumber, storeid, vendorstoreid, storename, servicetype, submitteddate, printdate, deferreddate, istaxexempt, ordertotal, balanceowing, notes, tip, customer, deliveryaddress, deliveryprovider FROM orders WHERE OrderID = $1
 `
 
 func (q *Queries) GetOrderByID(ctx context.Context, orderid int32) (Order, error) {
@@ -533,6 +537,7 @@ func (q *Queries) GetOrderByID(ctx context.Context, orderid int32) (Order, error
 	err := row.Scan(
 		&i.Tver,
 		&i.Orderid,
+		&i.Ordernumber,
 		&i.Storeid,
 		&i.Vendorstoreid,
 		&i.Storename,
@@ -553,7 +558,7 @@ func (q *Queries) GetOrderByID(ctx context.Context, orderid int32) (Order, error
 }
 
 const getOrdersPage = `-- name: GetOrdersPage :many
-SELECT tver, orderid, storeid, vendorstoreid, storename, servicetype, submitteddate, printdate, deferreddate, istaxexempt, ordertotal, balanceowing, notes, tip, customer, deliveryaddress, deliveryprovider FROM orders ORDER BY OrderID DESC LIMIT $1 OFFSET $2
+SELECT tver, orderid, ordernumber, storeid, vendorstoreid, storename, servicetype, submitteddate, printdate, deferreddate, istaxexempt, ordertotal, balanceowing, notes, tip, customer, deliveryaddress, deliveryprovider FROM orders ORDER BY OrderID DESC LIMIT $1 OFFSET $2
 `
 
 type GetOrdersPageParams struct {
@@ -573,6 +578,7 @@ func (q *Queries) GetOrdersPage(ctx context.Context, arg GetOrdersPageParams) ([
 		if err := rows.Scan(
 			&i.Tver,
 			&i.Orderid,
+			&i.Ordernumber,
 			&i.Storeid,
 			&i.Vendorstoreid,
 			&i.Storename,
@@ -660,6 +666,26 @@ func (q *Queries) GetTaxesByOrderID(ctx context.Context, orderid pgtype.Int4) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const incrementOrderNumber = `-- name: IncrementOrderNumber :one
+UPDATE order_number_counter SET value = value + 1 WHERE id = 1 RETURNING value
+`
+
+func (q *Queries) IncrementOrderNumber(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, incrementOrderNumber)
+	var value int32
+	err := row.Scan(&value)
+	return value, err
+}
+
+const resetOrderNumber = `-- name: ResetOrderNumber :exec
+UPDATE order_number_counter SET value = 1099 WHERE id = 1
+`
+
+func (q *Queries) ResetOrderNumber(ctx context.Context) error {
+	_, err := q.db.Exec(ctx, resetOrderNumber)
+	return err
 }
 
 const setAuthKey = `-- name: SetAuthKey :exec

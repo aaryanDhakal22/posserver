@@ -106,7 +106,7 @@ func ToMiscChargeParams(orderID int, charges []order.MiscCharge) []models.Create
 	return params
 }
 
-func ToCreateOrderParams(o *order.Order, customerID, addrID, providerID int32) models.CreateOrderParams {
+func ToCreateOrderParams(o *order.Order, customerID, addrID, providerID int32, orderNumber int32) models.CreateOrderParams {
 	tver, _ := strconv.Atoi(o.TVer)
 	var addrPg, providerPg pgtype.Int4
 	if addrID != 0 {
@@ -118,6 +118,7 @@ func ToCreateOrderParams(o *order.Order, customerID, addrID, providerID int32) m
 	return models.CreateOrderParams{
 		Tver:             Int32ToPg(int32(tver)),
 		Orderid:          int32(o.OrderID),
+		Ordernumber:      Int32ToPg(orderNumber),
 		Storeid:          Int32ToPg(int32(o.StoreID)),
 		Vendorstoreid:    StrToPg(o.VendorStoreID),
 		Storename:        StrToPg(o.StoreName),
@@ -304,6 +305,7 @@ func ToOrderDomain(
 	return order.Order{
 		TVer:             strconv.Itoa(int(o.Tver.Int32)),
 		OrderID:          int(o.Orderid),
+		OrderNumber:      int(o.Ordernumber.Int32),
 		StoreID:          int64(o.Storeid.Int32),
 		VendorStoreID:    o.Vendorstoreid.String,
 		StoreName:        o.Storename.String,

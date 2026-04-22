@@ -13,6 +13,7 @@ import "quiccpos/main/internal/domain/order"
 type Order struct {
 	TVer          string      `json:"tVer"`
 	OrderID       int         `json:"order_id"`
+	OrderNumber   int         `json:"order_number"`
 	StoreID       int64       `json:"store_id"`
 	VendorStoreID string      `json:"vendor_store_id"`
 	StoreName     string      `json:"store_name"`
@@ -122,6 +123,7 @@ func (d *Order) ToDomain() order.Order {
 	o := order.Order{
 		TVer:          d.TVer,
 		OrderID:       d.OrderID,
+		OrderNumber:   d.OrderNumber,
 		StoreID:       d.StoreID,
 		VendorStoreID: d.VendorStoreID,
 		StoreName:     d.StoreName,
@@ -232,6 +234,7 @@ func FromDomain(o order.Order) Order {
 	d := Order{
 		TVer:          o.TVer,
 		OrderID:       o.OrderID,
+		OrderNumber:   o.OrderNumber,
 		StoreID:       o.StoreID,
 		VendorStoreID: o.VendorStoreID,
 		StoreName:     o.StoreName,

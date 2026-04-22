@@ -42,8 +42,6 @@ func RequestLogger(logger *zerolog.Logger) echo.MiddlewareFunc {
 			logFn := reqLog.Info()
 			if status >= 500 {
 				logFn = reqLog.Error()
-			} else if status >= 400 {
-				logFn = reqLog.Warn()
 			}
 
 			logFn.

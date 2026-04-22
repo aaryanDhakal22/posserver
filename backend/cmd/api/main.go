@@ -8,7 +8,9 @@ import (
 	"os/signal"
 	authAppSvc "quiccpos/main/internal/app/auth"
 	orderSvc "quiccpos/main/internal/app/order"
+	"quiccpos/main/internal/infra/database/models"
 	"quiccpos/main/internal/infra/database/repositories"
+	"quiccpos/main/internal/infra/scheduler"
 	sqsconsumer "quiccpos/main/internal/infra/sqs"
 	"quiccpos/main/internal/migrate"
 	"quiccpos/main/internal/shared/config"
@@ -73,6 +75,11 @@ func main() {
 	if err != nil {
 		mainLogger.Fatal().Err(err).Msg("Failed to create SQS client")
 	}
+
+	// Start order number reset scheduler
+	scheduler.StartOrderNumberReset(ctx, func(c context.Context) error {
+		return models.New(pool).ResetOrderNumber(c)
+	}, lgr)
 
 	// Start SQS consumer
 	sqsConsumer := sqsconsumer.NewConsumer(sqsClient, cfg.SQSConfig.QueueURL, svc, lgr)

@@ -38,6 +38,7 @@ services:
       SQS_QUEUE_URL:
       SQS_ENDPOINT:
       ADMIN_PASSCODE:
+      TZ: America/New_York
     restart: unless-stopped
     volumes:
       - ../backend:/src

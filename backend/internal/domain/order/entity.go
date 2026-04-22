@@ -4,6 +4,7 @@ package order
 type Order struct {
 	TVer          string
 	OrderID       int
+	OrderNumber   int
 	StoreID       int64
 	VendorStoreID string
 	StoreName     string
