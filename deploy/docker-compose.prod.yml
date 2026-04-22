@@ -1,0 +1,114 @@
+name: quicc-prod
+
+services:
+  # ─────────────────────────────────────────────────────────
+  # Shared production database — volume is never touched by
+  # staging and persists across blue/green slot swaps.
+  # ─────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: quicc-prod-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - quicc_prod_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - proxy
+
+  # ─────────────────────────────────────────────────────────
+  # Blue slot — start with: docker compose --profile blue up
+  # Active when BLUE_PRIORITY > GREEN_PRIORITY
+  # ─────────────────────────────────────────────────────────
+  blue-api:
+    profiles: [blue]
+    container_name: quicc-blue-api
+    image: ghcr.io/aaryandhakal22/posserver:${BLUE_TAG:-prod-latest}
+    environment:
+      APP_ENV: prod
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER}
+      DB_NAME: ${DB_NAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      SERVER_PORT: 1323
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_OUTPUT: standard
+      LOG_STYLE: json
+      TZ: America/New_York
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL}
+      SQS_ENDPOINT: ${SQS_ENDPOINT:-}
+      ADMIN_PASSCODE: ${ADMIN_PASSCODE}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.quicc-blue.rule=Host(`main.quiccpos.com`)"
+      - "traefik.http.routers.quicc-blue.entrypoints=websecure"
+      - "traefik.http.routers.quicc-blue.tls=true"
+      - "traefik.http.routers.quicc-blue.tls.certresolver=cloudflare"
+      - "traefik.http.routers.quicc-blue.priority=${BLUE_PRIORITY:-100}"
+      - "traefik.http.services.quicc-blue.loadbalancer.server.port=1323"
+
+  # ─────────────────────────────────────────────────────────
+  # Green slot — start with: docker compose --profile green up
+  # Active when GREEN_PRIORITY > BLUE_PRIORITY
+  # ─────────────────────────────────────────────────────────
+  green-api:
+    profiles: [green]
+    container_name: quicc-green-api
+    image: ghcr.io/aaryandhakal22/posserver:${GREEN_TAG:-prod-latest}
+    environment:
+      APP_ENV: prod
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER}
+      DB_NAME: ${DB_NAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      SERVER_PORT: 1323
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_OUTPUT: standard
+      LOG_STYLE: json
+      TZ: America/New_York
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL}
+      SQS_ENDPOINT: ${SQS_ENDPOINT:-}
+      ADMIN_PASSCODE: ${ADMIN_PASSCODE}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.quicc-green.rule=Host(`main.quiccpos.com`)"
+      - "traefik.http.routers.quicc-green.entrypoints=websecure"
+      - "traefik.http.routers.quicc-green.tls=true"
+      - "traefik.http.routers.quicc-green.tls.certresolver=cloudflare"
+      - "traefik.http.routers.quicc-green.priority=${GREEN_PRIORITY:-1}"
+      - "traefik.http.services.quicc-green.loadbalancer.server.port=1323"
+
+networks:
+  proxy:
+    external: true
+
+volumes:
+  quicc_prod_postgres:
+    name: quicc_prod_postgres

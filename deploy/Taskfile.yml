@@ -1,0 +1,118 @@
+version: "3"
+
+vars:
+  STAGING_COMPOSE: docker-compose.staging.yml
+  PROD_COMPOSE:    docker-compose.prod.yml
+  PROD_ENV:        .env.prod
+  STAG_ENV:        .env.stag
+  STATE_FILE:      .state
+
+# Doppler tokens are stored in two files on the host (chmod 600):
+#   .doppler-prod-token  — service token scoped to Doppler config "prd"
+#   .doppler-stag-token  — service token scoped to Doppler config "stg"
+# Slot-control vars (tags, priorities) live in .env.prod / .env.stag.
+# All secrets (DB creds, AWS keys, ADMIN_PASSCODE, etc.) come from Doppler.
+
+tasks:
+  # ─────────────────────────────────────────────────────────────────────────
+  # Staging
+  # ─────────────────────────────────────────────────────────────────────────
+  staging-up:
+    desc: Start the staging stack (detached)
+    cmds:
+      - DOPPLER_TOKEN=$(cat .doppler-stag-token) doppler run -- docker compose -f {{.STAGING_COMPOSE}} --env-file {{.STAG_ENV}} up -d
+
+  staging-down:
+    desc: Stop the staging stack
+    cmds:
+      - DOPPLER_TOKEN=$(cat .doppler-stag-token) doppler run -- docker compose -f {{.STAGING_COMPOSE}} --env-file {{.STAG_ENV}} down
+
+  staging-restart:
+    desc: Restart the staging API (without recreating postgres)
+    cmds:
+      - DOPPLER_TOKEN=$(cat .doppler-stag-token) doppler run -- docker compose -f {{.STAGING_COMPOSE}} --env-file {{.STAG_ENV}} restart api
+
+  staging-pull:
+    desc: Pull latest staging image and recreate the API container
+    cmds:
+      - DOPPLER_TOKEN=$(cat .doppler-stag-token) doppler run -- docker compose -f {{.STAGING_COMPOSE}} --env-file {{.STAG_ENV}} pull api
+      - DOPPLER_TOKEN=$(cat .doppler-stag-token) doppler run -- docker compose -f {{.STAGING_COMPOSE}} --env-file {{.STAG_ENV}} up -d --no-deps api
+
+  staging-logs:
+    desc: "Tail staging logs. Pass service as arg: task staging-logs -- api"
+    cmds:
+      - DOPPLER_TOKEN=$(cat .doppler-stag-token) doppler run -- docker compose -f {{.STAGING_COMPOSE}} --env-file {{.STAG_ENV}} logs -f {{.CLI_ARGS}}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Production (blue-green)
+  # ─────────────────────────────────────────────────────────────────────────
+  prod-up:
+    desc: Start the active prod slot + postgres (reads .state for active slot)
+    vars:
+      SLOT:
+        sh: cat {{.STATE_FILE}} 2>/dev/null || echo "blue"
+    cmds:
+      - DOPPLER_TOKEN=$(cat .doppler-prod-token) doppler run -- docker compose -f {{.PROD_COMPOSE}} --env-file {{.PROD_ENV}} up -d postgres
+      - DOPPLER_TOKEN=$(cat .doppler-prod-token) doppler run -- docker compose -f {{.PROD_COMPOSE}} --env-file {{.PROD_ENV}} --profile {{.SLOT}} up -d --no-deps {{.SLOT}}-api
+
+  prod-down:
+    desc: Stop all production containers (both slots + postgres)
+    cmds:
+      - DOPPLER_TOKEN=$(cat .doppler-prod-token) doppler run -- docker compose -f {{.PROD_COMPOSE}} --env-file {{.PROD_ENV}} --profile blue --profile green down
+
+  prod-restart:
+    desc: Restart the active prod API container
+    vars:
+      SLOT:
+        sh: cat {{.STATE_FILE}} 2>/dev/null || echo "blue"
+    cmds:
+      - DOPPLER_TOKEN=$(cat .doppler-prod-token) doppler run -- docker compose -f {{.PROD_COMPOSE}} --env-file {{.PROD_ENV}} restart {{.SLOT}}-api
+
+  prod-logs:
+    desc: Tail active prod slot logs
+    vars:
+      SLOT:
+        sh: cat {{.STATE_FILE}} 2>/dev/null || echo "blue"
+    cmds:
+      - DOPPLER_TOKEN=$(cat .doppler-prod-token) doppler run -- docker compose -f {{.PROD_COMPOSE}} --env-file {{.PROD_ENV}} logs -f {{.SLOT}}-api
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Deploy & swap
+  # ─────────────────────────────────────────────────────────────────────────
+  deploy:
+    desc: "Blue-green deploy. Provide image tag: task deploy IMAGE=prod-a1b2c3d"
+    cmds:
+      - ./deploy.sh {{.IMAGE}}
+    requires:
+      vars: [IMAGE]
+
+  swap:
+    desc: Swap active/inactive slots using the image already in the inactive slot
+    vars:
+      CURRENT_TAG:
+        sh: "grep ^$(cat {{.STATE_FILE}} 2>/dev/null || echo BLUE | tr '[:lower:]' '[:upper:]')_TAG {{.PROD_ENV}} | cut -d= -f2"
+    cmds:
+      - ./deploy.sh {{.CURRENT_TAG}}
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Status
+  # ─────────────────────────────────────────────────────────────────────────
+  status:
+    desc: Show active slot, image tags, and container states
+    silent: true
+    vars:
+      ACTIVE:
+        sh: cat {{.STATE_FILE}} 2>/dev/null || echo "blue (default)"
+    cmds:
+      - echo ""
+      - echo "━━━━━━━━━━━━━━━━━━━━━  Quicc Host Status  ━━━━━━━━━━━━━━━━━━━━━"
+      - 'echo "Active prod slot  : {{.ACTIVE}}"'
+      - echo ""
+      - echo "── Image tags ──────────────────────────────────────────────────"
+      - grep -E "^(BLUE|GREEN)_TAG=" {{.PROD_ENV}} || true
+      - grep -E "^STAGING_TAG=" {{.STAG_ENV}} || true
+      - echo ""
+      - echo "── Running containers ──────────────────────────────────────────"
+      - 'docker ps --format "table {{`{{.Names}}\t{{.Image}}\t{{.Status}}`}}" --filter "name=quicc-" || true'
+      - echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      - echo ""

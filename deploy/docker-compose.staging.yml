@@ -1,0 +1,63 @@
+name: quicc-staging
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: quicc-staging-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - quicc_staging_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - proxy
+
+  api:
+    container_name: quicc-staging-api
+    image: ghcr.io/aaryandhakal22/posserver:${STAGING_TAG:-staging-latest}
+    environment:
+      APP_ENV: staging
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER}
+      DB_NAME: ${DB_NAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      SERVER_PORT: 1323
+      LOG_LEVEL: debug
+      LOG_OUTPUT: standard
+      LOG_STYLE: json
+      TZ: America/New_York
+      AWS_REGION: ${AWS_REGION}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL}
+      SQS_ENDPOINT: ${SQS_ENDPOINT:-}
+      ADMIN_PASSCODE: ${ADMIN_PASSCODE}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - proxy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.quicc-staging.rule=Host(`staging.quiccpos.com`)"
+      - "traefik.http.routers.quicc-staging.entrypoints=websecure"
+      - "traefik.http.routers.quicc-staging.tls=true"
+      - "traefik.http.routers.quicc-staging.tls.certresolver=cloudflare"
+      - "traefik.http.services.quicc-staging.loadbalancer.server.port=1323"
+
+networks:
+  proxy:
+    external: true
+
+volumes:
+  quicc_staging_postgres:
+    name: quicc_staging_postgres

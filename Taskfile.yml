@@ -2,86 +2,56 @@ version: "3"
 
 vars:
   DEV_CONFIG: ./docker/docker-compose.dev.yml
-  PROD_CONFIG: ./docker/docker-compose.prod.yml
   ENV_FILE: .env
 
 tasks:
-  default:
-    desc: Print a greeting message
-    cmds:
-      - echo "{{.GREETING}}"
-    silent: true
-
-  produp:
-    desc: Start the production environment
-    cmds:
-      - doppler run -- docker compose -f {{.PROD_CONFIG}}  up
-
-  proddown:
-    desc: Stop the production environment
-    cmds:
-      - doppler run -- docker compose -f {{.PROD_CONFIG}}  down
-
-  produpd:
-    desc: Start the production environment in detached mode
-    cmds:
-      - doppler run -- docker compose -f {{.PROD_CONFIG}}  up -d
-
-  prodrestart:
-    desc: Restart the production environment
-    cmds:
-      - doppler run -- docker compose -f {{.PROD_CONFIG}}  down
-      - doppler run -- docker compose -f {{.PROD_CONFIG}}  up
-
-  prodreset:
-    desc: Reset the production environment
-    cmds:
-      - doppler run -- docker compose -f {{.PROD_CONFIG}}  down
-      - doppler run -- docker compose -f {{.PROD_CONFIG}} down --rmi all
-      - doppler run -- docker compose -f {{.PROD_CONFIG}}  up --build
-
   devup:
     desc: Start the development environment
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}}  up
+      - doppler run -- docker compose -f {{.DEV_CONFIG}} up
 
   devdown:
     desc: Stop the development environment
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}}  down
+      - doppler run -- docker compose -f {{.DEV_CONFIG}} down
 
   devupd:
     desc: Start the development environment in detached mode
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}}  up -d
+      - doppler run -- docker compose -f {{.DEV_CONFIG}} up -d
 
   devrestart:
     desc: Restart the development environment
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}}  down
-      - doppler run -- docker compose -f {{.DEV_CONFIG}}  up
+      - doppler run -- docker compose -f {{.DEV_CONFIG}} down
+      - doppler run -- docker compose -f {{.DEV_CONFIG}} up
 
   devreset:
-    desc: Reset the development environment
+    desc: Reset the development environment (removes containers and images)
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}}  down
+      - doppler run -- docker compose -f {{.DEV_CONFIG}} down
       - doppler run -- docker compose -f {{.DEV_CONFIG}} down --rmi all
-      - doppler run -- docker compose -f {{.DEV_CONFIG}}  up --build
+      - doppler run -- docker compose -f {{.DEV_CONFIG}} up --build
 
   dev-del-volumes:
-    desc: Delete all volumes
+    desc: Delete all volumes (wipes Postgres data)
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}}  down -v
+      - doppler run -- docker compose -f {{.DEV_CONFIG}} down -v
 
   dev-config:
-    desc: See all the configurations
+    desc: Print the resolved docker-compose config
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}}  config
+      - doppler run -- docker compose -f {{.DEV_CONFIG}} config
 
   dev-logs:
-    desc: See logs of the containers passed as argument
+    desc: "Tail logs for a service: task dev-logs -- api"
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}}  logs {{.CLI_ARGS}}
+      - doppler run -- docker compose -f {{.DEV_CONFIG}} logs {{.CLI_ARGS}}
+
+  transport-deploy:
+    desc: Transport deploy folder to the server
+    cmds:
+      - scp -r ./deploy/. homelab@zephyrus-prod:/srv/containers/posserver/
 
   devmigrate:
     desc: Run database migrations manually (requires postgres to be running)
@@ -94,23 +64,3 @@ tasks:
         sh: grep ^DB_PASSWORD {{.ENV_FILE}} | cut -d= -f2
       DB_NAME:
         sh: grep ^DB_NAME {{.ENV_FILE}} | cut -d= -f2
-
-  gen-env:
-    desc: Generate .env file
-    cmds:
-      - touch {{.ENV_FILE}}
-      - echo "APP_ENV=development" >> {{.ENV_FILE}}
-      - echo "LOG_LEVEL=info" >> {{.ENV_FILE}}
-      - echo "LOG_OUTPUT=standard" >> {{.ENV_FILE}}
-      - echo "LOG_STYLE=json" >> {{.ENV_FILE}}
-      - echo "SERVER_PORT=1323" >> {{.ENV_FILE}}
-  #
-  # transport-env:
-  #   desc: Send the .env file to production
-  #   cmds: 
-  #     - scp {{.ENV_FILE}} lightsail-api:~
-  #
-  # transport-compose:
-  #   desc: Send the docker-compose file to production
-  #   cmds: 
-  #     - scp {{.PROD_CONFIG}} lightsail-api:/opt/ingest/docker-compose.yml
