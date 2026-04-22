@@ -8,15 +8,23 @@ import (
 	"github.com/rs/zerolog"
 )
 
-type Service struct {
-	repo   order.OrderRepository
-	logger zerolog.Logger
+// OrderPublisher is satisfied by the SSE broker. It is nil-safe — the server
+// works without an agent connected.
+type OrderPublisher interface {
+	PublishOrder(o order.Order)
 }
 
-func NewOrderService(repo order.OrderRepository, logger zerolog.Logger) *Service {
+type Service struct {
+	repo      order.OrderRepository
+	publisher OrderPublisher
+	logger    zerolog.Logger
+}
+
+func NewOrderService(repo order.OrderRepository, publisher OrderPublisher, logger zerolog.Logger) *Service {
 	return &Service{
-		repo:   repo,
-		logger: logger.With().Str("module", "order-service").Logger(),
+		repo:      repo,
+		publisher: publisher,
+		logger:    logger.With().Str("module", "order-service").Logger(),
 	}
 }
 
@@ -30,6 +38,11 @@ func (s *Service) Create(ctx context.Context, o *order.Order) error {
 	}
 
 	log.Debug().Int("order_id", o.OrderID).Msg("Create succeeded")
+
+	if s.publisher != nil {
+		s.publisher.PublishOrder(*o)
+	}
+
 	return nil
 }
 

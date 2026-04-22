@@ -10,11 +10,17 @@ import (
 	"github.com/rs/zerolog"
 )
 
-func AddRoutes(e *echo.Echo, svc *orderSvc.Service, authSvc *authAppSvc.Service, adminPasscode string, logger *zerolog.Logger) {
+type SSEBroker interface {
+	Subscribe() (chan []byte, func())
+}
+
+func AddRoutes(e *echo.Echo, svc *orderSvc.Service, authSvc *authAppSvc.Service, broker SSEBroker, adminPasscode string, logger *zerolog.Logger) {
 	logger.Info().Msg("Adding routes")
 
 	authHandler := handler.NewAuthHandler(authSvc, adminPasscode, *logger)
 	e.POST("/api/v1/auth/key", authHandler.SetKey)
+
+	sseHandler := handler.NewSSEHandler(broker, *logger)
 
 	orderHandler := handler.NewOrderHandler(svc, *logger)
 	orders := e.Group("/api/v1/orders")
@@ -23,4 +29,8 @@ func AddRoutes(e *echo.Echo, svc *orderSvc.Service, authSvc *authAppSvc.Service,
 	orders.GET("", orderHandler.GetOrders)
 	orders.GET("/latest", orderHandler.GetLatest)
 	orders.GET("/:id", orderHandler.GetByID)
+
+	events := e.Group("/api/v1/events")
+	events.Use(appMiddleware.APIKeyAuth(authSvc))
+	events.GET("/orders", sseHandler.StreamOrders)
 }

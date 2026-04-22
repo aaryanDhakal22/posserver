@@ -11,6 +11,7 @@ import (
 	"quiccpos/main/internal/infra/database/models"
 	"quiccpos/main/internal/infra/database/repositories"
 	"quiccpos/main/internal/infra/scheduler"
+	sseBroker "quiccpos/main/internal/infra/sse"
 	sqsconsumer "quiccpos/main/internal/infra/sqs"
 	"quiccpos/main/internal/migrate"
 	"quiccpos/main/internal/shared/config"
@@ -23,23 +24,19 @@ import (
 )
 
 func main() {
-	// Temp logger for bootstrap
 	tmpLogger := logger.TempLogger()
 	tmpLogger.Info().Msg("\n\n ==== Starting API ==== \n\n")
 
-	// Config
 	cfgLogger := tmpLogger.With().Str("module", "config").Logger()
 	cfg := config.NewConfig(&cfgLogger)
 
-	// Main logger
 	lgr := logger.NewLogger(cfg.LogConfig.Level, nil, cfg.LogConfig.Style)
 	mainLogger := lgr.With().Str("module", "main").Logger()
 
-	// Shared cancellable context — drives both the HTTP server and the SQS consumer.
+	// Shared cancellable context — drives the HTTP server, SQS consumer, and SSE broker.
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// PostgreSQL DSN
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
 		cfg.DatabaseConfig.Host,
@@ -49,7 +46,6 @@ func main() {
 		cfg.DatabaseConfig.Name,
 	)
 
-	// Run database migrations before opening the pool.
 	mainLogger.Info().Msg("Running database migrations")
 	if err := migrate.Run(ctx, dsn); err != nil {
 		mainLogger.Fatal().Err(err).Msg("Failed to run database migrations")
@@ -63,36 +59,35 @@ func main() {
 	defer pool.Close()
 	mainLogger.Info().Msg("Connected to database")
 
+	// SSE broker — fans out new orders to connected agents.
+	broker := sseBroker.New()
+
 	// Dependency injection
 	repo := repositories.NewOrderRepository(pool, lgr)
-	svc := orderSvc.NewOrderService(repo, lgr)
+	svc := orderSvc.NewOrderService(repo, broker, lgr)
 
 	authRepo := repositories.NewAuthKeyRepository(pool, lgr)
 	authService := authAppSvc.NewAuthKeyService(authRepo, lgr)
 
-	// Setup SQS client
 	sqsClient, err := sqsconsumer.NewSQSClient(ctx, cfg, lgr)
 	if err != nil {
 		mainLogger.Fatal().Err(err).Msg("Failed to create SQS client")
 	}
 
-	// Start order number reset scheduler
 	scheduler.StartOrderNumberReset(ctx, func(c context.Context) error {
 		return models.New(pool).ResetOrderNumber(c)
 	}, lgr)
 
-	// Start SQS consumer
 	sqsConsumer := sqsconsumer.NewConsumer(sqsClient, cfg.SQSConfig.QueueURL, svc, lgr)
 	go sqsConsumer.Start(ctx)
 
-	// Echo HTTP server
 	e := echo.New()
 	e.GET("/health", func(c *echo.Context) error {
 		return c.String(http.StatusOK, "OK")
 	})
 	tLogger := lgr.With().Str("module", "transport").Logger()
 	transport.AddDefaultMiddlewares(e, &tLogger)
-	transport.AddRoutes(e, svc, authService, cfg.AppConfig.AdminPasscode, &tLogger)
+	transport.AddRoutes(e, svc, authService, broker, cfg.AppConfig.AdminPasscode, &tLogger)
 
 	serverLogger := lgr.With().Str("module", "server").Logger()
 	transport.StartServer(ctx, e, cfg, &serverLogger)
