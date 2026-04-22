@@ -23,6 +23,12 @@ type CreateCouponParams struct {
 const createCustomer = `-- name: CreateCustomer :one
 INSERT INTO customers(FirstName, LastName, Company, Phone, Ext, Email)
 VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (Phone) DO UPDATE SET
+    FirstName = EXCLUDED.FirstName,
+    LastName  = EXCLUDED.LastName,
+    Company   = EXCLUDED.Company,
+    Ext       = EXCLUDED.Ext,
+    Email     = EXCLUDED.Email
 RETURNING id
 `
 
@@ -83,6 +89,10 @@ func (q *Queries) CreateDeliveryAddress(ctx context.Context, arg CreateDeliveryA
 const createDeliveryProvider = `-- name: CreateDeliveryProvider :one
 INSERT INTO delivery_providers(ProviderName, Status, DeliveryID, TrackingURL, PickupDate)
 VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (DeliveryID) DO UPDATE SET
+    Status      = EXCLUDED.Status,
+    TrackingURL = EXCLUDED.TrackingURL,
+    PickupDate  = EXCLUDED.PickupDate
 RETURNING id
 `
 
@@ -140,6 +150,7 @@ type CreateModifierParams struct {
 const createOrder = `-- name: CreateOrder :one
 INSERT INTO orders(TVer, OrderID, StoreID, VendorStoreID, StoreName, ServiceType, SubmittedDate, PrintDate, DeferredDate, IsTaxExempt, OrderTotal, BalanceOwing, Notes, Tip, Customer, DeliveryAddress, DeliveryProvider)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+ON CONFLICT (OrderID) DO NOTHING
 RETURNING OrderID
 `
 
@@ -282,6 +293,17 @@ func (q *Queries) GetAllOrders(ctx context.Context) ([]Order, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const getAuthKey = `-- name: GetAuthKey :one
+SELECT key FROM auth_keys WHERE id = 1
+`
+
+func (q *Queries) GetAuthKey(ctx context.Context) (string, error) {
+	row := q.db.QueryRow(ctx, getAuthKey)
+	var key string
+	err := row.Scan(&key)
+	return key, err
 }
 
 const getCouponsByOrderID = `-- name: GetCouponsByOrderID :many
@@ -638,4 +660,14 @@ func (q *Queries) GetTaxesByOrderID(ctx context.Context, orderid pgtype.Int4) ([
 		return nil, err
 	}
 	return items, nil
+}
+
+const setAuthKey = `-- name: SetAuthKey :exec
+INSERT INTO auth_keys(id, key) VALUES (1, $1)
+ON CONFLICT (id) DO UPDATE SET key = EXCLUDED.key
+`
+
+func (q *Queries) SetAuthKey(ctx context.Context, key string) error {
+	_, err := q.db.Exec(ctx, setAuthKey, key)
+	return err
 }

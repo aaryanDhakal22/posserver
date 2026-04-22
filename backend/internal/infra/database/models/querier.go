@@ -23,6 +23,7 @@ type Querier interface {
 	CreateSingleItem(ctx context.Context, arg CreateSingleItemParams) (int32, error)
 	CreateTax(ctx context.Context, arg []CreateTaxParams) (int64, error)
 	GetAllOrders(ctx context.Context) ([]Order, error)
+	GetAuthKey(ctx context.Context) (string, error)
 	GetCouponsByOrderID(ctx context.Context, orderid pgtype.Int4) ([]Coupon, error)
 	GetCustomerByID(ctx context.Context, id int32) (Customer, error)
 	GetDeliveryAddressByID(ctx context.Context, id int32) (DeliveryAddress, error)
@@ -35,6 +36,7 @@ type Querier interface {
 	GetOrdersPage(ctx context.Context, arg GetOrdersPageParams) ([]Order, error)
 	GetPaymentsByOrderID(ctx context.Context, orderid pgtype.Int4) ([]Payment, error)
 	GetTaxesByOrderID(ctx context.Context, orderid pgtype.Int4) ([]Tax, error)
+	SetAuthKey(ctx context.Context, key string) error
 }
 
 var _ Querier = (*Queries)(nil)

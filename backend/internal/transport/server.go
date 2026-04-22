@@ -9,6 +9,8 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
 	"github.com/rs/zerolog"
+
+	appMiddleware "quiccpos/main/internal/transport/middleware"
 )
 
 // StartServer runs the Echo server until ctx is cancelled (e.g. SIGINT/SIGTERM).
@@ -32,6 +34,6 @@ func StartServer(ctx context.Context, e *echo.Echo, cfg *config.Config, logger *
 
 func AddDefaultMiddlewares(e *echo.Echo, logger *zerolog.Logger) {
 	logger.Info().Msg("Adding default middlewares")
-	e.Use(middleware.RequestLogger())
+	e.Use(appMiddleware.RequestLogger(logger))
 	e.Use(middleware.Recover())
 }

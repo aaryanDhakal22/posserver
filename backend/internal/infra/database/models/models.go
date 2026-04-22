@@ -8,6 +8,11 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AuthKey struct {
+	ID  int32  `json:"id"`
+	Key string `json:"key"`
+}
+
 type Coupon struct {
 	ID      int32         `json:"id"`
 	Serial  pgtype.Text   `json:"serial"`

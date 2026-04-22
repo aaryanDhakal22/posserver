@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"quiccpos/main/internal/domain/order"
+	"quiccpos/main/internal/transport/dto"
 	"time"
 
 	orderSvc "quiccpos/main/internal/app/order"
-	"quiccpos/main/internal/domain/order"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -167,52 +168,58 @@ func contains(s string, substrs ...string) bool {
 }
 
 func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
+	msgID := aws.ToString(msg.MessageId)
+	start := time.Now()
+
 	if msg.Body == nil {
-		c.logger.Warn().Str("message_id", aws.ToString(msg.MessageId)).Msg("Received message with nil body, skipping")
+		c.logger.Warn().Str("message_id", msgID).Msg("received message with nil body, skipping")
 		return
 	}
 
-	c.logger.Debug().
-		Str("message_id", aws.ToString(msg.MessageId)).
-		Str("body", *msg.Body).
-		Msg("Raw SQS message body")
+	c.logger.Debug().Str("message_id", msgID).Msg("unmarshaling SQS envelope")
 
 	var cmd order.CreateOrderCommand
 	if err := json.Unmarshal([]byte(*msg.Body), &cmd); err != nil {
 		c.logger.Error().
 			Err(err).
-			Str("message_id", aws.ToString(msg.MessageId)).
-			Msg("Failed to unmarshal SQS envelope, skipping")
+			Str("message_id", msgID).
+			Msg("failed to unmarshal SQS envelope, skipping")
 		return
 	}
+	c.logger.Debug().Str("message_id", msgID).Str("order_id_str", cmd.OrderID).Msg("envelope parsed")
 
-	var o order.Order
-	if err := json.Unmarshal([]byte(cmd.Payload), &o); err != nil {
+	c.logger.Debug().Str("message_id", msgID).Msg("unmarshaling order payload")
+	var dtoOrder dto.Order
+	if err := json.Unmarshal([]byte(cmd.Payload), &dtoOrder); err != nil {
 		c.logger.Error().
 			Err(err).
-			Str("message_id", aws.ToString(msg.MessageId)).
-			Msg("Failed to unmarshal order payload, skipping")
+			Str("message_id", msgID).
+			Msg("failed to unmarshal order payload, skipping")
 		return
 	}
+	o := dtoOrder.ToDomain()
 
 	customerName := o.Customer.FirstName + " " + o.Customer.LastName
-
 	c.logger.Info().
-		Str("message_id", aws.ToString(msg.MessageId)).
+		Str("message_id", msgID).
 		Int("order_id", o.OrderID).
 		Str("customer_name", customerName).
 		Str("service_type", o.ServiceType).
-		Msg("Order received")
+		Int("item_count", len(o.Items)).
+		Msg("order received from SQS")
 
+	c.logger.Debug().Str("message_id", msgID).Int("order_id", o.OrderID).Msg("persisting order")
 	if err := c.orderService.Create(ctx, &o); err != nil {
 		c.logger.Error().
 			Err(err).
-			Str("message_id", aws.ToString(msg.MessageId)).
+			Str("message_id", msgID).
 			Int("order_id", o.OrderID).
 			Str("customer_name", customerName).
-			Msg("Failed to handle order, leaving on queue for retry")
+			Dur("elapsed", time.Since(start)).
+			Msg("failed to persist order, leaving on queue for retry")
 		return
 	}
+	c.logger.Debug().Str("message_id", msgID).Int("order_id", o.OrderID).Msg("order persisted, deleting from queue")
 
 	if _, err := c.client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
 		QueueUrl:      aws.String(c.queueURL),
@@ -220,16 +227,16 @@ func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 	}); err != nil {
 		c.logger.Error().
 			Err(err).
-			Str("message_id", aws.ToString(msg.MessageId)).
+			Str("message_id", msgID).
 			Int("order_id", o.OrderID).
-			Str("customer_name", customerName).
-			Msg("Failed to delete message from queue")
+			Msg("failed to delete message from queue")
 		return
 	}
 
 	c.logger.Info().
-		Str("message_id", aws.ToString(msg.MessageId)).
+		Str("message_id", msgID).
 		Int("order_id", o.OrderID).
 		Str("customer_name", customerName).
-		Msg("Message deleted from queue")
+		Dur("total_ms", time.Since(start)).
+		Msg("message processed and deleted")
 }

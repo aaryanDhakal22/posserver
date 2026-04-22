@@ -11,8 +11,9 @@ import (
 )
 
 type AppConfig struct {
-	AppEnv string
-	Domain string
+	AppEnv        string
+	Domain        string
+	AdminPasscode string
 }
 type ServerConfig struct {
 	Port string
@@ -59,8 +60,9 @@ func NewConfig(logger *zerolog.Logger) *Config {
 		logger: logger,
 	}
 	appConfig := AppConfig{
-		AppEnv: cfg.GetEnv("APP_ENV", true, "dev"),
-		Domain: cfg.GetEnv("DOMAIN", false, "localhost"),
+		AppEnv:        cfg.GetEnv("APP_ENV", true, "dev"),
+		Domain:        cfg.GetEnv("DOMAIN", false, "localhost"),
+		AdminPasscode: cfg.GetEnv("ADMIN_PASSCODE", false, ""),
 	}
 	serverConfig := ServerConfig{
 		Port: cfg.GetEnv("PORT", false, "1323"),

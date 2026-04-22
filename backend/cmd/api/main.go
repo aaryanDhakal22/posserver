@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	authAppSvc "quiccpos/main/internal/app/auth"
+	orderSvc "quiccpos/main/internal/app/order"
 	"quiccpos/main/internal/infra/database/repositories"
 	sqsconsumer "quiccpos/main/internal/infra/sqs"
 	"quiccpos/main/internal/migrate"
@@ -16,8 +18,6 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v5"
-
-	orderSvc "quiccpos/main/internal/app/order"
 )
 
 func main() {
@@ -65,6 +65,9 @@ func main() {
 	repo := repositories.NewOrderRepository(pool, lgr)
 	svc := orderSvc.NewOrderService(repo, lgr)
 
+	authRepo := repositories.NewAuthKeyRepository(pool, lgr)
+	authService := authAppSvc.NewAuthKeyService(authRepo, lgr)
+
 	// Setup SQS client
 	sqsClient, err := sqsconsumer.NewSQSClient(ctx, cfg, lgr)
 	if err != nil {
@@ -82,7 +85,7 @@ func main() {
 	})
 	tLogger := lgr.With().Str("module", "transport").Logger()
 	transport.AddDefaultMiddlewares(e, &tLogger)
-	transport.AddRoutes(e, svc, &tLogger)
+	transport.AddRoutes(e, svc, authService, cfg.AppConfig.AdminPasscode, &tLogger)
 
 	serverLogger := lgr.With().Str("module", "server").Logger()
 	transport.StartServer(ctx, e, cfg, &serverLogger)

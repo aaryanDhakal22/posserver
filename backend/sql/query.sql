@@ -17,6 +17,10 @@ VALUES ($1, $2, $3);
 -- name: CreateDeliveryProvider :one
 INSERT INTO delivery_providers(ProviderName, Status, DeliveryID, TrackingURL, PickupDate)
 VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (DeliveryID) DO UPDATE SET
+    Status      = EXCLUDED.Status,
+    TrackingURL = EXCLUDED.TrackingURL,
+    PickupDate  = EXCLUDED.PickupDate
 RETURNING id;
 
 -- name: CreateDeliveryAddress :one
@@ -35,11 +39,18 @@ VALUES ($1, $2, $3, $4, $5, $6, $7);
 -- name: CreateCustomer :one
 INSERT INTO customers(FirstName, LastName, Company, Phone, Ext, Email)
 VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (Phone) DO UPDATE SET
+    FirstName = EXCLUDED.FirstName,
+    LastName  = EXCLUDED.LastName,
+    Company   = EXCLUDED.Company,
+    Ext       = EXCLUDED.Ext,
+    Email     = EXCLUDED.Email
 RETURNING id;
 
 -- name: CreateOrder :one
 INSERT INTO orders(TVer, OrderID, StoreID, VendorStoreID, StoreName, ServiceType, SubmittedDate, PrintDate, DeferredDate, IsTaxExempt, OrderTotal, BalanceOwing, Notes, Tip, Customer, DeliveryAddress, DeliveryProvider)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+ON CONFLICT (OrderID) DO NOTHING
 RETURNING OrderID;
 
 -- name: GetAllOrders :many
@@ -85,3 +96,10 @@ SELECT id, street, crossstreets, suite, buz, city, state, zip FROM delivery_addr
 
 -- name: GetDeliveryProviderByID :one
 SELECT id, providername, status, deliveryid, trackingurl, pickupdate FROM delivery_providers WHERE id = $1;
+
+-- name: GetAuthKey :one
+SELECT key FROM auth_keys WHERE id = 1;
+
+-- name: SetAuthKey :exec
+INSERT INTO auth_keys(id, key) VALUES (1, $1)
+ON CONFLICT (id) DO UPDATE SET key = EXCLUDED.key;

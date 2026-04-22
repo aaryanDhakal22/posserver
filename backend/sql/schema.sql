@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS customers (
     FirstName  text,
     LastName   text,
     Company    text,
-    Phone      text,
+    Phone      text UNIQUE,
     Ext        text,
     Email      text
 );
@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS delivery_providers (
     id           SERIAL PRIMARY KEY,
     ProviderName text,
     Status       text,
-    DeliveryID   text,
+    DeliveryID   text UNIQUE,
     TrackingURL  text,
     PickupDate   text
 );
@@ -108,4 +108,10 @@ CREATE TABLE IF NOT EXISTS taxes (
     TaxName   text,
     TaxAmount real,
     OrderID   integer REFERENCES orders(OrderID)
+);
+
+CREATE TABLE IF NOT EXISTS auth_keys (
+    id  INTEGER PRIMARY KEY DEFAULT 1,
+    key TEXT NOT NULL,
+    CONSTRAINT single_row CHECK (id = 1)
 );

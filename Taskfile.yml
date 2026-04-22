@@ -68,6 +68,21 @@ tasks:
       - doppler run -- docker compose -f {{.DEV_CONFIG}} down --rmi all
       - doppler run -- docker compose -f {{.DEV_CONFIG}}  up --build
 
+  dev-del-volumes:
+    desc: Delete all volumes
+    cmds:
+      - doppler run -- docker compose -f {{.DEV_CONFIG}}  down -v
+
+  dev-config:
+    desc: See all the configurations
+    cmds:
+      - doppler run -- docker compose -f {{.DEV_CONFIG}}  config
+
+  dev-logs:
+    desc: See logs of the containers passed as argument
+    cmds:
+      - doppler run -- docker compose -f {{.DEV_CONFIG}}  logs {{.CLI_ARGS}}
+
   devmigrate:
     desc: Run database migrations manually (requires postgres to be running)
     cmds:

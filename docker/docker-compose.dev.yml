@@ -37,6 +37,7 @@ services:
       AWS_SECRET_ACCESS_KEY:
       SQS_QUEUE_URL:
       SQS_ENDPOINT:
+      ADMIN_PASSCODE:
     restart: unless-stopped
     volumes:
       - ../backend:/src
@@ -48,17 +49,42 @@ services:
         condition: service_healthy
 
   elasticmq:
-    image: softwaremill/elasticmq:latest
+    image: softwaremill/elasticmq-native:latest
     container_name: quicc-local-sqs
     volumes:
       - ./elasticmq.conf:/opt/elasticmq.conf
     ports:
       # REST API port 
       - "9324:9324"
-      # Web UI port
-      - "9325:9325"
     restart: unless-stopped
 
+  elasticmq-ui:
+    image: softwaremill/elasticmq-ui:latest
+    container_name: quicc-local-sqs-ui
+    ports:
+      # Web UI port
+      - "3000:3000"
+    restart: unless-stopped
+    environment:
+      SQS_ENDPOINT: http://elasticmq:9324
+    depends_on:
+      - elasticmq
+
+  pgadmin:
+    image: dpage/pgadmin4
+    container_name: quicc-pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: 
+      PGADMIN_DEFAULT_PASSWORD:
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    restart: unless-stopped
 
 volumes:
   postgres_data:
+  pgadmin_data:
