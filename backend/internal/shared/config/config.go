@@ -62,7 +62,7 @@ func NewConfig(logger *zerolog.Logger) *Config {
 	appConfig := AppConfig{
 		AppEnv:        cfg.GetEnv("APP_ENV", true, "dev"),
 		Domain:        cfg.GetEnv("DOMAIN", false, "localhost"),
-		AdminPasscode: cfg.GetEnv("ADMIN_PASSCODE", false, ""),
+		AdminPasscode: cfg.GetEnv("ADMIN_PASSCODE", true, ""),
 	}
 	serverConfig := ServerConfig{
 		Port: cfg.GetEnv("PORT", false, "1323"),

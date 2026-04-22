@@ -34,6 +34,9 @@ func (h *AuthHandler) SetKey(c *echo.Context) error {
 
 	passcode := c.Request().Header.Get("X-Admin-Passcode")
 	if passcode != h.adminPasscode {
+		log.Debug().Msg("Pascode recieved:")
+		log.Debug().Msg(passcode)
+		log.Debug().Msg(h.adminPasscode)
 		log.Warn().Msg("SetKey rejected: invalid admin passcode")
 		return c.JSON(http.StatusForbidden, errResp("invalid admin passcode"))
 	}
