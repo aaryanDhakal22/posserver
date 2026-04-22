@@ -39,11 +39,11 @@ jobs:
         with:
           images: ${{ env.IMAGE }}
           tags: |
-            # On main: staging-latest + staging-<sha7>
-            type=raw,value=staging-latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=sha,prefix=staging-,format=short,enable=${{ github.ref == 'refs/heads/main' }}
+            # On master: staging-latest + staging-<sha7>
+            type=raw,value=staging-latest,enable=${{ github.ref == 'refs/heads/master' }}
+            type=sha,prefix=staging-,format=short,enable=${{ github.ref == 'refs/heads/master' }}
             # On any other branch: staging-<branch-name>
-            type=ref,event=branch,prefix=staging-,enable=${{ github.ref != 'refs/heads/main' }}
+            type=ref,event=branch,prefix=staging-,enable=${{ github.ref != 'refs/heads/master' }}
 
       - name: Build and push staging image
         uses: docker/build-push-action@v5
@@ -58,12 +58,12 @@ jobs:
           cache-to: type=gha,mode=max,scope=staging
 
   # ─────────────────────────────────────────────
-  # Production image — built only on main
+  # Production image — built only on master
   # ─────────────────────────────────────────────
   build-production:
     name: Build production image
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/master'
     permissions:
       contents: read
       packages: write
