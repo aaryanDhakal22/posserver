@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"quiccpos/main/internal/shared/config"
@@ -23,6 +24,15 @@ func StartServer(ctx context.Context, e *echo.Echo, cfg *config.Config, logger *
 		HideBanner:      true,
 		HidePort:        true,
 		GracefulTimeout: 10 * time.Second,
+		// Echo v5 hardcodes WriteTimeout: 30s which kills long-lived SSE connections.
+		// Override: no write timeout (SSE streams indefinitely), but keep a strict
+		// ReadHeaderTimeout to protect against slowloris on normal requests.
+		BeforeServeFunc: func(s *http.Server) error {
+			s.ReadHeaderTimeout = 10 * time.Second
+			s.ReadTimeout = 0
+			s.WriteTimeout = 0
+			return nil
+		},
 	}
 
 	logger.Info().Msg("Starting server")

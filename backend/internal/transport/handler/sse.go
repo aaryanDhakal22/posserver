@@ -49,7 +49,7 @@ func (h *SSEHandler) StreamOrders(c *echo.Context) error {
 	fmt.Fprintf(w, ": connected\n\n")
 	flusher.Flush()
 
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 
 	for {
