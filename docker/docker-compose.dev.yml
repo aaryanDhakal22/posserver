@@ -21,10 +21,22 @@ services:
     build:
       context: ../backend
       target: dev
-    env_file:
-      - ../.env
     environment:
-      DB_HOST: postgres
+      APP_ENV: dev
+      DB_HOST: 
+      DB_PORT:
+      DB_USER: 
+      DB_NAME: 
+      SERVER_PORT: 
+      LOG_LEVEL:
+      LOG_OUTPUT: 
+      LOG_STYLE: 
+      DB_PASSWORD:
+      AWS_REGION:
+      AWS_ACCESS_KEY_ID:
+      AWS_SECRET_ACCESS_KEY:
+      SQS_QUEUE_URL:
+      SQS_ENDPOINT:
     restart: unless-stopped
     volumes:
       - ../backend:/src
@@ -34,6 +46,19 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+
+  elasticmq:
+    image: softwaremill/elasticmq:latest
+    container_name: quicc-local-sqs
+    volumes:
+      - ./elasticmq.conf:/opt/elasticmq.conf
+    ports:
+      # REST API port 
+      - "9324:9324"
+      # Web UI port
+      - "9325:9325"
+    restart: unless-stopped
+
 
 volumes:
   postgres_data:

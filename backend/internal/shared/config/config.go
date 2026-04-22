@@ -40,6 +40,7 @@ type CacheConfig struct {
 type SQSConfig struct {
 	QueueURL string
 	Region   string
+	Endpoint string
 }
 
 type Config struct {
@@ -82,8 +83,9 @@ func NewConfig(logger *zerolog.Logger) *Config {
 		Port: cfg.GetEnv("CACHE_PORT", false, "6379"),
 	}
 	sqsConfig := SQSConfig{
-		QueueURL: cfg.GetEnv("SQS_QUEUE_URL", false, ""),
+		QueueURL: cfg.GetEnv("SQS_QUEUE_URL", true, ""),
 		Region:   cfg.GetEnv("AWS_REGION", false, "us-east-1"),
+		Endpoint: cfg.GetEnv("SQS_ENDPOINT", false, ""),
 	}
 
 	cfg.AppConfig = appConfig

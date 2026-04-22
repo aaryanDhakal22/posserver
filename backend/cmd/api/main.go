@@ -7,20 +7,17 @@ import (
 	"os"
 	"os/signal"
 	"quiccpos/main/internal/infra/database/repositories"
+	sqsconsumer "quiccpos/main/internal/infra/sqs"
 	"quiccpos/main/internal/migrate"
 	"quiccpos/main/internal/shared/config"
 	"quiccpos/main/internal/shared/logger"
 	"quiccpos/main/internal/transport"
 	"syscall"
 
-	awscfg "github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v5"
 
 	orderSvc "quiccpos/main/internal/app/order"
-
-	sqsconsumer "quiccpos/main/internal/infra/sqs"
 )
 
 func main() {
@@ -68,22 +65,15 @@ func main() {
 	repo := repositories.NewOrderRepository(pool, lgr)
 	svc := orderSvc.NewOrderService(repo, lgr)
 
-	// SQS consumer (only started when SQS_QUEUE_URL is configured)
-	if cfg.SQSConfig.QueueURL != "" {
-		sqsLogger := lgr.With().Str("module", "sqs").Logger()
-		awsCfg, err := awscfg.LoadDefaultConfig(ctx,
-			awscfg.WithRegion(cfg.SQSConfig.Region),
-		)
-		if err != nil {
-			mainLogger.Fatal().Err(err).Msg("Failed to load AWS config")
-		}
-		sqsClient := sqs.NewFromConfig(awsCfg)
-		consumer := sqsconsumer.NewConsumer(sqsClient, cfg.SQSConfig.QueueURL, svc, sqsLogger)
-		go consumer.Start(ctx)
-		mainLogger.Info().Str("queue", cfg.SQSConfig.QueueURL).Msg("SQS consumer started")
-	} else {
-		mainLogger.Warn().Msg("SQS_QUEUE_URL not set — SQS consumer disabled")
+	// Setup SQS client
+	sqsClient, err := sqsconsumer.NewSQSClient(ctx, cfg, lgr)
+	if err != nil {
+		mainLogger.Fatal().Err(err).Msg("Failed to create SQS client")
 	}
+
+	// Start SQS consumer
+	sqsConsumer := sqsconsumer.NewConsumer(sqsClient, cfg.SQSConfig.QueueURL, svc, lgr)
+	go sqsConsumer.Start(ctx)
 
 	// Echo HTTP server
 	e := echo.New()

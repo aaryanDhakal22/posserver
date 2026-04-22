@@ -15,58 +15,58 @@ tasks:
   produp:
     desc: Start the production environment
     cmds:
-      - docker compose -f {{.PROD_CONFIG}}  up
+      - doppler run -- docker compose -f {{.PROD_CONFIG}}  up
 
   proddown:
     desc: Stop the production environment
     cmds:
-      - docker compose -f {{.PROD_CONFIG}}  down
+      - doppler run -- docker compose -f {{.PROD_CONFIG}}  down
 
   produpd:
     desc: Start the production environment in detached mode
     cmds:
-      - docker compose -f {{.PROD_CONFIG}}  up -d
+      - doppler run -- docker compose -f {{.PROD_CONFIG}}  up -d
 
   prodrestart:
     desc: Restart the production environment
     cmds:
-      - docker compose -f {{.PROD_CONFIG}}  down
-      - docker compose -f {{.PROD_CONFIG}}  up
+      - doppler run -- docker compose -f {{.PROD_CONFIG}}  down
+      - doppler run -- docker compose -f {{.PROD_CONFIG}}  up
 
   prodreset:
     desc: Reset the production environment
     cmds:
-      - docker compose -f {{.PROD_CONFIG}}  down
-      - docker compose -f {{.PROD_CONFIG}} down --rmi all
-      - docker compose -f {{.PROD_CONFIG}}  up --build
+      - doppler run -- docker compose -f {{.PROD_CONFIG}}  down
+      - doppler run -- docker compose -f {{.PROD_CONFIG}} down --rmi all
+      - doppler run -- docker compose -f {{.PROD_CONFIG}}  up --build
 
   devup:
     desc: Start the development environment
     cmds:
-      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} up
+      - doppler run -- docker compose -f {{.DEV_CONFIG}}  up
 
   devdown:
     desc: Stop the development environment
     cmds:
-      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} down
+      - doppler run -- docker compose -f {{.DEV_CONFIG}}  down
 
   devupd:
     desc: Start the development environment in detached mode
     cmds:
-      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} up -d
+      - doppler run -- docker compose -f {{.DEV_CONFIG}}  up -d
 
   devrestart:
     desc: Restart the development environment
     cmds:
-      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} down
-      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} up
+      - doppler run -- docker compose -f {{.DEV_CONFIG}}  down
+      - doppler run -- docker compose -f {{.DEV_CONFIG}}  up
 
   devreset:
     desc: Reset the development environment
     cmds:
-      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} down
-      - docker compose -f {{.DEV_CONFIG}} down --rmi all
-      - docker compose -f {{.DEV_CONFIG}} --env-file {{.ENV_FILE}} up --build
+      - doppler run -- docker compose -f {{.DEV_CONFIG}}  down
+      - doppler run -- docker compose -f {{.DEV_CONFIG}} down --rmi all
+      - doppler run -- docker compose -f {{.DEV_CONFIG}}  up --build
 
   devmigrate:
     desc: Run database migrations manually (requires postgres to be running)
