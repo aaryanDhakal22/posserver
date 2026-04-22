@@ -2,10 +2,9 @@ package sse
 
 import (
 	"encoding/json"
-	"sync"
-
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/transport/dto"
+	"sync"
 )
 
 // Broker fans out published byte slices to all subscribed SSE clients.
