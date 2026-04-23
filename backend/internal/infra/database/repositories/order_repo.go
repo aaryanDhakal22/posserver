@@ -88,12 +88,22 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// ON CONFLICT DO NOTHING returned no row — order already exists (duplicate SQS delivery).
+			// The deferred Rollback reverts the counter increment so duplicates don't consume numbers.
 			log.Info().Msg("order already exists, skipping duplicate")
 			return nil
 		}
 		log.Error().Err(err).Msg("failed to insert order row")
 		return fmt.Errorf("create order: %w", err)
 	}
+	// Write the assigned number back onto the domain order so downstream
+	// consumers (SSE broadcast → agent → receipt) see it. Without this, the
+	// counter increments correctly in the DB but every published order has
+	// OrderNumber = 0 (whatever the SQS payload carried), which breaks the
+	// receipt header. Intentionally done *after* the insert succeeded — on a
+	// duplicate we return nil above without touching o, so the ghost
+	// broadcast (if any) uses the original payload value rather than a
+	// number that's about to be rolled back.
+	o.OrderNumber = int(orderNumber)
 	log.Debug().Msg("order row inserted")
 
 	// 5. Items + modifiers per item
