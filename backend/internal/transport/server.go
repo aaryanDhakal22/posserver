@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/shared/config"
 
 	"github.com/labstack/echo/v5"
@@ -42,8 +43,12 @@ func StartServer(ctx context.Context, e *echo.Echo, cfg *config.Config, logger *
 	}
 }
 
-func AddDefaultMiddlewares(e *echo.Echo, logger *zerolog.Logger) {
+// AddDefaultMiddlewares installs OTEL, request-logging, and recover middleware
+// in that order so the request logger (and anything downstream) can read the
+// span context attached by the OTEL middleware.
+func AddDefaultMiddlewares(e *echo.Echo, serviceName string, logger *zerolog.Logger) {
 	logger.Info().Msg("Adding default middlewares")
+	e.Use(observability.EchoOTELMiddleware(serviceName))
 	e.Use(appMiddleware.RequestLogger(logger))
 	e.Use(middleware.Recover())
 }

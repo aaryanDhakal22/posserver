@@ -6,11 +6,17 @@ import (
 	"strings"
 	"time"
 
+	"quiccpos/main/internal/observability"
+
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 )
 
-func NewLogger(level string, output io.Writer, style string) zerolog.Logger {
+// NewLogger builds the application logger. If serviceName is non-empty, the
+// returned logger is wired with the OTEL trace hook (adds trace_id/span_id
+// from ctx) and the OTLP logs bridge (every event becomes an OTLP log
+// record). Passing an empty serviceName returns a plain zerolog logger.
+func NewLogger(level string, output io.Writer, style string, serviceName string) zerolog.Logger {
 	level = strings.ToLower(level)
 	logLevel, err := zerolog.ParseLevel(level)
 	if err != nil {
@@ -18,16 +24,27 @@ func NewLogger(level string, output io.Writer, style string) zerolog.Logger {
 		log.Error().Msg("Defaulting to info")
 		logLevel = zerolog.InfoLevel
 	}
-	var zer zerolog.ConsoleWriter
 	if output == nil {
 		output = os.Stdout
 	}
-	zer = zerolog.ConsoleWriter{Out: output, TimeFormat: time.RFC3339}
+
+	var writer io.Writer
+	if style == "json" {
+		writer = output
+	} else {
+		writer = zerolog.ConsoleWriter{Out: output, TimeFormat: time.RFC3339}
+	}
+
 	zerolog.SetGlobalLevel(logLevel)
-	log.Logger = log.Output(zer)
-	return zerolog.New(zer).With().Timestamp().Logger()
+	log.Logger = log.Output(writer)
+	base := zerolog.New(writer).With().Timestamp().Logger()
+
+	if serviceName == "" {
+		return base
+	}
+	return observability.Wire(base, serviceName)
 }
 
 func TempLogger() zerolog.Logger {
-	return NewLogger("debug", nil, "console")
+	return NewLogger("debug", nil, "console", "")
 }

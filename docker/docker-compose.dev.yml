@@ -38,6 +38,8 @@ services:
       SQS_QUEUE_URL:
       SQS_ENDPOINT:
       ADMIN_PASSCODE:
+      OTEL_EXPORTER_OTLP_ENDPOINT:
+      OTEL_SERVICE_NAME:
       TZ: America/New_York
     restart: unless-stopped
     volumes:

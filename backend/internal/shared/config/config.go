@@ -44,6 +44,14 @@ type SQSConfig struct {
 	Endpoint string
 }
 
+// OTELConfig holds the OpenTelemetry exporter/resource settings. Endpoint may
+// be empty — in that case observability.Setup installs no-op providers and
+// the service runs with zero telemetry backend reachable.
+type OTELConfig struct {
+	Endpoint    string
+	ServiceName string
+}
+
 type Config struct {
 	AppConfig      AppConfig
 	ServerConfig   ServerConfig
@@ -51,6 +59,7 @@ type Config struct {
 	LogConfig      LogConfig
 	CacheConfig    CacheConfig
 	SQSConfig      SQSConfig
+	OTELConfig     OTELConfig
 	logger         *zerolog.Logger
 }
 
@@ -89,6 +98,10 @@ func NewConfig(logger *zerolog.Logger) *Config {
 		Region:   cfg.GetEnv("AWS_REGION", false, "us-east-1"),
 		Endpoint: cfg.GetEnv("SQS_ENDPOINT", false, ""),
 	}
+	otelConfig := OTELConfig{
+		Endpoint:    cfg.GetEnv("OTEL_EXPORTER_OTLP_ENDPOINT", false, ""),
+		ServiceName: cfg.GetEnv("OTEL_SERVICE_NAME", false, "quicc-main"),
+	}
 
 	cfg.AppConfig = appConfig
 	cfg.ServerConfig = serverConfig
@@ -96,6 +109,7 @@ func NewConfig(logger *zerolog.Logger) *Config {
 	cfg.LogConfig = logConfig
 	cfg.CacheConfig = cacheConfig
 	cfg.SQSConfig = sqsConfig
+	cfg.OTELConfig = otelConfig
 
 	return &cfg
 }

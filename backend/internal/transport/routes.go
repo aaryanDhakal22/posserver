@@ -3,6 +3,7 @@ package transport
 import (
 	authAppSvc "quiccpos/main/internal/app/auth"
 	orderSvc "quiccpos/main/internal/app/order"
+	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/transport/handler"
 	appMiddleware "quiccpos/main/internal/transport/middleware"
 
@@ -14,13 +15,13 @@ type SSEBroker interface {
 	Subscribe() (chan []byte, func())
 }
 
-func AddRoutes(e *echo.Echo, svc *orderSvc.Service, authSvc *authAppSvc.Service, broker SSEBroker, adminPasscode string, logger *zerolog.Logger) {
+func AddRoutes(e *echo.Echo, svc *orderSvc.Service, authSvc *authAppSvc.Service, broker SSEBroker, adminPasscode string, logger *zerolog.Logger, meters observability.Meters) {
 	logger.Info().Msg("Adding routes")
 
 	authHandler := handler.NewAuthHandler(authSvc, adminPasscode, *logger)
 	e.POST("/api/v1/auth/key", authHandler.SetKey)
 
-	sseHandler := handler.NewSSEHandler(broker, *logger)
+	sseHandler := handler.NewSSEHandler(broker, *logger, meters)
 
 	orderHandler := handler.NewOrderHandler(svc, *logger)
 	orders := e.Group("/api/v1/orders")

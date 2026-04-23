@@ -6,22 +6,29 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
+
 	authAppSvc "quiccpos/main/internal/app/auth"
 	orderSvc "quiccpos/main/internal/app/order"
 	"quiccpos/main/internal/infra/database/models"
 	"quiccpos/main/internal/infra/database/repositories"
 	"quiccpos/main/internal/infra/scheduler"
-	sseBroker "quiccpos/main/internal/infra/sse"
 	sqsconsumer "quiccpos/main/internal/infra/sqs"
+	sseBroker "quiccpos/main/internal/infra/sse"
 	"quiccpos/main/internal/migrate"
+	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/shared/config"
 	"quiccpos/main/internal/shared/logger"
 	"quiccpos/main/internal/transport"
-	"syscall"
 
+	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v5"
 )
+
+// version is set via -ldflags at build time ("-X main.version=<sha>").
+// Defaults to "dev" for plain `go run`.
+var version = "dev"
 
 func main() {
 	tmpLogger := logger.TempLogger()
@@ -30,12 +37,36 @@ func main() {
 	cfgLogger := tmpLogger.With().Str("module", "config").Logger()
 	cfg := config.NewConfig(&cfgLogger)
 
-	lgr := logger.NewLogger(cfg.LogConfig.Level, nil, cfg.LogConfig.Style)
-	mainLogger := lgr.With().Str("module", "main").Logger()
-
-	// Shared cancellable context — drives the HTTP server, SQS consumer, and SSE broker.
+	// Shared cancellable context — drives the HTTP server, SQS consumer, SSE broker,
+	// and the OTEL batch processors.
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+
+	// --- Observability: must come before the logger is wired so the OTLP
+	// log bridge picks up the global LoggerProvider. ------------------------
+	shutdownOtel, err := observability.Setup(ctx, observability.Config{
+		Endpoint:    cfg.OTELConfig.Endpoint,
+		ServiceName: cfg.OTELConfig.ServiceName,
+		AppEnv:      cfg.AppConfig.AppEnv,
+		Version:     version,
+	})
+	if err != nil {
+		tmpLogger.Error().Err(err).Msg("OTEL setup failed — continuing with no telemetry")
+		shutdownOtel = func(context.Context) error { return nil }
+	}
+	defer func() {
+		if err := shutdownOtel(context.Background()); err != nil {
+			tmpLogger.Warn().Err(err).Msg("OTEL shutdown reported errors")
+		}
+	}()
+
+	meters, err := observability.NewMeters()
+	if err != nil {
+		tmpLogger.Fatal().Err(err).Msg("Failed to create metric instruments")
+	}
+
+	lgr := logger.NewLogger(cfg.LogConfig.Level, cfg.LogConfig.Output, cfg.LogConfig.Style, cfg.OTELConfig.ServiceName)
+	mainLogger := lgr.With().Str("module", "main").Logger()
 
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
@@ -46,18 +77,26 @@ func main() {
 		cfg.DatabaseConfig.Name,
 	)
 
-	mainLogger.Info().Msg("Running database migrations")
+	mainLogger.Info().Ctx(ctx).Msg("Running database migrations")
 	if err := migrate.Run(ctx, dsn); err != nil {
 		mainLogger.Fatal().Err(err).Msg("Failed to run database migrations")
 	}
-	mainLogger.Info().Msg("Database migrations complete")
+	mainLogger.Info().Ctx(ctx).Msg("Database migrations complete")
 
-	pool, err := pgxpool.New(ctx, dsn)
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		mainLogger.Fatal().Err(err).Msg("Failed to parse DB config")
+	}
+	// otelpgx spans every query, records rows-affected, and marks failed
+	// statements as Error. No call-site changes needed; it hooks into pgx.
+	poolConfig.ConnConfig.Tracer = otelpgx.NewTracer()
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		mainLogger.Fatal().Err(err).Msg("Failed to connect to database")
 	}
 	defer pool.Close()
-	mainLogger.Info().Msg("Connected to database")
+	mainLogger.Info().Ctx(ctx).Msg("Connected to database")
 
 	// SSE broker — fans out new orders to connected agents.
 	broker := sseBroker.New()
@@ -78,7 +117,7 @@ func main() {
 		return models.New(pool).ResetOrderNumber(c)
 	}, lgr)
 
-	sqsConsumer := sqsconsumer.NewConsumer(sqsClient, cfg.SQSConfig.QueueURL, svc, lgr)
+	sqsConsumer := sqsconsumer.NewConsumer(sqsClient, cfg.SQSConfig.QueueURL, svc, lgr, meters)
 	go sqsConsumer.Start(ctx)
 
 	e := echo.New()
@@ -86,8 +125,8 @@ func main() {
 		return c.String(http.StatusOK, "OK")
 	})
 	tLogger := lgr.With().Str("module", "transport").Logger()
-	transport.AddDefaultMiddlewares(e, &tLogger)
-	transport.AddRoutes(e, svc, authService, broker, cfg.AppConfig.AdminPasscode, &tLogger)
+	transport.AddDefaultMiddlewares(e, cfg.OTELConfig.ServiceName, &tLogger)
+	transport.AddRoutes(e, svc, authService, broker, cfg.AppConfig.AdminPasscode, &tLogger, meters)
 
 	serverLogger := lgr.With().Str("module", "server").Logger()
 	transport.StartServer(ctx, e, cfg, &serverLogger)

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"quiccpos/main/internal/domain/order"
-	"quiccpos/main/internal/transport/dto"
 	"time"
+
+	"quiccpos/main/internal/domain/order"
+	"quiccpos/main/internal/observability"
+	"quiccpos/main/internal/transport/dto"
 
 	orderSvc "quiccpos/main/internal/app/order"
 
@@ -16,11 +18,18 @@ import (
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"github.com/rs/zerolog"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
 	maxBackoff     = 60 * time.Second
 	initialBackoff = 2 * time.Second
+
+	tracerName = "quiccpos/main/sqs"
 )
 
 type Consumer struct {
@@ -28,14 +37,18 @@ type Consumer struct {
 	queueURL     string
 	orderService *orderSvc.Service
 	logger       zerolog.Logger
+	tracer       trace.Tracer
+	meters       observability.Meters
 }
 
-func NewConsumer(client *sqs.Client, queueURL string, orderService *orderSvc.Service, logger zerolog.Logger) *Consumer {
+func NewConsumer(client *sqs.Client, queueURL string, orderService *orderSvc.Service, logger zerolog.Logger, meters observability.Meters) *Consumer {
 	return &Consumer{
 		client:       client,
 		queueURL:     queueURL,
 		orderService: orderService,
 		logger:       logger.With().Str("module", "sqs-consumer").Logger(),
+		tracer:       otel.Tracer(tracerName),
+		meters:       meters,
 	}
 }
 
@@ -60,9 +73,10 @@ func (c *Consumer) Start(ctx context.Context) {
 		}
 
 		output, err := c.client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-			QueueUrl:            aws.String(c.queueURL),
-			MaxNumberOfMessages: 10,
-			WaitTimeSeconds:     20,
+			QueueUrl:              aws.String(c.queueURL),
+			MaxNumberOfMessages:   10,
+			WaitTimeSeconds:       20,
+			MessageAttributeNames: []string{"All"},
 		})
 		if err != nil {
 			if ctx.Err() != nil {
@@ -81,7 +95,6 @@ func (c *Consumer) Start(ctx context.Context) {
 			continue
 		}
 
-		// Reset backoff on success.
 		backoff = initialBackoff
 
 		c.logger.Debug().Int("count", len(output.Messages)).Msg("Poll returned messages")
@@ -135,7 +148,6 @@ func (c *Consumer) logAWSError(msg string, err error) {
 		}
 	}
 
-	// Credential/config errors (no HTTP response at all)
 	errStr := err.Error()
 	switch {
 	case contains(errStr, "NoCredentialProviders", "no EC2 IMDS role found", "failed to refresh cached credentials"):
@@ -167,40 +179,58 @@ func contains(s string, substrs ...string) bool {
 	return false
 }
 
+// processMessage wraps the full "unmarshal → persist → delete" sequence in a
+// single sqs.process span. If otelaws has extracted a traceparent from the
+// upstream MessageAttributes (populated by a future instrumented online/),
+// ctx already carries that parent — our span chains into it automatically.
 func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 	msgID := aws.ToString(msg.MessageId)
 	start := time.Now()
 
+	c.meters.SQSMessagesInFlt.Add(ctx, 1)
+	defer c.meters.SQSMessagesInFlt.Add(ctx, -1)
+
+	ctx, span := c.tracer.Start(ctx, "sqs.process",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			attribute.String("messaging.system", "aws_sqs"),
+			attribute.String("messaging.destination", c.queueURL),
+			attribute.String("messaging.message.id", msgID),
+		),
+	)
+	defer span.End()
+
 	if msg.Body == nil {
-		c.logger.Warn().Str("message_id", msgID).Msg("received message with nil body, skipping")
+		span.SetStatus(codes.Error, "nil body")
+		c.logger.Warn().Ctx(ctx).Str("message_id", msgID).Msg("received message with nil body, skipping")
 		return
 	}
-
-	c.logger.Debug().Str("message_id", msgID).Msg("unmarshaling SQS envelope")
 
 	var cmd order.CreateOrderCommand
 	if err := json.Unmarshal([]byte(*msg.Body), &cmd); err != nil {
-		c.logger.Error().
-			Err(err).
-			Str("message_id", msgID).
-			Msg("failed to unmarshal SQS envelope, skipping")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "envelope unmarshal")
+		c.logger.Error().Ctx(ctx).Err(err).Str("message_id", msgID).Msg("failed to unmarshal SQS envelope, skipping")
 		return
 	}
-	c.logger.Debug().Str("message_id", msgID).Str("order_id_str", cmd.OrderID).Msg("envelope parsed")
 
-	c.logger.Debug().Str("message_id", msgID).Msg("unmarshaling order payload")
 	var dtoOrder dto.Order
 	if err := json.Unmarshal([]byte(cmd.Payload), &dtoOrder); err != nil {
-		c.logger.Error().
-			Err(err).
-			Str("message_id", msgID).
-			Msg("failed to unmarshal order payload, skipping")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "payload unmarshal")
+		c.logger.Error().Ctx(ctx).Err(err).Str("message_id", msgID).Msg("failed to unmarshal order payload, skipping")
 		return
 	}
 	o := dtoOrder.ToDomain()
 
+	span.SetAttributes(
+		attribute.Int("order.id", o.OrderID),
+		attribute.String("order.service_type", o.ServiceType),
+		attribute.Int("order.item_count", len(o.Items)),
+	)
+
 	customerName := o.Customer.FirstName + " " + o.Customer.LastName
-	c.logger.Info().
+	c.logger.Info().Ctx(ctx).
 		Str("message_id", msgID).
 		Int("order_id", o.OrderID).
 		Str("customer_name", customerName).
@@ -208,9 +238,12 @@ func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 		Int("item_count", len(o.Items)).
 		Msg("order received from SQS")
 
-	c.logger.Debug().Str("message_id", msgID).Int("order_id", o.OrderID).Msg("persisting order")
+	c.meters.OrdersConsumed.Add(ctx, 1, metric.WithAttributes(attribute.String("service_type", o.ServiceType)))
+
 	if err := c.orderService.Create(ctx, &o); err != nil {
-		c.logger.Error().
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "persist failed")
+		c.logger.Error().Ctx(ctx).
 			Err(err).
 			Str("message_id", msgID).
 			Int("order_id", o.OrderID).
@@ -219,13 +252,15 @@ func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 			Msg("failed to persist order, leaving on queue for retry")
 		return
 	}
-	c.logger.Debug().Str("message_id", msgID).Int("order_id", o.OrderID).Msg("order persisted, deleting from queue")
+	c.meters.OrdersPersisted.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "ok")))
 
 	if _, err := c.client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
 		QueueUrl:      aws.String(c.queueURL),
 		ReceiptHandle: msg.ReceiptHandle,
 	}); err != nil {
-		c.logger.Error().
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "delete failed")
+		c.logger.Error().Ctx(ctx).
 			Err(err).
 			Str("message_id", msgID).
 			Int("order_id", o.OrderID).
@@ -233,7 +268,7 @@ func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 		return
 	}
 
-	c.logger.Info().
+	c.logger.Info().Ctx(ctx).
 		Str("message_id", msgID).
 		Int("order_id", o.OrderID).
 		Str("customer_name", customerName).

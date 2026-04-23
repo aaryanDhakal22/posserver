@@ -64,3 +64,13 @@ tasks:
         sh: grep ^DB_PASSWORD {{.ENV_FILE}} | cut -d= -f2
       DB_NAME:
         sh: grep ^DB_NAME {{.ENV_FILE}} | cut -d= -f2
+
+  test:
+    desc: "Run the main/ pytest suite under Doppler (dev stack must be up)"
+    cmds:
+      - doppler run -- uv run --directory tests pytest -v
+
+  test-quick:
+    desc: "Run only the fast subset of main/ tests"
+    cmds:
+      - doppler run -- uv run --directory tests pytest -v -m "not slow"
