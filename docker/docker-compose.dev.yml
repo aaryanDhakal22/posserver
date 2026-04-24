@@ -39,6 +39,7 @@ services:
       SQS_ENDPOINT:
       ADMIN_PASSCODE:
       OTEL_EXPORTER_OTLP_ENDPOINT:
+      OTEL_EXPORTER_OTLP_HEADERS:
       OTEL_SERVICE_NAME:
       TZ: America/New_York
     restart: unless-stopped

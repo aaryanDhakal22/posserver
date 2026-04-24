@@ -52,8 +52,8 @@ echo "✓  Started quicc-${INACTIVE}-api"
 echo "▶  Waiting for quicc-${INACTIVE}-api /health ..."
 PASSED=0
 for i in $(seq 1 $HEALTH_RETRIES); do
-  if docker exec "quicc-${INACTIVE}-api" \
-       wget -q -O /dev/null http://localhost:1323/health 2>/dev/null; then
+  if docker run --rm --network proxy alpine:3.20 \
+       wget -q -O /dev/null "http://quicc-${INACTIVE}-api:1323/health" 2>/dev/null; then
     echo "✓  Health check passed (attempt ${i})"
     PASSED=1
     break
