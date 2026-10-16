@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"bytes"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	menuApp "quiccpos/main/internal/app/menu"
@@ -527,4 +530,57 @@ func (h *MenuHandler) reorder(c *echo.Context, apply func([]uuid.UUID) error) er
 		return c.JSON(http.StatusBadRequest, errResp(err.Error()))
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+// --- CSV import / export ------------------------------------------------------
+
+// maxMenuCSV bounds an import upload.
+const maxMenuCSV = 2 << 20
+
+// MeExportCSV — GET /store/v1/me/menu/export.csv: the location's menus as an
+// import file (menu,category,item,price,printer,description).
+func (h *MenuHandler) MeExportCSV(c *echo.Context) error {
+	_, lid, _ := meScope(c)
+	var buf bytes.Buffer
+	if err := h.svc.ExportCSV(c.Request().Context(), lid, &buf); err != nil {
+		h.logger.Error().Ctx(c.Request().Context()).Err(err).Msg("menu export failed")
+		return c.JSON(http.StatusInternalServerError, errResp("export failed"))
+	}
+	c.Response().Header().Set(echo.HeaderContentDisposition, `attachment; filename="menu.csv"`)
+	return c.Blob(http.StatusOK, "text/csv; charset=utf-8", buf.Bytes())
+}
+
+// MeImportCSV — POST /store/v1/me/menu/import?dry_run=1&replace=1, body = the
+// CSV. Returns what changed (or would change). Bad rows / unknown printers → 400.
+func (h *MenuHandler) MeImportCSV(c *echo.Context) error {
+	tid, lid, _ := meScope(c)
+	body, err := io.ReadAll(io.LimitReader(c.Request().Body, maxMenuCSV+1))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errResp("could not read the file"))
+	}
+	if len(body) > maxMenuCSV {
+		return c.JSON(http.StatusRequestEntityTooLarge, errResp("file too large (max 2 MB)"))
+	}
+	rows, err := menuApp.ParseMenuCSV(bytes.NewReader(body))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errResp(err.Error()))
+	}
+	dry, replace := truthy(c.QueryParam("dry_run")), truthy(c.QueryParam("replace"))
+	res, err := h.svc.ImportCSV(c.Request().Context(), tid, lid, rows, dry, replace)
+	if err != nil {
+		if menuApp.IsCSVError(err) {
+			return c.JSON(http.StatusBadRequest, errResp(err.Error()))
+		}
+		h.logger.Error().Ctx(c.Request().Context()).Err(err).Bool("dry_run", dry).Msg("menu import failed")
+		return c.JSON(http.StatusInternalServerError, map[string]any{"error": "import failed part-way: " + err.Error() + " — fix and re-run (imports are re-runnable)", "result": res})
+	}
+	return c.JSON(http.StatusOK, res)
+}
+
+func truthy(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }

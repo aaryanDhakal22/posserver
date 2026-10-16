@@ -45,8 +45,10 @@ type Claims struct {
 }
 
 // Signer issues + verifies session cookies. `secure` sets the cookie's Secure
-// flag; it must be false in dev (Vite proxies over plain-HTTP localhost, where a
-// Secure cookie is silently dropped) and true in stg/prd (behind Traefik TLS).
+// flag for requests that arrived over HTTPS (directly or via a TLS proxy's
+// X-Forwarded-Proto); it must be false in dev (Vite proxies over plain-HTTP
+// localhost). A plain-HTTP request never gets a Secure cookie — the browser
+// would drop it (staging main is reached over plain HTTP on the LAN).
 type Signer struct {
 	secret []byte
 	secure bool
@@ -97,27 +99,39 @@ func (s *Signer) decode(value string) (Claims, bool) {
 	return Claims{TenantID: tid, LocationID: lid, Exp: exp}, true
 }
 
+// secureFor reports whether the cookie for this request gets the Secure flag.
+func (s *Signer) secureFor(r *http.Request) bool {
+	if !s.secure || r == nil {
+		return s.secure
+	}
+	if r.TLS != nil {
+		return true
+	}
+	proto, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
+	return strings.EqualFold(strings.TrimSpace(proto), "https")
+}
+
 // Issue writes a fresh session cookie scoping the browser to (tenantID, locationID).
-func (s *Signer) Issue(w http.ResponseWriter, tenantID, locationID uuid.UUID) {
+func (s *Signer) Issue(w http.ResponseWriter, r *http.Request, tenantID, locationID uuid.UUID) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,
 		Value:    s.encode(Claims{TenantID: tenantID, LocationID: locationID, Exp: time.Now().Add(ttl).Unix()}),
 		Path:     cookiePath,
 		HttpOnly: true,
-		Secure:   s.secure,
+		Secure:   s.secureFor(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(ttl.Seconds()),
 	})
 }
 
 // Clear expires the session cookie (logout).
-func (s *Signer) Clear(w http.ResponseWriter) {
+func (s *Signer) Clear(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,
 		Value:    "",
 		Path:     cookiePath,
 		HttpOnly: true,
-		Secure:   s.secure,
+		Secure:   s.secureFor(r),
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   -1,
 	})

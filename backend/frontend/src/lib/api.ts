@@ -180,6 +180,11 @@ export interface StoreOrder {
   driver_name?: string;
 }
 /** A recent vendor item name that doesn't reach a kitchen printer. */
+export interface MenuImportResult {
+  dry_run: boolean; replace: boolean; rows: number; menus_deleted: number; menus: number;
+  categories: number; category_printers: number; items: number; items_updated: number;
+  item_printers: number; changes: string[];
+}
 export interface UnmatchedName { name: string; routing: 'unmatched' | 'unassigned'; orders: number; last_seen: string; }
 export interface FloorDriver { id: string; name: string; position: number; status: string; updated_at: string; }
 export interface StoreFloor { drivers: FloorDriver[]; last_sync_at: string | null; }

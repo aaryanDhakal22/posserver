@@ -5,7 +5,7 @@
   import {
     storeApi, ApiError, dollars, toCents,
     type Menu, type Category, type Item, type Printer, type LivePrinters, type ItemGroupLink,
-    type UnmatchedName, fmtTime
+    type UnmatchedName, type MenuImportResult, fmtTime
   } from '$lib/api';
   import ModifiersTab from '$lib/components/menu/ModifiersTab.svelte';
   import ItemEditor from '$lib/components/menu/ItemEditor.svelte';
@@ -139,6 +139,58 @@
     toast('item saved');
   }
 
+  // --- CSV import / export ---
+  // Import = pick a file → dry-run preview → Apply (or Replace everything).
+  let csvInput = $state<HTMLInputElement | null>(null);
+  let csvText = $state('');
+  let csvName = $state('');
+  let csvReplace = $state(false);
+  let csvPreview = $state<MenuImportResult | null>(null);
+  let csvBusy = $state(false);
+
+  async function postCSV(dryRun: boolean): Promise<MenuImportResult> {
+    const q = new URLSearchParams({ dry_run: dryRun ? '1' : '0', replace: csvReplace ? '1' : '0' });
+    return storeApi<MenuImportResult>(`/me/menu/import?${q}`, {
+      method: 'POST', body: csvText, headers: { 'Content-Type': 'text/csv' }
+    });
+  }
+  async function previewCSV() {
+    csvBusy = true;
+    try { csvPreview = await postCSV(true); }
+    catch (e) { csvPreview = null; err(e); }
+    finally { csvBusy = false; }
+  }
+  async function pickCSV(e: Event) {
+    const f = (e.target as HTMLInputElement).files?.[0];
+    if (!f) return;
+    csvName = f.name;
+    csvText = await f.text();
+    csvReplace = false;
+    (e.target as HTMLInputElement).value = '';
+    await previewCSV();
+  }
+  async function applyCSV() {
+    if (csvReplace && !confirm('Replace deletes every menu here (categories, items, item printers) and rebuilds it from the file. Continue?')) return;
+    csvBusy = true;
+    try {
+      const r = await postCSV(false);
+      csvPreview = null; csvText = '';
+      activeMenu = null;
+      await loadMenus();
+      await loadUnmatched();
+      toast(`imported: ${r.items} new items, ${r.items_updated} updated, ${r.item_printers + r.category_printers} printer changes`);
+    } catch (e) { err(e); }
+    finally { csvBusy = false; }
+  }
+  const csvSummary = (r: MenuImportResult) => [
+    r.menus_deleted && `${r.menus_deleted} menu(s) deleted`,
+    r.menus && `${r.menus} menu(s)`,
+    r.categories && `${r.categories} categor${r.categories === 1 ? 'y' : 'ies'}`,
+    r.items && `${r.items} new item(s)`,
+    r.items_updated && `${r.items_updated} item(s) updated`,
+    (r.item_printers || r.category_printers) && `${r.item_printers + r.category_printers} printer change(s)`
+  ].filter(Boolean).join(' · ') || 'no changes';
+
   // --- drag reorder (native HTML5) ---
   let dragCat = $state<string | null>(null);
   async function reorderItems(catID: string, from: number, to: number) {
@@ -157,6 +209,9 @@
     <div class="text-xs text-slate-500 dark:text-slate-400">categories, items, modifiers, printer routing</div>
   </div>
   <div class="flex gap-1">
+    <a class="btn btn-ghost btn-xs" href="/store/v1/me/menu/export.csv" download="menu.csv" title="menu,category,item,price,printer,description">Export CSV</a>
+    <button class="btn btn-ghost btn-xs" disabled={csvBusy} onclick={() => csvInput?.click()} title="Add/update items from a CSV — preview first">Import CSV</button>
+    <input type="file" accept=".csv,text/csv" class="hidden" bind:this={csvInput} onchange={pickCSV} />
     <button class="btn btn-xs {tab === 'overview' ? 'btn-dark' : 'btn-ghost'}" onclick={() => (tab = 'overview')}>Overview</button>
     <button class="btn btn-xs {tab === 'modifiers' ? 'btn-dark' : 'btn-ghost'}" onclick={() => (tab = 'modifiers')}>Modifiers</button>
   </div>
@@ -166,6 +221,29 @@
   <div class="rounded-md border px-4 py-2.5 text-sm mb-4 {banner.kind === 'error'
     ? 'border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-900/60 dark:bg-rose-950/60 dark:text-rose-200'
     : 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/50 dark:text-emerald-200'}">{banner.msg}</div>
+{/if}
+
+{#if csvPreview}
+  <div class="card px-4 py-3 mb-4 border-sky-300 dark:border-sky-500/40">
+    <div class="flex items-baseline justify-between gap-2">
+      <div class="font-semibold text-sm">Import preview — {csvName} ({csvPreview.rows} rows)</div>
+      <button class="btn btn-ghost btn-xs" onclick={() => { csvPreview = null; csvText = ''; }}>cancel</button>
+    </div>
+    <div class="text-sm my-1">{csvSummary(csvPreview)}</div>
+    <p class="text-xs text-slate-500 dark:text-slate-400 mb-2">
+      Items match by name (case/spaces ignored). Blank price/printer cells keep what's there; nothing is
+      deleted unless you tick Replace.
+    </p>
+    {#if csvPreview.changes.length}
+      <pre class="text-xs max-h-64 overflow-auto rounded bg-slate-50 dark:bg-slate-900 p-2 mb-2">{csvPreview.changes.join('\n')}</pre>
+    {/if}
+    <div class="flex items-center gap-3">
+      <label class="text-sm flex items-center gap-1">
+        <input type="checkbox" bind:checked={csvReplace} onchange={previewCSV} /> Replace — delete all menus first
+      </label>
+      <button class="btn btn-primary btn-xs" disabled={csvBusy} onclick={applyCSV}>{csvReplace ? 'Replace menu' : 'Apply'}</button>
+    </div>
+  </div>
 {/if}
 
 {#if loading}

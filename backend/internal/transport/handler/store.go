@@ -87,7 +87,7 @@ func (h *StoreHandler) SessionLogin(c *echo.Context) error {
 		h.logger.Error().Err(err).Msg("session login: location lookup failed")
 		return c.JSON(http.StatusInternalServerError, errResp("login failed"))
 	}
-	h.signer.Issue(c.Response(), tenant.ID, loc.ID)
+	h.signer.Issue(c.Response(), c.Request(), tenant.ID, loc.ID)
 	return c.JSON(http.StatusOK, map[string]any{
 		"tenant_id":   tenant.ID.String(),
 		"location_id": loc.ID.String(),
@@ -97,7 +97,7 @@ func (h *StoreHandler) SessionLogin(c *echo.Context) error {
 
 // DELETE /store/v1/session — clear the session cookie.
 func (h *StoreHandler) SessionLogout(c *echo.Context) error {
-	h.signer.Clear(c.Response())
+	h.signer.Clear(c.Response(), c.Request())
 	return c.NoContent(http.StatusNoContent)
 }
 
@@ -115,7 +115,7 @@ func (h *StoreHandler) SessionWhoami(c *echo.Context) error {
 		// a dev DB reset wiped them). Log the manager out gracefully — a 401 lets
 		// the SPA fall back to the login screen instead of hard-failing the page.
 		if errors.Is(err, pgx.ErrNoRows) {
-			h.signer.Clear(c.Response())
+			h.signer.Clear(c.Response(), c.Request())
 			return c.JSON(http.StatusUnauthorized, errResp("session expired — please log in again"))
 		}
 		return c.JSON(http.StatusInternalServerError, errResp("tenant lookup failed"))
@@ -123,7 +123,7 @@ func (h *StoreHandler) SessionWhoami(c *echo.Context) error {
 	l, err := h.svc.GetLocation(ctx, lid)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			h.signer.Clear(c.Response())
+			h.signer.Clear(c.Response(), c.Request())
 			return c.JSON(http.StatusUnauthorized, errResp("session expired — please log in again"))
 		}
 		return c.JSON(http.StatusInternalServerError, errResp("location lookup failed"))

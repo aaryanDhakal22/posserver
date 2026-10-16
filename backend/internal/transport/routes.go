@@ -234,6 +234,8 @@ func routeTable(d RouterDeps) []routeDef {
 		// Store — menu editor (session-scoped). menus → categories → items;
 		// reusable modifier groups attached M:N.
 		def("GET", storePrefix+"/me/menu/unmatched", "store-session", "Recent vendor item names that don't route to a printer (?days=14)", menuH.MeUnmatched, storeSession),
+		def("GET", storePrefix+"/me/menu/export.csv", "store-session", "Download the menu as CSV (menu,category,item,price,printer,description)", menuH.MeExportCSV, storeSession),
+		def("POST", storePrefix+"/me/menu/import", "store-session", "Import a menu CSV (?dry_run=1 previews, ?replace=1 deletes existing menus first)", menuH.MeImportCSV, storeSession),
 		def("GET", storePrefix+"/me/menu/menus", "store-session", "List this location's menus", menuH.MeListMenus, storeSession),
 		def("POST", storePrefix+"/me/menu/menus", "store-session", "Create a menu", menuH.MeCreateMenu, storeSession),
 		def("POST", storePrefix+"/me/menu/menus/reorder", "store-session", "Reorder menus", menuH.MeReorderMenus, storeSession),

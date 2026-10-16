@@ -13,6 +13,7 @@ import (
 
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	menuDom "quiccpos/main/internal/domain/menu"
+	tenancyDom "quiccpos/main/internal/domain/tenancy"
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/observability"
 
@@ -33,16 +34,22 @@ type Service struct {
 	logger  zerolog.Logger
 	meters  observability.Meters
 	tracer  trace.Tracer
+	// listPrinters resolves a location's printers (tenancy's; swapped in tests).
+	listPrinters func(ctx context.Context, locationID uuid.UUID) ([]tenancyDom.Printer, error)
 }
 
 func NewService(repo menuDom.Repository, tenancy *tenancyApp.Service, meters observability.Meters, lg zerolog.Logger) *Service {
-	return &Service{
+	s := &Service{
 		repo:    repo,
 		tenancy: tenancy,
 		logger:  lg.With().Str("module", "menu-service").Logger(),
 		meters:  meters,
 		tracer:  otel.Tracer(tracerName),
 	}
+	if tenancy != nil {
+		s.listPrinters = tenancy.ListPrintersByLocation
+	}
+	return s
 }
 
 // mutateSpan opens a menu.mutate span for a create/update/delete operation.
@@ -467,7 +474,7 @@ func (s *Service) validatePrinter(ctx context.Context, locationID uuid.UUID, pri
 	if printerID == nil {
 		return nil
 	}
-	printers, err := s.tenancy.ListPrintersByLocation(ctx, locationID)
+	printers, err := s.listPrinters(ctx, locationID)
 	if err != nil {
 		return fmt.Errorf("resolve printers: %w", err)
 	}
