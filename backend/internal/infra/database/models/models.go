@@ -8,6 +8,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AgentBackup struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	DeviceID   pgtype.UUID        `json:"device_id"`
+	Size       int64              `json:"size"`
+	Sha256     string             `json:"sha256"`
+	Data       []byte             `json:"data"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type AgentHealth struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	DeviceID   pgtype.UUID        `json:"device_id"`
+	Health     []byte             `json:"health"`
+	At         pgtype.Timestamptz `json:"at"`
+}
+
+type AgentState struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	State      []byte             `json:"state"`
+	At         pgtype.Timestamptz `json:"at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AppRelease struct {
 	ID          pgtype.UUID        `json:"id"`
 	App         string             `json:"app"`
@@ -234,6 +261,10 @@ type Order struct {
 	EstimatedReadyAt    pgtype.Timestamptz `json:"estimated_ready_at"`
 	DriverName          string             `json:"driver_name"`
 	FloorAt             pgtype.Timestamptz `json:"floor_at"`
+	AgentAckAt          pgtype.Timestamptz `json:"agent_ack_at"`
+	AgentStatus         []byte             `json:"agent_status"`
+	AgentStatusAt       pgtype.Timestamptz `json:"agent_status_at"`
+	AgentBatchID        pgtype.Int8        `json:"agent_batch_id"`
 }
 
 type OutboxDispatch struct {

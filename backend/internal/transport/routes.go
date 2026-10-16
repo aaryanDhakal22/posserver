@@ -4,32 +4,34 @@
 // Routes are a single source of truth: `routeTable` returns a []routeDef that
 // `AddRoutes` both REGISTERS with Echo and serializes at GET /__routes (so the
 // console's routes viewer can't drift from what's actually served). Layout:
-//   /api/v1/*    — device-authenticated, scope-filtered runtime API
-//   /admin/v1/*  — admin-authenticated tenancy management (single bearer)
-//   /store/v1/*  — store-manager surface: browser managers use the session cookie
-//                  (POST /session + /me/*); the agent uses X-STORE-API-KEY
-//                  (store-config), provisioned by an admin-minted device token
-//   /app         — the embedded compiled SvelteKit UI (SPA); /admin + /store 302
-//                  redirect into /app/admin + /app/store
+//
+//	/api/v1/*    — device-authenticated, scope-filtered runtime API
+//	/admin/v1/*  — admin-authenticated tenancy management (single bearer)
+//	/store/v1/*  — store-manager surface: browser managers use the session cookie
+//	               (POST /session + /me/*); the agent uses X-STORE-API-KEY
+//	               (store-config), provisioned by an admin-minted device token
+//	/app         — the embedded compiled SvelteKit UI (SPA); /admin + /store 302
+//	               redirect into /app/admin + /app/store
 package transport
 
 import (
-	floorApp "quiccpos/main/internal/app/floor"
 	"io"
 	"io/fs"
 	"mime"
 	"net/http"
 	"path"
+	floorApp "quiccpos/main/internal/app/floor"
 	"strings"
 
+	"quiccpos/main/internal/app/agentsync"
 	menuApp "quiccpos/main/internal/app/menu"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
 	"quiccpos/main/internal/app/printerstatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/observability"
-	"quiccpos/main/internal/transport/handler"
 	"quiccpos/main/internal/rpc"
+	"quiccpos/main/internal/transport/handler"
 	appMiddleware "quiccpos/main/internal/transport/middleware"
 	"quiccpos/main/internal/transport/session"
 	"quiccpos/main/internal/transport/webapp"
@@ -57,8 +59,8 @@ type RouterDeps struct {
 	Broker         handler.SSEBroker
 	// Publisher pushes frames to a scope's connected agents (live store_config
 	// after location/printer edits). The concrete *sse.Broker satisfies it.
-	Publisher handler.FramePublisher
-	AdminAPIKey    string
+	Publisher   handler.FramePublisher
+	AdminAPIKey string
 	// Version + Commit are injected from cmd/api/main.go's ldflags-set vars.
 	// Surfaced via GET /api/v1/version so ops can `curl` and confirm what's
 	// actually running.
@@ -84,6 +86,8 @@ type RouterDeps struct {
 	MenuService *menuApp.Service
 	// OperatorService backs the operator accounts + read-only menu API.
 	OperatorService *operatorApp.Service
+	// AgentSync backs agent link / restore / backups / fleet health.
+	AgentSync *agentsync.Service
 }
 
 // RouteInfo is the JSON shape served at GET /__routes (shared across all
@@ -148,6 +152,7 @@ func routeTable(d RouterDeps) []routeDef {
 	operatorH := handler.NewOperatorHandler(d.OperatorService, d.MenuService, d.Meters, d.Logger)
 	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
+	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
 
 	appFS := webapp.FS()
 	appBuilt := webapp.Built()
@@ -175,6 +180,9 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", adminPrefix+"/app-releases", "admin", "Upload a tablet-app APK (?app=quibase&version_code&version_name; body = APK)", appRelH.Upload, admin),
 		def("DELETE", adminPrefix+"/app-releases/:code", "admin", "Delete a tablet-app release (?app=quibase)", appRelH.Delete, admin),
 		def("GET", adminPrefix+"/app-releases", "admin", "List tablet-app releases (?app=quibase), newest first", appRelH.List, admin),
+		def("GET", adminPrefix+"/agents/health", "admin", "Every location's agent health + connected state (fleet view)", agentLinkH.Fleet, admin),
+		def("GET", adminPrefix+"/agent-backups", "admin", "Stored agent DB backups (?location_id)", agentLinkH.ListBackups, admin),
+		def("GET", adminPrefix+"/agent-backups/:id", "admin", "Download one agent DB backup", agentLinkH.GetBackup, admin),
 		def("GET", adminPrefix+"/overview", "admin", "Flat dump of tenants/locations/devices", adminH.Overview, admin),
 		def("POST", adminPrefix+"/tenants", "admin", "Create a tenant (optional username/password/store_id)", adminH.CreateTenant, admin),
 		def("GET", adminPrefix+"/tenants", "admin", "List all tenants", adminH.ListTenants, admin),
@@ -213,6 +221,10 @@ func routeTable(d RouterDeps) []routeDef {
 		// screen (verified by a device-authed GET here), so the old username/
 		// password mint login is gone.
 		def("GET", storePrefix+"/store-config", "device", "This store's config (scope from the key) — agent keys only", storeH.GetStoreConfig, device, agentOnly),
+		def("POST", storePrefix+"/agent/link", "none", "Link a blank agent with the store manager login → agent key + secrets (revokes the old agent; throttled)", agentLinkH.Link),
+		def("GET", storePrefix+"/agent/restore", "device", "Open batch for a replacement agent (state + orders + drivers) — agent keys only", agentLinkH.Restore, device, agentOnly),
+		def("GET", storePrefix+"/agent/credential", "device", "Manager login hash for offline web-UI unlock — agent keys only", agentLinkH.Credential, device, agentOnly),
+		def("POST", storePrefix+"/agent/backup", "device", "Upload the agent's nightly SQLite copy (newest 2 kept) — agent keys only", agentLinkH.Backup, device, agentOnly),
 		def("POST", storePrefix+"/agent/rpc", "device", "Duplex channel: agent→main replies + reports — agent keys only", agentRPCH.Handle, device, agentOnly),
 		def("GET", storePrefix+"/agent/app/latest", "device", "Newest tablet-app release (?app=quibase; 204 none) — agent keys only", appRelH.Latest, device, agentOnly),
 		def("GET", storePrefix+"/agent/app/releases/:code/apk", "device", "Download a tablet-app APK (?app=quibase) — agent keys only", appRelH.APK, device, agentOnly),

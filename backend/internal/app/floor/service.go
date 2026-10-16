@@ -43,6 +43,10 @@ type event struct {
 	DriverName       string     `json:"driver_name"`
 	Auto             bool       `json:"auto"`
 	At               time.Time  `json:"at"`
+	// The agent's whole status object + batch (newer agents) — stored for a
+	// replacement agent's restore.
+	AgentStatus json.RawMessage `json:"agent_status"`
+	BatchID     *int64          `json:"batch_id"`
 	// driver.shift
 	ShiftID  string     `json:"shift_id"`
 	DriverID string     `json:"driver_id"`
@@ -163,6 +167,13 @@ func (s *Service) applyStatus(ctx context.Context, sc order.Scope, eid uuid.UUID
 	}
 	if out == order.FloorApplied {
 		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Str("status", string(newStatus)).Msg("floor update applied")
+	}
+	// Keep the agent's own view of the order (even for a skipped / duplicate
+	// event — the store is guarded by `at`) so a replacement Pi can restore it.
+	if len(ev.AgentStatus) > 0 && string(ev.AgentStatus) != "null" && !ev.At.IsZero() {
+		if err := s.repo.SetAgentStatus(ctx, sc, oid, ev.AgentStatus, ev.BatchID, ev.At); err != nil {
+			return "", err
+		}
 	}
 	return out, nil
 }

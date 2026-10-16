@@ -90,6 +90,24 @@ func (q *Queries) CountPendingDispatches(ctx context.Context, handlerName string
 	return count, err
 }
 
+const countUnackedOrders = `-- name: CountUnackedOrders :one
+SELECT count(*) FROM orders
+WHERE agent_ack_at IS NULL AND status = 'received'
+  AND received_at < $1 AND received_at > $2
+`
+
+type CountUnackedOrdersParams struct {
+	OlderThan pgtype.Timestamptz `json:"older_than"`
+	NewerThan pgtype.Timestamptz `json:"newer_than"`
+}
+
+func (q *Queries) CountUnackedOrders(ctx context.Context, arg CountUnackedOrdersParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnackedOrders, arg.OlderThan, arg.NewerThan)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAppRelease = `-- name: CreateAppRelease :one
 
 INSERT INTO app_releases (app, version_code, version_name, sha256, size, apk)
@@ -1116,6 +1134,40 @@ func (q *Queries) GetActiveOperatorTokenByHash(ctx context.Context, tokenHash st
 	return i, err
 }
 
+const getAgentBackupData = `-- name: GetAgentBackupData :one
+SELECT data, location_id, created_at FROM agent_backups WHERE id = $1
+`
+
+type GetAgentBackupDataRow struct {
+	Data       []byte             `json:"data"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) GetAgentBackupData(ctx context.Context, id pgtype.UUID) (GetAgentBackupDataRow, error) {
+	row := q.db.QueryRow(ctx, getAgentBackupData, id)
+	var i GetAgentBackupDataRow
+	err := row.Scan(&i.Data, &i.LocationID, &i.CreatedAt)
+	return i, err
+}
+
+const getAgentState = `-- name: GetAgentState :one
+SELECT location_id, tenant_id, state, at, updated_at FROM agent_state WHERE location_id = $1
+`
+
+func (q *Queries) GetAgentState(ctx context.Context, locationID pgtype.UUID) (AgentState, error) {
+	row := q.db.QueryRow(ctx, getAgentState, locationID)
+	var i AgentState
+	err := row.Scan(
+		&i.LocationID,
+		&i.TenantID,
+		&i.State,
+		&i.At,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getAppReleaseAPK = `-- name: GetAppReleaseAPK :one
 SELECT apk FROM app_releases WHERE app = $1 AND version_code = $2
 `
@@ -1389,6 +1441,30 @@ func (q *Queries) GetOperatorByID(ctx context.Context, id pgtype.UUID) (GetOpera
 	return i, err
 }
 
+const getOrderAgentFields = `-- name: GetOrderAgentFields :one
+SELECT agent_status, agent_batch_id, agent_ack_at FROM orders
+WHERE id = $1 AND tenant_id = $2 AND location_id = $3
+`
+
+type GetOrderAgentFieldsParams struct {
+	ID         pgtype.UUID `json:"id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+type GetOrderAgentFieldsRow struct {
+	AgentStatus  []byte             `json:"agent_status"`
+	AgentBatchID pgtype.Int8        `json:"agent_batch_id"`
+	AgentAckAt   pgtype.Timestamptz `json:"agent_ack_at"`
+}
+
+func (q *Queries) GetOrderAgentFields(ctx context.Context, arg GetOrderAgentFieldsParams) (GetOrderAgentFieldsRow, error) {
+	row := q.db.QueryRow(ctx, getOrderAgentFields, arg.ID, arg.TenantID, arg.LocationID)
+	var i GetOrderAgentFieldsRow
+	err := row.Scan(&i.AgentStatus, &i.AgentBatchID, &i.AgentAckAt)
+	return i, err
+}
+
 const getOrderBySourceEventInScope = `-- name: GetOrderBySourceEventInScope :one
 SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        kitchen_order_number, status, source_status, currency,
@@ -1396,7 +1472,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        customer_display_name, customer_email, customer_phone, customer_external_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
-       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at
+       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2 AND source = $3 AND source_event_id = $4
 `
@@ -1450,6 +1527,10 @@ func (q *Queries) GetOrderBySourceEventInScope(ctx context.Context, arg GetOrder
 		&i.EstimatedReadyAt,
 		&i.DriverName,
 		&i.FloorAt,
+		&i.AgentAckAt,
+		&i.AgentStatus,
+		&i.AgentStatusAt,
+		&i.AgentBatchID,
 	)
 	return i, err
 }
@@ -1461,7 +1542,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        customer_display_name, customer_email, customer_phone, customer_external_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
-       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at
+       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id
 FROM orders
 WHERE id = $1 AND tenant_id = $2 AND location_id = $3
 `
@@ -1511,6 +1593,10 @@ func (q *Queries) GetOrderInScope(ctx context.Context, arg GetOrderInScopeParams
 		&i.EstimatedReadyAt,
 		&i.DriverName,
 		&i.FloorAt,
+		&i.AgentAckAt,
+		&i.AgentStatus,
+		&i.AgentStatusAt,
+		&i.AgentBatchID,
 	)
 	return i, err
 }
@@ -1522,7 +1608,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        customer_display_name, customer_email, customer_phone, customer_external_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
-       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at
+       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id
 FROM orders
 WHERE id = $1 AND tenant_id = $2 AND location_id = $3
 FOR UPDATE
@@ -1573,6 +1660,10 @@ func (q *Queries) GetOrderInScopeForUpdate(ctx context.Context, arg GetOrderInSc
 		&i.EstimatedReadyAt,
 		&i.DriverName,
 		&i.FloorAt,
+		&i.AgentAckAt,
+		&i.AgentStatus,
+		&i.AgentStatusAt,
+		&i.AgentBatchID,
 	)
 	return i, err
 }
@@ -1584,7 +1675,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        customer_display_name, customer_email, customer_phone, customer_external_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
-       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at
+       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2
 ORDER BY received_at DESC
@@ -1646,6 +1738,10 @@ func (q *Queries) GetOrdersPageInScope(ctx context.Context, arg GetOrdersPageInS
 			&i.EstimatedReadyAt,
 			&i.DriverName,
 			&i.FloorAt,
+			&i.AgentAckAt,
+			&i.AgentStatus,
+			&i.AgentStatusAt,
+			&i.AgentBatchID,
 		); err != nil {
 			return nil, err
 		}
@@ -1804,6 +1900,53 @@ func (q *Queries) GetTenantByStoreID(ctx context.Context, storeID pgtype.Int8) (
 	return i, err
 }
 
+const insertAgentBackup = `-- name: InsertAgentBackup :one
+INSERT INTO agent_backups (tenant_id, location_id, device_id, size, sha256, data)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, tenant_id, location_id, device_id, size, sha256, created_at
+`
+
+type InsertAgentBackupParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	DeviceID   pgtype.UUID `json:"device_id"`
+	Size       int64       `json:"size"`
+	Sha256     string      `json:"sha256"`
+	Data       []byte      `json:"data"`
+}
+
+type InsertAgentBackupRow struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	DeviceID   pgtype.UUID        `json:"device_id"`
+	Size       int64              `json:"size"`
+	Sha256     string             `json:"sha256"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) InsertAgentBackup(ctx context.Context, arg InsertAgentBackupParams) (InsertAgentBackupRow, error) {
+	row := q.db.QueryRow(ctx, insertAgentBackup,
+		arg.TenantID,
+		arg.LocationID,
+		arg.DeviceID,
+		arg.Size,
+		arg.Sha256,
+		arg.Data,
+	)
+	var i InsertAgentBackupRow
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.DeviceID,
+		&i.Size,
+		&i.Sha256,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const insertDriver = `-- name: InsertDriver :exec
 INSERT INTO drivers (id, tenant_id, location_id, name, position, status, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -1900,6 +2043,92 @@ func (q *Queries) LastFloorEventAt(ctx context.Context, arg LastFloorEventAtPara
 	var last_at pgtype.Timestamptz
 	err := row.Scan(&last_at)
 	return last_at, err
+}
+
+const listAgentBackups = `-- name: ListAgentBackups :many
+SELECT id, tenant_id, location_id, device_id, size, sha256, created_at FROM agent_backups
+WHERE ($1::uuid IS NULL OR location_id = $1)
+ORDER BY created_at DESC LIMIT 100
+`
+
+type ListAgentBackupsRow struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	DeviceID   pgtype.UUID        `json:"device_id"`
+	Size       int64              `json:"size"`
+	Sha256     string             `json:"sha256"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListAgentBackups(ctx context.Context, locationID pgtype.UUID) ([]ListAgentBackupsRow, error) {
+	rows, err := q.db.Query(ctx, listAgentBackups, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAgentBackupsRow
+	for rows.Next() {
+		var i ListAgentBackupsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.DeviceID,
+			&i.Size,
+			&i.Sha256,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAgentHealth = `-- name: ListAgentHealth :many
+SELECT h.location_id, h.tenant_id, h.device_id, h.health, h.at, l.name AS location_name
+FROM agent_health h JOIN locations l ON l.id = h.location_id
+ORDER BY l.name
+`
+
+type ListAgentHealthRow struct {
+	LocationID   pgtype.UUID        `json:"location_id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	DeviceID     pgtype.UUID        `json:"device_id"`
+	Health       []byte             `json:"health"`
+	At           pgtype.Timestamptz `json:"at"`
+	LocationName string             `json:"location_name"`
+}
+
+func (q *Queries) ListAgentHealth(ctx context.Context) ([]ListAgentHealthRow, error) {
+	rows, err := q.db.Query(ctx, listAgentHealth)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAgentHealthRow
+	for rows.Next() {
+		var i ListAgentHealthRow
+		if err := rows.Scan(
+			&i.LocationID,
+			&i.TenantID,
+			&i.DeviceID,
+			&i.Health,
+			&i.At,
+			&i.LocationName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAllDevices = `-- name: ListAllDevices :many
@@ -2714,6 +2943,49 @@ func (q *Queries) ListRecentItemNames(ctx context.Context, arg ListRecentItemNam
 	return items, nil
 }
 
+const listRestoreOrderIDs = `-- name: ListRestoreOrderIDs :many
+SELECT id FROM orders
+WHERE tenant_id = $1 AND location_id = $2
+  AND (agent_batch_id = $3
+       OR (status = 'received' AND received_at >= $4))
+ORDER BY received_at ASC
+LIMIT 2000
+`
+
+type ListRestoreOrderIDsParams struct {
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	BatchID    pgtype.Int8        `json:"batch_id"`
+	Since      pgtype.Timestamptz `json:"since"`
+}
+
+// A replacement agent's open batch: everything the old agent filed under that
+// batch, plus orders nobody accepted yet since the batch opened.
+func (q *Queries) ListRestoreOrderIDs(ctx context.Context, arg ListRestoreOrderIDsParams) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listRestoreOrderIDs,
+		arg.TenantID,
+		arg.LocationID,
+		arg.BatchID,
+		arg.Since,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRoutingByLocation = `-- name: ListRoutingByLocation :many
 SELECT i.id AS item_id,
        i.name AS item_name,
@@ -2777,6 +3049,53 @@ func (q *Queries) ListTenants(ctx context.Context) ([]Tenant, error) {
 			&i.PasswordHash,
 			&i.CreatedAt,
 			&i.StoreID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnackedOrders = `-- name: ListUnackedOrders :many
+SELECT id, tenant_id, location_id, received_at FROM orders
+WHERE agent_ack_at IS NULL AND status = 'received'
+  AND received_at < $1 AND received_at > $2
+ORDER BY received_at ASC
+LIMIT $3
+`
+
+type ListUnackedOrdersParams struct {
+	OlderThan pgtype.Timestamptz `json:"older_than"`
+	NewerThan pgtype.Timestamptz `json:"newer_than"`
+	MaxRows   int32              `json:"max_rows"`
+}
+
+type ListUnackedOrdersRow struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	ReceivedAt pgtype.Timestamptz `json:"received_at"`
+}
+
+// Orders the agent hasn't confirmed: re-sent until it does.
+func (q *Queries) ListUnackedOrders(ctx context.Context, arg ListUnackedOrdersParams) ([]ListUnackedOrdersRow, error) {
+	rows, err := q.db.Query(ctx, listUnackedOrders, arg.OlderThan, arg.NewerThan, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnackedOrdersRow
+	for rows.Next() {
+		var i ListUnackedOrdersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.ReceivedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -2865,6 +3184,27 @@ func (q *Queries) MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeen
 	return result.RowsAffected(), nil
 }
 
+const markOrdersAcked = `-- name: MarkOrdersAcked :execrows
+
+UPDATE orders SET agent_ack_at = now()
+WHERE tenant_id = $1 AND location_id = $2 AND id = ANY($3::uuid[]) AND agent_ack_at IS NULL
+`
+
+type MarkOrdersAckedParams struct {
+	TenantID   pgtype.UUID   `json:"tenant_id"`
+	LocationID pgtype.UUID   `json:"location_id"`
+	Ids        []pgtype.UUID `json:"ids"`
+}
+
+// Agent reliability + recovery (00009) -------------------------------------------
+func (q *Queries) MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markOrdersAcked, arg.TenantID, arg.LocationID, arg.Ids)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const pendingEventsForHandler = `-- name: PendingEventsForHandler :many
 SELECT e.id, e.aggregate_id, e.tenant_id, e.location_id, e.type, e.payload,
        e.occurred_at, e.schema_version, d.attempts
@@ -2922,6 +3262,18 @@ func (q *Queries) PendingEventsForHandler(ctx context.Context, arg PendingEvents
 		return nil, err
 	}
 	return items, nil
+}
+
+const pruneAgentBackups = `-- name: PruneAgentBackups :exec
+DELETE FROM agent_backups a
+WHERE a.location_id = $1 AND a.id NOT IN (
+    SELECT b.id FROM agent_backups b WHERE b.location_id = $1 ORDER BY b.created_at DESC LIMIT 2
+)
+`
+
+func (q *Queries) PruneAgentBackups(ctx context.Context, locationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, pruneAgentBackups, locationID)
+	return err
 }
 
 const pruneAppReleases = `-- name: PruneAppReleases :exec
@@ -2990,7 +3342,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        customer_display_name, customer_email, customer_phone, customer_external_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
-       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at
+       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2
   AND ($3::text = '' OR customer_display_name ILIKE '%' || $3 || '%'
@@ -3074,6 +3427,10 @@ func (q *Queries) SearchOrdersInScope(ctx context.Context, arg SearchOrdersInSco
 			&i.EstimatedReadyAt,
 			&i.DriverName,
 			&i.FloorAt,
+			&i.AgentAckAt,
+			&i.AgentStatus,
+			&i.AgentStatusAt,
+			&i.AgentBatchID,
 		); err != nil {
 			return nil, err
 		}
@@ -3172,6 +3529,39 @@ type SetOptionPositionParams struct {
 func (q *Queries) SetOptionPosition(ctx context.Context, arg SetOptionPositionParams) error {
 	_, err := q.db.Exec(ctx, setOptionPosition, arg.ID, arg.TenantID, arg.Position)
 	return err
+}
+
+const setOrderAgentStatus = `-- name: SetOrderAgentStatus :execrows
+UPDATE orders
+SET agent_status = $1, agent_status_at = $2,
+    agent_batch_id = COALESCE($3, agent_batch_id),
+    agent_ack_at = COALESCE(agent_ack_at, now())
+WHERE id = $4 AND tenant_id = $5 AND location_id = $6
+  AND (agent_status_at IS NULL OR agent_status_at <= $2)
+`
+
+type SetOrderAgentStatusParams struct {
+	AgentStatus []byte             `json:"agent_status"`
+	At          pgtype.Timestamptz `json:"at"`
+	BatchID     pgtype.Int8        `json:"batch_id"`
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+}
+
+func (q *Queries) SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStatusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setOrderAgentStatus,
+		arg.AgentStatus,
+		arg.At,
+		arg.BatchID,
+		arg.ID,
+		arg.TenantID,
+		arg.LocationID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setPrinterReceipt = `-- name: SetPrinterReceipt :one
@@ -3644,6 +4034,57 @@ func (q *Queries) UpdateTenantConfig(ctx context.Context, arg UpdateTenantConfig
 		&i.StoreID,
 	)
 	return i, err
+}
+
+const upsertAgentHealth = `-- name: UpsertAgentHealth :exec
+INSERT INTO agent_health (location_id, tenant_id, device_id, health, at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (location_id) DO UPDATE
+SET device_id = EXCLUDED.device_id, health = EXCLUDED.health, at = EXCLUDED.at
+`
+
+type UpsertAgentHealthParams struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	DeviceID   pgtype.UUID        `json:"device_id"`
+	Health     []byte             `json:"health"`
+	At         pgtype.Timestamptz `json:"at"`
+}
+
+func (q *Queries) UpsertAgentHealth(ctx context.Context, arg UpsertAgentHealthParams) error {
+	_, err := q.db.Exec(ctx, upsertAgentHealth,
+		arg.LocationID,
+		arg.TenantID,
+		arg.DeviceID,
+		arg.Health,
+		arg.At,
+	)
+	return err
+}
+
+const upsertAgentState = `-- name: UpsertAgentState :exec
+INSERT INTO agent_state (location_id, tenant_id, state, at)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (location_id) DO UPDATE
+SET state = EXCLUDED.state, at = EXCLUDED.at, updated_at = now()
+WHERE agent_state.at <= EXCLUDED.at
+`
+
+type UpsertAgentStateParams struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	State      []byte             `json:"state"`
+	At         pgtype.Timestamptz `json:"at"`
+}
+
+func (q *Queries) UpsertAgentState(ctx context.Context, arg UpsertAgentStateParams) error {
+	_, err := q.db.Exec(ctx, upsertAgentState,
+		arg.LocationID,
+		arg.TenantID,
+		arg.State,
+		arg.At,
+	)
+	return err
 }
 
 const upsertDriverShift = `-- name: UpsertDriverShift :exec

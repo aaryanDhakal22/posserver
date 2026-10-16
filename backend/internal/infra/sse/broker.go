@@ -66,9 +66,17 @@ type ScopeWaker interface {
 	WakeScope(ctx context.Context, tenantID, locationID uuid.UUID)
 }
 
+// subscriberBuffer is each stream's queue. Generous so a reconnect backlog or a
+// burst never overflows it; an overflow still isn't a loss (the frame's order
+// stays unacked and is re-sent), just a delay.
+const subscriberBuffer = 256
+
 type Broker struct {
 	mu      sync.Mutex
 	clients map[Scope]map[chan Frame]struct{}
+	// devices maps each stream to the device that opened it (uuid.Nil when
+	// unknown), so a revoked agent's live stream can be cut immediately.
+	devices map[chan Frame]uuid.UUID
 	waker   Waker
 	logger  zerolog.Logger
 	meters  observability.Meters
@@ -77,6 +85,7 @@ type Broker struct {
 func New(lg zerolog.Logger, meters observability.Meters) *Broker {
 	return &Broker{
 		clients: make(map[Scope]map[chan Frame]struct{}),
+		devices: make(map[chan Frame]uuid.UUID),
 		logger:  lg.With().Str("module", "sse-broker").Logger(),
 		meters:  meters,
 	}
@@ -88,7 +97,12 @@ func (b *Broker) SetWaker(w Waker) { b.waker = w }
 // unsubscribe func. The dispatcher is woken on subscribe so the new client
 // gets any pending events for its scope within one tick.
 func (b *Broker) Subscribe(ctx context.Context, scope Scope) (chan Frame, func()) {
-	ch := make(chan Frame, 8)
+	return b.SubscribeAs(ctx, scope, uuid.Nil)
+}
+
+// SubscribeAs is Subscribe for a known device (see DisconnectDevice).
+func (b *Broker) SubscribeAs(ctx context.Context, scope Scope, deviceID uuid.UUID) (chan Frame, func()) {
+	ch := make(chan Frame, subscriberBuffer)
 
 	b.mu.Lock()
 	set, ok := b.clients[scope]
@@ -97,6 +111,7 @@ func (b *Broker) Subscribe(ctx context.Context, scope Scope) (chan Frame, func()
 		b.clients[scope] = set
 	}
 	set[ch] = struct{}{}
+	b.devices[ch] = deviceID
 	b.mu.Unlock()
 
 	if b.waker != nil {
@@ -111,17 +126,44 @@ func (b *Broker) Subscribe(ctx context.Context, scope Scope) (chan Frame, func()
 
 	return ch, func() {
 		b.mu.Lock()
-		if set, ok := b.clients[scope]; ok {
-			if _, ok := set[ch]; ok {
-				delete(set, ch)
-				close(ch)
-			}
-			if len(set) == 0 {
-				delete(b.clients, scope)
-			}
-		}
+		b.removeLocked(scope, ch)
 		b.mu.Unlock()
 	}
+}
+
+// removeLocked drops one stream (closing its channel once). Caller holds mu.
+func (b *Broker) removeLocked(scope Scope, ch chan Frame) {
+	if set, ok := b.clients[scope]; ok {
+		if _, ok := set[ch]; ok {
+			delete(set, ch)
+			delete(b.devices, ch)
+			close(ch)
+		}
+		if len(set) == 0 {
+			delete(b.clients, scope)
+		}
+	}
+}
+
+// DisconnectDevice closes every live stream opened by deviceID (a revoked
+// agent): its handler returns, the agent reconnects, gets 401 and wipes
+// itself. Returns how many streams were closed.
+func (b *Broker) DisconnectDevice(deviceID uuid.UUID) int {
+	if deviceID == uuid.Nil {
+		return 0
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	n := 0
+	for scope, set := range b.clients {
+		for ch := range set {
+			if b.devices[ch] == deviceID {
+				b.removeLocked(scope, ch)
+				n++
+			}
+		}
+	}
+	return n
 }
 
 // SubscribersFor returns how many clients are currently subscribed to a

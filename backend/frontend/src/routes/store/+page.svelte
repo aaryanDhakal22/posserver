@@ -27,6 +27,40 @@
   let banner = $state<{ msg: string; kind: 'ok' | 'error' | 'info' } | null>(null);
   let minted = $state<Minted | null>(null);
 
+  // Opening hours (location config `opening_hours`): one open period per day
+  // here; extra periods set through the API are kept as they are. main pages
+  // the owner when the Pi is offline for 2+ minutes inside these hours.
+  const DAYS: [string, string][] = [
+    ['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']
+  ];
+  type HoursRange = { open: string; close: string };
+  type DayHours = { on: boolean; open: string; close: string; extra: HoursRange[] };
+  let hours = $state<Record<string, DayHours>>({});
+
+  function hoursFromLoc(l: Location) {
+    const oh = ((l.config ?? {}) as Record<string, unknown>).opening_hours as Record<string, HoursRange[]> | undefined;
+    const next: Record<string, DayHours> = {};
+    for (const [d] of DAYS) {
+      const ranges = oh?.[d] ?? [];
+      next[d] = {
+        on: ranges.length > 0,
+        open: ranges[0]?.open ?? '11:00',
+        close: ranges[0]?.close ?? '23:00',
+        extra: ranges.slice(1)
+      };
+    }
+    hours = next;
+  }
+  function hoursConfig(): Record<string, HoursRange[]> {
+    const out: Record<string, HoursRange[]> = {};
+    for (const [d] of DAYS) {
+      const h = hours[d];
+      out[d] = h?.on ? [{ open: h.open, close: h.close }, ...h.extra] : [];
+    }
+    return out;
+  }
+  const hoursSet = $derived(Object.values(hours).some((h) => h.on));
+
   // new printer / device inputs
   let np = $state({ name: '', ip: '' });
   let nd = $state({ name: '', kind: 'mobile' });
@@ -41,6 +75,7 @@
 
   async function loadAll() {
     loc = await storeApi<Location>('/me/location');
+    hoursFromLoc(loc);
     printers = await storeApi<Printer[]>('/me/printers');
     devices = await storeApi<Device[]>('/me/devices');
     await loadFloor();
@@ -113,9 +148,10 @@
           phone: loc.phone,
           address_line1: loc.address_line1,
           address_line2: loc.address_line2,
-          config: loc.config
+          config: { ...(loc.config ?? {}), opening_hours: hoursConfig() }
         })
       });
+      hoursFromLoc(loc);
       toast('location saved');
     } catch (e) {
       err(e);
@@ -305,6 +341,29 @@
             bind:value={loc.daily_reset_hour}
           />
         </div>
+      </div>
+      <h3 class="font-semibold text-sm mt-5 mb-1">Opening hours</h3>
+      <p class="text-xs opacity-70 mb-2">
+        If the Pi goes offline for 2 minutes while you're open, the owner gets a Pushover. A close time
+        earlier than the open time runs past midnight.
+        {#if !hoursSet}<span class="font-semibold">No hours set — the offline alert is off.</span>{/if}
+      </p>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
+        {#each DAYS as [d, label]}
+          {#if hours[d]}
+            <div class="flex items-center gap-2 text-sm">
+              <label class="flex items-center gap-1 w-16"><input type="checkbox" bind:checked={hours[d].on} />{label}</label>
+              {#if hours[d].on}
+                <input type="time" class="field" bind:value={hours[d].open} />
+                <span>–</span>
+                <input type="time" class="field" bind:value={hours[d].close} />
+                {#if hours[d].extra.length}<span class="text-xs opacity-60">+{hours[d].extra.length} more</span>{/if}
+              {:else}
+                <span class="opacity-60">closed</span>
+              {/if}
+            </div>
+          {/if}
+        {/each}
       </div>
       <button class="btn btn-primary btn-xs mt-3" onclick={saveLocation}>save location</button>
     </section>

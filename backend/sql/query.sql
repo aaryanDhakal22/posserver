@@ -231,7 +231,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        customer_display_name, customer_email, customer_phone, customer_external_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
-       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at
+       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id
 FROM orders
 WHERE id = $1 AND tenant_id = $2 AND location_id = $3;
 
@@ -244,7 +245,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        customer_display_name, customer_email, customer_phone, customer_external_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
-       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at
+       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id
 FROM orders
 WHERE id = $1 AND tenant_id = $2 AND location_id = $3
 FOR UPDATE;
@@ -256,7 +258,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        customer_display_name, customer_email, customer_phone, customer_external_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
-       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at
+       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2 AND source = $3 AND source_event_id = $4;
 
@@ -267,7 +270,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        customer_display_name, customer_email, customer_phone, customer_external_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
-       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at
+       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2
 ORDER BY received_at DESC
@@ -285,7 +289,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        customer_display_name, customer_email, customer_phone, customer_external_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
-       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at
+       placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id
 FROM orders
 WHERE tenant_id = sqlc.arg('tenant_id') AND location_id = sqlc.arg('location_id')
   AND (sqlc.arg('q')::text = '' OR customer_display_name ILIKE '%' || sqlc.arg('q') || '%'
@@ -684,3 +689,84 @@ WHERE a.app = $1 AND a.version_code NOT IN (
 
 -- name: DeleteAppRelease :execrows
 DELETE FROM app_releases WHERE app = $1 AND version_code = $2;
+
+-- Agent reliability + recovery (00009) -------------------------------------------
+
+-- name: MarkOrdersAcked :execrows
+UPDATE orders SET agent_ack_at = now()
+WHERE tenant_id = $1 AND location_id = $2 AND id = ANY(sqlc.arg(ids)::uuid[]) AND agent_ack_at IS NULL;
+
+-- name: ListUnackedOrders :many
+-- Orders the agent hasn't confirmed: re-sent until it does.
+SELECT id, tenant_id, location_id, received_at FROM orders
+WHERE agent_ack_at IS NULL AND status = 'received'
+  AND received_at < sqlc.arg(older_than) AND received_at > sqlc.arg(newer_than)
+ORDER BY received_at ASC
+LIMIT sqlc.arg(max_rows);
+
+-- name: CountUnackedOrders :one
+SELECT count(*) FROM orders
+WHERE agent_ack_at IS NULL AND status = 'received'
+  AND received_at < sqlc.arg(older_than) AND received_at > sqlc.arg(newer_than);
+
+-- name: SetOrderAgentStatus :execrows
+UPDATE orders
+SET agent_status = sqlc.arg(agent_status), agent_status_at = sqlc.arg(at),
+    agent_batch_id = COALESCE(sqlc.narg(batch_id), agent_batch_id),
+    agent_ack_at = COALESCE(agent_ack_at, now())
+WHERE id = sqlc.arg(id) AND tenant_id = sqlc.arg(tenant_id) AND location_id = sqlc.arg(location_id)
+  AND (agent_status_at IS NULL OR agent_status_at <= sqlc.arg(at));
+
+-- name: UpsertAgentState :exec
+INSERT INTO agent_state (location_id, tenant_id, state, at)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (location_id) DO UPDATE
+SET state = EXCLUDED.state, at = EXCLUDED.at, updated_at = now()
+WHERE agent_state.at <= EXCLUDED.at;
+
+-- name: GetAgentState :one
+SELECT location_id, tenant_id, state, at, updated_at FROM agent_state WHERE location_id = $1;
+
+-- name: ListRestoreOrderIDs :many
+-- A replacement agent's open batch: everything the old agent filed under that
+-- batch, plus orders nobody accepted yet since the batch opened.
+SELECT id FROM orders
+WHERE tenant_id = sqlc.arg(tenant_id) AND location_id = sqlc.arg(location_id)
+  AND (agent_batch_id = sqlc.narg(batch_id)
+       OR (status = 'received' AND received_at >= sqlc.arg(since)))
+ORDER BY received_at ASC
+LIMIT 2000;
+
+-- name: GetOrderAgentFields :one
+SELECT agent_status, agent_batch_id, agent_ack_at FROM orders
+WHERE id = $1 AND tenant_id = $2 AND location_id = $3;
+
+-- name: UpsertAgentHealth :exec
+INSERT INTO agent_health (location_id, tenant_id, device_id, health, at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (location_id) DO UPDATE
+SET device_id = EXCLUDED.device_id, health = EXCLUDED.health, at = EXCLUDED.at;
+
+-- name: ListAgentHealth :many
+SELECT h.location_id, h.tenant_id, h.device_id, h.health, h.at, l.name AS location_name
+FROM agent_health h JOIN locations l ON l.id = h.location_id
+ORDER BY l.name;
+
+-- name: InsertAgentBackup :one
+INSERT INTO agent_backups (tenant_id, location_id, device_id, size, sha256, data)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, tenant_id, location_id, device_id, size, sha256, created_at;
+
+-- name: PruneAgentBackups :exec
+DELETE FROM agent_backups a
+WHERE a.location_id = $1 AND a.id NOT IN (
+    SELECT b.id FROM agent_backups b WHERE b.location_id = $1 ORDER BY b.created_at DESC LIMIT 2
+);
+
+-- name: ListAgentBackups :many
+SELECT id, tenant_id, location_id, device_id, size, sha256, created_at FROM agent_backups
+WHERE (sqlc.narg(location_id)::uuid IS NULL OR location_id = sqlc.narg(location_id))
+ORDER BY created_at DESC LIMIT 100;
+
+-- name: GetAgentBackupData :one
+SELECT data, location_id, created_at FROM agent_backups WHERE id = $1;

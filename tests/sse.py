@@ -25,6 +25,7 @@ class SSEStream:
             raise AssertionError(f"SSE connect failed: {self.resp.status_code} {self.resp.text}")
         self.frames: Queue = Queue()
         self._stop = threading.Event()
+        self._done = threading.Event()
         threading.Thread(target=self._read, daemon=True).start()
 
     def _read(self) -> None:
@@ -47,6 +48,8 @@ class SSEStream:
                     data.append(raw[5:].strip())
         except (requests.RequestException, AttributeError, ValueError):
             return  # connection closed by close()
+        finally:
+            self._done.set()
 
     def next(self, *, timeout: float = 10.0) -> dict:
         try:
@@ -68,6 +71,18 @@ class SSEStream:
             if predicate(d):
                 return d
         return None
+
+    def alive(self) -> bool:
+        """False once the server closed the stream."""
+        return not self._done.is_set()
+
+    def drain(self) -> None:
+        """Drop every frame received so far."""
+        while True:
+            try:
+                self.frames.get_nowait()
+            except Empty:
+                return
 
     def close(self) -> None:
         self._stop.set()

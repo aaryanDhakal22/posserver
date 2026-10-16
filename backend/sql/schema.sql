@@ -103,12 +103,19 @@ CREATE TABLE orders (
     driver_name           text        NOT NULL DEFAULT '',
     -- 00007: newest agent floor event applied (stale events can't overwrite fields).
     floor_at              timestamptz,
+    -- 00009: agent ack (resend until stored) + the agent's floor status for restore.
+    agent_ack_at          timestamptz,
+    agent_status          jsonb,
+    agent_status_at       timestamptz,
+    agent_batch_id        bigint,
 
     UNIQUE (tenant_id, source, source_event_id),
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE RESTRICT
 );
 CREATE INDEX idx_orders_received_at ON orders(received_at DESC);
 CREATE INDEX idx_orders_location_received ON orders(location_id, received_at DESC);
+CREATE INDEX idx_orders_unacked ON orders (received_at) WHERE agent_ack_at IS NULL;
+CREATE INDEX idx_orders_agent_batch ON orders (location_id, agent_batch_id);
 
 CREATE TABLE line_items (
     id                uuid     PRIMARY KEY,
@@ -370,3 +377,35 @@ CREATE TABLE app_releases (
     created_at   timestamptz NOT NULL DEFAULT now(),
     UNIQUE (app, version_code)
 );
+
+-- 00009_agent_link: agent floor state, health, nightly DB backups.
+CREATE TABLE agent_state (
+    location_id uuid        PRIMARY KEY,
+    tenant_id   uuid        NOT NULL,
+    state       jsonb       NOT NULL,
+    at          timestamptz NOT NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+
+CREATE TABLE agent_health (
+    location_id uuid        PRIMARY KEY,
+    tenant_id   uuid        NOT NULL,
+    device_id   uuid,
+    health      jsonb       NOT NULL,
+    at          timestamptz NOT NULL,
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+
+CREATE TABLE agent_backups (
+    id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   uuid        NOT NULL,
+    location_id uuid        NOT NULL,
+    device_id   uuid,
+    size        bigint      NOT NULL,
+    sha256      text        NOT NULL,
+    data        bytea       NOT NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_agent_backups_location ON agent_backups (location_id, created_at DESC);

@@ -235,3 +235,20 @@ func (r *OrderRepository) LastFloorEventAt(ctx context.Context, scope order.Scop
 	}
 	return &t.Time, nil
 }
+
+// SetAgentStatus — see order.FloorRepository.
+func (r *OrderRepository) SetAgentStatus(ctx context.Context, scope order.Scope, id uuid.UUID, status []byte, batchID *int64, at time.Time) error {
+	batch := pgtype.Int8{}
+	if batchID != nil {
+		batch = pgtype.Int8{Int64: *batchID, Valid: true}
+	}
+	_, err := models.New(r.pool).SetOrderAgentStatus(ctx, models.SetOrderAgentStatusParams{
+		AgentStatus: status,
+		At:          pgtype.Timestamptz{Time: at, Valid: true},
+		BatchID:     batch,
+		ID:          toPgUUID(id),
+		TenantID:    toPgUUID(uuid.UUID(scope.TenantID)),
+		LocationID:  toPgUUID(uuid.UUID(scope.LocationID)),
+	})
+	return err
+}

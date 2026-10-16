@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
 	"os"
 	"os/signal"
+	"quiccpos/main/internal/app/agentsync"
 	floorApp "quiccpos/main/internal/app/floor"
 	"quiccpos/main/internal/app/printerstatus"
 	"quiccpos/main/internal/casting/online"
@@ -12,6 +14,7 @@ import (
 	"quiccpos/main/internal/dispatch/handlers"
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/infra/database/repositories"
+	"quiccpos/main/internal/infra/pushover"
 	"quiccpos/main/internal/migrate"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
@@ -20,6 +23,7 @@ import (
 	"quiccpos/main/internal/transport"
 	"quiccpos/main/internal/transport/session"
 	"syscall"
+	"time"
 
 	authAppSvc "quiccpos/main/internal/app/auth"
 	menuApp "quiccpos/main/internal/app/menu"
@@ -192,9 +196,35 @@ func main() {
 
 	tenancyRepo := repositories.NewTenancyRepository(pool, lgr)
 	tenancyService := tenancyApp.NewService(tenancyRepo, lgr)
+	// A revoked / deleted device's live SSE stream is cut at once (a revoked
+	// agent must not keep printing until its next request fails).
+	tenancyService.OnDeviceGone(func(id uuid.UUID) { broker.DisconnectDevice(id) })
 
 	menuRepo := repositories.NewMenuRepository(pool, lgr)
 	menuService := menuApp.NewService(menuRepo, tenancyService, meters, lgr)
+
+	// Agent reliability + headless recovery: order acks + re-sends, the
+	// agent's state/health reports, link with the manager login, restore,
+	// backups, and the opening-hours offline pager. Runtime secrets handed to
+	// a linked agent come from AGENT_SECRET_* (read here, never logged).
+	agentSecrets := agentsync.Secrets{
+		PushoverAppToken: os.Getenv("AGENT_SECRET_PUSHOVER_APP_TOKEN"),
+		PushoverUserKey:  os.Getenv("AGENT_SECRET_PUSHOVER_USER_KEY"),
+		PushoverBossKey:  os.Getenv("AGENT_SECRET_PUSHOVER_BOSS_KEY"),
+		OTLPEndpoint:     os.Getenv("AGENT_SECRET_OTLP_ENDPOINT"),
+		OTLPHeaders:      os.Getenv("AGENT_SECRET_OTLP_HEADERS"),
+		TailscaleAuthKey: os.Getenv("AGENT_SECRET_TAILSCALE_AUTHKEY"),
+	}
+	pager := pushover.New(agentSecrets.PushoverAppToken, agentSecrets.PushoverUserKey, agentSecrets.PushoverBossKey)
+	agentSync := agentsync.New(pool, repo, repo, broker, tenancyService, agentSecrets, pager, lgr)
+	if v, err := time.ParseDuration(os.Getenv("ORDER_REDELIVER_AFTER")); err == nil && v > 0 {
+		agentSync.RedeliverAfter = v
+	}
+	requester.RegisterInbound(agentsync.MsgOrderAck, agentSync.HandleAck)
+	requester.RegisterInbound(agentsync.MsgAgentState, agentSync.HandleState)
+	requester.RegisterInbound(agentsync.MsgAgentHealth, agentSync.HandleHealth)
+	go agentSync.RunRedeliver(ctx)
+	go agentSync.RunOfflinePager(ctx)
 
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
 	operatorService := operatorApp.NewService(operatorRepo, tenancyService, lgr)
@@ -247,6 +277,7 @@ func main() {
 		MenuService:     menuService,
 		FloorService:    floorService,
 		OperatorService: operatorService,
+		AgentSync:       agentSync,
 	})
 
 	serverLogger := lgr.With().Str("module", "server").Logger()

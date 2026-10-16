@@ -35,8 +35,9 @@ type MintedDevice struct {
 }
 
 type Service struct {
-	repo   tenancy.Repository
-	logger zerolog.Logger
+	repo         tenancy.Repository
+	logger       zerolog.Logger
+	onDeviceGone func(id uuid.UUID)
 }
 
 func NewService(repo tenancy.Repository, lg zerolog.Logger) *Service {
@@ -314,6 +315,9 @@ func (s *Service) UpdateLocation(ctx context.Context, p tenancy.UpdateLocationPa
 	if p.Config == nil {
 		p.Config = tenancy.Config{}
 	}
+	if _, _, err := tenancy.HoursFromConfig(p.Config); err != nil {
+		return nil, err
+	}
 	return s.repo.UpdateLocation(ctx, p)
 }
 
@@ -323,7 +327,11 @@ func (s *Service) DeleteDevice(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return errors.New("device id is required")
 	}
-	return s.repo.DeleteDevice(ctx, id)
+	if err := s.repo.DeleteDevice(ctx, id); err != nil {
+		return err
+	}
+	s.deviceGone(id)
+	return nil
 }
 
 func (s *Service) UpdateTenantConfig(ctx context.Context, id uuid.UUID, cfg tenancy.Config) (*tenancy.Tenant, error) {
@@ -399,7 +407,22 @@ func (s *Service) ListDevicesByLocation(ctx context.Context, locationID uuid.UUI
 }
 
 func (s *Service) RevokeDevice(ctx context.Context, id uuid.UUID) error {
-	return s.repo.RevokeDevice(ctx, id)
+	if err := s.repo.RevokeDevice(ctx, id); err != nil {
+		return err
+	}
+	s.deviceGone(id)
+	return nil
+}
+
+// OnDeviceGone registers a hook run after a device is revoked or deleted
+// (cmd/api wires the SSE broker's DisconnectDevice, so a revoked agent's live
+// stream is cut at once instead of at its next request).
+func (s *Service) OnDeviceGone(fn func(id uuid.UUID)) { s.onDeviceGone = fn }
+
+func (s *Service) deviceGone(id uuid.UUID) {
+	if s.onDeviceGone != nil {
+		s.onDeviceGone(id)
+	}
 }
 
 // --- Printers --------------------------------------------------------------
@@ -487,4 +510,22 @@ func generateKey() (string, error) {
 		return "", err
 	}
 	return "qpos_" + hex.EncodeToString(buf), nil
+}
+
+// ManagerCredential returns the tenant's manager username and password hash
+// (bcrypt). A linked agent caches the hash so its web UI can be unlocked with
+// the manager login while the internet is down.
+func (s *Service) ManagerCredential(ctx context.Context, tenantID uuid.UUID) (username, hash string, err error) {
+	t, err := s.repo.GetTenantByID(ctx, tenantID)
+	if err != nil {
+		return "", "", err
+	}
+	if t.Username == "" {
+		return "", "", ErrInvalidCredentials
+	}
+	auth, err := s.repo.GetTenantAuthByUsername(ctx, t.Username)
+	if err != nil {
+		return "", "", err
+	}
+	return t.Username, auth.PasswordHash, nil
 }

@@ -28,6 +28,7 @@ const tracerName = "quiccpos/main/sse-handler"
 // tests can swap a fake without standing up the real broker.
 type SSEBroker interface {
 	Subscribe(ctx context.Context, scope sseBroker.Scope) (chan sseBroker.Frame, func())
+	SubscribeAs(ctx context.Context, scope sseBroker.Scope, deviceID uuid.UUID) (chan sseBroker.Frame, func())
 }
 
 type SSEHandler struct {
@@ -93,7 +94,11 @@ func (h *SSEHandler) StreamOrders(c *echo.Context) error {
 	}
 
 	// 2. Subscribe + main loop.
-	ch, unsub := h.broker.Subscribe(ctx, scope)
+	deviceID := uuid.Nil
+	if dev := appMiddleware.DeviceFromContext(ctx); dev != nil {
+		deviceID = dev.ID
+	}
+	ch, unsub := h.broker.SubscribeAs(ctx, scope, deviceID)
 	defer unsub()
 
 	h.meters.SSEClientsActive.Add(ctx, 1)

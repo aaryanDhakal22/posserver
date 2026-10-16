@@ -40,6 +40,13 @@ services:
       # Required: gates /admin/v1/* and the embedded /admin UI's mutations.
       # Generate one with `task admin-key-gen` and put it in Doppler.
       ADMIN_API_KEY:
+      AGENT_SECRET_PUSHOVER_APP_TOKEN:
+      AGENT_SECRET_PUSHOVER_USER_KEY:
+      AGENT_SECRET_PUSHOVER_BOSS_KEY:
+      AGENT_SECRET_OTLP_ENDPOINT:
+      AGENT_SECRET_OTLP_HEADERS:
+      AGENT_SECRET_TAILSCALE_AUTHKEY:
+      ORDER_REDELIVER_AFTER:
       OTEL_EXPORTER_OTLP_ENDPOINT:
       OTEL_EXPORTER_OTLP_HEADERS:
       OTEL_SERVICE_NAME:

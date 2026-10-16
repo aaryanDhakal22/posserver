@@ -119,4 +119,9 @@ type FloorRepository interface {
 	ListDriverShifts(ctx context.Context, scope Scope, since time.Time) ([]DriverShift, error)
 	// LastFloorEventAt is when the location's agent last synced a floor event.
 	LastFloorEventAt(ctx context.Context, scope Scope) (*time.Time, error)
+	// SetAgentStatus stores the agent's full floor status for an order (and
+	// the agent batch it belongs to) — what a replacement agent restores
+	// from. Ignored when an equal-or-newer status is already stored. Also
+	// marks the order acknowledged by the agent.
+	SetAgentStatus(ctx context.Context, scope Scope, id uuid.UUID, status []byte, batchID *int64, at time.Time) error
 }

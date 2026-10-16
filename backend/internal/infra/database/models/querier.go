@@ -17,6 +17,7 @@ type Querier interface {
 	ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error
 	CountItemsForGroup(ctx context.Context, arg CountItemsForGroupParams) (int64, error)
 	CountPendingDispatches(ctx context.Context, handlerName string) (int64, error)
+	CountUnackedOrders(ctx context.Context, arg CountUnackedOrdersParams) (int64, error)
 	// App releases (Quibase APKs) ----------------------------------------------------
 	CreateAppRelease(ctx context.Context, arg CreateAppReleaseParams) (CreateAppReleaseRow, error)
 	// ───────────────────────────────────────────────────────────────────────────
@@ -83,6 +84,8 @@ type Querier interface {
 	DetachModifierGroup(ctx context.Context, arg DetachModifierGroupParams) error
 	GetActiveDeviceByKeyHash(ctx context.Context, keyHash string) (Device, error)
 	GetActiveOperatorTokenByHash(ctx context.Context, tokenHash string) (GetActiveOperatorTokenByHashRow, error)
+	GetAgentBackupData(ctx context.Context, id pgtype.UUID) (GetAgentBackupDataRow, error)
+	GetAgentState(ctx context.Context, locationID pgtype.UUID) (AgentState, error)
 	GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKParams) ([]byte, error)
 	GetLatestAppRelease(ctx context.Context, app string) (GetLatestAppReleaseRow, error)
 	GetLineItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]LineItem, error)
@@ -93,6 +96,7 @@ type Querier interface {
 	GetModifierGroupByID(ctx context.Context, arg GetModifierGroupByIDParams) (ModifierGroup, error)
 	GetOperatorAuthByUsername(ctx context.Context, username string) (GetOperatorAuthByUsernameRow, error)
 	GetOperatorByID(ctx context.Context, id pgtype.UUID) (GetOperatorByIDRow, error)
+	GetOrderAgentFields(ctx context.Context, arg GetOrderAgentFieldsParams) (GetOrderAgentFieldsRow, error)
 	GetOrderBySourceEventInScope(ctx context.Context, arg GetOrderBySourceEventInScopeParams) (Order, error)
 	// Tenant/location-scoped lookup by canonical id. Read endpoints always
 	// supply the caller's scope so a cross-tenant id leak still 404s.
@@ -109,6 +113,7 @@ type Querier interface {
 	GetTenantByID(ctx context.Context, id pgtype.UUID) (Tenant, error)
 	// Order routing: the external vendor's store_id → tenant (see app/tenancy.ResolveStore).
 	GetTenantByStoreID(ctx context.Context, storeID pgtype.Int8) (Tenant, error)
+	InsertAgentBackup(ctx context.Context, arg InsertAgentBackupParams) (InsertAgentBackupRow, error)
 	InsertDriver(ctx context.Context, arg InsertDriverParams) error
 	InsertOutboxDispatch(ctx context.Context, arg InsertOutboxDispatchParams) error
 	// ───────────────────────────────────────────────────────────────────────────
@@ -116,6 +121,8 @@ type Querier interface {
 	// ───────────────────────────────────────────────────────────────────────────
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) error
 	LastFloorEventAt(ctx context.Context, arg LastFloorEventAtParams) (pgtype.Timestamptz, error)
+	ListAgentBackups(ctx context.Context, locationID pgtype.UUID) ([]ListAgentBackupsRow, error)
+	ListAgentHealth(ctx context.Context) ([]ListAgentHealthRow, error)
 	ListAllDevices(ctx context.Context) ([]Device, error)
 	ListAllLocations(ctx context.Context) ([]Location, error)
 	ListAppReleases(ctx context.Context, app string) ([]ListAppReleasesRow, error)
@@ -139,17 +146,25 @@ type Querier interface {
 	// Top-level item names ordered at a location since a time, with counts — the
 	// input to the unmatched-names report.
 	ListRecentItemNames(ctx context.Context, arg ListRecentItemNamesParams) ([]ListRecentItemNamesRow, error)
+	// A replacement agent's open batch: everything the old agent filed under that
+	// batch, plus orders nobody accepted yet since the batch opened.
+	ListRestoreOrderIDs(ctx context.Context, arg ListRestoreOrderIDsParams) ([]pgtype.UUID, error)
 	// Kitchen routing table for one location: every menu item's name with its
 	// effective printer (the item's own printer, else its category's default),
 	// best candidate first — available menus/categories first, then menu,
 	// category and item position. The router keeps the first row per name.
 	ListRoutingByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListRoutingByLocationRow, error)
 	ListTenants(ctx context.Context) ([]Tenant, error)
+	// Orders the agent hasn't confirmed: re-sent until it does.
+	ListUnackedOrders(ctx context.Context, arg ListUnackedOrdersParams) ([]ListUnackedOrdersRow, error)
 	MarkDispatchFailed(ctx context.Context, arg MarkDispatchFailedParams) error
 	MarkDispatchSucceeded(ctx context.Context, arg MarkDispatchSucceededParams) error
 	// Idempotency gate for agent floor events: 0 rows = already applied.
 	MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeenParams) (int64, error)
+	// Agent reliability + recovery (00009) -------------------------------------------
+	MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) (int64, error)
 	PendingEventsForHandler(ctx context.Context, arg PendingEventsForHandlerParams) ([]PendingEventsForHandlerRow, error)
+	PruneAgentBackups(ctx context.Context, locationID pgtype.UUID) error
 	PruneAppReleases(ctx context.Context, arg PruneAppReleasesParams) error
 	// An agent for this (tenant, location) just (re)subscribed: make every still-
 	// pending, backed-off dispatch for the scope due now so its backlog drains
@@ -169,6 +184,7 @@ type Querier interface {
 	SetMenuPosition(ctx context.Context, arg SetMenuPositionParams) error
 	SetOperatorPassword(ctx context.Context, arg SetOperatorPasswordParams) error
 	SetOptionPosition(ctx context.Context, arg SetOptionPositionParams) error
+	SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStatusParams) (int64, error)
 	SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptParams) (Printer, error)
 	// Set/rotate a tenant's store-manager login (username + already-hashed password).
 	SetTenantCredentials(ctx context.Context, arg SetTenantCredentialsParams) error
@@ -189,6 +205,8 @@ type Querier interface {
 	UpdateOrderFloor(ctx context.Context, arg UpdateOrderFloorParams) error
 	UpdatePrinter(ctx context.Context, arg UpdatePrinterParams) (Printer, error)
 	UpdateTenantConfig(ctx context.Context, arg UpdateTenantConfigParams) (Tenant, error)
+	UpsertAgentHealth(ctx context.Context, arg UpsertAgentHealthParams) error
+	UpsertAgentState(ctx context.Context, arg UpsertAgentStateParams) error
 	// A driver.shift event (clock-in, then the clock-out for the same shift id),
 	// keyed per location.
 	UpsertDriverShift(ctx context.Context, arg UpsertDriverShiftParams) error

@@ -6,15 +6,15 @@ name: Build and Push to GHCR
 # Image tags at ghcr.io/<owner>/posserver (floating tags move, the rest don't):
 #
 #   push to `staging` branch → staging-latest (floating), staging-<sha7>
-#   push to `master`         → prod-latest (floating),    prod-<sha7>
-#   push a `v*` tag          → <semver>, prod-v<semver>   (immutable release)
+#   push to `master`         → master-<sha7>                (never deployed)
+#   push a `v*` tag          → <semver>, prod-v<semver>     (the ONLY prod images)
 #   any other branch         → branch-<slug>
 #
-# Staging and prod images live side by side. Nothing here deploys: a host
-# only changes when an operator pulls a tag and recreates the container
-# (`task deploy IMAGE=…` on the prod box, `task staging-up` on staging).
-# NOTE: `master` still holds v1 until the cutover (see ../CUTOVER.md) — push v2
-# to `staging` only.
+# `prod-latest` is never written by CI: it stays the last v1 image, which the
+# prod box still runs and which is the rollback target after the cutover.
+# Prod deploys always pin an exact tag (`deploy.sh prod-vX.Y.Z`).
+# Nothing here deploys: a host only changes when an operator pulls a tag and
+# recreates the container.
 # ─────────────────────────────────────────────────────────────────────────
 
 on:
@@ -88,8 +88,7 @@ jobs:
           tags: |
             type=raw,value=staging-latest,enable=${{ github.ref == 'refs/heads/staging' }}
             type=sha,prefix=staging-,format=short,enable=${{ github.ref == 'refs/heads/staging' }}
-            type=raw,value=prod-latest,enable=${{ github.ref == 'refs/heads/master' }}
-            type=sha,prefix=prod-,format=short,enable=${{ github.ref == 'refs/heads/master' }}
+            type=sha,prefix=master-,format=short,enable=${{ github.ref == 'refs/heads/master' }}
             type=ref,event=branch,prefix=branch-,enable=${{ github.ref != 'refs/heads/staging' && github.ref != 'refs/heads/master' }}
 
       - name: Read VERSION
