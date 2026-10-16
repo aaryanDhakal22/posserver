@@ -17,6 +17,8 @@ type Querier interface {
 	ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error
 	CountItemsForGroup(ctx context.Context, arg CountItemsForGroupParams) (int64, error)
 	CountPendingDispatches(ctx context.Context, handlerName string) (int64, error)
+	// App releases (Quibase APKs) ----------------------------------------------------
+	CreateAppRelease(ctx context.Context, arg CreateAppReleaseParams) (CreateAppReleaseRow, error)
 	// ───────────────────────────────────────────────────────────────────────────
 	// Devices (API keys)
 	// ───────────────────────────────────────────────────────────────────────────
@@ -53,6 +55,7 @@ type Querier interface {
 	// can still create credential-less tenants. Full-column RETURNING keeps sqlc
 	// mapping to the models.Tenant table struct (see toDomainTenant).
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
+	DeleteAppRelease(ctx context.Context, arg DeleteAppReleaseParams) (int64, error)
 	DeleteDevice(ctx context.Context, id pgtype.UUID) error
 	DeleteLocationDrivers(ctx context.Context, arg DeleteLocationDriversParams) error
 	DeleteMenu(ctx context.Context, arg DeleteMenuParams) error
@@ -80,6 +83,8 @@ type Querier interface {
 	DetachModifierGroup(ctx context.Context, arg DetachModifierGroupParams) error
 	GetActiveDeviceByKeyHash(ctx context.Context, keyHash string) (Device, error)
 	GetActiveOperatorTokenByHash(ctx context.Context, tokenHash string) (GetActiveOperatorTokenByHashRow, error)
+	GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKParams) ([]byte, error)
+	GetLatestAppRelease(ctx context.Context, app string) (GetLatestAppReleaseRow, error)
 	GetLineItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]LineItem, error)
 	GetLocationByID(ctx context.Context, id pgtype.UUID) (Location, error)
 	GetMenuByID(ctx context.Context, arg GetMenuByIDParams) (Menu, error)
@@ -113,6 +118,7 @@ type Querier interface {
 	LastFloorEventAt(ctx context.Context, arg LastFloorEventAtParams) (pgtype.Timestamptz, error)
 	ListAllDevices(ctx context.Context) ([]Device, error)
 	ListAllLocations(ctx context.Context) ([]Location, error)
+	ListAppReleases(ctx context.Context, app string) ([]ListAppReleasesRow, error)
 	ListCategoriesByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuCategory, error)
 	ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) ([]MenuCategory, error)
 	ListDevicesByLocation(ctx context.Context, locationID pgtype.UUID) ([]Device, error)
@@ -144,6 +150,7 @@ type Querier interface {
 	// Idempotency gate for agent floor events: 0 rows = already applied.
 	MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeenParams) (int64, error)
 	PendingEventsForHandler(ctx context.Context, arg PendingEventsForHandlerParams) ([]PendingEventsForHandlerRow, error)
+	PruneAppReleases(ctx context.Context, arg PruneAppReleasesParams) error
 	// An agent for this (tenant, location) just (re)subscribed: make every still-
 	// pending, backed-off dispatch for the scope due now so its backlog drains
 	// within one dispatcher tick instead of waiting out the exponential backoff.

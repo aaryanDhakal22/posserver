@@ -147,6 +147,7 @@ func routeTable(d RouterDeps) []routeDef {
 	floorH := handler.NewFloorHandler(d.Service, d.FloorService, d.Logger)
 	operatorH := handler.NewOperatorHandler(d.OperatorService, d.MenuService, d.Meters, d.Logger)
 	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
+	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 
 	appFS := webapp.FS()
 	appBuilt := webapp.Built()
@@ -171,6 +172,9 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", apiPrefix+"/events/orders", "device", "SSE stream (store_config handshake + orders) — agent keys only", sseH.StreamOrders, device, agentOnly),
 
 		// Admin — single shared bearer.
+		def("POST", adminPrefix+"/app-releases", "admin", "Upload a tablet-app APK (?app=quibase&version_code&version_name; body = APK)", appRelH.Upload, admin),
+		def("DELETE", adminPrefix+"/app-releases/:code", "admin", "Delete a tablet-app release (?app=quibase)", appRelH.Delete, admin),
+		def("GET", adminPrefix+"/app-releases", "admin", "List tablet-app releases (?app=quibase), newest first", appRelH.List, admin),
 		def("GET", adminPrefix+"/overview", "admin", "Flat dump of tenants/locations/devices", adminH.Overview, admin),
 		def("POST", adminPrefix+"/tenants", "admin", "Create a tenant (optional username/password/store_id)", adminH.CreateTenant, admin),
 		def("GET", adminPrefix+"/tenants", "admin", "List all tenants", adminH.ListTenants, admin),
@@ -210,6 +214,8 @@ func routeTable(d RouterDeps) []routeDef {
 		// password mint login is gone.
 		def("GET", storePrefix+"/store-config", "device", "This store's config (scope from the key) — agent keys only", storeH.GetStoreConfig, device, agentOnly),
 		def("POST", storePrefix+"/agent/rpc", "device", "Duplex channel: agent→main replies + reports — agent keys only", agentRPCH.Handle, device, agentOnly),
+		def("GET", storePrefix+"/agent/app/latest", "device", "Newest tablet-app release (?app=quibase; 204 none) — agent keys only", appRelH.Latest, device, agentOnly),
+		def("GET", storePrefix+"/agent/app/releases/:code/apk", "device", "Download a tablet-app APK (?app=quibase) — agent keys only", appRelH.APK, device, agentOnly),
 		def("POST", storePrefix+"/agent/revoke", "device", "Agent self-revoke (kills its own key) — agent keys only", storeH.AgentSelfRevoke, device, agentOnly),
 
 		// Store — browser manager session (signed httpOnly cookie).

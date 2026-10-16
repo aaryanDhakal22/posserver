@@ -90,6 +90,55 @@ func (q *Queries) CountPendingDispatches(ctx context.Context, handlerName string
 	return count, err
 }
 
+const createAppRelease = `-- name: CreateAppRelease :one
+
+INSERT INTO app_releases (app, version_code, version_name, sha256, size, apk)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, app, version_code, version_name, sha256, size, created_at
+`
+
+type CreateAppReleaseParams struct {
+	App         string `json:"app"`
+	VersionCode int64  `json:"version_code"`
+	VersionName string `json:"version_name"`
+	Sha256      string `json:"sha256"`
+	Size        int64  `json:"size"`
+	Apk         []byte `json:"apk"`
+}
+
+type CreateAppReleaseRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	App         string             `json:"app"`
+	VersionCode int64              `json:"version_code"`
+	VersionName string             `json:"version_name"`
+	Sha256      string             `json:"sha256"`
+	Size        int64              `json:"size"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+// App releases (Quibase APKs) ----------------------------------------------------
+func (q *Queries) CreateAppRelease(ctx context.Context, arg CreateAppReleaseParams) (CreateAppReleaseRow, error) {
+	row := q.db.QueryRow(ctx, createAppRelease,
+		arg.App,
+		arg.VersionCode,
+		arg.VersionName,
+		arg.Sha256,
+		arg.Size,
+		arg.Apk,
+	)
+	var i CreateAppReleaseRow
+	err := row.Scan(
+		&i.ID,
+		&i.App,
+		&i.VersionCode,
+		&i.VersionName,
+		&i.Sha256,
+		&i.Size,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createDevice = `-- name: CreateDevice :one
 
 INSERT INTO devices (tenant_id, location_id, name, kind, key_hash, key_prefix)
@@ -763,6 +812,23 @@ func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) (Ten
 	return i, err
 }
 
+const deleteAppRelease = `-- name: DeleteAppRelease :execrows
+DELETE FROM app_releases WHERE app = $1 AND version_code = $2
+`
+
+type DeleteAppReleaseParams struct {
+	App         string `json:"app"`
+	VersionCode int64  `json:"version_code"`
+}
+
+func (q *Queries) DeleteAppRelease(ctx context.Context, arg DeleteAppReleaseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAppRelease, arg.App, arg.VersionCode)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteDevice = `-- name: DeleteDevice :exec
 DELETE FROM devices WHERE id = $1
 `
@@ -1046,6 +1112,52 @@ func (q *Queries) GetActiveOperatorTokenByHash(ctx context.Context, tokenHash st
 		&i.OperatorID,
 		&i.Username,
 		&i.DisplayName,
+	)
+	return i, err
+}
+
+const getAppReleaseAPK = `-- name: GetAppReleaseAPK :one
+SELECT apk FROM app_releases WHERE app = $1 AND version_code = $2
+`
+
+type GetAppReleaseAPKParams struct {
+	App         string `json:"app"`
+	VersionCode int64  `json:"version_code"`
+}
+
+func (q *Queries) GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKParams) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getAppReleaseAPK, arg.App, arg.VersionCode)
+	var apk []byte
+	err := row.Scan(&apk)
+	return apk, err
+}
+
+const getLatestAppRelease = `-- name: GetLatestAppRelease :one
+SELECT id, app, version_code, version_name, sha256, size, created_at
+FROM app_releases WHERE app = $1 ORDER BY version_code DESC LIMIT 1
+`
+
+type GetLatestAppReleaseRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	App         string             `json:"app"`
+	VersionCode int64              `json:"version_code"`
+	VersionName string             `json:"version_name"`
+	Sha256      string             `json:"sha256"`
+	Size        int64              `json:"size"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) GetLatestAppRelease(ctx context.Context, app string) (GetLatestAppReleaseRow, error) {
+	row := q.db.QueryRow(ctx, getLatestAppRelease, app)
+	var i GetLatestAppReleaseRow
+	err := row.Scan(
+		&i.ID,
+		&i.App,
+		&i.VersionCode,
+		&i.VersionName,
+		&i.Sha256,
+		&i.Size,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -1855,6 +1967,49 @@ func (q *Queries) ListAllLocations(ctx context.Context) ([]Location, error) {
 			&i.AddressLine2,
 			&i.Config,
 			&i.StoreType,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAppReleases = `-- name: ListAppReleases :many
+SELECT id, app, version_code, version_name, sha256, size, created_at
+FROM app_releases WHERE app = $1 ORDER BY version_code DESC
+`
+
+type ListAppReleasesRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	App         string             `json:"app"`
+	VersionCode int64              `json:"version_code"`
+	VersionName string             `json:"version_name"`
+	Sha256      string             `json:"sha256"`
+	Size        int64              `json:"size"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) ListAppReleases(ctx context.Context, app string) ([]ListAppReleasesRow, error) {
+	rows, err := q.db.Query(ctx, listAppReleases, app)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAppReleasesRow
+	for rows.Next() {
+		var i ListAppReleasesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.App,
+			&i.VersionCode,
+			&i.VersionName,
+			&i.Sha256,
+			&i.Size,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -2767,6 +2922,23 @@ func (q *Queries) PendingEventsForHandler(ctx context.Context, arg PendingEvents
 		return nil, err
 	}
 	return items, nil
+}
+
+const pruneAppReleases = `-- name: PruneAppReleases :exec
+DELETE FROM app_releases a
+WHERE a.app = $1 AND a.version_code NOT IN (
+    SELECT b.version_code FROM app_releases b WHERE b.app = $1 ORDER BY b.version_code DESC LIMIT $2
+)
+`
+
+type PruneAppReleasesParams struct {
+	App   string `json:"app"`
+	Limit int32  `json:"limit"`
+}
+
+func (q *Queries) PruneAppReleases(ctx context.Context, arg PruneAppReleasesParams) error {
+	_, err := q.db.Exec(ctx, pruneAppReleases, arg.App, arg.Limit)
+	return err
 }
 
 const resetDispatchBackoffForScope = `-- name: ResetDispatchBackoffForScope :exec

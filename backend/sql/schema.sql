@@ -357,3 +357,16 @@ CREATE TABLE driver_shifts (
     PRIMARY KEY (location_id, id) -- 00007
 );
 CREATE INDEX idx_driver_shifts_location ON driver_shifts (location_id, clock_in DESC);
+
+-- 00008_app_releases: Quibase APKs (console uploads, agents download).
+CREATE TABLE app_releases (
+    id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    app          text        NOT NULL,
+    version_code bigint      NOT NULL,
+    version_name text        NOT NULL,
+    sha256       text        NOT NULL,
+    size         bigint      NOT NULL,
+    apk          bytea       NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (app, version_code)
+);

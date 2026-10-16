@@ -8,6 +8,17 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AppRelease struct {
+	ID          pgtype.UUID        `json:"id"`
+	App         string             `json:"app"`
+	VersionCode int64              `json:"version_code"`
+	VersionName string             `json:"version_name"`
+	Sha256      string             `json:"sha256"`
+	Size        int64              `json:"size"`
+	Apk         []byte             `json:"apk"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type Device struct {
 	ID         pgtype.UUID        `json:"id"`
 	TenantID   pgtype.UUID        `json:"tenant_id"`

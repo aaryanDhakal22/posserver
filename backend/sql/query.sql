@@ -657,3 +657,30 @@ UPDATE operator_tokens SET last_used_at = now() WHERE id = $1;
 
 -- name: RevokeAllOperatorTokens :exec
 UPDATE operator_tokens SET revoked_at = now() WHERE operator_id = $1 AND revoked_at IS NULL;
+
+-- App releases (Quibase APKs) ----------------------------------------------------
+
+-- name: CreateAppRelease :one
+INSERT INTO app_releases (app, version_code, version_name, sha256, size, apk)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, app, version_code, version_name, sha256, size, created_at;
+
+-- name: ListAppReleases :many
+SELECT id, app, version_code, version_name, sha256, size, created_at
+FROM app_releases WHERE app = $1 ORDER BY version_code DESC;
+
+-- name: GetLatestAppRelease :one
+SELECT id, app, version_code, version_name, sha256, size, created_at
+FROM app_releases WHERE app = $1 ORDER BY version_code DESC LIMIT 1;
+
+-- name: GetAppReleaseAPK :one
+SELECT apk FROM app_releases WHERE app = $1 AND version_code = $2;
+
+-- name: PruneAppReleases :exec
+DELETE FROM app_releases a
+WHERE a.app = $1 AND a.version_code NOT IN (
+    SELECT b.version_code FROM app_releases b WHERE b.app = $1 ORDER BY b.version_code DESC LIMIT $2
+);
+
+-- name: DeleteAppRelease :execrows
+DELETE FROM app_releases WHERE app = $1 AND version_code = $2;
