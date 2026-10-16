@@ -10,3 +10,6 @@ dependencies = [
 
 [tool.pytest.ini_options]
 testpaths = ["."]
+markers = [
+    "slow: waits on real timeouts (e.g. ~90s SQS redrive to the DLQ); `task test-quick` skips these",
+]

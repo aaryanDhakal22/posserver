@@ -11,10 +11,20 @@ import (
 )
 
 type AppConfig struct {
-	AppEnv        string
-	Domain        string
-	AdminPasscode string
+	AppEnv      string
+	Domain      string
+	AdminAPIKey string
+	// SessionSecret signs the store-manager web session cookie. It MUST be
+	// stable + identical across the blue-green slots (Doppler-managed) — a
+	// per-boot secret would log every manager out on a deploy swap. Required in
+	// stg/prd; a fixed insecure default is used in dev so local runs don't need
+	// it set until it's added to the dev Doppler config.
+	SessionSecret string
 }
+
+// devSessionSecret is the dev-only fallback for SESSION_SECRET (never used when
+// APP_ENV != "dev", where the var is required and boot fails fast if unset).
+const devSessionSecret = "dev-insecure-session-secret-change-me-please-0123456789"
 type ServerConfig struct {
 	Port string
 	Host string
@@ -31,11 +41,6 @@ type LogConfig struct {
 	Level  string
 	Output io.Writer
 	Style  string
-}
-
-type CacheConfig struct {
-	Host string
-	Port string
 }
 
 type SQSConfig struct {
@@ -57,7 +62,6 @@ type Config struct {
 	ServerConfig   ServerConfig
 	DatabaseConfig DatabaseConfig
 	LogConfig      LogConfig
-	CacheConfig    CacheConfig
 	SQSConfig      SQSConfig
 	OTELConfig     OTELConfig
 	logger         *zerolog.Logger
@@ -68,13 +72,16 @@ func NewConfig(logger *zerolog.Logger) *Config {
 	cfg := Config{
 		logger: logger,
 	}
+	appEnv := cfg.GetEnv("APP_ENV", true, "dev")
 	appConfig := AppConfig{
-		AppEnv:        cfg.GetEnv("APP_ENV", true, "dev"),
-		Domain:        cfg.GetEnv("DOMAIN", false, "localhost"),
-		AdminPasscode: cfg.GetEnv("ADMIN_PASSCODE", true, ""),
+		AppEnv:      appEnv,
+		Domain:      cfg.GetEnv("DOMAIN", false, "localhost"),
+		AdminAPIKey: cfg.GetEnv("ADMIN_API_KEY", true, ""),
+		// Required outside dev (fail-fast); dev falls back to a fixed insecure secret.
+		SessionSecret: cfg.GetEnv("SESSION_SECRET", appEnv != "dev", devSessionSecret),
 	}
 	serverConfig := ServerConfig{
-		Port: cfg.GetEnv("PORT", false, "1323"),
+		Port: cfg.GetEnv("SERVER_PORT", false, "1323"),
 		Host: cfg.GetEnv("HOST", false, "0.0.0.0"),
 	}
 	databaseConfig := DatabaseConfig{
@@ -88,10 +95,6 @@ func NewConfig(logger *zerolog.Logger) *Config {
 		Level:  cfg.GetEnv("LOG_LEVEL", false, "info"),
 		Output: getLogOutput(cfg.GetEnv("LOG_OUTPUT", false, "stdout")),
 		Style:  cfg.GetEnv("LOG_STYLE", false, "console"),
-	}
-	cacheConfig := CacheConfig{
-		Host: cfg.GetEnv("CACHE_HOST", false, "localhost"),
-		Port: cfg.GetEnv("CACHE_PORT", false, "6379"),
 	}
 	sqsConfig := SQSConfig{
 		QueueURL: cfg.GetEnv("SQS_QUEUE_URL", true, ""),
@@ -107,7 +110,6 @@ func NewConfig(logger *zerolog.Logger) *Config {
 	cfg.ServerConfig = serverConfig
 	cfg.DatabaseConfig = databaseConfig
 	cfg.LogConfig = logConfig
-	cfg.CacheConfig = cacheConfig
 	cfg.SQSConfig = sqsConfig
 	cfg.OTELConfig = otelConfig
 

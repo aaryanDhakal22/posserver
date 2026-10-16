@@ -8,125 +8,284 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type AuthKey struct {
-	ID  int32  `json:"id"`
-	Key string `json:"key"`
+type Device struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Name       string             `json:"name"`
+	Kind       string             `json:"kind"`
+	KeyHash    string             `json:"key_hash"`
+	KeyPrefix  string             `json:"key_prefix"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
 }
 
-type Coupon struct {
-	ID      int32         `json:"id"`
-	Serial  pgtype.Text   `json:"serial"`
-	Plu     pgtype.Text   `json:"plu"`
-	Name    pgtype.Text   `json:"name"`
-	Value   pgtype.Float4 `json:"value"`
-	Groupid pgtype.Text   `json:"groupid"`
-	Orderid pgtype.Int4   `json:"orderid"`
+type Driver struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Name       string             `json:"name"`
+	Position   int32              `json:"position"`
+	Status     string             `json:"status"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
-type Customer struct {
-	ID        int32       `json:"id"`
-	Firstname pgtype.Text `json:"firstname"`
-	Lastname  pgtype.Text `json:"lastname"`
-	Company   pgtype.Text `json:"company"`
-	Phone     pgtype.Text `json:"phone"`
-	Ext       pgtype.Text `json:"ext"`
-	Email     pgtype.Text `json:"email"`
+type DriverShift struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	DriverID   pgtype.UUID        `json:"driver_id"`
+	DriverName string             `json:"driver_name"`
+	ClockIn    pgtype.Timestamptz `json:"clock_in"`
+	ClockOut   pgtype.Timestamptz `json:"clock_out"`
+	AutoOut    bool               `json:"auto_out"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
-type DeliveryAddress struct {
-	ID           int32       `json:"id"`
-	Street       pgtype.Text `json:"street"`
-	Crossstreets pgtype.Text `json:"crossstreets"`
-	Suite        pgtype.Text `json:"suite"`
-	Buz          pgtype.Text `json:"buz"`
-	City         pgtype.Text `json:"city"`
-	State        pgtype.Text `json:"state"`
-	Zip          pgtype.Text `json:"zip"`
+type FloorEventsSeen struct {
+	EventID    pgtype.UUID        `json:"event_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	OrderID    pgtype.UUID        `json:"order_id"`
+	Type       string             `json:"type"`
+	Result     string             `json:"result"`
+	ReceivedAt pgtype.Timestamptz `json:"received_at"`
 }
 
-type DeliveryProvider struct {
-	ID           int32       `json:"id"`
-	Providername pgtype.Text `json:"providername"`
-	Status       pgtype.Text `json:"status"`
-	Deliveryid   pgtype.Text `json:"deliveryid"`
-	Trackingurl  pgtype.Text `json:"trackingurl"`
-	Pickupdate   pgtype.Text `json:"pickupdate"`
+type ItemModifierGroup struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	ItemID   pgtype.UUID `json:"item_id"`
+	GroupID  pgtype.UUID `json:"group_id"`
+	Position int32       `json:"position"`
 }
 
-type Item struct {
-	ID       int32         `json:"id"`
-	Name     pgtype.Text   `json:"name"`
-	Sizeid   pgtype.Int4   `json:"sizeid"`
-	Sizename pgtype.Text   `json:"sizename"`
-	Quantity pgtype.Int4   `json:"quantity"`
-	Price    pgtype.Float4 `json:"price"`
-	Plu      pgtype.Text   `json:"plu"`
-	Who      pgtype.Text   `json:"who"`
-	Groupid  pgtype.Text   `json:"groupid"`
-	Notes    pgtype.Text   `json:"notes"`
-	Orderid  pgtype.Int4   `json:"orderid"`
+type LineItem struct {
+	ID             pgtype.UUID `json:"id"`
+	OrderID        pgtype.UUID `json:"order_id"`
+	ParentID       pgtype.UUID `json:"parent_id"`
+	Position       int32       `json:"position"`
+	Sku            string      `json:"sku"`
+	Name           string      `json:"name"`
+	Quantity       int32       `json:"quantity"`
+	UnitPriceCents int64       `json:"unit_price_cents"`
+	LineTotalCents int64       `json:"line_total_cents"`
+	Notes          string      `json:"notes"`
+	Size           string      `json:"size"`
+	MenuItemID     pgtype.UUID `json:"menu_item_id"`
+	PrinterID      pgtype.UUID `json:"printer_id"`
+	Routing        string      `json:"routing"`
 }
 
-type MiscCharge struct {
-	ID               int32         `json:"id"`
-	Miscchargename   pgtype.Text   `json:"miscchargename"`
-	Miscchargedesc   pgtype.Text   `json:"miscchargedesc"`
-	Miscchargeamount pgtype.Float4 `json:"miscchargeamount"`
-	Orderid          pgtype.Int4   `json:"orderid"`
+type Location struct {
+	ID             pgtype.UUID        `json:"id"`
+	TenantID       pgtype.UUID        `json:"tenant_id"`
+	Slug           string             `json:"slug"`
+	Name           string             `json:"name"`
+	Timezone       string             `json:"timezone"`
+	DailyResetHour int16              `json:"daily_reset_hour"`
+	Phone          string             `json:"phone"`
+	AddressLine1   string             `json:"address_line1"`
+	AddressLine2   string             `json:"address_line2"`
+	Config         []byte             `json:"config"`
+	StoreType      string             `json:"store_type"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
 }
 
-type Modifier struct {
-	ID       int32         `json:"id"`
-	Side     pgtype.Text   `json:"side"`
-	Name     pgtype.Text   `json:"name"`
-	Quantity pgtype.Int4   `json:"quantity"`
-	Plu      pgtype.Text   `json:"plu"`
-	Price    pgtype.Float4 `json:"price"`
-	Action   pgtype.Text   `json:"action"`
-	Itemid   pgtype.Int4   `json:"itemid"`
+type Menu struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	Available   bool               `json:"available"`
+	Position    int32              `json:"position"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type MenuCategory struct {
+	ID               pgtype.UUID        `json:"id"`
+	TenantID         pgtype.UUID        `json:"tenant_id"`
+	LocationID       pgtype.UUID        `json:"location_id"`
+	MenuID           pgtype.UUID        `json:"menu_id"`
+	Name             string             `json:"name"`
+	Description      string             `json:"description"`
+	Available        bool               `json:"available"`
+	Position         int32              `json:"position"`
+	DefaultPrinterID pgtype.UUID        `json:"default_printer_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type MenuItem struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	CategoryID  pgtype.UUID        `json:"category_id"`
+	Name        string             `json:"name"`
+	Description string             `json:"description"`
+	PriceCents  int64              `json:"price_cents"`
+	TaxRateBps  int32              `json:"tax_rate_bps"`
+	InStock     bool               `json:"in_stock"`
+	OutUntil    pgtype.Timestamptz `json:"out_until"`
+	Tags        []byte             `json:"tags"`
+	PrinterID   pgtype.UUID        `json:"printer_id"`
+	Position    int32              `json:"position"`
+	Attributes  []byte             `json:"attributes"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ModifierGroup struct {
+	ID            pgtype.UUID        `json:"id"`
+	TenantID      pgtype.UUID        `json:"tenant_id"`
+	LocationID    pgtype.UUID        `json:"location_id"`
+	Name          string             `json:"name"`
+	Required      bool               `json:"required"`
+	MinSelect     int32              `json:"min_select"`
+	MaxSelect     int32              `json:"max_select"`
+	AllowMultiple bool               `json:"allow_multiple"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ModifierOption struct {
+	ID              pgtype.UUID        `json:"id"`
+	TenantID        pgtype.UUID        `json:"tenant_id"`
+	LocationID      pgtype.UUID        `json:"location_id"`
+	GroupID         pgtype.UUID        `json:"group_id"`
+	Name            string             `json:"name"`
+	PriceDeltaCents int64              `json:"price_delta_cents"`
+	InStock         bool               `json:"in_stock"`
+	Position        int32              `json:"position"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type Operator struct {
+	ID           pgtype.UUID        `json:"id"`
+	Username     string             `json:"username"`
+	PasswordHash string             `json:"password_hash"`
+	DisplayName  string             `json:"display_name"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
+type OperatorLocation struct {
+	OperatorID pgtype.UUID `json:"operator_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+type OperatorToken struct {
+	ID          pgtype.UUID        `json:"id"`
+	OperatorID  pgtype.UUID        `json:"operator_id"`
+	TokenHash   string             `json:"token_hash"`
+	TokenPrefix string             `json:"token_prefix"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt  pgtype.Timestamptz `json:"last_used_at"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
 }
 
 type Order struct {
-	Tver             pgtype.Int4   `json:"tver"`
-	Orderid          int32         `json:"orderid"`
-	Ordernumber      pgtype.Int4   `json:"ordernumber"`
-	Storeid          pgtype.Int4   `json:"storeid"`
-	Vendorstoreid    pgtype.Text   `json:"vendorstoreid"`
-	Storename        pgtype.Text   `json:"storename"`
-	Servicetype      pgtype.Text   `json:"servicetype"`
-	Submitteddate    pgtype.Text   `json:"submitteddate"`
-	Printdate        pgtype.Text   `json:"printdate"`
-	Deferreddate     pgtype.Text   `json:"deferreddate"`
-	Istaxexempt      pgtype.Bool   `json:"istaxexempt"`
-	Ordertotal       pgtype.Float4 `json:"ordertotal"`
-	Balanceowing     pgtype.Float4 `json:"balanceowing"`
-	Notes            pgtype.Text   `json:"notes"`
-	Tip              pgtype.Float4 `json:"tip"`
-	Customer         pgtype.Int4   `json:"customer"`
-	Deliveryaddress  pgtype.Int4   `json:"deliveryaddress"`
-	Deliveryprovider pgtype.Int4   `json:"deliveryprovider"`
+	ID                  pgtype.UUID        `json:"id"`
+	TenantID            pgtype.UUID        `json:"tenant_id"`
+	LocationID          pgtype.UUID        `json:"location_id"`
+	SchemaVersion       int32              `json:"schema_version"`
+	Source              string             `json:"source"`
+	SourceEventID       string             `json:"source_event_id"`
+	KitchenOrderNumber  pgtype.Int4        `json:"kitchen_order_number"`
+	Status              string             `json:"status"`
+	SourceStatus        string             `json:"source_status"`
+	Currency            string             `json:"currency"`
+	SubtotalCents       int64              `json:"subtotal_cents"`
+	TaxCents            int64              `json:"tax_cents"`
+	TipCents            int64              `json:"tip_cents"`
+	TotalCents          int64              `json:"total_cents"`
+	Fees                []byte             `json:"fees"`
+	Discounts           []byte             `json:"discounts"`
+	CustomerDisplayName string             `json:"customer_display_name"`
+	CustomerEmail       string             `json:"customer_email"`
+	CustomerPhone       string             `json:"customer_phone"`
+	CustomerExternalID  string             `json:"customer_external_id"`
+	FulfillmentType     string             `json:"fulfillment_type"`
+	FulfillmentAddress  []byte             `json:"fulfillment_address"`
+	PromisedAt          pgtype.Timestamptz `json:"promised_at"`
+	TableID             string             `json:"table_id"`
+	Notes               string             `json:"notes"`
+	SourceMetadata      []byte             `json:"source_metadata"`
+	RawPayload          []byte             `json:"raw_payload"`
+	PlacedAt            pgtype.Timestamptz `json:"placed_at"`
+	ReceivedAt          pgtype.Timestamptz `json:"received_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	EstimatedReadyAt    pgtype.Timestamptz `json:"estimated_ready_at"`
+	DriverName          string             `json:"driver_name"`
+	FloorAt             pgtype.Timestamptz `json:"floor_at"`
 }
 
-type OrderNumberCounter struct {
-	ID    int32 `json:"id"`
-	Value int32 `json:"value"`
+type OutboxDispatch struct {
+	EventID       pgtype.UUID        `json:"event_id"`
+	HandlerName   string             `json:"handler_name"`
+	DispatchedAt  pgtype.Timestamptz `json:"dispatched_at"`
+	Attempts      int32              `json:"attempts"`
+	LastError     string             `json:"last_error"`
+	LastAttemptAt pgtype.Timestamptz `json:"last_attempt_at"`
+	NextAttemptAt pgtype.Timestamptz `json:"next_attempt_at"`
+}
+
+type OutboxEvent struct {
+	ID            pgtype.UUID        `json:"id"`
+	AggregateID   pgtype.UUID        `json:"aggregate_id"`
+	TenantID      pgtype.UUID        `json:"tenant_id"`
+	LocationID    pgtype.UUID        `json:"location_id"`
+	Type          string             `json:"type"`
+	Payload       []byte             `json:"payload"`
+	OccurredAt    pgtype.Timestamptz `json:"occurred_at"`
+	SchemaVersion int32              `json:"schema_version"`
 }
 
 type Payment struct {
-	ID            int32         `json:"id"`
-	Paymenttype   pgtype.Text   `json:"paymenttype"`
-	Amount        pgtype.Float4 `json:"amount"`
-	Cardnumber    pgtype.Text   `json:"cardnumber"`
-	Cardholder    pgtype.Text   `json:"cardholder"`
-	Authcode      pgtype.Text   `json:"authcode"`
-	Transactionid pgtype.Text   `json:"transactionid"`
-	Token         pgtype.Text   `json:"token"`
-	Orderid       pgtype.Int4   `json:"orderid"`
+	ID          pgtype.UUID        `json:"id"`
+	OrderID     pgtype.UUID        `json:"order_id"`
+	Processor   string             `json:"processor"`
+	Status      string             `json:"status"`
+	AmountCents int64              `json:"amount_cents"`
+	Token       string             `json:"token"`
+	Last4       string             `json:"last4"`
+	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
 }
 
-type Tax struct {
-	ID        int32         `json:"id"`
-	Taxname   pgtype.Text   `json:"taxname"`
-	Taxamount pgtype.Float4 `json:"taxamount"`
-	Orderid   pgtype.Int4   `json:"orderid"`
+type Printer struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Name       string             `json:"name"`
+	IP         string             `json:"ip"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	IsReceipt  bool               `json:"is_receipt"`
+}
+
+type StatusEvent struct {
+	OrderID    pgtype.UUID        `json:"order_id"`
+	Position   int32              `json:"position"`
+	FromStatus string             `json:"from_status"`
+	ToStatus   string             `json:"to_status"`
+	At         pgtype.Timestamptz `json:"at"`
+	Actor      string             `json:"actor"`
+	ActorID    pgtype.UUID        `json:"actor_id"`
+	Reason     string             `json:"reason"`
+}
+
+type Tenant struct {
+	ID           pgtype.UUID        `json:"id"`
+	Slug         string             `json:"slug"`
+	Name         string             `json:"name"`
+	Config       []byte             `json:"config"`
+	Username     pgtype.Text        `json:"username"`
+	PasswordHash pgtype.Text        `json:"password_hash"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	StoreID      pgtype.Int8        `json:"store_id"`
 }

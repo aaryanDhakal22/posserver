@@ -21,7 +21,7 @@ services:
       retries: 10
     restart: unless-stopped
     networks:
-      - proxy
+      - internal
 
   # ─────────────────────────────────────────────────────────
   # Blue slot — start with: docker compose --profile blue up
@@ -48,16 +48,19 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       SQS_QUEUE_URL: ${SQS_QUEUE_URL}
       SQS_ENDPOINT: ${SQS_ENDPOINT:-}
-      ADMIN_PASSCODE: ${ADMIN_PASSCODE}
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      # Must be identical across blue + green so manager sessions survive a swap.
+      SESSION_SECRET: ${SESSION_SECRET}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
       OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS}
-      OTEL_SERRVICE_NAME: ${OTEL_SERVICE_NAME}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME}
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - proxy
+      - internal
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.quicc-blue.rule=Host(`main.quiccpos.com`)"
@@ -92,16 +95,19 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       SQS_QUEUE_URL: ${SQS_QUEUE_URL}
       SQS_ENDPOINT: ${SQS_ENDPOINT:-}
-      ADMIN_PASSCODE: ${ADMIN_PASSCODE}
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      # Must be identical across blue + green so manager sessions survive a swap.
+      SESSION_SECRET: ${SESSION_SECRET}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
       OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS}
-      OTEL_SERRVICE_NAME: ${OTEL_SERVICE_NAME}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME}
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - proxy
+      - internal
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.quicc-green.rule=Host(`main.quiccpos.com`)"
@@ -114,6 +120,7 @@ services:
 networks:
   proxy:
     external: true
+  internal:
 
 volumes:
   quicc_prod_postgres:

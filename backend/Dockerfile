@@ -23,11 +23,28 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 #####################################
+##        FRONTEND BUILD           ##
+#####################################
+# Compile the SvelteKit app; its static output (build/) is embedded by the Go
+# stage below. Kept CI-transparent: the whole thing happens inside the image.
+FROM node:20-bookworm AS frontend
+
+WORKDIR /fe
+COPY frontend/package.json frontend/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY frontend/ ./
+RUN npm run build
+
+#####################################
 ##        PRODUCTION IMAGE        ##
 #####################################
 FROM builder AS prod
 
 COPY . .
+
+# Overwrite the committed .gitkeep placeholder with the real compiled app so
+# //go:embed all:build ships the SPA inside the binary.
+COPY --from=frontend /fe/build ./internal/transport/webapp/build
 
 ARG MAIN=./cmd/api
 ARG BIN=app

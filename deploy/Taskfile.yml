@@ -11,7 +11,7 @@ vars:
 #   .doppler-prod-token  — service token scoped to Doppler config "prd"
 #   .doppler-stag-token  — service token scoped to Doppler config "stg"
 # Slot-control vars (tags, priorities) live in .env.prod / .env.stag.
-# All secrets (DB creds, AWS keys, ADMIN_PASSCODE, etc.) come from Doppler.
+# All secrets (DB creds, AWS keys, ADMIN_API_KEY, etc.) come from Doppler.
 
 tasks:
   # ─────────────────────────────────────────────────────────────────────────
@@ -116,3 +116,34 @@ tasks:
       - 'docker ps --format "table {{`{{.Names}}\t{{.Image}}\t{{.Status}}`}}" --filter "name=quicc-" || true'
       - echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
       - echo ""
+
+  # ─────────────────────────────────────────────────────────────────────────
+  # Danger zone — destructive resets. These WIPE the Postgres volume.
+  # Use only when you truly want a blank slate (dev-like reset on an env).
+  # ─────────────────────────────────────────────────────────────────────────
+  staging-nuke:
+    desc: "DESTRUCTIVE — stop staging, wipe postgres volume, restart fresh"
+    prompt: "This will DELETE all staging data (quicc_staging_postgres volume). Continue?"
+    cmds:
+      - DOPPLER_TOKEN=$(cat .doppler-stag-token) doppler run -- docker compose -f {{.STAGING_COMPOSE}} --env-file {{.STAG_ENV}} down -v --remove-orphans
+      - docker volume rm quicc_staging_postgres 2>/dev/null || true
+      - DOPPLER_TOKEN=$(cat .doppler-stag-token) doppler run -- docker compose -f {{.STAGING_COMPOSE}} --env-file {{.STAG_ENV}} up -d
+
+  prod-nuke:
+    desc: "DESTRUCTIVE — stop both prod slots, wipe postgres volume, restart the active slot fresh"
+    prompt: "This will DELETE all PROD data (quicc_prod_postgres volume). Continue?"
+    vars:
+      SLOT:
+        sh: cat {{.STATE_FILE}} 2>/dev/null || echo "blue"
+    cmds:
+      - DOPPLER_TOKEN=$(cat .doppler-prod-token) doppler run -- docker compose -f {{.PROD_COMPOSE}} --env-file {{.PROD_ENV}} --profile blue --profile green down -v --remove-orphans
+      - docker volume rm quicc_prod_postgres 2>/dev/null || true
+      - DOPPLER_TOKEN=$(cat .doppler-prod-token) doppler run -- docker compose -f {{.PROD_COMPOSE}} --env-file {{.PROD_ENV}} up -d postgres
+      - DOPPLER_TOKEN=$(cat .doppler-prod-token) doppler run -- docker compose -f {{.PROD_COMPOSE}} --env-file {{.PROD_ENV}} --profile {{.SLOT}} up -d --no-deps {{.SLOT}}-api
+
+  nuke-all:
+    desc: "DESTRUCTIVE — nuke BOTH staging and prod (volumes + containers) and restart fresh"
+    prompt: "This will DELETE ALL DATA in staging AND prod. Are you absolutely sure?"
+    cmds:
+      - task: staging-nuke
+      - task: prod-nuke

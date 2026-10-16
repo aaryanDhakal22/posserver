@@ -3,32 +3,61 @@ package main
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"os/signal"
-	"syscall"
-
-	authAppSvc "quiccpos/main/internal/app/auth"
-	orderSvc "quiccpos/main/internal/app/order"
-	"quiccpos/main/internal/infra/database/models"
+	floorApp "quiccpos/main/internal/app/floor"
+	"quiccpos/main/internal/app/printerstatus"
+	"quiccpos/main/internal/casting/online"
+	"quiccpos/main/internal/dispatch"
+	"quiccpos/main/internal/dispatch/handlers"
+	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/infra/database/repositories"
-	"quiccpos/main/internal/infra/scheduler"
-	sqsconsumer "quiccpos/main/internal/infra/sqs"
-	sseBroker "quiccpos/main/internal/infra/sse"
 	"quiccpos/main/internal/migrate"
 	"quiccpos/main/internal/observability"
+	"quiccpos/main/internal/rpc"
 	"quiccpos/main/internal/shared/config"
 	"quiccpos/main/internal/shared/logger"
 	"quiccpos/main/internal/transport"
+	"quiccpos/main/internal/transport/session"
+	"syscall"
+
+	authAppSvc "quiccpos/main/internal/app/auth"
+	menuApp "quiccpos/main/internal/app/menu"
+	operatorApp "quiccpos/main/internal/app/operator"
+	orderSvc "quiccpos/main/internal/app/order"
+	tenancyApp "quiccpos/main/internal/app/tenancy"
+
+	sqsconsumer "quiccpos/main/internal/infra/sqs"
+	sseBroker "quiccpos/main/internal/infra/sse"
 
 	"github.com/exaring/otelpgx"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v5"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 )
 
-// version is set via -ldflags at build time ("-X main.version=<sha>").
-// Defaults to "dev" for plain `go run`.
-var version = "dev"
+// version + commit are injected at build time via -ldflags. CI passes them
+// from VERSION + the git sha so the running binary can be inspected via
+// the `/version` endpoint and so OTEL resource attributes carry real
+// values rather than `dev`.
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
+// storeResolver adapts tenancy.Service's ResolveStore (store_id first, then the
+// store_name fallback) to the online caster's StoreResolver interface
+// (uuid.UUID → order.TenantID/LocationID).
+type storeResolver struct{ svc *tenancyApp.Service }
+
+func (r storeResolver) ResolveStore(ctx context.Context, storeID int64, storeName string) (order.TenantID, order.LocationID, string, error) {
+	tid, lid, method, err := r.svc.ResolveStore(ctx, storeID, storeName)
+	if err != nil {
+		return order.TenantID{}, order.LocationID{}, string(method), err
+	}
+	return order.TenantID(tid), order.LocationID(lid), string(method), nil
+}
 
 func main() {
 	tmpLogger := logger.TempLogger()
@@ -37,13 +66,11 @@ func main() {
 	cfgLogger := tmpLogger.With().Str("module", "config").Logger()
 	cfg := config.NewConfig(&cfgLogger)
 
-	// Shared cancellable context — drives the HTTP server, SQS consumer, SSE broker,
-	// and the OTEL batch processors.
+	// Shared cancellable context — drives the HTTP server, SQS consumer,
+	// dispatcher, and OTEL batch processors.
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
-	// --- Observability: must come before the logger is wired so the OTLP
-	// log bridge picks up the global LoggerProvider. ------------------------
 	shutdownOtel, err := observability.Setup(ctx, observability.Config{
 		Endpoint:    cfg.OTELConfig.Endpoint,
 		ServiceName: cfg.OTELConfig.ServiceName,
@@ -87,8 +114,6 @@ func main() {
 	if err != nil {
 		mainLogger.Fatal().Err(err).Msg("Failed to parse DB config")
 	}
-	// otelpgx spans every query, records rows-affected, and marks failed
-	// statements as Error. No call-site changes needed; it hooks into pgx.
 	poolConfig.ConnConfig.Tracer = otelpgx.NewTracer()
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
@@ -98,35 +123,131 @@ func main() {
 	defer pool.Close()
 	mainLogger.Info().Ctx(ctx).Msg("Connected to database")
 
-	// SSE broker — fans out new orders to connected agents.
-	broker := sseBroker.New()
+	// --- Wiring order matters here:
+	// 1. Build the SSE broker (no waker yet).
+	// 2. Build the SSE handler that adapts the broker to the dispatch.Handler interface.
+	// 3. Build the order repo, passing in the handler names so it inserts
+	//    one outbox_dispatches row per handler in the same tx as Create.
+	// 4. Build the dispatcher and tell the broker to wake it on Subscribe.
+	// 5. Build the order service with the dispatcher as its Waker.
+	// ----------------------------------------------------------------------
 
-	// Dependency injection
-	repo := repositories.NewOrderRepository(pool, lgr)
-	svc := orderSvc.NewOrderService(repo, broker, lgr)
+	broker := sseBroker.New(lgr, meters)
 
-	authRepo := repositories.NewAuthKeyRepository(pool, lgr)
-	authService := authAppSvc.NewAuthKeyService(authRepo, lgr)
+	// Duplex RPC core: main→agent commands ride the broker's SSE; agent→main
+	// replies/reports land on POST /store/v1/agent/rpc.
+	requester := rpc.NewRequester(broker, meters, lgr)
+
+	// Live printer roster the agent reports over the duplex channel (advisory).
+	printerCache := printerstatus.NewCache()
+	requester.RegisterInbound(rpc.MsgPrinterReport, printerCache.Handle)
+
+	// SSE handler reads the snapshot directly from the outbox payload —
+	// no aggregate loader needed. The order repo is built below with the
+	// handler names so per-handler dispatch rows are written in the order
+	// transaction.
+	sseHandler := handlers.NewSSE(broker, lgr)
+
+	allHandlers := []dispatch.Handler{sseHandler}
+	handlerNames := make([]string, 0, len(allHandlers))
+	for _, h := range allHandlers {
+		handlerNames = append(handlerNames, h.Name())
+	}
+
+	repo := repositories.NewOrderRepository(pool, lgr, handlerNames)
+	outboxRepo := repositories.NewOutboxRepository(pool, lgr)
+
+	hooks := dispatch.Hooks{
+		OnEventDispatched: func(handler string, ev order.EventType) {
+			meters.OutboxDispatched.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("handler", handler),
+				attribute.String("event_type", string(ev)),
+			))
+		},
+		OnEventFailed: func(handler string, ev order.EventType, transient bool) {
+			meters.OutboxFailed.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("handler", handler),
+				attribute.String("event_type", string(ev)),
+				attribute.Bool("transient", transient),
+			))
+		},
+	}
+	dispatcher := dispatch.New(outboxRepo, allHandlers, lgr, dispatch.WithHooks(hooks))
+	broker.SetWaker(dispatcher)
+	go dispatcher.Run(ctx)
+
+	if err := observability.RegisterPendingDispatch(meters, outboxRepo, handlerNames); err != nil {
+		mainLogger.Warn().Err(err).Msg("Failed to register outbox.events.pending gauge")
+	}
+
+	svc := orderSvc.NewOrderService(repo, dispatcher, lgr)
+
+	// Floor read model: the agent pushes its floor events (accept / ready /
+	// on delivery / delivered / driver roster) as `floor.events` reports.
+	floorService := floorApp.NewService(repo, repo, lgr, meters)
+	requester.RegisterInbound(floorApp.MsgFloorEvents, floorService.Handle)
+
+	authRepo := repositories.NewDeviceAuthRepository(pool, lgr)
+	authService := authAppSvc.NewService(authRepo, lgr)
+
+	tenancyRepo := repositories.NewTenancyRepository(pool, lgr)
+	tenancyService := tenancyApp.NewService(tenancyRepo, lgr)
+
+	menuRepo := repositories.NewMenuRepository(pool, lgr)
+	menuService := menuApp.NewService(menuRepo, tenancyService, meters, lgr)
+
+	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
+	operatorService := operatorApp.NewService(operatorRepo, tenancyService, lgr)
 
 	sqsClient, err := sqsconsumer.NewSQSClient(ctx, cfg, lgr)
 	if err != nil {
 		mainLogger.Fatal().Err(err).Msg("Failed to create SQS client")
 	}
 
-	scheduler.StartOrderNumberReset(ctx, func(c context.Context) error {
-		return models.New(pool).ResetOrderNumber(c)
-	}, lgr)
+	// Per-source caster registry. Each entry maps a `source`
+	// MessageAttribute value to its normalisation strategy. Adding a source
+	// (mobile / pos / kiosk) is one new caster + one entry here. The online
+	// caster routes each order to a tenant/location by its store_name (see
+	// storeResolver + tenancy.ResolveStoreByName).
+	onlineCaster := online.New(lgr, storeResolver{svc: tenancyService}, menuService)
+	casters := map[order.Source]sqsconsumer.Caster{
+		order.SourceOnline: onlineCaster,
+	}
 
-	sqsConsumer := sqsconsumer.NewConsumer(sqsClient, cfg.SQSConfig.QueueURL, svc, lgr, meters)
+	sqsConsumer := sqsconsumer.NewConsumer(sqsClient, cfg.SQSConfig.QueueURL, casters, svc, lgr, meters)
 	go sqsConsumer.Start(ctx)
 
+	// Store-manager session signer. Secret is stable (Doppler-managed) so
+	// sessions survive a blue-green swap; Secure cookies only outside dev.
+	sessionSigner, err := session.New(cfg.AppConfig.SessionSecret, cfg.AppConfig.AppEnv != "dev")
+	if err != nil {
+		lgr.Fatal().Err(err).Msg("failed to build session signer")
+	}
+
 	e := echo.New()
-	e.GET("/health", func(c *echo.Context) error {
-		return c.String(http.StatusOK, "OK")
-	})
 	tLogger := lgr.With().Str("module", "transport").Logger()
 	transport.AddDefaultMiddlewares(e, cfg.OTELConfig.ServiceName, &tLogger)
-	transport.AddRoutes(e, svc, authService, broker, cfg.AppConfig.AdminPasscode, &tLogger, meters)
+	transport.AddRoutes(e, transport.RouterDeps{
+		Service:         svc,
+		AuthService:     authService,
+		TenancyService:  tenancyService,
+		Broker:          broker,
+		Publisher:       broker,
+		AdminAPIKey:     cfg.AppConfig.AdminAPIKey,
+		Version:         version,
+		Commit:          commit,
+		Pool:            pool,
+		SQS:             sqsClient,
+		QueueURL:        cfg.SQSConfig.QueueURL,
+		Meters:          meters,
+		Logger:          tLogger,
+		SessionSigner:   sessionSigner,
+		Requester:       requester,
+		PrinterCache:    printerCache,
+		MenuService:     menuService,
+		FloorService:    floorService,
+		OperatorService: operatorService,
+	})
 
 	serverLogger := lgr.With().Str("module", "server").Logger()
 	transport.StartServer(ctx, e, cfg, &serverLogger)

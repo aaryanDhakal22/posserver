@@ -1,27 +1,77 @@
+# main/ — supplements root .gitignore with module-specific bits.
+
+# Doppler tokens (the `task` commands shell in via DOPPLER_TOKEN=$(cat ...)).
+.doppler-*
+
+# Per-environment compose env files driven by deploy/Taskfile.yml. State file
+# tracks blue/green active slot.
+deploy/.env.stag
+deploy/.env.prod
+deploy/.state
+deploy/.doppler-stag-token
+deploy/.doppler-prod-token
+
+# Local env overrides.
 .env
 .env.dev
 .env.prod
-### Go ###
-# Binaries for programs and plugins
+.env.local
+*.local.*
+
+# Go / Air build artefacts.
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
-
-# Test binary, built with `go test -c`
 *.test
-
-# Output of the go coverage tool, specifically when used with LiteIDE
 *.out
-
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
-### Go Patch ###
-/vendor/
-/Godeps/
 backend/tmp/
 /tmp/
+**/tmp/
+/vendor/
+/Godeps/
 
+# Build outputs.
+/bin/
+/dist/
+
+# DB dumps + local backups (created by `task db-dump`).
+dumps/
+*.sql.bak
+
+# CLAUDE.md is treated as a local config doc, not source — leave it gitignored
+# so each clone can customise.
 CLAUDE.md
+
+# Python (the tests/ pytest suite + tooling caches).
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+
+# Claude Code local/session files (the tracked CLAUDE.md is handled above).
+.claude/
+CLAUDE.local.md
+
+# OS / editor junk.
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# The SvelteKit build is produced by the Docker image's Node stage (and locally
+# by `task ui-build`); only the placeholder is tracked so `go:embed all:build`
+# compiles in CI without Node.
+backend/internal/transport/webapp/build/*
+!backend/internal/transport/webapp/build/.gitkeep
+
+# Python test caches.
+__pycache__/
+*.pyc
+
+# Stray local build of the server binary.
+backend/api

@@ -1,67 +1,47 @@
-"""Auth flow tests for main/.
+"""Auth surfaces on main/: device keys (X-STORE-API-KEY), the admin bearer,
+and the X-Trace-Id echo."""
 
-Verifies the admin passcode can set an API key, and that the key gates the
-order routes. Relies on ADMIN_PASSCODE being present (Doppler provides it);
-skips otherwise so CI without admin creds still passes other suites.
-"""
-
-import os
-import secrets
-
-import pytest
 import requests
 
-from conftest import BASE_URL, ADMIN_PASSCODE
+from conftest import ADMIN_API_KEY, ADMIN_V1, API_V1, store_key
 
 
-requires_admin = pytest.mark.skipif(
-    not ADMIN_PASSCODE, reason="ADMIN_PASSCODE env var not set"
-)
+def test_orders_without_key_401(admin) -> None:
+    assert requests.get(f"{API_V1}/orders", timeout=5).status_code == 401
 
 
-@requires_admin
-def test_set_key_with_passcode_succeeds() -> None:
-    key = "test-" + secrets.token_hex(8)
-    resp = requests.post(
-        f"{BASE_URL}/auth/key",
-        headers={"X-Admin-Passcode": ADMIN_PASSCODE},
-        json={"key": key},
-        timeout=5,
-    )
-    assert resp.status_code == 200, resp.text
+def test_orders_with_bogus_key_401(admin) -> None:
+    r = requests.get(f"{API_V1}/orders", headers=store_key("qpos_definitely-not-real"), timeout=5)
+    assert r.status_code == 401
 
 
-@requires_admin
-def test_set_key_wrong_passcode_rejected() -> None:
-    resp = requests.post(
-        f"{BASE_URL}/auth/key",
-        headers={"X-Admin-Passcode": "definitely-not-the-passcode"},
-        json={"key": "anything"},
-        timeout=5,
-    )
-    assert resp.status_code in (401, 403)
+def test_orders_with_valid_key_200(store) -> None:
+    r = requests.get(f"{API_V1}/orders", headers=store_key(store.key), timeout=5)
+    assert r.status_code == 200, r.text
+    assert r.json() == []  # brand-new store has no orders
 
 
-def test_orders_without_api_key_rejected() -> None:
-    resp = requests.get(f"{BASE_URL}/orders", timeout=5)
-    assert resp.status_code in (401, 403)
+def test_revoked_key_401(admin, store) -> None:
+    h = store_key(store.key)
+    assert requests.get(f"{API_V1}/orders", headers=h, timeout=5).status_code == 200
+    r = admin.post(f"{ADMIN_V1}/devices/{store.device_id}/revoke", timeout=5)
+    assert r.status_code == 204, r.text
+    assert requests.get(f"{API_V1}/orders", headers=h, timeout=5).status_code == 401
 
 
-def test_orders_with_bogus_key_rejected() -> None:
-    resp = requests.get(
-        f"{BASE_URL}/orders",
-        headers={"X-API-Key": "nope-not-a-real-key"},
-        timeout=5,
-    )
-    assert resp.status_code in (401, 403)
+def test_admin_requires_bearer(admin) -> None:
+    assert requests.get(f"{ADMIN_V1}/overview", timeout=5).status_code == 401
+    r = requests.get(f"{ADMIN_V1}/overview", headers={"Authorization": "Bearer wrong"}, timeout=5)
+    assert r.status_code == 401
 
 
-def test_response_sets_trace_id_header(http: requests.Session) -> None:
-    """The OTEL middleware we installed always writes X-Trace-Id on responses
-    so callers (including these tests) can look up the trace in Tempo."""
-    resp = http.get(f"{BASE_URL}/orders", params={"offset": 0, "num": 1}, timeout=5)
-    # status can be 200 or 400 depending on data — we only care about the header
-    assert "X-Trace-Id" in resp.headers
-    trace_id = resp.headers["X-Trace-Id"]
-    assert len(trace_id) == 32, f"expected 32-hex trace id, got {trace_id!r}"
-    int(trace_id, 16)  # parses as hex
+def test_admin_key_is_not_a_device_key(admin) -> None:
+    r = requests.get(f"{API_V1}/orders", headers=store_key(ADMIN_API_KEY), timeout=5)
+    assert r.status_code == 401
+
+
+def test_response_carries_trace_id(store) -> None:
+    r = requests.get(f"{API_V1}/orders", headers=store_key(store.key), timeout=5)
+    trace_id = r.headers.get("X-Trace-Id", "")
+    assert len(trace_id) == 32, f"expected a 32-hex trace id, got {trace_id!r}"
+    int(trace_id, 16)

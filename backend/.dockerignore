@@ -1,0 +1,14 @@
+# The frontend is compiled in a dedicated node stage (see Dockerfile). Keep its
+# node_modules + build output OUT of the Go build context so `COPY . .` ships
+# only the committed .gitkeep placeholder under webapp/build (the frontend stage
+# then overwrites it with the real compiled app).
+frontend/node_modules
+frontend/build
+frontend/.svelte-kit
+internal/transport/webapp/build/_app
+internal/transport/webapp/build/index.html
+
+# Go build artifacts / local noise
+tmp
+*.log
+.git

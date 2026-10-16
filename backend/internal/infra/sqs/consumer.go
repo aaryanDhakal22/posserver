@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/observability"
-	"quiccpos/main/internal/transport/dto"
 
 	orderSvc "quiccpos/main/internal/app/order"
 
@@ -17,6 +17,7 @@ import (
 	sqstypes "github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/aws/smithy-go"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -30,21 +31,43 @@ const (
 	initialBackoff = 2 * time.Second
 
 	tracerName = "quiccpos/main/sqs"
+
+	// MessageAttribute keys main/ reads on every inbound message. The
+	// producer-side contract lives in online/SQS_CONTRACT.md.
+	sourceAttribute     = "source"
+	tenantIDAttribute   = "tenant_id"
+	locationIDAttribute = "location_id"
+
+	// defaultSource is what the consumer assumes when no `source` attribute
+	// is set. Belt-and-suspenders — every producer is expected to set it.
+	defaultSource = order.SourceOnline
 )
+
+// Caster is the interface every per-source caster satisfies. CastInput lives
+// in domain/order so casters can implement it without importing this package.
+type Caster interface {
+	Source() order.Source
+	Cast(ctx context.Context, in order.CastInput) (*order.Order, error)
+}
 
 type Consumer struct {
 	client       *sqs.Client
 	queueURL     string
+	casters      map[order.Source]Caster
 	orderService *orderSvc.Service
 	logger       zerolog.Logger
 	tracer       trace.Tracer
 	meters       observability.Meters
 }
 
-func NewConsumer(client *sqs.Client, queueURL string, orderService *orderSvc.Service, logger zerolog.Logger, meters observability.Meters) *Consumer {
+// NewConsumer takes the per-source caster registry. Today only `online` is
+// registered; adding `mobile` / `pos` / `kiosk` is one more entry plus a
+// new caster package — no other plumbing.
+func NewConsumer(client *sqs.Client, queueURL string, casters map[order.Source]Caster, orderService *orderSvc.Service, logger zerolog.Logger, meters observability.Meters) *Consumer {
 	return &Consumer{
 		client:       client,
 		queueURL:     queueURL,
+		casters:      casters,
 		orderService: orderService,
 		logger:       logger.With().Str("module", "sqs-consumer").Logger(),
 		tracer:       otel.Tracer(tracerName),
@@ -160,7 +183,7 @@ func (c *Consumer) logAWSError(msg string, err error) {
 		ev.Msg(msg + ": AWS access key is invalid. Fix: check AWS_ACCESS_KEY_ID / ~/.aws/credentials.")
 	case contains(errStr, "context deadline exceeded", "connection refused", "no such host"):
 		ev.Msg(msg + ": network error reaching AWS. Fix: check internet connectivity from the container " +
-			"and verify AWS_REGION=" + "is correct.")
+			"and verify AWS_REGION is correct.")
 	default:
 		ev.Msg(msg)
 	}
@@ -179,10 +202,15 @@ func contains(s string, substrs ...string) bool {
 	return false
 }
 
-// processMessage wraps the full "unmarshal → persist → delete" sequence in a
-// single sqs.process span. If otelaws has extracted a traceparent from the
-// upstream MessageAttributes (populated by a future instrumented online/),
-// ctx already carries that parent — our span chains into it automatically.
+// processMessage wraps cast → persist → delete in a single sqs.process span.
+// otelaws extracts traceparent from upstream MessageAttributes, which online/
+// injects automatically via its otelaws-instrumented client, so this span
+// chains under SQS.SendMessage without custom plumbing.
+//
+// On cast failure: the message is NOT deleted — SQS will redrive it and
+// eventually land it in the DLQ via maxReceiveCount.
+// On duplicate persistence: the message IS deleted; the order is already in
+// the DB and a retry would never succeed.
 func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 	msgID := aws.ToString(msg.MessageId)
 	start := time.Now()
@@ -206,72 +234,198 @@ func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 		return
 	}
 
-	var cmd order.CreateOrderCommand
-	if err := json.Unmarshal([]byte(*msg.Body), &cmd); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "envelope unmarshal")
-		c.logger.Error().Ctx(ctx).Err(err).Str("message_id", msgID).Msg("failed to unmarshal SQS envelope, skipping")
+	source := readSourceAttribute(msg.MessageAttributes)
+	tenantID, locationID, scopeErr := scopeForSource(source, msg.MessageAttributes)
+	span.SetAttributes(
+		attribute.String("messaging.source", string(source)),
+		attribute.String("tenant.id", uuid.UUID(tenantID).String()),
+		attribute.String("location.id", uuid.UUID(locationID).String()),
+	)
+	if scopeErr != nil {
+		// Missing or malformed tenant/location attributes — permanent config
+		// failure on the producer side. Surface in metrics + DLQ via redrive.
+		span.SetStatus(codes.Error, "missing_scope")
+		c.meters.OrdersCastFailed.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("source", string(source)),
+			attribute.String("reason", "missing_scope"),
+		))
+		c.logger.Error().Ctx(ctx).Err(scopeErr).Str("message_id", msgID).Str("source", string(source)).
+			Msg("missing/invalid tenant_id or location_id MessageAttribute; leaving for redrive/DLQ")
 		return
 	}
 
-	var dtoOrder dto.Order
-	if err := json.Unmarshal([]byte(cmd.Payload), &dtoOrder); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "payload unmarshal")
-		c.logger.Error().Ctx(ctx).Err(err).Str("message_id", msgID).Msg("failed to unmarshal order payload, skipping")
+	caster, ok := c.casters[source]
+	if !ok {
+		span.SetStatus(codes.Error, "unknown_source")
+		c.meters.OrdersCastFailed.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("source", string(source)),
+			attribute.String("reason", "unknown_source"),
+		))
+		c.logger.Error().Ctx(ctx).Str("message_id", msgID).Str("source", string(source)).
+			Msg("unknown source on SQS message; no caster registered")
 		return
 	}
-	o := dtoOrder.ToDomain()
+
+	raw := []byte(*msg.Body)
+	if source == order.SourceOnline {
+		if inner, ok := unwrapV1Envelope(raw); ok {
+			raw = inner
+			span.SetAttributes(attribute.String("messaging.envelope", "v1"))
+		}
+	}
+
+	agg, err := caster.Cast(ctx, order.CastInput{
+		Raw:        raw,
+		TenantID:   tenantID,
+		LocationID: locationID,
+	})
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "cast_failed")
+		c.meters.OrdersCastFailed.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("source", string(source)),
+			attribute.String("reason", "cast_error"),
+		))
+		c.logger.Error().Ctx(ctx).Err(err).Str("message_id", msgID).Str("source", string(source)).Int("body_bytes", len(raw)).
+			Msg("cast failed; leaving message on queue for redrive/DLQ")
+		return
+	}
 
 	span.SetAttributes(
-		attribute.Int("order.id", o.OrderID),
-		attribute.String("order.service_type", o.ServiceType),
-		attribute.Int("order.item_count", len(o.Items)),
+		attribute.String("order.id", uuid.UUID(agg.ID()).String()),
+		attribute.String("order.source", string(agg.Source())),
+		attribute.String("order.source_event_id", agg.SourceEventID()),
+		attribute.Int("order.item_count", len(agg.Items())),
 	)
 
-	customerName := o.Customer.FirstName + " " + o.Customer.LastName
-	c.logger.Info().Ctx(ctx).
-		Str("message_id", msgID).
-		Int("order_id", o.OrderID).
-		Str("customer_name", customerName).
-		Str("service_type", o.ServiceType).
-		Int("item_count", len(o.Items)).
-		Msg("order received from SQS")
+	c.meters.OrdersConsumed.Add(ctx, 1, metric.WithAttributes(
+		attribute.String("source", string(agg.Source())),
+		attribute.String("service_type", string(agg.Fulfillment().Type)),
+	))
 
-	c.meters.OrdersConsumed.Add(ctx, 1, metric.WithAttributes(attribute.String("service_type", o.ServiceType)))
-
-	if err := c.orderService.Create(ctx, &o); err != nil {
+	if err := c.orderService.Create(ctx, agg); err != nil {
+		if errors.Is(err, order.ErrDuplicate) {
+			// Already in the DB — safe to delete from the queue.
+			c.deleteMessage(ctx, msg, msgID, agg.ID())
+			c.meters.OrdersPersisted.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "duplicate")))
+			return
+		}
 		span.RecordError(err)
-		span.SetStatus(codes.Error, "persist failed")
-		c.logger.Error().Ctx(ctx).
-			Err(err).
+		span.SetStatus(codes.Error, "persist_failed")
+		c.meters.OrdersPersistFailed.Add(ctx, 1, metric.WithAttributes(
+			attribute.String("source", string(agg.Source())),
+		))
+		c.logger.Error().Ctx(ctx).Err(err).
 			Str("message_id", msgID).
-			Int("order_id", o.OrderID).
-			Str("customer_name", customerName).
+			Str("order_id", uuid.UUID(agg.ID()).String()).
 			Dur("elapsed", time.Since(start)).
 			Msg("failed to persist order, leaving on queue for retry")
 		return
 	}
 	c.meters.OrdersPersisted.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "ok")))
 
+	c.deleteMessage(ctx, msg, msgID, agg.ID())
+
+	c.logger.Info().Ctx(ctx).
+		Str("message_id", msgID).
+		Str("order_id", uuid.UUID(agg.ID()).String()).
+		Str("source_event_id", agg.SourceEventID()).
+		Dur("total_ms", time.Since(start)).
+		Msg("message processed and deleted")
+}
+
+// unwrapV1Envelope recognises the v1 online relay's message — the vendor JSON
+// wrapped as a string: {"ID", "Payload": "<vendor json>", "DateCreated",
+// "CreatedAt"} (no MessageAttributes) — and returns the inner vendor body. It
+// lets v2 main read the v1 queues as they are: the staging mirror for the
+// shadow run, and prod's queue at cutover without changing prod online. A
+// raw vendor body (it has "order_id", never a string "Payload") is left alone.
+func unwrapV1Envelope(raw []byte) ([]byte, bool) {
+	var env map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return nil, false
+	}
+	if _, isVendor := env["order_id"]; isVendor {
+		return nil, false
+	}
+	p, ok := env["Payload"]
+	if !ok {
+		return nil, false
+	}
+	var inner string
+	if err := json.Unmarshal(p, &inner); err != nil || inner == "" {
+		return nil, false
+	}
+	return []byte(inner), true
+}
+
+// readSourceAttribute pulls the `source` MessageAttribute and maps it to an
+// order.Source. Empty / missing attribute → defaultSource (online), so the
+// frozen online/ relay keeps working without setting attributes. Any other
+// value is returned as-is, even if no caster is registered — the dispatch
+// site handles the "unknown source" case explicitly.
+func readSourceAttribute(attrs map[string]sqstypes.MessageAttributeValue) order.Source {
+	v, ok := attrs[sourceAttribute]
+	if !ok || v.StringValue == nil || *v.StringValue == "" {
+		return defaultSource
+	}
+	return order.Source(*v.StringValue)
+}
+
+// readScopeAttributes parses tenant_id and location_id from MessageAttributes.
+// Both are required — main/ refuses messages without them. The placeholder
+// pair lives in the seed migration so online's default Doppler config Just
+// Works without provisioning real tenants first.
+// scopeForSource reads the tenant/location scope attributes. They're required
+// for every source except `online`: the online caster routes by the vendor
+// body's store_id/store_name and ignores the SQS scope entirely, so an online
+// message without (or with malformed) scope attributes is still processed —
+// online's SCOPE_TENANT_ID/SCOPE_LOCATION_ID are optional config.
+func scopeForSource(source order.Source, attrs map[string]sqstypes.MessageAttributeValue) (order.TenantID, order.LocationID, error) {
+	tid, lid, err := readScopeAttributes(attrs)
+	if err != nil && source == order.SourceOnline {
+		return order.TenantID{}, order.LocationID{}, nil
+	}
+	return tid, lid, err
+}
+
+func readScopeAttributes(attrs map[string]sqstypes.MessageAttributeValue) (order.TenantID, order.LocationID, error) {
+	tenantStr, err := requiredStringAttr(attrs, tenantIDAttribute)
+	if err != nil {
+		return order.TenantID{}, order.LocationID{}, err
+	}
+	locationStr, err := requiredStringAttr(attrs, locationIDAttribute)
+	if err != nil {
+		return order.TenantID{}, order.LocationID{}, err
+	}
+	tenantUUID, err := uuid.Parse(tenantStr)
+	if err != nil {
+		return order.TenantID{}, order.LocationID{}, fmt.Errorf("invalid tenant_id: %w", err)
+	}
+	locationUUID, err := uuid.Parse(locationStr)
+	if err != nil {
+		return order.TenantID{}, order.LocationID{}, fmt.Errorf("invalid location_id: %w", err)
+	}
+	return order.TenantID(tenantUUID), order.LocationID(locationUUID), nil
+}
+
+func requiredStringAttr(attrs map[string]sqstypes.MessageAttributeValue, key string) (string, error) {
+	v, ok := attrs[key]
+	if !ok || v.StringValue == nil || *v.StringValue == "" {
+		return "", fmt.Errorf("missing MessageAttribute %q", key)
+	}
+	return *v.StringValue, nil
+}
+
+func (c *Consumer) deleteMessage(ctx context.Context, msg sqstypes.Message, msgID string, orderID order.ID) {
 	if _, err := c.client.DeleteMessage(ctx, &sqs.DeleteMessageInput{
 		QueueUrl:      aws.String(c.queueURL),
 		ReceiptHandle: msg.ReceiptHandle,
 	}); err != nil {
-		span.RecordError(err)
-		span.SetStatus(codes.Error, "delete failed")
 		c.logger.Error().Ctx(ctx).
 			Err(err).
 			Str("message_id", msgID).
-			Int("order_id", o.OrderID).
+			Str("order_id", uuid.UUID(orderID).String()).
 			Msg("failed to delete message from queue")
-		return
 	}
-
-	c.logger.Info().Ctx(ctx).
-		Str("message_id", msgID).
-		Int("order_id", o.OrderID).
-		Str("customer_name", customerName).
-		Dur("total_ms", time.Since(start)).
-		Msg("message processed and deleted")
 }
