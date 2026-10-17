@@ -25,6 +25,7 @@ type AppConfig struct {
 // devSessionSecret is the dev-only fallback for SESSION_SECRET (never used when
 // APP_ENV != "dev", where the var is required and boot fails fast if unset).
 const devSessionSecret = "dev-insecure-session-secret-change-me-please-0123456789"
+
 type ServerConfig struct {
 	Port string
 	Host string
@@ -116,20 +117,21 @@ func NewConfig(logger *zerolog.Logger) *Config {
 	return &cfg
 }
 
+// GetEnv reads one env var. It logs only the name and whether it was set —
+// never a value or a default: ADMIN_API_KEY, SESSION_SECRET and DB_PASSWORD
+// come through here, and the startup logger is fixed at debug level.
 func (c *Config) GetEnv(envVar string, req bool, defaultVal string) string {
-	c.logger.Debug().Msgf("Getting env var %s", envVar)
 	val, found := os.LookupEnv(envVar)
 	if !found {
-		c.logger.Debug().Msgf("Env var %s not found", envVar)
 		if req {
 			c.logger.Error().Msgf("Required Env var %s is not set", envVar)
 			c.logger.Fatal().Msg("Exiting...")
 			panic("Environment variable " + envVar + " is not set")
 		}
-		c.logger.Debug().Msgf("Returning default value %s", defaultVal)
+		c.logger.Debug().Msgf("Env var %s not set, using the default", envVar)
 		return defaultVal
 	}
-	c.logger.Debug().Msgf("Env var found, returning %s", val)
+	c.logger.Debug().Msgf("Env var %s set", envVar)
 	return val
 }
 
