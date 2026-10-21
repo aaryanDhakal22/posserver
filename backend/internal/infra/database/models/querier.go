@@ -90,6 +90,7 @@ type Querier interface {
 	GetActiveTabletTokenByHash(ctx context.Context, tokenHash string) (GetActiveTabletTokenByHashRow, error)
 	GetAgentBackupData(ctx context.Context, id pgtype.UUID) (GetAgentBackupDataRow, error)
 	GetAgentState(ctx context.Context, locationID pgtype.UUID) (AgentState, error)
+	GetAgentUpdate(ctx context.Context, id pgtype.UUID) (AgentUpdate, error)
 	GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKParams) ([]byte, error)
 	GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagReportRow, error)
 	GetLatestAppRelease(ctx context.Context, app string) (GetLatestAppReleaseRow, error)
@@ -119,6 +120,10 @@ type Querier interface {
 	// Order routing: the external vendor's store_id → tenant (see app/tenancy.ResolveStore).
 	GetTenantByStoreID(ctx context.Context, storeID pgtype.Int8) (Tenant, error)
 	InsertAgentBackup(ctx context.Context, arg InsertAgentBackupParams) (InsertAgentBackupRow, error)
+	// ---------------------------------------------------------------------------
+	// 00012: Pi updates (agent_updates)
+	// ---------------------------------------------------------------------------
+	InsertAgentUpdate(ctx context.Context, arg InsertAgentUpdateParams) error
 	InsertDiagReport(ctx context.Context, arg InsertDiagReportParams) (int64, error)
 	InsertDriver(ctx context.Context, arg InsertDriverParams) error
 	InsertOutboxDispatch(ctx context.Context, arg InsertOutboxDispatchParams) error
@@ -126,12 +131,14 @@ type Querier interface {
 	// Outbox
 	// ───────────────────────────────────────────────────────────────────────────
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) error
+	InsertPrinterIPChange(ctx context.Context, arg InsertPrinterIPChangeParams) error
 	InsertTabletReportToken(ctx context.Context, arg InsertTabletReportTokenParams) (pgtype.UUID, error)
 	// When this (location, scenario, outcome) last paged the owner (throttle).
 	LastDiagPage(ctx context.Context, arg LastDiagPageParams) (pgtype.Timestamptz, error)
 	LastFloorEventAt(ctx context.Context, arg LastFloorEventAtParams) (pgtype.Timestamptz, error)
 	ListAgentBackups(ctx context.Context, locationID pgtype.UUID) ([]ListAgentBackupsRow, error)
 	ListAgentHealth(ctx context.Context) ([]ListAgentHealthRow, error)
+	ListAgentUpdates(ctx context.Context, arg ListAgentUpdatesParams) ([]AgentUpdate, error)
 	ListAllDevices(ctx context.Context) ([]Device, error)
 	ListAllLocations(ctx context.Context) ([]Location, error)
 	ListAppReleases(ctx context.Context, app string) ([]ListAppReleasesRow, error)
@@ -152,6 +159,7 @@ type Querier interface {
 	ListOperators(ctx context.Context) ([]ListOperatorsRow, error)
 	ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) ([]ModifierOption, error)
 	ListOptionsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ModifierOption, error)
+	ListPrinterIPChanges(ctx context.Context, arg ListPrinterIPChangesParams) ([]ListPrinterIPChangesRow, error)
 	ListPrintersByLocation(ctx context.Context, locationID pgtype.UUID) ([]Printer, error)
 	// Top-level item names ordered at a location since a time, with counts — the
 	// input to the unmatched-names report.
@@ -175,6 +183,10 @@ type Querier interface {
 	MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeenParams) (int64, error)
 	// Agent reliability + recovery (00009) -------------------------------------------
 	MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) (int64, error)
+	// The Pi followed a printer to a new IP. Applied only while the printer still
+	// has the IP the Pi saw (a manager edit in between wins); an empty mac keeps
+	// the stored one.
+	MovePrinterIP(ctx context.Context, arg MovePrinterIPParams) (Printer, error)
 	PendingEventsForHandler(ctx context.Context, arg PendingEventsForHandlerParams) ([]PendingEventsForHandlerRow, error)
 	PruneAgentBackups(ctx context.Context, locationID pgtype.UUID) error
 	PruneAppReleases(ctx context.Context, arg PruneAppReleasesParams) error
@@ -206,11 +218,16 @@ type Querier interface {
 	SetOperatorPassword(ctx context.Context, arg SetOperatorPasswordParams) error
 	SetOptionPosition(ctx context.Context, arg SetOptionPositionParams) error
 	SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStatusParams) (int64, error)
+	SetPrinterMAC(ctx context.Context, arg SetPrinterMACParams) error
 	SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptParams) (Printer, error)
 	// Set/rotate a tenant's store-manager login (username + already-hashed password).
 	SetTenantCredentials(ctx context.Context, arg SetTenantCredentialsParams) error
 	// Set/clear (NULL) a tenant's vendor store_id. Unique when present.
 	SetTenantStoreID(ctx context.Context, arg SetTenantStoreIDParams) (Tenant, error)
+	// main's own follow-up after asking the agent (its reply, or no agent / no
+	// reply). Only while the row is still 'requested' — a status report the agent
+	// already sent is newer and wins.
+	SettleAgentUpdateRequest(ctx context.Context, arg SettleAgentUpdateRequestParams) (int64, error)
 	TouchDevice(ctx context.Context, id pgtype.UUID) error
 	TouchOperatorToken(ctx context.Context, id pgtype.UUID) error
 	TouchTabletToken(ctx context.Context, id pgtype.UUID) error
@@ -229,6 +246,9 @@ type Querier interface {
 	UpdateTenantConfig(ctx context.Context, arg UpdateTenantConfigParams) (Tenant, error)
 	UpsertAgentHealth(ctx context.Context, arg UpsertAgentHealthParams) error
 	UpsertAgentState(ctx context.Context, arg UpsertAgentStateParams) error
+	// The agent's agent.update.status report. Inserted when unknown (an update
+	// started on the Pi itself); only the reporting location's row is touched.
+	UpsertAgentUpdateStatus(ctx context.Context, arg UpsertAgentUpdateStatusParams) error
 	// A driver.shift event (clock-in, then the clock-out for the same shift id),
 	// keyed per location.
 	UpsertDriverShift(ctx context.Context, arg UpsertDriverShiftParams) error

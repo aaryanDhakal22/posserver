@@ -35,6 +35,21 @@ type AgentState struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
+type AgentUpdate struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	Action      string             `json:"action"`
+	RequestedBy string             `json:"requested_by"`
+	Force       bool               `json:"force"`
+	State       string             `json:"state"`
+	FromVersion string             `json:"from_version"`
+	ToVersion   string             `json:"to_version"`
+	Error       string             `json:"error"`
+	RequestedAt pgtype.Timestamptz `json:"requested_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type AppRelease struct {
 	ID          pgtype.UUID        `json:"id"`
 	App         string             `json:"app"`
@@ -331,6 +346,19 @@ type Printer struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 	IsReceipt  bool               `json:"is_receipt"`
+	MAC        string             `json:"mac"`
+}
+
+type PrinterIpChange struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	PrinterID  pgtype.UUID        `json:"printer_id"`
+	OldIP      string             `json:"old_ip"`
+	NewIP      string             `json:"new_ip"`
+	MAC        string             `json:"mac"`
+	Source     string             `json:"source"`
+	At         pgtype.Timestamptz `json:"at"`
 }
 
 type StatusEvent struct {

@@ -68,6 +68,30 @@ type Printer struct {
 	// IsReceipt marks the location's one receipt printer (full customer
 	// receipt); every other printer is a kitchen station.
 	IsReceipt bool
+	// MAC is the printer's hardware address as the Pi learned it (empty = not
+	// known yet) — how the Pi recognises the printer at a new IP.
+	MAC       string
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+// PrinterIPChange is one printer IP change: the Pi following a printer that
+// moved (source "agent") or a manager edit (source "manager").
+type PrinterIPChange struct {
+	ID          uuid.UUID
+	TenantID    uuid.UUID
+	LocationID  uuid.UUID
+	PrinterID   uuid.UUID
+	PrinterName string
+	OldIP       string
+	NewIP       string
+	MAC         string
+	Source      string
+	At          time.Time
+}
+
+// Printer IP change sources.
+const (
+	IPChangeByAgent   = "agent"
+	IPChangeByManager = "manager"
+)

@@ -24,6 +24,10 @@ export interface StoreRow {
   /** Last sign of life from the Pi (heartbeat or key use). */
   lastSeen: string | null;
   version: string;
+  /** The Pi says a newer agent is published for its env (agent ≥ 2.0.6). */
+  updateAvailable: boolean;
+  /** That newer version ('' when unknown). */
+  latestVersion: string;
   printersUp: number | null;
   printersDown: number | null;
   problems: string[];
@@ -65,6 +69,8 @@ export function buildRows(overview: Overview, fleet: AgentHealth[], orders: Admi
       pi,
       lastSeen,
       version: info.version,
+      updateAvailable: !!info.update?.updateAvailable,
+      latestVersion: info.update?.latestVersion ?? '',
       printersUp: info.printersUp,
       printersDown: info.printersDown,
       problems: info.problems,

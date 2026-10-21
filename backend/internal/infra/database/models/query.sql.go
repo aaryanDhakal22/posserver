@@ -720,9 +720,9 @@ func (q *Queries) CreatePayment(ctx context.Context, arg CreatePaymentParams) er
 
 const createPrinter = `-- name: CreatePrinter :one
 
-INSERT INTO printers (tenant_id, location_id, name, ip)
-VALUES ($1, $2, $3, $4)
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt
+INSERT INTO printers (tenant_id, location_id, name, ip, mac)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
 `
 
 type CreatePrinterParams struct {
@@ -730,6 +730,7 @@ type CreatePrinterParams struct {
 	LocationID pgtype.UUID `json:"location_id"`
 	Name       string      `json:"name"`
 	IP         string      `json:"ip"`
+	MAC        string      `json:"mac"`
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -741,6 +742,7 @@ func (q *Queries) CreatePrinter(ctx context.Context, arg CreatePrinterParams) (P
 		arg.LocationID,
 		arg.Name,
 		arg.IP,
+		arg.MAC,
 	)
 	var i Printer
 	err := row.Scan(
@@ -752,6 +754,7 @@ func (q *Queries) CreatePrinter(ctx context.Context, arg CreatePrinterParams) (P
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.IsReceipt,
+		&i.MAC,
 	)
 	return i, err
 }
@@ -1230,6 +1233,32 @@ func (q *Queries) GetAgentState(ctx context.Context, locationID pgtype.UUID) (Ag
 		&i.TenantID,
 		&i.State,
 		&i.At,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getAgentUpdate = `-- name: GetAgentUpdate :one
+SELECT id, tenant_id, location_id, action, requested_by, force, state, from_version, to_version,
+       error, requested_at, updated_at
+FROM agent_updates WHERE id = $1
+`
+
+func (q *Queries) GetAgentUpdate(ctx context.Context, id pgtype.UUID) (AgentUpdate, error) {
+	row := q.db.QueryRow(ctx, getAgentUpdate, id)
+	var i AgentUpdate
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Action,
+		&i.RequestedBy,
+		&i.Force,
+		&i.State,
+		&i.FromVersion,
+		&i.ToVersion,
+		&i.Error,
+		&i.RequestedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
@@ -1915,7 +1944,7 @@ func (q *Queries) GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID)
 }
 
 const getPrinterByID = `-- name: GetPrinterByID :one
-SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt
+SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
 FROM printers WHERE id = $1
 `
 
@@ -1931,6 +1960,7 @@ func (q *Queries) GetPrinterByID(ctx context.Context, id pgtype.UUID) (Printer, 
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.IsReceipt,
+		&i.MAC,
 	)
 	return i, err
 }
@@ -2074,6 +2104,36 @@ func (q *Queries) InsertAgentBackup(ctx context.Context, arg InsertAgentBackupPa
 	return i, err
 }
 
+const insertAgentUpdate = `-- name: InsertAgentUpdate :exec
+
+INSERT INTO agent_updates (id, tenant_id, location_id, action, requested_by, force, state)
+VALUES ($1, $2, $3, $4, $5, $6, 'requested')
+`
+
+type InsertAgentUpdateParams struct {
+	ID          pgtype.UUID `json:"id"`
+	TenantID    pgtype.UUID `json:"tenant_id"`
+	LocationID  pgtype.UUID `json:"location_id"`
+	Action      string      `json:"action"`
+	RequestedBy string      `json:"requested_by"`
+	Force       bool        `json:"force"`
+}
+
+// ---------------------------------------------------------------------------
+// 00012: Pi updates (agent_updates)
+// ---------------------------------------------------------------------------
+func (q *Queries) InsertAgentUpdate(ctx context.Context, arg InsertAgentUpdateParams) error {
+	_, err := q.db.Exec(ctx, insertAgentUpdate,
+		arg.ID,
+		arg.TenantID,
+		arg.LocationID,
+		arg.Action,
+		arg.RequestedBy,
+		arg.Force,
+	)
+	return err
+}
+
 const insertDiagReport = `-- name: InsertDiagReport :execrows
 INSERT INTO diag_reports (id, tenant_id, location_id, tablet_id, tablet_name, via, kind, scenario,
                           outcome, headline, cause, fixed_by, app_version, agent_version, report, created_at)
@@ -2202,6 +2262,34 @@ func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventPa
 		arg.Payload,
 		arg.OccurredAt,
 		arg.SchemaVersion,
+	)
+	return err
+}
+
+const insertPrinterIPChange = `-- name: InsertPrinterIPChange :exec
+INSERT INTO printer_ip_changes (tenant_id, location_id, printer_id, old_ip, new_ip, mac, source)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+type InsertPrinterIPChangeParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	PrinterID  pgtype.UUID `json:"printer_id"`
+	OldIP      string      `json:"old_ip"`
+	NewIP      string      `json:"new_ip"`
+	MAC        string      `json:"mac"`
+	Source     string      `json:"source"`
+}
+
+func (q *Queries) InsertPrinterIPChange(ctx context.Context, arg InsertPrinterIPChangeParams) error {
+	_, err := q.db.Exec(ctx, insertPrinterIPChange,
+		arg.TenantID,
+		arg.LocationID,
+		arg.PrinterID,
+		arg.OldIP,
+		arg.NewIP,
+		arg.MAC,
+		arg.Source,
 	)
 	return err
 }
@@ -2347,6 +2435,53 @@ func (q *Queries) ListAgentHealth(ctx context.Context) ([]ListAgentHealthRow, er
 			&i.Health,
 			&i.At,
 			&i.LocationName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAgentUpdates = `-- name: ListAgentUpdates :many
+SELECT id, tenant_id, location_id, action, requested_by, force, state, from_version, to_version,
+       error, requested_at, updated_at
+FROM agent_updates
+WHERE ($1::uuid IS NULL OR location_id = $1)
+ORDER BY requested_at DESC
+LIMIT $2::int
+`
+
+type ListAgentUpdatesParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	MaxRows    int32       `json:"max_rows"`
+}
+
+func (q *Queries) ListAgentUpdates(ctx context.Context, arg ListAgentUpdatesParams) ([]AgentUpdate, error) {
+	rows, err := q.db.Query(ctx, listAgentUpdates, arg.LocationID, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AgentUpdate
+	for rows.Next() {
+		var i AgentUpdate
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Action,
+			&i.RequestedBy,
+			&i.Force,
+			&i.State,
+			&i.FromVersion,
+			&i.ToVersion,
+			&i.Error,
+			&i.RequestedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -3183,8 +3318,61 @@ func (q *Queries) ListOptionsByLocation(ctx context.Context, locationID pgtype.U
 	return items, nil
 }
 
+const listPrinterIPChanges = `-- name: ListPrinterIPChanges :many
+SELECT c.id, c.printer_id, p.name AS printer_name, c.old_ip, c.new_ip, c.mac, c.source, c.at
+FROM printer_ip_changes c JOIN printers p ON p.id = c.printer_id
+WHERE c.location_id = $1
+ORDER BY c.at DESC
+LIMIT $2::int
+`
+
+type ListPrinterIPChangesParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	MaxRows    int32       `json:"max_rows"`
+}
+
+type ListPrinterIPChangesRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	PrinterID   pgtype.UUID        `json:"printer_id"`
+	PrinterName string             `json:"printer_name"`
+	OldIP       string             `json:"old_ip"`
+	NewIP       string             `json:"new_ip"`
+	MAC         string             `json:"mac"`
+	Source      string             `json:"source"`
+	At          pgtype.Timestamptz `json:"at"`
+}
+
+func (q *Queries) ListPrinterIPChanges(ctx context.Context, arg ListPrinterIPChangesParams) ([]ListPrinterIPChangesRow, error) {
+	rows, err := q.db.Query(ctx, listPrinterIPChanges, arg.LocationID, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPrinterIPChangesRow
+	for rows.Next() {
+		var i ListPrinterIPChangesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PrinterID,
+			&i.PrinterName,
+			&i.OldIP,
+			&i.NewIP,
+			&i.MAC,
+			&i.Source,
+			&i.At,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPrintersByLocation = `-- name: ListPrintersByLocation :many
-SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt
+SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
 FROM printers WHERE location_id = $1 ORDER BY name ASC
 `
 
@@ -3206,6 +3394,7 @@ func (q *Queries) ListPrintersByLocation(ctx context.Context, locationID pgtype.
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.IsReceipt,
+			&i.MAC,
 		); err != nil {
 			return nil, err
 		}
@@ -3581,6 +3770,49 @@ func (q *Queries) MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const movePrinterIP = `-- name: MovePrinterIP :one
+UPDATE printers
+SET ip = $1,
+    mac = CASE WHEN $2::text = '' THEN mac ELSE $2::text END,
+    updated_at = now()
+WHERE id = $3 AND location_id = $4 AND ip = $5
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+`
+
+type MovePrinterIPParams struct {
+	NewIP      string      `json:"new_ip"`
+	MAC        string      `json:"mac"`
+	ID         pgtype.UUID `json:"id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	OldIP      string      `json:"old_ip"`
+}
+
+// The Pi followed a printer to a new IP. Applied only while the printer still
+// has the IP the Pi saw (a manager edit in between wins); an empty mac keeps
+// the stored one.
+func (q *Queries) MovePrinterIP(ctx context.Context, arg MovePrinterIPParams) (Printer, error) {
+	row := q.db.QueryRow(ctx, movePrinterIP,
+		arg.NewIP,
+		arg.MAC,
+		arg.ID,
+		arg.LocationID,
+		arg.OldIP,
+	)
+	var i Printer
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Name,
+		&i.IP,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IsReceipt,
+		&i.MAC,
+	)
+	return i, err
 }
 
 const pendingEventsForHandler = `-- name: PendingEventsForHandler :many
@@ -4031,10 +4263,24 @@ func (q *Queries) SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStat
 	return result.RowsAffected(), nil
 }
 
+const setPrinterMAC = `-- name: SetPrinterMAC :exec
+UPDATE printers SET mac = $2, updated_at = now() WHERE id = $1
+`
+
+type SetPrinterMACParams struct {
+	ID  pgtype.UUID `json:"id"`
+	MAC string      `json:"mac"`
+}
+
+func (q *Queries) SetPrinterMAC(ctx context.Context, arg SetPrinterMACParams) error {
+	_, err := q.db.Exec(ctx, setPrinterMAC, arg.ID, arg.MAC)
+	return err
+}
+
 const setPrinterReceipt = `-- name: SetPrinterReceipt :one
 UPDATE printers SET is_receipt = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
 `
 
 type SetPrinterReceiptParams struct {
@@ -4054,6 +4300,7 @@ func (q *Queries) SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptPa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.IsReceipt,
+		&i.MAC,
 	)
 	return i, err
 }
@@ -4099,6 +4346,28 @@ func (q *Queries) SetTenantStoreID(ctx context.Context, arg SetTenantStoreIDPara
 		&i.StoreID,
 	)
 	return i, err
+}
+
+const settleAgentUpdateRequest = `-- name: SettleAgentUpdateRequest :execrows
+UPDATE agent_updates SET state = $2, error = $3, updated_at = now()
+WHERE id = $1 AND state = 'requested'
+`
+
+type SettleAgentUpdateRequestParams struct {
+	ID    pgtype.UUID `json:"id"`
+	State string      `json:"state"`
+	Error string      `json:"error"`
+}
+
+// main's own follow-up after asking the agent (its reply, or no agent / no
+// reply). Only while the row is still 'requested' — a status report the agent
+// already sent is newer and wins.
+func (q *Queries) SettleAgentUpdateRequest(ctx context.Context, arg SettleAgentUpdateRequestParams) (int64, error) {
+	result, err := q.db.Exec(ctx, settleAgentUpdateRequest, arg.ID, arg.State, arg.Error)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const touchDevice = `-- name: TouchDevice :exec
@@ -4461,7 +4730,7 @@ func (q *Queries) UpdateOrderFloor(ctx context.Context, arg UpdateOrderFloorPara
 const updatePrinter = `-- name: UpdatePrinter :one
 UPDATE printers SET name = $2, ip = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
 `
 
 type UpdatePrinterParams struct {
@@ -4482,6 +4751,7 @@ func (q *Queries) UpdatePrinter(ctx context.Context, arg UpdatePrinterParams) (P
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.IsReceipt,
+		&i.MAC,
 	)
 	return i, err
 }
@@ -4559,6 +4829,54 @@ func (q *Queries) UpsertAgentState(ctx context.Context, arg UpsertAgentStatePara
 		arg.TenantID,
 		arg.State,
 		arg.At,
+	)
+	return err
+}
+
+const upsertAgentUpdateStatus = `-- name: UpsertAgentUpdateStatus :exec
+INSERT INTO agent_updates (id, tenant_id, location_id, action, requested_by, force, state,
+                           from_version, to_version, error, requested_at, updated_at)
+VALUES ($1, $2, $3, $4, $5,
+        $6, $7, $8, $9, $10,
+        $11, now())
+ON CONFLICT (id) DO UPDATE
+SET state        = EXCLUDED.state,
+    from_version = COALESCE(NULLIF(EXCLUDED.from_version, ''), agent_updates.from_version),
+    to_version   = COALESCE(NULLIF(EXCLUDED.to_version, ''), agent_updates.to_version),
+    error        = EXCLUDED.error,
+    updated_at   = now()
+WHERE agent_updates.location_id = EXCLUDED.location_id
+`
+
+type UpsertAgentUpdateStatusParams struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	Action      string             `json:"action"`
+	RequestedBy string             `json:"requested_by"`
+	Force       bool               `json:"force"`
+	State       string             `json:"state"`
+	FromVersion string             `json:"from_version"`
+	ToVersion   string             `json:"to_version"`
+	Error       string             `json:"error"`
+	RequestedAt pgtype.Timestamptz `json:"requested_at"`
+}
+
+// The agent's agent.update.status report. Inserted when unknown (an update
+// started on the Pi itself); only the reporting location's row is touched.
+func (q *Queries) UpsertAgentUpdateStatus(ctx context.Context, arg UpsertAgentUpdateStatusParams) error {
+	_, err := q.db.Exec(ctx, upsertAgentUpdateStatus,
+		arg.ID,
+		arg.TenantID,
+		arg.LocationID,
+		arg.Action,
+		arg.RequestedBy,
+		arg.Force,
+		arg.State,
+		arg.FromVersion,
+		arg.ToVersion,
+		arg.Error,
+		arg.RequestedAt,
 	)
 	return err
 }

@@ -33,7 +33,8 @@ func NewPrinterStatusHandler(cache *printerstatus.Cache, requester *rpc.Requeste
 // MeGetLive serves GET /store/v1/me/printers/live: an on-demand pull of the
 // agent's live roster (short timeout), falling back to the cached report. The
 // response carries the report age + whether an agent is currently connected so
-// the UI can flag stale/offline data.
+// the UI can flag stale/offline data, each printer's MAC, and `found` — printers
+// the Pi found on its network that aren't in the roster yet.
 func (h *PrinterStatusHandler) MeGetLive(c *echo.Context) error {
 	ctx := c.Request().Context()
 	tid, lid, ok := meScope(c)
@@ -67,6 +68,9 @@ func (h *PrinterStatusHandler) MeGetLive(c *echo.Context) error {
 	out := map[string]any{
 		"agent_online": agentOnline,
 		"printers":     rep.Printers, // nil → JSON null; fine, UI treats as empty
+		// Printers the Pi found on its network that aren't in the roster yet
+		// (agents before 2.0.6 don't scan → always empty).
+		"found": rep.Found,
 	}
 	if cached {
 		out["reported_at"] = rep.ReportedAt
@@ -74,6 +78,9 @@ func (h *PrinterStatusHandler) MeGetLive(c *echo.Context) error {
 	}
 	if rep.Printers == nil {
 		out["printers"] = []printerstatus.LivePrinter{}
+	}
+	if rep.Found == nil {
+		out["found"] = []printerstatus.FoundPrinter{}
 	}
 	return c.JSON(http.StatusOK, out)
 }

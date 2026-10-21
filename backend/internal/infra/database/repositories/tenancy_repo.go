@@ -10,6 +10,7 @@ import (
 	"quiccpos/main/internal/infra/database/models"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -351,15 +352,19 @@ func (r *TenancyRepository) RevokeDevice(ctx context.Context, id uuid.UUID) erro
 
 // --- Printers --------------------------------------------------------------
 
-func (r *TenancyRepository) CreatePrinter(ctx context.Context, tenantID, locationID uuid.UUID, name, ip string) (*tenancy.Printer, error) {
+func (r *TenancyRepository) CreatePrinter(ctx context.Context, tenantID, locationID uuid.UUID, name, ip, mac string) (*tenancy.Printer, error) {
 	q := models.New(r.pool)
 	row, err := q.CreatePrinter(ctx, models.CreatePrinterParams{
 		TenantID:   pgtype.UUID{Bytes: tenantID, Valid: true},
 		LocationID: pgtype.UUID{Bytes: locationID, Valid: true},
 		Name:       name,
 		IP:         ip,
+		MAC:        mac,
 	})
 	if err != nil {
+		if isUniqueViolationOn(err, printerNameKey) {
+			return nil, tenancy.ErrPrinterNameTaken
+		}
 		return nil, fmt.Errorf("create printer: %w", err)
 	}
 	return toDomainPrinter(row), nil
@@ -395,6 +400,9 @@ func (r *TenancyRepository) UpdatePrinter(ctx context.Context, id uuid.UUID, nam
 		IP:   ip,
 	})
 	if err != nil {
+		if isUniqueViolationOn(err, printerNameKey) {
+			return nil, tenancy.ErrPrinterNameTaken
+		}
 		return nil, fmt.Errorf("update printer: %w", err)
 	}
 	return toDomainPrinter(row), nil
@@ -434,6 +442,99 @@ func (r *TenancyRepository) DeletePrinter(ctx context.Context, id uuid.UUID) err
 		return fmt.Errorf("delete printer: %w", err)
 	}
 	return nil
+}
+
+// printerNameKey is the (location_id, name) unique constraint on printers.
+const printerNameKey = "printers_location_id_name_key"
+
+// MovePrinterIP updates the printer's IP (+ MAC) only while it still has oldIP,
+// and logs the change in the same transaction.
+func (r *TenancyRepository) MovePrinterIP(ctx context.Context, locationID, printerID uuid.UUID, oldIP, newIP, mac, source string) (*tenancy.Printer, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	q := models.New(tx)
+	row, err := q.MovePrinterIP(ctx, models.MovePrinterIPParams{
+		NewIP:      newIP,
+		MAC:        mac,
+		ID:         pgtype.UUID{Bytes: printerID, Valid: true},
+		LocationID: pgtype.UUID{Bytes: locationID, Valid: true},
+		OldIP:      oldIP,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, tenancy.ErrPrinterIPChanged
+	}
+	if err != nil {
+		return nil, fmt.Errorf("move printer ip: %w", err)
+	}
+	if err := q.InsertPrinterIPChange(ctx, models.InsertPrinterIPChangeParams{
+		TenantID:   row.TenantID,
+		LocationID: row.LocationID,
+		PrinterID:  row.ID,
+		OldIP:      oldIP,
+		NewIP:      newIP,
+		MAC:        row.MAC,
+		Source:     source,
+	}); err != nil {
+		return nil, fmt.Errorf("log printer ip change: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit tx: %w", err)
+	}
+	return toDomainPrinter(row), nil
+}
+
+func (r *TenancyRepository) SetPrinterMAC(ctx context.Context, printerID uuid.UUID, mac string) error {
+	if err := models.New(r.pool).SetPrinterMAC(ctx, models.SetPrinterMACParams{
+		ID: pgtype.UUID{Bytes: printerID, Valid: true}, MAC: mac,
+	}); err != nil {
+		return fmt.Errorf("set printer mac: %w", err)
+	}
+	return nil
+}
+
+func (r *TenancyRepository) InsertPrinterIPChange(ctx context.Context, c tenancy.PrinterIPChange) error {
+	if err := models.New(r.pool).InsertPrinterIPChange(ctx, models.InsertPrinterIPChangeParams{
+		TenantID:   pgtype.UUID{Bytes: c.TenantID, Valid: true},
+		LocationID: pgtype.UUID{Bytes: c.LocationID, Valid: true},
+		PrinterID:  pgtype.UUID{Bytes: c.PrinterID, Valid: true},
+		OldIP:      c.OldIP,
+		NewIP:      c.NewIP,
+		MAC:        c.MAC,
+		Source:     c.Source,
+	}); err != nil {
+		return fmt.Errorf("log printer ip change: %w", err)
+	}
+	return nil
+}
+
+func (r *TenancyRepository) ListPrinterIPChanges(ctx context.Context, locationID uuid.UUID, limit int) ([]tenancy.PrinterIPChange, error) {
+	rows, err := models.New(r.pool).ListPrinterIPChanges(ctx, models.ListPrinterIPChangesParams{
+		LocationID: pgtype.UUID{Bytes: locationID, Valid: true}, MaxRows: int32(limit),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list printer ip changes: %w", err)
+	}
+	out := make([]tenancy.PrinterIPChange, 0, len(rows))
+	for _, row := range rows {
+		c := tenancy.PrinterIPChange{
+			ID:          uuid.UUID(row.ID.Bytes),
+			LocationID:  locationID,
+			PrinterID:   uuid.UUID(row.PrinterID.Bytes),
+			PrinterName: row.PrinterName,
+			OldIP:       row.OldIP,
+			NewIP:       row.NewIP,
+			MAC:         row.MAC,
+			Source:      row.Source,
+		}
+		if row.At.Valid {
+			c.At = row.At.Time
+		}
+		out = append(out, c)
+	}
+	return out, nil
 }
 
 func (r *TenancyRepository) DeletePrintersByLocation(ctx context.Context, locationID uuid.UUID) error {
@@ -516,6 +617,7 @@ func toDomainPrinter(row models.Printer) *tenancy.Printer {
 		Name:       row.Name,
 		IP:         row.IP,
 		IsReceipt:  row.IsReceipt,
+		MAC:        row.MAC,
 	}
 	if row.CreatedAt.Valid {
 		p.CreatedAt = row.CreatedAt.Time

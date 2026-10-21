@@ -15,3 +15,6 @@ sql:
         # otherwise emit the field as `Ip`).
         rename:
           ip: "IP"
+          old_ip: "OldIP"
+          new_ip: "NewIP"
+          mac: "MAC"

@@ -50,6 +50,9 @@ type PrinterContext struct {
 	IP   string `json:"ip"`
 	// IsReceipt marks the location's receipt printer (prints the full customer
 	// receipt); all others are kitchen stations that print only their items.
-	IsReceipt bool      `json:"is_receipt"`
+	IsReceipt bool `json:"is_receipt"`
+	// MAC is the printer's hardware address as the Pi learned it (omitted
+	// when not known yet).
+	MAC       string    `json:"mac,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 }

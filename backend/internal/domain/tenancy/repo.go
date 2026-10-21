@@ -15,6 +15,12 @@ var ErrStoreIDTaken = errors.New("store_id is already assigned to another tenant
 // (tenants.username is unique when present).
 var ErrUsernameTaken = errors.New("username already taken")
 
+// ErrPrinterNameTaken: the location already has a printer with that name.
+var ErrPrinterNameTaken = errors.New("a printer with that name already exists")
+
+// ErrPrinterIPChanged: the printer no longer has the IP the caller saw (MovePrinterIP).
+var ErrPrinterIPChanged = errors.New("printer ip changed since it was read")
+
 // CreateTenantParams creates a tenant and its (only) location. PasswordHash is
 // already hashed by the service.
 type CreateTenantParams struct {
@@ -96,7 +102,7 @@ type Repository interface {
 	// DeleteDevice hard-deletes a device row (vs RevokeDevice, which tombstones it).
 	DeleteDevice(ctx context.Context, id uuid.UUID) error
 
-	CreatePrinter(ctx context.Context, tenantID, locationID uuid.UUID, name, ip string) (*Printer, error)
+	CreatePrinter(ctx context.Context, tenantID, locationID uuid.UUID, name, ip, mac string) (*Printer, error)
 	GetPrinterByID(ctx context.Context, id uuid.UUID) (*Printer, error)
 	ListPrintersByLocation(ctx context.Context, locationID uuid.UUID) ([]Printer, error)
 	UpdatePrinter(ctx context.Context, id uuid.UUID, name, ip string) (*Printer, error)
@@ -106,4 +112,14 @@ type Repository interface {
 	SetReceiptPrinter(ctx context.Context, locationID, printerID uuid.UUID, isReceipt bool) (*Printer, error)
 	// DeletePrintersByLocation removes every printer for a location.
 	DeletePrintersByLocation(ctx context.Context, locationID uuid.UUID) error
+	// MovePrinterIP moves a printer of locationID from oldIP to newIP (and sets
+	// its MAC unless mac is empty), logging the change — one transaction.
+	// ErrPrinterIPChanged when the printer's IP is no longer oldIP.
+	MovePrinterIP(ctx context.Context, locationID, printerID uuid.UUID, oldIP, newIP, mac, source string) (*Printer, error)
+	// SetPrinterMAC records a printer's hardware address.
+	SetPrinterMAC(ctx context.Context, printerID uuid.UUID, mac string) error
+	// InsertPrinterIPChange logs one printer IP change.
+	InsertPrinterIPChange(ctx context.Context, c PrinterIPChange) error
+	// ListPrinterIPChanges returns a location's printer IP changes, newest first.
+	ListPrinterIPChanges(ctx context.Context, locationID uuid.UUID, limit int) ([]PrinterIPChange, error)
 }

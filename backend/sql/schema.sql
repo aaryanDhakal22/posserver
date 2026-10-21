@@ -39,6 +39,7 @@ CREATE TABLE printers (
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now(),
     is_receipt  boolean     NOT NULL DEFAULT false,
+    mac         text        NOT NULL DEFAULT '',
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE,
     UNIQUE (location_id, name)
 );
@@ -451,3 +452,36 @@ CREATE TABLE diag_reports (
 );
 CREATE INDEX idx_diag_reports_location ON diag_reports (location_id, received_at DESC);
 CREATE INDEX idx_diag_reports_received ON diag_reports (received_at DESC);
+
+-- 00012_pi_updates_printer_follow: printer MACs + IP history, Pi update log.
+CREATE TABLE printer_ip_changes (
+    id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   uuid        NOT NULL,
+    location_id uuid        NOT NULL,
+    printer_id  uuid        NOT NULL REFERENCES printers(id) ON DELETE CASCADE,
+    old_ip      text        NOT NULL DEFAULT '',
+    new_ip      text        NOT NULL DEFAULT '',
+    mac         text        NOT NULL DEFAULT '',
+    source      text        NOT NULL CHECK (source IN ('agent', 'manager')),
+    at          timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_printer_ip_changes_location ON printer_ip_changes (location_id, at DESC);
+
+CREATE TABLE agent_updates (
+    id           uuid        PRIMARY KEY,
+    tenant_id    uuid        NOT NULL,
+    location_id  uuid        NOT NULL,
+    action       text        NOT NULL,
+    requested_by text        NOT NULL DEFAULT '',
+    force        boolean     NOT NULL DEFAULT false,
+    state        text        NOT NULL,
+    from_version text        NOT NULL DEFAULT '',
+    to_version   text        NOT NULL DEFAULT '',
+    error        text        NOT NULL DEFAULT '',
+    requested_at timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_agent_updates_location ON agent_updates (location_id, requested_at DESC);
+CREATE INDEX idx_agent_updates_requested ON agent_updates (requested_at DESC);

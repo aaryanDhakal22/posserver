@@ -160,6 +160,7 @@ func routeTable(d RouterDeps) []routeDef {
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
 	diagH := handler.NewDiagHandler(d.Diag, d.Logger)
+	agentUpdateH := handler.NewAgentUpdateHandler(d.AgentSync, d.Requester, d.Logger)
 
 	appFS := webapp.FS()
 	appBuilt := webapp.Built()
@@ -208,6 +209,9 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", adminPrefix+"/devices/:id/revoke", "admin", "Revoke a device (tombstone)", adminH.RevokeDevice, admin),
 		def("DELETE", adminPrefix+"/devices/:id", "admin", "Hard-delete a device row", adminH.DeleteDevice, admin),
 		def("POST", adminPrefix+"/agent/ping", "admin", "Round-trip an agent over the duplex channel (debug)", agentRPCH.PingAgent, admin),
+		def("POST", adminPrefix+"/agent/update", "admin", "Ask a location's Pi to update {tenant_id, location_id, force} (after close; force = once idle)", agentUpdateH.Update, admin),
+		def("POST", adminPrefix+"/agent/rollback", "admin", "Ask a location's Pi to roll back to its previous agent {tenant_id, location_id}", agentUpdateH.Rollback, admin),
+		def("GET", adminPrefix+"/agent-updates", "admin", "Pi update history, newest first (?location_id&limit=20)", agentUpdateH.List, admin),
 
 		// Admin — tablet diagnostics (reports + tablet report tokens).
 		def("GET", adminPrefix+"/diag-reports", "admin", "Tablet diagnostics reports, newest first (?tenant_id&kind&outcome&unresolved&limit)", diagH.AdminList, admin),
@@ -262,6 +266,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", storePrefix+"/me/orders", "store-session", "Recent orders with the agent-synced floor status (?limit)", floorH.MeListOrders, storeSession),
 		def("GET", storePrefix+"/me/floor", "store-session", "Driver roster + last agent floor sync", floorH.MeGetFloor, storeSession),
 		def("GET", storePrefix+"/me/printers/live", "store-session", "Agent-reported live printer roster + reachability", printerStatusH.MeGetLive, storeSession),
+		def("GET", storePrefix+"/me/printers/ip-changes", "store-session", "Printer IP changes, newest first (?limit=20) — the Pi following a printer + manager edits", storeH.MeListPrinterIPChanges, storeSession),
 		def("GET", storePrefix+"/me/printers", "store-session", "List this location's printers", storeH.MeListPrinters, storeSession),
 		def("POST", storePrefix+"/me/printers", "store-session", "Add a printer", storeH.MeCreatePrinter, storeSession),
 		def("PATCH", storePrefix+"/me/printers/:id", "store-session", "Edit a printer (must be this location's)", storeH.MeUpdatePrinter, storeSession),

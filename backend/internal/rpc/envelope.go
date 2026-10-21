@@ -25,6 +25,17 @@ const (
 	MsgPing                 = "ping"
 	MsgPrinterReport        = "printer.report"         // agent → main, unsolicited push
 	MsgPrinterReportRequest = "printer.report.request" // main → agent, pull
+
+	// Pi updates (2.0.6). An agent older than 2.0.6 doesn't answer these
+	// commands — the request times out and main records the update as
+	// "unreachable".
+	MsgAgentUpdate       = "agent.update"        // main → agent {id, force, requested_by}
+	MsgAgentRollback     = "agent.rollback"      // main → agent {id, requested_by}
+	MsgAgentUpdateStatus = "agent.update.status" // agent → main, every state change
+
+	// Printer auto-follow + found printers (2.0.6), agent → main requests.
+	MsgPrinterMoved = "printer.moved" // {printer_id, old_ip, new_ip, mac} → {applied, reason}
+	MsgPrinterAdd   = "printer.add"   // {name, ip, mac} → {ok, id, name, ip} | {ok:false, code}
 )
 
 // Envelope is the wire shape for every duplex message, both directions. It must

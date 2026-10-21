@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 
@@ -447,6 +448,13 @@ func (s *Service) deviceGone(id uuid.UUID) {
 // --- Printers --------------------------------------------------------------
 
 func (s *Service) CreatePrinter(ctx context.Context, locationID uuid.UUID, name, ip string) (*tenancy.Printer, error) {
+	return s.AddPrinter(ctx, locationID, name, ip, "")
+}
+
+// AddPrinter adds a printer with its hardware address when known (the Pi
+// found it on the network; empty otherwise). tenancy.ErrPrinterNameTaken when the
+// location already has a printer of that name.
+func (s *Service) AddPrinter(ctx context.Context, locationID uuid.UUID, name, ip, mac string) (*tenancy.Printer, error) {
 	name = strings.TrimSpace(name)
 	ip = strings.TrimSpace(ip)
 	if name == "" || ip == "" {
@@ -456,7 +464,7 @@ func (s *Service) CreatePrinter(ctx context.Context, locationID uuid.UUID, name,
 	if err != nil {
 		return nil, fmt.Errorf("resolve location: %w", err)
 	}
-	p, err := s.repo.CreatePrinter(ctx, loc.TenantID, loc.ID, name, ip)
+	p, err := s.repo.CreatePrinter(ctx, loc.TenantID, loc.ID, name, ip, NormalizeMAC(mac))
 	if err != nil {
 		return nil, err
 	}
@@ -466,6 +474,84 @@ func (s *Service) CreatePrinter(ctx context.Context, locationID uuid.UUID, name,
 		return nil, err
 	}
 	return s.repo.GetPrinterByID(ctx, p.ID)
+}
+
+// NormalizeMAC returns mac in lowercase colon form ("aa:bb:cc:dd:ee:ff"), or
+// empty when it isn't a hardware address.
+func NormalizeMAC(mac string) string {
+	hw, err := net.ParseMAC(strings.TrimSpace(mac))
+	if err != nil {
+		return ""
+	}
+	return hw.String()
+}
+
+// MoveResult is the outcome of MovePrinter. Reason is "" when applied, else
+// "stale_old_ip" (the printer no longer has the IP the Pi saw — a manager edit
+// or an earlier move won) or "not_found" (no such printer at this location).
+type MoveResult struct {
+	Applied bool
+	Reason  string
+	// Changed is true when the printer's IP actually moved (store_config needs
+	// a push); an applied repeat of a move already made changes nothing.
+	Changed bool
+	Printer *tenancy.Printer
+}
+
+// Move outcomes (the printer.moved reply's reason).
+const (
+	MoveStaleOldIP = "stale_old_ip"
+	MoveNotFound   = "not_found"
+)
+
+// MovePrinter follows a printer the Pi found at a new IP: only a printer of
+// this (tenant, location), only while it still has oldIP. The change is logged
+// (source "agent"). A repeat of a move already made (the printer is at newIP)
+// is applied without a second log row.
+func (s *Service) MovePrinter(ctx context.Context, tenantID, locationID, printerID uuid.UUID, oldIP, newIP, mac string) (MoveResult, error) {
+	oldIP, newIP, mac = strings.TrimSpace(oldIP), strings.TrimSpace(newIP), NormalizeMAC(mac)
+	p, err := s.repo.GetPrinterByID(ctx, printerID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return MoveResult{Reason: MoveNotFound}, nil
+	}
+	if err != nil {
+		return MoveResult{}, err
+	}
+	if p.TenantID != tenantID || p.LocationID != locationID {
+		return MoveResult{Reason: MoveNotFound}, nil
+	}
+	if p.IP == newIP {
+		if mac != "" && p.MAC != mac {
+			if err := s.repo.SetPrinterMAC(ctx, p.ID, mac); err != nil {
+				return MoveResult{}, err
+			}
+			p.MAC = mac
+		}
+		return MoveResult{Applied: true, Printer: p}, nil
+	}
+	if p.IP != oldIP {
+		return MoveResult{Reason: MoveStaleOldIP, Printer: p}, nil
+	}
+	moved, err := s.repo.MovePrinterIP(ctx, locationID, printerID, oldIP, newIP, mac, tenancy.IPChangeByAgent)
+	if errors.Is(err, tenancy.ErrPrinterIPChanged) {
+		return MoveResult{Reason: MoveStaleOldIP, Printer: p}, nil
+	}
+	if err != nil {
+		return MoveResult{}, err
+	}
+	return MoveResult{Applied: true, Changed: true, Printer: moved}, nil
+}
+
+// ListPrinterIPChanges returns the location's printer IP changes, newest
+// first (limit clamped to 1..100, default 20).
+func (s *Service) ListPrinterIPChanges(ctx context.Context, locationID uuid.UUID, limit int) ([]tenancy.PrinterIPChange, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+	return s.repo.ListPrinterIPChanges(ctx, locationID, limit)
 }
 
 // SetReceiptPrinter makes printerID the location's receipt printer (the one
@@ -496,13 +582,32 @@ func (s *Service) ListPrintersByLocation(ctx context.Context, locationID uuid.UU
 	return s.repo.ListPrintersByLocation(ctx, locationID)
 }
 
+// UpdatePrinter is the manager's edit. A changed IP is logged (source
+// "manager") next to the Pi's own moves.
 func (s *Service) UpdatePrinter(ctx context.Context, id uuid.UUID, name, ip string) (*tenancy.Printer, error) {
 	name = strings.TrimSpace(name)
 	ip = strings.TrimSpace(ip)
 	if name == "" || ip == "" {
 		return nil, errors.New("name and ip are required")
 	}
-	return s.repo.UpdatePrinter(ctx, id, name, ip)
+	before, err := s.repo.GetPrinterByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	p, err := s.repo.UpdatePrinter(ctx, id, name, ip)
+	if err != nil {
+		return nil, err
+	}
+	if before.IP != p.IP {
+		if err := s.repo.InsertPrinterIPChange(ctx, tenancy.PrinterIPChange{
+			TenantID: p.TenantID, LocationID: p.LocationID, PrinterID: p.ID,
+			OldIP: before.IP, NewIP: p.IP, MAC: p.MAC, Source: tenancy.IPChangeByManager,
+		}); err != nil {
+			// The edit itself stands; only its history line is missing.
+			s.logger.Warn().Ctx(ctx).Err(err).Str("printer_id", id.String()).Msg("printer ip change not logged")
+		}
+	}
+	return p, nil
 }
 
 func (s *Service) DeletePrinter(ctx context.Context, id uuid.UUID) error {

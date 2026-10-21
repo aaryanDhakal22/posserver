@@ -134,22 +134,22 @@ UPDATE devices SET last_used_at = now() WHERE id = $1;
 -- ───────────────────────────────────────────────────────────────────────────
 
 -- name: CreatePrinter :one
-INSERT INTO printers (tenant_id, location_id, name, ip)
-VALUES ($1, $2, $3, $4)
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt;
+INSERT INTO printers (tenant_id, location_id, name, ip, mac)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac;
 
 -- name: GetPrinterByID :one
-SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt
+SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
 FROM printers WHERE id = $1;
 
 -- name: ListPrintersByLocation :many
-SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt
+SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
 FROM printers WHERE location_id = $1 ORDER BY name ASC;
 
 -- name: UpdatePrinter :one
 UPDATE printers SET name = $2, ip = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt;
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac;
 
 -- name: ClearReceiptPrinter :exec
 -- Unflag the location's current receipt printer (one per location).
@@ -159,7 +159,32 @@ WHERE location_id = $1 AND is_receipt;
 -- name: SetPrinterReceipt :one
 UPDATE printers SET is_receipt = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt;
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac;
+
+-- name: MovePrinterIP :one
+-- The Pi followed a printer to a new IP. Applied only while the printer still
+-- has the IP the Pi saw (a manager edit in between wins); an empty mac keeps
+-- the stored one.
+UPDATE printers
+SET ip = sqlc.arg(new_ip),
+    mac = CASE WHEN sqlc.arg(mac)::text = '' THEN mac ELSE sqlc.arg(mac)::text END,
+    updated_at = now()
+WHERE id = sqlc.arg(id) AND location_id = sqlc.arg(location_id) AND ip = sqlc.arg(old_ip)
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac;
+
+-- name: SetPrinterMAC :exec
+UPDATE printers SET mac = $2, updated_at = now() WHERE id = $1;
+
+-- name: InsertPrinterIPChange :exec
+INSERT INTO printer_ip_changes (tenant_id, location_id, printer_id, old_ip, new_ip, mac, source)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: ListPrinterIPChanges :many
+SELECT c.id, c.printer_id, p.name AS printer_name, c.old_ip, c.new_ip, c.mac, c.source, c.at
+FROM printer_ip_changes c JOIN printers p ON p.id = c.printer_id
+WHERE c.location_id = $1
+ORDER BY c.at DESC
+LIMIT sqlc.arg(max_rows)::int;
 
 -- name: DeletePrinter :exec
 DELETE FROM printers WHERE id = $1;
@@ -861,3 +886,47 @@ WHERE id = sqlc.arg(id);
 
 -- name: PruneDiagReports :execrows
 DELETE FROM diag_reports WHERE received_at < $1;
+
+-- ---------------------------------------------------------------------------
+-- 00012: Pi updates (agent_updates)
+-- ---------------------------------------------------------------------------
+
+-- name: InsertAgentUpdate :exec
+INSERT INTO agent_updates (id, tenant_id, location_id, action, requested_by, force, state)
+VALUES ($1, $2, $3, $4, $5, $6, 'requested');
+
+-- name: SettleAgentUpdateRequest :execrows
+-- main's own follow-up after asking the agent (its reply, or no agent / no
+-- reply). Only while the row is still 'requested' — a status report the agent
+-- already sent is newer and wins.
+UPDATE agent_updates SET state = $2, error = $3, updated_at = now()
+WHERE id = $1 AND state = 'requested';
+
+-- name: UpsertAgentUpdateStatus :exec
+-- The agent's agent.update.status report. Inserted when unknown (an update
+-- started on the Pi itself); only the reporting location's row is touched.
+INSERT INTO agent_updates (id, tenant_id, location_id, action, requested_by, force, state,
+                           from_version, to_version, error, requested_at, updated_at)
+VALUES (sqlc.arg(id), sqlc.arg(tenant_id), sqlc.arg(location_id), sqlc.arg(action), sqlc.arg(requested_by),
+        sqlc.arg(force), sqlc.arg(state), sqlc.arg(from_version), sqlc.arg(to_version), sqlc.arg(error),
+        sqlc.arg(requested_at), now())
+ON CONFLICT (id) DO UPDATE
+SET state        = EXCLUDED.state,
+    from_version = COALESCE(NULLIF(EXCLUDED.from_version, ''), agent_updates.from_version),
+    to_version   = COALESCE(NULLIF(EXCLUDED.to_version, ''), agent_updates.to_version),
+    error        = EXCLUDED.error,
+    updated_at   = now()
+WHERE agent_updates.location_id = EXCLUDED.location_id;
+
+-- name: GetAgentUpdate :one
+SELECT id, tenant_id, location_id, action, requested_by, force, state, from_version, to_version,
+       error, requested_at, updated_at
+FROM agent_updates WHERE id = $1;
+
+-- name: ListAgentUpdates :many
+SELECT id, tenant_id, location_id, action, requested_by, force, state, from_version, to_version,
+       error, requested_at, updated_at
+FROM agent_updates
+WHERE (sqlc.narg(location_id)::uuid IS NULL OR location_id = sqlc.narg(location_id))
+ORDER BY requested_at DESC
+LIMIT sqlc.arg(max_rows)::int;

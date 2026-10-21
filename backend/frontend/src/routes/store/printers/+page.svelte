@@ -1,6 +1,19 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { errText, fmtTime, hhmm, storeApi, type LivePrinter, type LivePrinters, type Printer } from '$lib/api';
+  import { tick } from 'svelte';
+  import {
+    errText,
+    fmtTime,
+    hhmm,
+    storeApi,
+    timeAgo,
+    type FoundPrinter,
+    type LivePrinter,
+    type LivePrinters,
+    type Printer,
+    type PrinterIPChange
+  } from '$lib/api';
+  import Card from '$lib/ui/Card.svelte';
   import { confirmDialog } from '$lib/confirm.svelte';
   import { menuUsage, type PrinterUsage } from '$lib/store/menuUsage';
   import { toast } from '$lib/toast.svelte';
@@ -21,8 +34,10 @@
   let pi = $state<PiLink>('unknown');
   let usage = $state<Record<string, PrinterUsage> | null>(null);
 
+  let ipChanges = $state<PrinterIPChange[]>([]);
+
   let adding = $state(false);
-  let np = $state({ name: '', ip: '' });
+  let np = $state({ name: '', ip: '', mac: '' });
   let addErr = $state('');
   let saving = $state(false);
 
@@ -38,12 +53,19 @@
   async function loadUsage() {
     usage = await menuUsage();
   }
+  async function loadIPChanges() {
+    ipChanges = await storeApi<PrinterIPChange[]>('/me/printers/ip-changes?limit=20').catch(() => ipChanges);
+  }
 
   onMount(() => {
     loadPrinters().catch((e) => toast.error(e));
     loadLive();
     loadUsage();
-    const t = setInterval(loadLive, 25000);
+    loadIPChanges();
+    const t = setInterval(() => {
+      loadLive();
+      loadIPChanges();
+    }, 25000);
     return () => clearInterval(t);
   });
 
@@ -60,6 +82,25 @@
     return lp.up ? { label: 'Ready', tone: 'ok', down: null } : { label: 'Not responding', tone: 'bad', down: lp };
   }
   const plural = (n: number, one: string, many = one + 's') => `${n} ${n === 1 ? one : many}`;
+
+  // The MAC the Pi learned (stored with the printer, else from its live report).
+  const macFor = (p: Printer) => p.mac || liveFor(p)?.mac || '';
+  // The printer's newest IP change, when it's from the last 7 days.
+  function recentMove(p: Printer): PrinterIPChange | null {
+    const c = ipChanges.find((x) => x.printer_id === p.id);
+    return c && Date.now() - new Date(c.at).getTime() < 7 * 86400_000 ? c : null;
+  }
+  // Printers the Pi found on its network that aren't set up yet (agent ≥ 2.0.6).
+  const found = $derived<FoundPrinter[]>(
+    (live?.found ?? []).filter((f) => !(printers ?? []).some((p) => p.ip === f.ip || (!!f.mac && p.mac === f.mac)))
+  );
+  async function addFound(f: FoundPrinter) {
+    np = { name: '', ip: f.ip, mac: f.mac };
+    addErr = '';
+    adding = true;
+    await tick();
+    document.getElementById('np-name')?.focus();
+  }
   function usageText(p: Printer): string {
     const u = usage?.[p.id];
     const items = u ? `${plural(u.effective, 'menu item')} print here` : '';
@@ -73,9 +114,11 @@
     if (!np.name.trim()) return (addErr = 'Give the printer a name.');
     saving = true;
     try {
-      await storeApi('/me/printers', { method: 'POST', body: JSON.stringify({ name: np.name.trim(), ip: np.ip.trim() }) });
+      // The MAC only rides along while the IP is still the found printer's.
+      const mac = found.some((f) => f.ip === np.ip.trim() && f.mac === np.mac) ? np.mac : '';
+      await storeApi('/me/printers', { method: 'POST', body: JSON.stringify({ name: np.name.trim(), ip: np.ip.trim(), mac }) });
       toast.success(`“${np.name.trim()}” added`);
-      np = { name: '', ip: '' };
+      np = { name: '', ip: '', mac: '' };
       adding = false;
       await loadPrinters();
       loadLive();
@@ -97,6 +140,7 @@
       toast.success('Printer saved');
       editId = null;
       await loadPrinters();
+      loadIPChanges();
     } catch (err) {
       toast.error(err);
     }
@@ -166,7 +210,15 @@
       : 'Live status from the Pi · checked every 25 s'}
 >
   {#snippet actions()}
-    <Button variant="primary" icon="plus" aria-expanded={adding} onclick={() => (adding = !adding)}>Add printer</Button>
+    <Button
+      variant="primary"
+      icon="plus"
+      aria-expanded={adding}
+      onclick={() => {
+        if (!adding) np = { name: '', ip: '', mac: '' };
+        adding = !adding;
+      }}>Add printer</Button
+    >
   {/snippet}
 </PageHeader>
 
@@ -180,12 +232,30 @@
     <div>
       <label class="lbl" for="np-ip">IP address</label>
       <input id="np-ip" class="field mono" bind:value={np.ip} placeholder="192.168.1.x" />
+      {#if np.mac}<p class="help mono">found on the network · {np.mac}</p>{/if}
     </div>
     <div class="flex gap-2 sm:pt-[25px]">
       <Button type="submit" variant="primary" loading={saving}>Add</Button>
       <Button variant="ghost" onclick={() => (adding = false)}>Cancel</Button>
     </div>
   </form>
+{/if}
+
+{#if found.length}
+  <Card title="Found on the network" subtitle="Printers the Pi found that aren't set up yet — add one to start printing on it">
+    <ul class="m-0 p-0 list-none flex flex-col">
+      {#each found as f (f.ip)}
+        <li class="flex flex-wrap items-center gap-3 py-2.5 border-t border-border first:border-t-0">
+          <span class="text-accent"><Icon name="printer" size={18} /></span>
+          <span class="flex-1 min-w-[160px]">
+            <span class="mono font-semibold">{f.ip}</span>
+            {#if f.mac}<span class="block mono text-xs text-muted">{f.mac}</span>{/if}
+          </span>
+          <Button size="sm" icon="plus" onclick={() => addFound(f)}>Add</Button>
+        </li>
+      {/each}
+    </ul>
+  </Card>
 {/if}
 
 {#if printers === null}
@@ -230,6 +300,13 @@
             <div class="flex-1 min-w-0">
               <div class="font-bold text-[15px] truncate">{p.name}</div>
               <div class="mono text-[13px] text-muted">{p.ip || 'no IP set'}</div>
+              {#if macFor(p)}<div class="mono text-[11px] text-muted" title="Hardware address — the Pi finds the printer by it if its IP changes">{macFor(p)}</div>{/if}
+              {#if recentMove(p)}
+                {@const mv = recentMove(p)!}
+                <div class="text-xs text-text2 mt-0.5" title="{mv.source === 'agent' ? 'The Pi found it at a new IP' : 'Changed by a manager'} · {fmtTime(mv.at)}">
+                  moved from <span class="mono">{mv.old_ip}</span> · {timeAgo(mv.at)}
+                </div>
+              {/if}
             </div>
             <Badge tone={st.tone} dot>{st.label}</Badge>
           </div>
@@ -254,4 +331,19 @@
       </article>
     {/each}
   </div>
+{/if}
+
+{#if ipChanges.length}
+  <Card title="IP changes" subtitle="When a printer gets a new address the Pi finds it and follows it; manager edits show here too">
+    <ul class="m-0 p-0 list-none flex flex-col text-[13px]">
+      {#each ipChanges as c (c.id)}
+        <li class="flex flex-wrap items-center gap-x-3 gap-y-1 py-2 border-t border-border first:border-t-0">
+          <span class="font-semibold min-w-[110px]">{c.printer_name}</span>
+          <span class="mono flex-1 min-w-[180px]">{c.old_ip || '—'} → {c.new_ip}</span>
+          <Badge tone={c.source === 'agent' ? 'info' : 'mute'}>{c.source === 'agent' ? 'Pi followed it' : 'Manager'}</Badge>
+          <span class="text-muted" title={fmtTime(c.at)}>{timeAgo(c.at)}</span>
+        </li>
+      {/each}
+    </ul>
+  </Card>
 {/if}
