@@ -208,3 +208,12 @@ func TestRequestUpdateRefusesUnknownLocation(t *testing.T) {
 		t.Fatal("an unknown action must be refused")
 	}
 }
+
+func TestUpdateStatusAcceptsEmptyTimes(t *testing.T) {
+	// The Pi sends every field; while waiting/running the times are "".
+	var r updateStatus
+	body := `{"id":"abc","action":"update","state":"requested","started_at":"","finished_at":"","from_version":"2.0.6","to_version":""}`
+	if err := json.Unmarshal([]byte(body), &r); err != nil {
+		t.Fatalf("an in-progress status must decode: %v", err)
+	}
+}

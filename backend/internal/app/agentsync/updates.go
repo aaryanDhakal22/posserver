@@ -162,18 +162,20 @@ var (
 
 // updateStatus mirrors the agent's update.status object (+ requested_by, force).
 type updateStatus struct {
-	ID          string     `json:"id"`
-	Action      string     `json:"action"`
-	RequestedBy string     `json:"requested_by"`
-	Force       bool       `json:"force"`
-	State       string     `json:"state"`
-	FromVersion string     `json:"from_version"`
-	ToVersion   string     `json:"to_version"`
-	FromSHA     string     `json:"from_sha"`
-	ToSHA       string     `json:"to_sha"`
-	Error       string     `json:"error"`
-	StartedAt   *time.Time `json:"started_at"`
-	FinishedAt  *time.Time `json:"finished_at"`
+	ID          string `json:"id"`
+	Action      string `json:"action"`
+	RequestedBy string `json:"requested_by"`
+	Force       bool   `json:"force"`
+	State       string `json:"state"`
+	FromVersion string `json:"from_version"`
+	ToVersion   string `json:"to_version"`
+	FromSHA     string `json:"from_sha"`
+	ToSHA       string `json:"to_sha"`
+	Error       string `json:"error"`
+	// RFC3339 strings; "" while an update is still waiting or running (the
+	// Pi always sends every field), so they're parsed leniently.
+	StartedAt  string `json:"started_at"`
+	FinishedAt string `json:"finished_at"`
 }
 
 // HandleUpdateStatus is the rpc.InboundHandler for agent.update.status: upsert
@@ -195,8 +197,8 @@ func (s *Service) HandleUpdateStatus(ctx context.Context, scope sseBroker.Scope,
 		id = uuid.NewSHA1(updateIDNamespace, []byte(scope.LocationID.String()+"/"+r.ID))
 	}
 	requestedAt := time.Now()
-	if r.StartedAt != nil && !r.StartedAt.IsZero() {
-		requestedAt = *r.StartedAt
+	if t, err := time.Parse(time.RFC3339, strings.TrimSpace(r.StartedAt)); err == nil && !t.IsZero() {
+		requestedAt = t
 	}
 	if err := models.New(s.pool).UpsertAgentUpdateStatus(ctx, models.UpsertAgentUpdateStatusParams{
 		ID: pgUUID(id), TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID),
