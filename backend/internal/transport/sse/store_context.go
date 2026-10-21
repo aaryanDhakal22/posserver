@@ -20,9 +20,9 @@ import "time"
 //   - PrinterContext.IP is whatever the operator typed in the /store UI; the
 //     agent applies it verbatim when opening the ESC/POS TCP socket.
 type StoreContext struct {
-	Tenant   TenantContext     `json:"tenant"`
-	Location LocationContext   `json:"location"`
-	Printers []PrinterContext  `json:"printers"`
+	Tenant   TenantContext    `json:"tenant"`
+	Location LocationContext  `json:"location"`
+	Printers []PrinterContext `json:"printers"`
 }
 
 type TenantContext struct {

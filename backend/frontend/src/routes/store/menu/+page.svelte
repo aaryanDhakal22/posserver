@@ -29,9 +29,17 @@
   let newItemName = $state<Record<string, string>>({});
   let expanded = $state<Record<string, boolean>>({});
 
+  // Errors stay until dismissed or replaced; other messages auto-hide. The
+  // previous timer is cleared so a new message isn't cut short by an old one.
+  let bannerTimer: ReturnType<typeof setTimeout> | undefined;
   function toast(msg: string, kind: 'ok' | 'error' = 'ok') {
+    clearTimeout(bannerTimer);
     banner = { msg, kind };
-    setTimeout(() => (banner = null), 3500);
+    bannerTimer = kind === 'error' ? undefined : setTimeout(() => (banner = null), 3500);
+  }
+  function dismissBanner() {
+    clearTimeout(bannerTimer);
+    banner = null;
   }
   function err(e: unknown) {
     toast(e instanceof ApiError ? e.message : String(e), 'error');
@@ -147,6 +155,11 @@
   let csvReplace = $state(false);
   let csvPreview = $state<MenuImportResult | null>(null);
   let csvBusy = $state(false);
+  // The last import failure (bad row, unknown printer…), shown next to the
+  // import controls until the next attempt — not just a passing toast.
+  let csvError = $state('');
+  let csvErrorOnApply = $state(false); // the failure happened while applying, not previewing
+  const errText = (e: unknown) => (e instanceof ApiError ? e.message : String(e));
 
   async function postCSV(dryRun: boolean): Promise<MenuImportResult> {
     const q = new URLSearchParams({ dry_run: dryRun ? '1' : '0', replace: csvReplace ? '1' : '0' });
@@ -155,14 +168,16 @@
     });
   }
   async function previewCSV() {
+    if (csvBusy) return;
     csvBusy = true;
+    csvError = '';
     try { csvPreview = await postCSV(true); }
-    catch (e) { csvPreview = null; err(e); }
+    catch (e) { csvPreview = null; csvError = errText(e); csvErrorOnApply = false; }
     finally { csvBusy = false; }
   }
   async function pickCSV(e: Event) {
     const f = (e.target as HTMLInputElement).files?.[0];
-    if (!f) return;
+    if (!f || csvBusy) return;
     csvName = f.name;
     csvText = await f.text();
     csvReplace = false;
@@ -170,8 +185,10 @@
     await previewCSV();
   }
   async function applyCSV() {
+    if (csvBusy) return;
     if (csvReplace && !confirm('Replace deletes every menu here (categories, items, item printers) and rebuilds it from the file. Continue?')) return;
     csvBusy = true;
+    csvError = '';
     try {
       const r = await postCSV(false);
       csvPreview = null; csvText = '';
@@ -179,7 +196,7 @@
       await loadMenus();
       await loadUnmatched();
       toast(`imported: ${r.items} new items, ${r.items_updated} updated, ${r.item_printers + r.category_printers} printer changes`);
-    } catch (e) { err(e); }
+    } catch (e) { csvError = errText(e); csvErrorOnApply = true; }
     finally { csvBusy = false; }
   }
   const csvSummary = (r: MenuImportResult) => [
@@ -211,16 +228,34 @@
   <div class="flex gap-1">
     <a class="btn btn-ghost btn-xs" href="/store/v1/me/menu/export.csv" download="menu.csv" title="menu,category,item,price,printer,description">Export CSV</a>
     <button class="btn btn-ghost btn-xs" disabled={csvBusy} onclick={() => csvInput?.click()} title="Add/update items from a CSV — preview first">Import CSV</button>
-    <input type="file" accept=".csv,text/csv" class="hidden" bind:this={csvInput} onchange={pickCSV} />
+    <input type="file" accept=".csv,text/csv" class="hidden" disabled={csvBusy} bind:this={csvInput} onchange={pickCSV} />
     <button class="btn btn-xs {tab === 'overview' ? 'btn-dark' : 'btn-ghost'}" onclick={() => (tab = 'overview')}>Overview</button>
     <button class="btn btn-xs {tab === 'modifiers' ? 'btn-dark' : 'btn-ghost'}" onclick={() => (tab = 'modifiers')}>Modifiers</button>
   </div>
 </div>
 
 {#if banner}
-  <div class="rounded-md border px-4 py-2.5 text-sm mb-4 {banner.kind === 'error'
+  <div class="rounded-md border px-4 py-2.5 text-sm mb-4 flex items-start gap-3 {banner.kind === 'error'
     ? 'border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-900/60 dark:bg-rose-950/60 dark:text-rose-200'
-    : 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/50 dark:text-emerald-200'}">{banner.msg}</div>
+    : 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/50 dark:text-emerald-200'}">
+    <span class="flex-1 min-w-0 break-words">{banner.msg}</span>
+    <button type="button" class="shrink-0 opacity-60 hover:opacity-100 leading-none text-base" aria-label="dismiss" title="dismiss" onclick={dismissBanner}>×</button>
+  </div>
+{/if}
+
+{#if csvError}
+  <div class="card px-4 py-3 mb-4 border-rose-300 dark:border-rose-500/40 text-rose-900 dark:text-rose-200">
+    <div class="flex items-baseline justify-between gap-2">
+      <div class="font-semibold text-sm">Import failed{csvName ? ` — ${csvName}` : ''}</div>
+      <button class="btn btn-ghost btn-xs" onclick={() => (csvError = '')}>dismiss</button>
+    </div>
+    <pre class="text-xs whitespace-pre-wrap break-words my-1 font-mono">{csvError}</pre>
+    <p class="text-xs opacity-80">
+      {csvErrorOnApply
+        ? 'The import may have stopped part-way. Fix the problem and import the same file again — a re-import picks up where it stopped.'
+        : 'Nothing was changed. Fix the file (or add the missing printers in /app/store) and use Import CSV again.'}
+    </p>
+  </div>
 {/if}
 
 {#if csvPreview}
@@ -239,7 +274,7 @@
     {/if}
     <div class="flex items-center gap-3">
       <label class="text-sm flex items-center gap-1">
-        <input type="checkbox" bind:checked={csvReplace} onchange={previewCSV} /> Replace — delete all menus first
+        <input type="checkbox" disabled={csvBusy} bind:checked={csvReplace} onchange={previewCSV} /> Replace — delete all menus first
       </label>
       <button class="btn btn-primary btn-xs" disabled={csvBusy} onclick={applyCSV}>{csvReplace ? 'Replace menu' : 'Apply'}</button>
     </div>

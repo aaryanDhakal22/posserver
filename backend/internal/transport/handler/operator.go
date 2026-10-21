@@ -19,11 +19,12 @@ type OperatorHandler struct {
 	svc     *operatorApp.Service
 	menuSvc *menuApp.Service
 	meters  observability.Meters
+	logins  *loginLimiter
 	logger  zerolog.Logger
 }
 
 func NewOperatorHandler(svc *operatorApp.Service, menuSvc *menuApp.Service, meters observability.Meters, logger zerolog.Logger) *OperatorHandler {
-	return &OperatorHandler{svc: svc, menuSvc: menuSvc, meters: meters, logger: logger.With().Str("module", "operator-handler").Logger()}
+	return &OperatorHandler{svc: svc, menuSvc: menuSvc, meters: meters, logins: newLoginLimiter(), logger: logger.With().Str("module", "operator-handler").Logger()}
 }
 
 // --- read surface (operator bearer token) ----------------------------------
@@ -35,13 +36,18 @@ func (h *OperatorHandler) Login(c *echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
 	}
+	if stop, err := h.logins.throttled(c, req.Username); stop {
+		return err
+	}
 	op, err := h.svc.Authenticate(ctx, req.Username, req.Password)
 	if err != nil {
 		if operatorApp.IsInvalidCredentials(err) {
+			h.logins.failed(req.Username)
 			return c.JSON(http.StatusUnauthorized, errResp("invalid username or password"))
 		}
 		return c.JSON(http.StatusInternalServerError, errResp("login failed"))
 	}
+	h.logins.succeeded(req.Username)
 	token, err := h.svc.MintToken(ctx, op.ID)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, errResp("failed to mint token"))

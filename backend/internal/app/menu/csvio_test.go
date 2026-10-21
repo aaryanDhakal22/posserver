@@ -3,6 +3,7 @@ package menuApp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -283,5 +284,15 @@ func TestImportCSV(t *testing.T) {
 	}
 	if rep.MenusDeleted != 1 || len(repo.menus) != 1 || len(repo.items) != 1 || repo.items[0].Name != "Fries" {
 		t.Errorf("replace = %+v, menus %d, items %d", rep, len(repo.menus), len(repo.items))
+	}
+}
+
+// A parse error in a record's first field used to panic (FieldPos after a
+// failed Read).
+func TestParseMenuCSV_BadQuoteInFirstFieldIsAnError(t *testing.T) {
+	_, err := ParseMenuCSV(strings.NewReader("menu,category,item,price\nMain,Pizza,Cheese,9.99\n\"Main,Pizza,Broken,1\n"))
+	var ce *CSVError
+	if !errors.As(err, &ce) {
+		t.Fatalf("err = %v, want a CSVError", err)
 	}
 }

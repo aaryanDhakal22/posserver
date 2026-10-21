@@ -116,10 +116,17 @@ func ParseMenuCSV(r io.Reader) ([]CSVRow, error) {
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		line, _ := cr.FieldPos(0)
 		if err != nil {
+			// FieldPos is only valid for a successfully read record (it
+			// panics after a parse error in the first field).
+			line := 0
+			var pe *csv.ParseError
+			if errors.As(err, &pe) {
+				line = pe.Line
+			}
 			return nil, &CSVError{Line: line, Msg: err.Error()}
 		}
+		line, _ := cr.FieldPos(0)
 		if blankRecord(rec) {
 			continue
 		}

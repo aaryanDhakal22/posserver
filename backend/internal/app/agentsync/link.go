@@ -66,6 +66,8 @@ func (s *Service) Link(ctx context.Context, req LinkRequest) (*LinkResult, error
 	if !s.linkLimit.Allow(key) || !s.linkLimit.AllowN(linkGlobalKey, linkGlobalMax) {
 		return nil, ErrThrottled
 	}
+	s.linkMu.Lock()
+	defer s.linkMu.Unlock()
 	tenant, err := s.tenancy.AuthenticateTenant(ctx, req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, tenancyApp.ErrInvalidCredentials) {

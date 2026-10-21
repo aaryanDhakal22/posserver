@@ -13,8 +13,8 @@ import (
 
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	menuDom "quiccpos/main/internal/domain/menu"
-	tenancyDom "quiccpos/main/internal/domain/tenancy"
 	"quiccpos/main/internal/domain/order"
+	tenancyDom "quiccpos/main/internal/domain/tenancy"
 	"quiccpos/main/internal/observability"
 
 	"github.com/google/uuid"

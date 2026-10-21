@@ -319,6 +319,7 @@ type Payment struct {
 	Token       string             `json:"token"`
 	Last4       string             `json:"last4"`
 	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
+	AuthCode    string             `json:"auth_code"`
 }
 
 type Printer struct {

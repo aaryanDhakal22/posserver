@@ -12,9 +12,9 @@ import (
 
 func appFS() fstest.MapFS {
 	return fstest.MapFS{
-		"index.html":                    {Data: []byte("<!doctype html><body>app</body>")},
-		"_app/immutable/entry/app.js":   {Data: []byte("export const x=1")},
-		"favicon.png":                   {Data: []byte("\x89PNG")},
+		"index.html":                  {Data: []byte("<!doctype html><body>app</body>")},
+		"_app/immutable/entry/app.js": {Data: []byte("export const x=1")},
+		"favicon.png":                 {Data: []byte("\x89PNG")},
 	}
 }
 
@@ -83,10 +83,10 @@ func TestServeApp_MissingAssetIs404(t *testing.T) {
 
 func TestAppContentType(t *testing.T) {
 	cases := map[string]string{
-		"a.js": "text/javascript; charset=utf-8",
-		"a.css": "text/css; charset=utf-8",
-		"a.woff2": "font/woff2",
-		"a.svg": "image/svg+xml",
+		"a.js":          "text/javascript; charset=utf-8",
+		"a.css":         "text/css; charset=utf-8",
+		"a.woff2":       "font/woff2",
+		"a.svg":         "image/svg+xml",
 		"a.webmanifest": "application/manifest+json",
 	}
 	for name, want := range cases {

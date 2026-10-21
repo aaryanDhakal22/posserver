@@ -54,7 +54,7 @@ type Requester struct {
 	tracer trace.Tracer
 
 	mu      sync.Mutex
-	waiters map[string]waiter       // correlation id → pending Request
+	waiters map[string]waiter         // correlation id → pending Request
 	inbound map[string]InboundHandler // message type → agent-initiated handler
 }
 

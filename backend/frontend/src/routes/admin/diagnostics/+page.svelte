@@ -21,9 +21,17 @@
   let loading = $state(false);
   let banner = $state<{ msg: string; kind: 'ok' | 'error' | 'info' } | null>(null);
 
+  // Errors stay until dismissed or replaced; other messages auto-hide. The
+  // previous timer is cleared so a new message isn't cut short by an old one.
+  let bannerTimer: ReturnType<typeof setTimeout> | undefined;
   function toast(msg: string, kind: 'ok' | 'error' | 'info' = 'ok') {
+    clearTimeout(bannerTimer);
     banner = { msg, kind };
-    setTimeout(() => (banner = null), 4000);
+    bannerTimer = kind === 'error' ? undefined : setTimeout(() => (banner = null), 4000);
+  }
+  function dismissBanner() {
+    clearTimeout(bannerTimer);
+    banner = null;
   }
   function err(e: unknown) { toast(e instanceof ApiError ? e.message : String(e), 'error'); }
 
@@ -125,11 +133,12 @@
 
 {#if banner}
   <div
-    class="rounded-md border px-4 py-3 text-sm mb-4 {banner.kind === 'error'
+    class="rounded-md border px-4 py-3 text-sm mb-4 flex items-start gap-3 {banner.kind === 'error'
       ? 'border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-900/60 dark:bg-rose-950/60 dark:text-rose-200'
       : 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/50 dark:text-emerald-200'}"
   >
-    {banner.msg}
+    <span class="flex-1 min-w-0 break-words">{banner.msg}</span>
+    <button type="button" class="shrink-0 opacity-60 hover:opacity-100 leading-none text-base" aria-label="dismiss" title="dismiss" onclick={dismissBanner}>×</button>
   </div>
 {/if}
 

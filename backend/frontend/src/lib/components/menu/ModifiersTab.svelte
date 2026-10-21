@@ -9,12 +9,16 @@
   let options = $state<ModifierOption[]>([]);
   let newGroupName = $state('');
   let newOpt = $state({ name: '', price: '0.00' });
+  // option id → the unparseable price text typed into its row (blocks saving it)
+  let badDelta = $state<Record<string, string>>({});
+  const badPrice = (raw: string) => `Price "${raw}" isn't a valid amount — use e.g. 1.50, -0.50 or 0. Not saved.`;
 
   function err(e: unknown) { toast(String(e), 'error'); }
 
   async function load() { groups = await storeApi<ModifierGroup[]>('/me/menu/modifier-groups'); }
   async function selectGroup(g: ModifierGroup) {
     selected = { ...g };
+    badDelta = {};
     options = await storeApi<ModifierOption[]>(`/me/menu/modifier-groups/${g.id}/options`);
   }
   onMount(load);
@@ -45,13 +49,26 @@
   }
   async function addOption() {
     if (!selected || !newOpt.name.trim()) return;
+    const delta = toCents(newOpt.price);
+    if (delta === null) return toast(badPrice(newOpt.price), 'error');
     try {
-      await storeApi(`/me/menu/modifier-groups/${selected.id}/options`, { method: 'POST', body: JSON.stringify({ name: newOpt.name.trim(), price_delta_cents: toCents(newOpt.price) }) });
+      await storeApi(`/me/menu/modifier-groups/${selected.id}/options`, { method: 'POST', body: JSON.stringify({ name: newOpt.name.trim(), price_delta_cents: delta }) });
       newOpt = { name: '', price: '0.00' };
       options = await storeApi<ModifierOption[]>(`/me/menu/modifier-groups/${selected.id}/options`);
     } catch (e) { err(e); }
   }
+  function setDelta(o: ModifierOption, raw: string) {
+    const c = toCents(raw);
+    if (c === null) {
+      badDelta[o.id] = raw;
+      toast(badPrice(raw), 'error');
+      return;
+    }
+    delete badDelta[o.id];
+    o.price_delta_cents = c;
+  }
   async function saveOption(o: ModifierOption) {
+    if (badDelta[o.id] !== undefined) return toast(badPrice(badDelta[o.id]), 'error');
     try { await storeApi(`/me/menu/modifier-groups/${o.group_id}/options/${o.id}`, { method: 'PATCH', body: JSON.stringify({ name: o.name, price_delta_cents: o.price_delta_cents, in_stock: o.in_stock }) }); toast('option saved'); }
     catch (e) { err(e); }
   }
@@ -98,7 +115,7 @@
             {#each options as o (o.id)}
               <div class="flex items-center gap-2">
                 <input class="field flex-1" bind:value={o.name} />
-                <input class="field w-24" value={(o.price_delta_cents / 100).toFixed(2)} onchange={(e) => (o.price_delta_cents = toCents((e.target as HTMLInputElement).value))} title="price delta ($)" />
+                <input class="field w-24 {badDelta[o.id] !== undefined ? 'border-rose-500 dark:border-rose-500' : ''}" value={(o.price_delta_cents / 100).toFixed(2)} onchange={(e) => setDelta(o, (e.target as HTMLInputElement).value)} title="price delta ($)" />
                 <button class="chip {o.in_stock ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/50 dark:text-emerald-200' : 'bg-rose-100 text-rose-800 dark:bg-rose-900/50 dark:text-rose-200'}" onclick={() => { o.in_stock = !o.in_stock; saveOption(o); }}>{o.in_stock ? 'in' : 'out'}</button>
                 <button class="btn btn-primary btn-xs" onclick={() => saveOption(o)}>save</button>
                 <button class="btn btn-danger btn-xs" onclick={() => deleteOption(o)}>✕</button>

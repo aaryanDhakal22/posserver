@@ -255,7 +255,15 @@ export interface TabletToken {
 export function dollars(cents: number): string {
   return '$' + ((cents || 0) / 100).toFixed(2);
 }
-export function toCents(dollarsStr: string): number {
-  const n = parseFloat(dollarsStr);
-  return isNaN(n) ? 0 : Math.round(n * 100);
+/**
+ * Parse a dollar amount typed by a person ("5.99", "$5.99", " 5 ", "-1.50",
+ * "-$1.50") into cents. Returns null for anything else ("", "abc", "5,99") so
+ * callers can show an error instead of silently saving $0.
+ */
+export function toCents(dollarsStr: string): number | null {
+  const m = /^(-?)\s*\$?\s*(\d+(?:\.\d*)?|\.\d+)$/.exec(dollarsStr.trim());
+  if (!m) return null;
+  const cents = Math.round(parseFloat(m[2]) * 100);
+  if (!Number.isSafeInteger(cents)) return null;
+  return m[1] ? -cents : cents;
 }

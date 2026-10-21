@@ -13,6 +13,9 @@
     type Minted,
     type StoreOrder,
     type StoreFloor,
+    type Menu,
+    type Category,
+    type Item,
     dollars
   } from '$lib/api';
   import { TIMEZONES } from '$lib/timezones';
@@ -63,11 +66,20 @@
 
   // new printer / device inputs
   let np = $state({ name: '', ip: '' });
+  let addingPrinter = $state(false);
   let nd = $state({ name: '', kind: 'mobile' });
 
+  // Errors stay until dismissed or replaced; other messages auto-hide. The
+  // previous timer is cleared so a new message isn't cut short by an old one.
+  let bannerTimer: ReturnType<typeof setTimeout> | undefined;
   function toast(msg: string, kind: 'ok' | 'error' | 'info' = 'ok') {
+    clearTimeout(bannerTimer);
     banner = { msg, kind };
-    setTimeout(() => (banner = null), 4000);
+    bannerTimer = kind === 'error' ? undefined : setTimeout(() => (banner = null), 4000);
+  }
+  function dismissBanner() {
+    clearTimeout(bannerTimer);
+    banner = null;
   }
   function err(e: unknown) {
     toast(e instanceof ApiError ? e.message : String(e), 'error');
@@ -159,7 +171,9 @@
   }
 
   async function addPrinter() {
+    if (addingPrinter) return;
     if (!np.name.trim()) return toast('printer needs a name', 'error');
+    addingPrinter = true;
     try {
       await storeApi('/me/printers', { method: 'POST', body: JSON.stringify(np) });
       np = { name: '', ip: '' };
@@ -167,6 +181,8 @@
       toast('printer added');
     } catch (e) {
       err(e);
+    } finally {
+      addingPrinter = false;
     }
   }
   async function savePrinter(p: Printer) {
@@ -192,8 +208,43 @@
       err(e);
     }
   }
+  // How many menu categories (default printer) and items (own printer) send to
+  // this printer — read through the existing menu routes; null if unavailable.
+  async function menuUsage(p: Printer): Promise<{ cats: number; items: number } | null> {
+    try {
+      const menus = await storeApi<Menu[]>('/me/menu/menus');
+      const cats = (
+        await Promise.all(menus.map((m) => storeApi<Category[]>(`/me/menu/menus/${m.id}/categories`)))
+      ).flat();
+      const items = (
+        await Promise.all(cats.map((c) => storeApi<Item[]>(`/me/menu/categories/${c.id}/items`)))
+      ).flat();
+      return {
+        cats: cats.filter((c) => c.default_printer_id === p.id).length,
+        items: items.filter((it) => it.printer_id === p.id).length
+      };
+    } catch {
+      return null;
+    }
+  }
   async function deletePrinter(p: Printer) {
-    if (!confirm(`Delete printer "${p.name}"?`)) return;
+    // Deleting a printer unassigns it from the menu (categories/items keep no
+    // printer), so anything left without one prints on EVERY station.
+    const use = await menuUsage(p);
+    const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+    const what =
+      use === null
+        ? 'Any menu categories or items sent to this printer'
+        : use.cats || use.items
+          ? `${plural(use.cats, 'category', 'categories')} and ${plural(use.items, 'item', 'items')} in the menu are sent to this printer. They`
+          : '';
+    const msg =
+      `Delete printer "${p.name}"?\n\n` +
+      (what
+        ? `${what} will lose it — anything left without a printer then prints on EVERY station until you assign a new printer in the menu.\n\n`
+        : 'No menu categories or items are sent to this printer.\n\n') +
+      'If the printer only moved or got a new IP address, cancel and edit its IP instead.';
+    if (!confirm(msg)) return;
     try {
       await storeApi('/me/printers/' + p.id, { method: 'DELETE' });
       printers = await storeApi<Printer[]>('/me/printers');
@@ -240,11 +291,12 @@
 
   {#if banner}
     <div
-      class="rounded-md border px-4 py-3 text-sm mb-4 {banner.kind === 'error'
+      class="rounded-md border px-4 py-3 text-sm mb-4 flex items-start gap-3 {banner.kind === 'error'
         ? 'border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-900/60 dark:bg-rose-950/60 dark:text-rose-200'
         : 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/50 dark:text-emerald-200'}"
     >
-      {banner.msg}
+      <span class="flex-1 min-w-0 break-words">{banner.msg}</span>
+      <button type="button" class="shrink-0 opacity-60 hover:opacity-100 leading-none text-base" aria-label="dismiss" title="dismiss" onclick={dismissBanner}>×</button>
     </div>
   {/if}
 
@@ -398,7 +450,7 @@
       <div>
         <label class="lbl">ip</label><input class="field w-40 mono" bind:value={np.ip} placeholder="192.168.1.50" />
       </div>
-      <button class="btn btn-primary btn-xs" onclick={addPrinter}>add printer</button>
+      <button class="btn btn-primary btn-xs" disabled={addingPrinter} onclick={addPrinter}>{addingPrinter ? 'adding…' : 'add printer'}</button>
     </div>
   </section>
 

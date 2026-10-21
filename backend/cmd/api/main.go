@@ -23,6 +23,7 @@ import (
 	"quiccpos/main/internal/shared/logger"
 	"quiccpos/main/internal/transport"
 	"quiccpos/main/internal/transport/session"
+	"strings"
 	"syscall"
 	"time"
 
@@ -102,11 +103,11 @@ func main() {
 
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
-		cfg.DatabaseConfig.Host,
-		cfg.DatabaseConfig.Port,
-		cfg.DatabaseConfig.User,
-		cfg.DatabaseConfig.Password,
-		cfg.DatabaseConfig.Name,
+		dsnValue(cfg.DatabaseConfig.Host),
+		dsnValue(cfg.DatabaseConfig.Port),
+		dsnValue(cfg.DatabaseConfig.User),
+		dsnValue(cfg.DatabaseConfig.Password),
+		dsnValue(cfg.DatabaseConfig.Name),
 	)
 
 	mainLogger.Info().Ctx(ctx).Msg("Running database migrations")
@@ -292,4 +293,10 @@ func main() {
 
 	serverLogger := lgr.With().Str("module", "server").Logger()
 	transport.StartServer(ctx, e, cfg, &serverLogger)
+}
+
+// dsnValue quotes one keyword/value connection-string value (libpq rules), so
+// a password with a space, quote or backslash can't break the DSN.
+func dsnValue(v string) string {
+	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(v) + "'"
 }
