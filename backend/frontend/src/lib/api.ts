@@ -72,6 +72,12 @@ export interface Printer {
   updated_at: string;
 }
 
+/** A printer's name as the menu shows it: items on the receipt printer print
+ * only on the receipt (agent ≥ 2.0.5) unless it is the store's only printer. */
+export function printerLabel(p: Printer, all: Printer[]): string {
+  return p.is_receipt && all.length > 1 ? `${p.name} (receipt only)` : p.name;
+}
+
 export interface Overview {
   tenants: Tenant[];
   locations: Location[];
