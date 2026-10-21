@@ -38,17 +38,19 @@
 
   async function exitImpersonation() {
     const tid = who?.tenant.id;
-    await storeSignOut();
+    // Leave first: the store pages unmount and stop polling, so nothing is
+    // still asking /me/* when the session goes (those would all 401).
+    await goto(base + (tid ? `/admin/tenants/${tid}` : '/admin'));
     storeSession.who = null;
-    goto(base + (tid ? `/admin/tenants/${tid}` : '/admin'));
+    await storeSignOut();
   }
 
   async function signOut() {
     if (who?.impersonated) return exitImpersonation();
-    await storeSignOut();
+    await goto(base + '/login', { replaceState: true });
     storeSession.who = null;
+    await storeSignOut();
     toast.success('Signed out');
-    goto(base + '/login', { replaceState: true });
   }
 </script>
 
