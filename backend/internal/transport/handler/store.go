@@ -109,7 +109,8 @@ func (h *StoreHandler) SessionLogout(c *echo.Context) error {
 }
 
 // GET /store/v1/session — whoami. Behind StoreSessionAuth; returns the
-// manager's tenant + location so the SPA can render without a second call.
+// manager's tenant + location so the SPA can render without a second call, and
+// whether this is an admin's open-as-store session (impersonated[_by]).
 func (h *StoreHandler) SessionWhoami(c *echo.Context) error {
 	ctx := c.Request().Context()
 	tid, lid, ok := meScope(c)
@@ -135,10 +136,16 @@ func (h *StoreHandler) SessionWhoami(c *echo.Context) error {
 		}
 		return c.JSON(http.StatusInternalServerError, errResp("location lookup failed"))
 	}
-	return c.JSON(http.StatusOK, map[string]any{
-		"tenant":   toTenantJSON(*t),
-		"location": toLocationJSON(*l),
-	})
+	resp := map[string]any{
+		"tenant":       toTenantJSON(*t),
+		"location":     toLocationJSON(*l),
+		"impersonated": false,
+	}
+	if by := appMiddleware.StoreImpersonatorFromContext(ctx); by != "" {
+		resp["impersonated"] = true
+		resp["impersonated_by"] = by
+	}
+	return c.JSON(http.StatusOK, resp)
 }
 
 // --- /me/* — session-scoped self-service (location_id from the cookie) ----

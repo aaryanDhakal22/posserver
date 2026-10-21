@@ -1,209 +1,161 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import {
-    adminApi,
-    getAdminKey,
-    setAdminKey,
-    ApiError,
-    parseStoreId,
-    type Overview,
-    type Location,
-    type Device,
-    type Minted
-  } from '$lib/api';
-  import TenantRow from '$lib/components/TenantRow.svelte';
+  import { base } from '$app/paths';
+  import { timeAgo, hhmm, durationSince } from '$lib/api';
+  import { loadAdminData, type AdminData } from '$lib/admin/stores';
+  import { toast } from '$lib/toast.svelte';
+  import PageHeader from '$lib/ui/PageHeader.svelte';
+  import Button from '$lib/ui/Button.svelte';
+  import StatTile from '$lib/ui/StatTile.svelte';
+  import Badge, { type Tone } from '$lib/ui/Badge.svelte';
+  import Icon from '$lib/ui/Icon.svelte';
+  import Skeleton from '$lib/ui/Skeleton.svelte';
+  import StoresTable from '$lib/components/admin/StoresTable.svelte';
 
-  let key = $state(getAdminKey());
-  let ov = $state<Overview | null>(null);
-  let banner = $state<{ msg: string; kind: 'ok' | 'error' | 'info' } | null>(null);
-  let minted = $state<Minted | null>(null);
-  let showNew = $state(false);
-  let creating = $state(false);
-  let nt = $state({ slug: '', name: '', username: '', password: '', store_id: '' });
-  // Default the login username to the store name (lowercased, punctuation/spaces
-  // stripped) until the operator edits it by hand — matches the console's dev
-  // seed-logins convention.
-  let usernameTouched = $state(false);
-  const storeUsername = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-  function onNameInput() {
-    if (!usernameTouched) nt.username = storeUsername(nt.name);
-  }
-
-  // Errors stay until dismissed or replaced; other messages auto-hide. The
-  // previous timer is cleared so a new message isn't cut short by an old one.
-  let bannerTimer: ReturnType<typeof setTimeout> | undefined;
-  function toast(msg: string, kind: 'ok' | 'error' | 'info' = 'ok') {
-    clearTimeout(bannerTimer);
-    banner = { msg, kind };
-    bannerTimer = kind === 'error' ? undefined : setTimeout(() => (banner = null), 4000);
-  }
-  function dismissBanner() {
-    clearTimeout(bannerTimer);
-    banner = null;
-  }
-  function err(e: unknown) {
-    toast(e instanceof ApiError ? e.message : String(e), 'error');
-  }
-  function reveal(m: Minted) {
-    minted = m;
-  }
-
-  const locsByTenant = $derived.by(() => {
-    const m: Record<string, Location[]> = {};
-    ov?.locations.forEach((l) => (m[l.tenant_id] ??= []).push(l));
-    return m;
-  });
-  const devsByLoc = $derived.by(() => {
-    const m: Record<string, Device[]> = {};
-    ov?.devices.forEach((d) => (m[d.location_id] ??= []).push(d));
-    return m;
-  });
+  let data = $state<AdminData | null>(null);
+  let loading = $state(true);
+  let loadedAt = $state<string | null>(null);
 
   async function reload() {
-    if (!getAdminKey()) {
-      ov = null;
-      return;
-    }
     try {
-      ov = await adminApi<Overview>('/overview');
+      data = await loadAdminData();
+      loadedAt = new Date().toISOString();
     } catch (e) {
-      err(e);
-    }
-  }
-  function saveKey() {
-    setAdminKey(key.trim());
-    toast('admin key saved');
-    reload();
-  }
-
-  async function createTenant() {
-    if (creating) return;
-    if (!nt.slug.trim() || !nt.name.trim()) return toast('tenant needs slug + name', 'error');
-    if ((nt.username && !nt.password) || (!nt.username && nt.password))
-      return toast('set both username and password, or neither', 'error');
-    const storeId = parseStoreId(nt.store_id);
-    if (storeId === undefined) return toast('store id must be a positive whole number (or blank)', 'error');
-    creating = true;
-    try {
-      await adminApi('/tenants', { method: 'POST', body: JSON.stringify({ ...nt, store_id: storeId }) });
-      const hadLogin = !!nt.username;
-      nt = { slug: '', name: '', username: '', password: '', store_id: '' };
-      usernameTouched = false;
-      toast(hadLogin ? 'tenant created' : 'tenant created (no login yet)');
-      reload();
-    } catch (e) {
-      err(e);
+      toast.error(e);
     } finally {
-      creating = false;
+      loading = false;
     }
   }
 
-  onMount(reload);
+  onMount(() => {
+    reload();
+    const t = setInterval(reload, 30000);
+    return () => clearInterval(t);
+  });
+
+  const rows = $derived(data?.rows ?? []);
+  const withPi = $derived(rows.filter((r) => r.pi !== 'none'));
+  const online = $derived(rows.filter((r) => r.pi === 'online'));
+  const offline = $derived(rows.filter((r) => r.pi === 'offline'));
+  const ordersToday = $derived(rows.reduce((n, r) => n + r.ordersToday, 0));
+  const busiest = $derived(
+    rows
+      .filter((r) => r.ordersToday > 0)
+      .sort((a, b) => b.ordersToday - a.ordersToday)
+      .slice(0, 2)
+      .map((r) => `${r.tenant.name} ${r.ordersToday}`)
+      .join(' · ')
+  );
+
+  interface Attention {
+    key: string;
+    tone: Tone;
+    tag: string;
+    store: string;
+    text: string;
+    href: string;
+    cta: string;
+  }
+  const attention = $derived.by<Attention[]>(() => {
+    if (!data) return [];
+    const out: Attention[] = [];
+    for (const r of offline) {
+      out.push({
+        key: 'off-' + r.tenant.id,
+        tone: 'bad',
+        tag: 'Offline',
+        store: r.tenant.name,
+        text: r.lastSeen ? `Pi hasn't checked in for ${durationSince(r.lastSeen)}` : "Pi has a key but hasn't connected yet",
+        href: `${base}/admin/tenants/${r.tenant.id}`,
+        cta: 'Open store'
+      });
+    }
+    for (const r of rows) {
+      if (r.pi !== 'online') continue;
+      if (r.printersDown)
+        out.push({
+          key: 'pr-' + r.tenant.id,
+          tone: 'warn',
+          tag: 'Printer',
+          store: r.tenant.name,
+          text: `${r.printersDown} printer${r.printersDown === 1 ? '' : 's'} not responding (as of ${hhmm(r.health?.at)})`,
+          href: `${base}/admin/tenants/${r.tenant.id}`,
+          cta: 'Open store'
+        });
+      for (const p of r.problems)
+        out.push({
+          key: 'pb-' + r.tenant.id + p,
+          tone: 'warn',
+          tag: 'Pi',
+          store: r.tenant.name,
+          text: p,
+          href: `${base}/admin/tenants/${r.tenant.id}`,
+          cta: 'Open store'
+        });
+    }
+    for (const d of data.unresolved.slice(0, 5)) {
+      out.push({
+        key: 'dg-' + d.id,
+        tone: 'info',
+        tag: 'Diagnostics',
+        store: d.store_name,
+        text: `tablet sent “${d.headline || d.scenario.replaceAll('_', ' ') || d.kind}”`,
+        href: `${base}/admin/diagnostics?id=${d.id.slice(0, 8)}`,
+        cta: 'View report'
+      });
+    }
+    return out;
+  });
 </script>
 
-<div class="flex flex-wrap items-center justify-between gap-3 mb-4">
-  <div>
-    <div class="text-lg font-semibold">Admin</div>
-    <div class="text-xs text-slate-500 dark:text-slate-400">
-      god mode · tenants, locations, logins, agent devices
-    </div>
-  </div>
-  <div class="flex items-center gap-2">
-    <input class="field w-64" type="password" placeholder="ADMIN_API_KEY" bind:value={key} />
-    <button class="btn btn-dark btn-xs" onclick={saveKey}>save</button>
-    <button class="btn btn-ghost btn-xs" onclick={reload}>reload</button>
-  </div>
+<svelte:head><title>Overview — quicc admin</title></svelte:head>
+
+<PageHeader title="Overview" subtitle="Every store at a glance · {loadedAt ? 'updated ' + timeAgo(loadedAt) : 'loading…'}">
+  {#snippet actions()}
+    <Button icon="refresh" onclick={reload} aria-label="Refresh" />
+    <Button variant="primary" icon="plus" href="{base}/admin/tenants/new">New store</Button>
+  {/snippet}
+</PageHeader>
+
+<div class="grid gap-3.5" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr))">
+  <StatTile {loading} label="Stores" value={rows.length} sub="{withPi.length} with a Pi linked" />
+  <StatTile
+    {loading}
+    label="Pis online"
+    value={online.length}
+    suffix="/ {withPi.length}"
+    sub={offline.length ? `${offline.map((r) => r.tenant.name).slice(0, 2).join(', ')} offline` : 'all connected'}
+    subTone={offline.length ? 'bad' : 'muted'}
+  />
+  <StatTile {loading} label="Orders today" value={ordersToday} sub={busiest || 'no orders yet today'} />
+  <StatTile
+    {loading}
+    label="Diagnostics"
+    value={data?.unresolved.length ?? 0}
+    sub="unresolved reports"
+    subTone={data?.unresolved.length ? 'warn' : 'muted'}
+    href="{base}/admin/diagnostics"
+  />
 </div>
 
-{#if banner}
-  <div
-    class="rounded-md border px-4 py-3 text-sm mb-4 flex items-start gap-3 {banner.kind === 'error'
-      ? 'border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-900/60 dark:bg-rose-950/60 dark:text-rose-200'
-      : 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/50 dark:text-emerald-200'}"
-  >
-    <span class="flex-1 min-w-0 break-words">{banner.msg}</span>
-    <button type="button" class="shrink-0 opacity-60 hover:opacity-100 leading-none text-base" aria-label="dismiss" title="dismiss" onclick={dismissBanner}>×</button>
+<section class="card py-1" aria-labelledby="attn">
+  <div class="flex items-center gap-2.5 px-[18px] py-3">
+    <span class={attention.length ? 'text-warn' : 'text-ok'}><Icon name={attention.length ? 'alert' : 'check'} size={18} /></span>
+    <h2 id="attn" class="m-0 text-[15px] font-semibold">Needs attention</h2>
   </div>
-{/if}
-
-{#if minted}
-  <div
-    class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 mb-4 dark:border-amber-500/40 dark:bg-amber-500/10"
-  >
-    <div class="text-sm font-semibold text-amber-900 dark:text-amber-200">
-      Agent token — copy it now, it is never shown again
-    </div>
-    <div
-      class="mono mt-2 break-all bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-500/30 rounded px-2 py-1"
-    >
-      {minted.api_key}
-    </div>
-    <div class="text-xs text-slate-600 dark:text-slate-400 mt-1">
-      device id: <span class="mono">{minted.device.id}</span> · paste this token into the agent's
-      setup screen to link the device.
-    </div>
-    <div class="flex gap-1 mt-3">
-      <button
-        class="btn btn-primary btn-xs"
-        onclick={() => {
-          navigator.clipboard?.writeText(minted?.api_key ?? '');
-          toast('token copied');
-        }}>copy token</button
-      >
-      <button class="btn btn-ghost btn-xs" onclick={() => (minted = null)}>dismiss</button>
-    </div>
-  </div>
-{/if}
-
-<section class="card">
-  <header class="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
-    <h2 class="font-semibold">Tenants</h2>
-    <button class="btn btn-dark btn-xs" onclick={() => (showNew = !showNew)}>+ new tenant</button>
-  </header>
-
-  {#if showNew}
-    <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/40">
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div><label class="lbl">slug</label><input class="field w-full" bind:value={nt.slug} placeholder="acme-pizza" /></div>
-        <div><label class="lbl">display name</label><input class="field w-full" bind:value={nt.name} oninput={onNameInput} placeholder="Acme Pizza" /></div>
-        <div>
-          <label class="lbl">login username <span class="normal-case text-slate-400">(defaults to store name)</span></label>
-          <input class="field w-full" bind:value={nt.username} oninput={() => (usernameTouched = true)} autocomplete="off" />
-        </div>
-        <div>
-          <label class="lbl">login password <span class="normal-case text-slate-400">(optional)</span></label>
-          <input class="field w-full" type="password" bind:value={nt.password} autocomplete="new-password" />
-        </div>
-        <div>
-          <label class="lbl">vendor store id <span class="normal-case text-slate-400">(optional — online orders route by it)</span></label>
-          <input class="field w-full mono" inputmode="numeric" bind:value={nt.store_id} placeholder="3282" autocomplete="off" />
-        </div>
+  {#if loading}
+    <div class="px-[18px] pb-4"><Skeleton lines={2} /></div>
+  {:else if attention.length === 0}
+    <p class="m-0 px-[18px] py-3 border-t border-border text-muted">Nothing right now — every Pi is online and no reports are open.</p>
+  {:else}
+    {#each attention as a (a.key)}
+      <div class="flex flex-wrap items-center gap-3 px-[18px] py-3 border-t border-border">
+        <Badge tone={a.tone} dot>{a.tag}</Badge>
+        <span class="flex-1 min-w-[200px]"><b>{a.store}</b> — {a.text}</span>
+        <Button size="sm" href={a.href}>{a.cta}</Button>
       </div>
-      <div class="flex items-center gap-3 mt-3">
-        <button class="btn btn-primary" disabled={creating} onclick={createTenant}>{creating ? 'creating…' : 'create tenant'}</button>
-        <span class="text-xs text-slate-500 dark:text-slate-400">
-          Creates the restaurant and its location. Set a username + password so the manager can sign in at /app/store.
-        </span>
-      </div>
-    </div>
+    {/each}
   {/if}
-
-  <div class="divide-y divide-slate-200 dark:divide-slate-800">
-    {#if ov && ov.tenants.length}
-      {#each ov.tenants as t (t.id)}
-        <TenantRow
-          tenant={t}
-          locations={locsByTenant[t.id] ?? []}
-          {devsByLoc}
-          {reload}
-          {toast}
-          {reveal}
-        />
-      {/each}
-    {:else}
-      <div class="px-4 py-6 text-sm text-slate-500 dark:text-slate-400">
-        {getAdminKey() ? 'No tenants yet. Create one above.' : 'Paste your ADMIN_API_KEY to get started.'}
-      </div>
-    {/if}
-  </div>
 </section>
+
+<StoresTable {rows} {loading} />

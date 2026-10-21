@@ -11,6 +11,11 @@
 // where payload = "<tenant_id>|<location_id>|<exp unix>". It carries the
 // manager's SCOPE, so no store-side lookup is needed to know which
 // (tenant, location) a request is clamped to.
+//
+// An admin "open as store" session (IssueAs) appends a 4th field — the
+// impersonator label, "<tenant_id>|<location_id>|<exp unix>|<by>" — and gets a
+// shorter TTL. A plain manager cookie keeps the 3-field form, so cookies issued
+// before the 4th field existed still verify.
 package session
 
 import (
@@ -35,6 +40,9 @@ const (
 	cookiePath = "/store"
 	ttl        = 12 * time.Hour
 	minSecret  = 16
+	// ImpersonateTTL bounds an admin's open-as-store session; short on purpose
+	// since it is a support tool, not a working login.
+	ImpersonateTTL = 2 * time.Hour
 )
 
 // Claims is the decoded, verified content of a session cookie.
@@ -42,6 +50,9 @@ type Claims struct {
 	TenantID   uuid.UUID
 	LocationID uuid.UUID
 	Exp        int64
+	// ImpersonatedBy is the impersonator label ("admin") of an open-as-store
+	// session; "" for a manager's own login.
+	ImpersonatedBy string
 }
 
 // Signer issues + verifies session cookies. `secure` sets the cookie's Secure
@@ -69,6 +80,9 @@ func (s *Signer) mac(payload string) string {
 
 func (s *Signer) encode(c Claims) string {
 	raw := c.TenantID.String() + "|" + c.LocationID.String() + "|" + strconv.FormatInt(c.Exp, 10)
+	if c.ImpersonatedBy != "" {
+		raw += "|" + c.ImpersonatedBy
+	}
 	payload := base64.RawURLEncoding.EncodeToString([]byte(raw))
 	return payload + "." + s.mac(payload)
 }
@@ -86,9 +100,16 @@ func (s *Signer) decode(value string) (Claims, bool) {
 	if err != nil {
 		return Claims{}, false
 	}
+	// 3 parts = a manager's own session; 4 = impersonated (4th must be non-empty).
 	parts := strings.Split(string(raw), "|")
-	if len(parts) != 3 {
+	if len(parts) != 3 && len(parts) != 4 {
 		return Claims{}, false
+	}
+	var by string
+	if len(parts) == 4 {
+		if by = parts[3]; by == "" {
+			return Claims{}, false
+		}
 	}
 	tid, err1 := uuid.Parse(parts[0])
 	lid, err2 := uuid.Parse(parts[1])
@@ -96,7 +117,7 @@ func (s *Signer) decode(value string) (Claims, bool) {
 	if err1 != nil || err2 != nil || err3 != nil {
 		return Claims{}, false
 	}
-	return Claims{TenantID: tid, LocationID: lid, Exp: exp}, true
+	return Claims{TenantID: tid, LocationID: lid, Exp: exp, ImpersonatedBy: by}, true
 }
 
 // secureFor reports whether the cookie for this request gets the Secure flag.
@@ -113,14 +134,34 @@ func (s *Signer) secureFor(r *http.Request) bool {
 
 // Issue writes a fresh session cookie scoping the browser to (tenantID, locationID).
 func (s *Signer) Issue(w http.ResponseWriter, r *http.Request, tenantID, locationID uuid.UUID) {
+	s.issue(w, r, Claims{TenantID: tenantID, LocationID: locationID}, ttl)
+}
+
+// ErrBadImpersonator rejects an IssueAs label that can't round-trip the cookie.
+var ErrBadImpersonator = errors.New("impersonator label must be non-empty and contain no '|'")
+
+// IssueAs writes an impersonated session cookie: the same (tenant, location)
+// scope as Issue, stamped with who opened it (`by`, e.g. "admin") and limited
+// to ImpersonateTTL. The caller audits the issue; the stamp lets every request
+// on the session be traced back to it.
+func (s *Signer) IssueAs(w http.ResponseWriter, r *http.Request, tenantID, locationID uuid.UUID, by string) error {
+	if by == "" || strings.ContainsRune(by, '|') {
+		return ErrBadImpersonator
+	}
+	s.issue(w, r, Claims{TenantID: tenantID, LocationID: locationID, ImpersonatedBy: by}, ImpersonateTTL)
+	return nil
+}
+
+func (s *Signer) issue(w http.ResponseWriter, r *http.Request, c Claims, life time.Duration) {
+	c.Exp = time.Now().Add(life).Unix()
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,
-		Value:    s.encode(Claims{TenantID: tenantID, LocationID: locationID, Exp: time.Now().Add(ttl).Unix()}),
+		Value:    s.encode(c),
 		Path:     cookiePath,
 		HttpOnly: true,
 		Secure:   s.secureFor(r),
 		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(ttl.Seconds()),
+		MaxAge:   int(life.Seconds()),
 	})
 }
 

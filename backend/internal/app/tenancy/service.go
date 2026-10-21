@@ -72,6 +72,9 @@ func (s *Service) CreateTenant(ctx context.Context, slug, name, username, passwo
 	if slug == "" || name == "" {
 		return nil, nil, errors.New("slug and name are required")
 	}
+	if err := validUsername(username); err != nil {
+		return nil, nil, err
+	}
 	// Credentials are optional, but if one is given both must be.
 	var passwordHash string
 	if username != "" || password != "" {
@@ -91,6 +94,19 @@ func (s *Service) CreateTenant(ctx context.Context, slug, name, username, passwo
 		Slug: slug, Name: name, Username: username, PasswordHash: passwordHash, StoreID: storeID,
 		LocationSlug: defaultLocationSlug, Timezone: defaultTimezone,
 	})
+}
+
+// ErrReservedUsername rejects a store login named "admin" (any case): the
+// admin's open-as-store session is labelled "admin" in logs, traces and the
+// whoami, so a manager account with that name would be indistinguishable.
+var ErrReservedUsername = errors.New(`username "admin" is reserved`)
+
+// validUsername checks an already-trimmed username ("" = no login, allowed here).
+func validUsername(username string) error {
+	if strings.EqualFold(username, "admin") {
+		return ErrReservedUsername
+	}
+	return nil
 }
 
 // defaultLocationSlug is the slug of every tenant's single location.
@@ -128,6 +144,9 @@ func (s *Service) SetTenantCredentials(ctx context.Context, id uuid.UUID, userna
 	}
 	if username == "" || password == "" {
 		return errors.New("username and password are required")
+	}
+	if err := validUsername(username); err != nil {
+		return err
 	}
 	h, err := authSvc.HashPassword(password)
 	if err != nil {

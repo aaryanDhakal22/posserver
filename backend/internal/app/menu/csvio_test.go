@@ -197,16 +197,25 @@ func TestImportCSV(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if repo.calls != 0 || dry.Menus != 1 || dry.Categories != 2 || dry.Items != 4 || dry.ItemPrinters != 1 {
+	if repo.calls != 0 || dry.Menus != 1 || dry.Categories != 2 || dry.Items != 4 || dry.ItemPrinters != 1 || dry.CategoryPrinters != 1 {
 		t.Fatalf("dry run = %+v, writes %d", dry, repo.calls)
+	}
+	// Where the file's items will print: the new Pizza category's default
+	// counts too, not only items with a printer of their own.
+	wantOn := []PrinterItems{{Printer: "Pizza", Items: 2}, {Printer: "Sub", Items: 1}}
+	if !equalPrintsOn(dry.PrintsOn, wantOn) || dry.ItemsNoPrinter != 1 {
+		t.Fatalf("dry run prints_on = %+v, no printer %d", dry.PrintsOn, dry.ItemsNoPrinter)
 	}
 
 	res, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, lombardis), false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Menus != 1 || res.Categories != 2 || res.Items != 4 || res.ItemPrinters != 1 {
+	if res.Menus != 1 || res.Categories != 2 || res.Items != 4 || res.ItemPrinters != 1 || res.CategoryPrinters != 1 {
 		t.Fatalf("import = %+v", res)
+	}
+	if !equalPrintsOn(res.PrintsOn, wantOn) || res.ItemsNoPrinter != 1 {
+		t.Fatalf("import prints_on = %+v, no printer %d", res.PrintsOn, res.ItemsNoPrinter)
 	}
 	if len(repo.items) != 4 { // "biryani " merged into "Biryani"
 		t.Fatalf("items = %d, want 4", len(repo.items))
@@ -269,12 +278,20 @@ func TestImportCSV(t *testing.T) {
 	if ed.ItemsUpdated != 1 || ed.CategoryPrinters != 1 || ed.ItemPrinters != 0 || ed.Items != 0 {
 		t.Errorf("edit = %+v", ed)
 	}
+	// Garlic Knots keeps its own Sub printer; Biryani now inherits Online.
+	if want := []PrinterItems{{Printer: "Pizza", Items: 1}, {Printer: "Sub", Items: 1}, {Printer: "Online", Items: 1}}; !equalPrintsOn(ed.PrintsOn, want) || ed.ItemsNoPrinter != 0 {
+		t.Errorf("edit prints_on = %+v, no printer %d", ed.PrintsOn, ed.ItemsNoPrinter)
+	}
 
-	// Unknown printer: nothing written.
+	// Unknown printer: nothing written, and the message is plain language.
 	before := repo.calls
-	_, err = svc.ImportCSV(ctx, tid, lid, mustParse(t, "category,item,printer\nPizza,Cheese Pizza,Grill\n"), false, false)
-	if !IsCSVError(err) || !strings.Contains(err.Error(), "Grill") || repo.calls != before {
-		t.Errorf("unknown printer: err = %v, writes %d", err, repo.calls-before)
+	_, err = svc.ImportCSV(ctx, tid, lid, mustParse(t, "category,item,printer\nPizza,Cheese Pizza,Grill\nPizza,Fries,front\nPizza,Wings,Pizza\n"), false, false)
+	if !IsCSVError(err) || repo.calls != before {
+		t.Fatalf("unknown printer: err = %v, writes %d", err, repo.calls-before)
+	}
+	if want := "This file sends items to printers that this store doesn't have yet: Grill, front. " +
+		"Add them on the Printers page first, or clear the printer column. This store has: Pizza, Sub, Online."; err.Error() != want {
+		t.Errorf("unknown printer message =\n%s\nwant\n%s", err, want)
 	}
 
 	// Replace wipes the location's menus first.
@@ -295,4 +312,26 @@ func TestParseMenuCSV_BadQuoteInFirstFieldIsAnError(t *testing.T) {
 	if !errors.As(err, &ce) {
 		t.Fatalf("err = %v, want a CSVError", err)
 	}
+}
+
+// A store with no printers yet gets no empty "This store has:" tail.
+func TestImportCSV_UnknownPrinterNoPrinters(t *testing.T) {
+	svc, _, _ := newImportSvc(t)
+	_, err := svc.ImportCSV(context.Background(), uuid.New(), uuid.New(), mustParse(t, "category,item,printer\nGrill,Burger,Grill\nGrill,Fries,Front\n"), true, false)
+	want := "This file sends items to printers that this store doesn't have yet: Grill, Front. Add them on the Printers page first, or clear the printer column."
+	if !IsCSVError(err) || err.Error() != want {
+		t.Errorf("err = %v, want %q", err, want)
+	}
+}
+
+func equalPrintsOn(got, want []PrinterItems) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }

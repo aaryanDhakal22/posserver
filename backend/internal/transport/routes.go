@@ -149,7 +149,7 @@ func routeTable(d RouterDeps) []routeDef {
 	orderH := handler.NewOrderHandler(d.Service, d.Logger)
 	sseH := handler.NewSSEHandler(d.Broker, d.TenancyService, d.Logger, d.Meters)
 	cfgPub := handler.NewStoreConfigPublisher(d.Publisher, d.TenancyService, d.Logger)
-	adminH := handler.NewAdminHandler(d.TenancyService, d.Service, cfgPub, d.Logger)
+	adminH := handler.NewAdminHandler(d.TenancyService, d.Service, cfgPub, d.SessionSigner, d.Logger)
 	storeH := handler.NewStoreHandler(d.TenancyService, d.SessionSigner, cfgPub, d.Logger)
 	agentRPCH := handler.NewAgentRPCHandler(d.Requester, d.Logger)
 	printerStatusH := handler.NewPrinterStatusHandler(d.PrinterCache, d.Requester, d.Meters, d.Logger)
@@ -196,6 +196,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("PATCH", adminPrefix+"/tenants/:id/config", "admin", "Edit a tenant's config blob", adminH.UpdateTenantConfig, admin),
 		def("PATCH", adminPrefix+"/tenants/:id/credentials", "admin", "Set/rotate a tenant's store-manager login", adminH.SetTenantCredentials, admin),
 		def("PATCH", adminPrefix+"/tenants/:id/store-id", "admin", "Set/clear a tenant's external vendor store_id (online order routing key)", adminH.SetTenantStoreID, admin),
+		def("POST", adminPrefix+"/tenants/:id/store-session", "admin", "Open this tenant's store as its manager (sets a 2h store session cookie; audited)", adminH.OpenStoreSession, admin),
 		def("DELETE", adminPrefix+"/tenants/:id", "admin", "Cascade-delete a tenant + its locations/orders/devices", adminH.DeleteTenant, admin),
 		def("GET", adminPrefix+"/orders", "admin", "Cross-tenant order list (?source_event_id/tenant_id/limit)", adminH.ListOrders, admin),
 		def("DELETE", adminPrefix+"/orders", "admin", "Bulk-delete orders (?tenant_id, absent=all)", adminH.DeleteOrders, admin),

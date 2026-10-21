@@ -1,492 +1,117 @@
 <script lang="ts">
-  import { base } from '$app/paths';
-  import { goto } from '$app/navigation';
   import { onMount } from 'svelte';
+  import { base } from '$app/paths';
   import {
-    storeApi,
-    ApiError,
+    dollars,
     fmtTime,
-    type Whoami,
-    type Location,
-    type Printer,
-    type Device,
-    type Minted,
-    type StoreOrder,
+    isToday,
+    storeApi,
+    timeAgo,
+    type LivePrinters,
     type StoreFloor,
-    type Menu,
-    type Category,
-    type Item,
-    dollars
+    type StoreOrder
   } from '$lib/api';
-  import { TIMEZONES } from '$lib/timezones';
+  import { storeSession } from '$lib/session.svelte';
+  import { toast } from '$lib/toast.svelte';
+  import PageHeader from '$lib/ui/PageHeader.svelte';
+  import StatTile from '$lib/ui/StatTile.svelte';
+  import Card from '$lib/ui/Card.svelte';
+  import Badge from '$lib/ui/Badge.svelte';
+  import Button from '$lib/ui/Button.svelte';
+  import Skeleton from '$lib/ui/Skeleton.svelte';
+  import { orderBucket } from '$lib/ui/StatusBadge.svelte';
+  import OrdersTable from '$lib/components/store/OrdersTable.svelte';
+  import { loadPiStatus, PI_NOT_LINKED, type PiLink } from '$lib/store/pi';
 
-  let loading = $state(true);
-  let who = $state<Whoami | null>(null);
-  let loc = $state<Location | null>(null);
-  let printers = $state<Printer[]>([]);
-  let devices = $state<Device[]>([]);
+  // Store overview: today's floor at a glance. The floor (status, kitchen #,
+  // drivers) is decided by the store's tablet and synced here; this view is
+  // read-only and refreshes every 15 s.
   let orders = $state<StoreOrder[]>([]);
   let floor = $state<StoreFloor | null>(null);
-  let banner = $state<{ msg: string; kind: 'ok' | 'error' | 'info' } | null>(null);
-  let minted = $state<Minted | null>(null);
+  let live = $state<LivePrinters | null>(null);
+  let pi = $state<PiLink>('unknown');
+  let loading = $state(true);
 
-  // Opening hours (location config `opening_hours`): one open period per day
-  // here; extra periods set through the API are kept as they are. main pages
-  // the owner when the Pi is offline for 2+ minutes inside these hours.
-  const DAYS: [string, string][] = [
-    ['mon', 'Mon'], ['tue', 'Tue'], ['wed', 'Wed'], ['thu', 'Thu'], ['fri', 'Fri'], ['sat', 'Sat'], ['sun', 'Sun']
-  ];
-  type HoursRange = { open: string; close: string };
-  type DayHours = { on: boolean; open: string; close: string; extra: HoursRange[] };
-  let hours = $state<Record<string, DayHours>>({});
-
-  function hoursFromLoc(l: Location) {
-    const oh = ((l.config ?? {}) as Record<string, unknown>).opening_hours as Record<string, HoursRange[]> | undefined;
-    const next: Record<string, DayHours> = {};
-    for (const [d] of DAYS) {
-      const ranges = oh?.[d] ?? [];
-      next[d] = {
-        on: ranges.length > 0,
-        open: ranges[0]?.open ?? '11:00',
-        close: ranges[0]?.close ?? '23:00',
-        extra: ranges.slice(1)
-      };
-    }
-    hours = next;
-  }
-  function hoursConfig(): Record<string, HoursRange[]> {
-    const out: Record<string, HoursRange[]> = {};
-    for (const [d] of DAYS) {
-      const h = hours[d];
-      out[d] = h?.on ? [{ open: h.open, close: h.close }, ...h.extra] : [];
-    }
-    return out;
-  }
-  const hoursSet = $derived(Object.values(hours).some((h) => h.on));
-
-  // new printer / device inputs
-  let np = $state({ name: '', ip: '' });
-  let addingPrinter = $state(false);
-  let nd = $state({ name: '', kind: 'mobile' });
-
-  // Errors stay until dismissed or replaced; other messages auto-hide. The
-  // previous timer is cleared so a new message isn't cut short by an old one.
-  let bannerTimer: ReturnType<typeof setTimeout> | undefined;
-  function toast(msg: string, kind: 'ok' | 'error' | 'info' = 'ok') {
-    clearTimeout(bannerTimer);
-    banner = { msg, kind };
-    bannerTimer = kind === 'error' ? undefined : setTimeout(() => (banner = null), 4000);
-  }
-  function dismissBanner() {
-    clearTimeout(bannerTimer);
-    banner = null;
-  }
-  function err(e: unknown) {
-    toast(e instanceof ApiError ? e.message : String(e), 'error');
-  }
-
-  async function loadAll() {
-    loc = await storeApi<Location>('/me/location');
-    hoursFromLoc(loc);
-    printers = await storeApi<Printer[]>('/me/printers');
-    devices = await storeApi<Device[]>('/me/devices');
-    await loadFloor();
-  }
-
-  // The floor (status, kitchen #, drivers) is decided by the store's agent and
-  // synced here; this view is read-only and refreshes every 15s.
   async function loadFloor() {
-    orders = await storeApi<StoreOrder[]>('/me/orders?limit=30');
-    floor = await storeApi<StoreFloor>('/me/floor');
+    [orders, floor] = await Promise.all([storeApi<StoreOrder[]>('/me/orders?limit=100'), storeApi<StoreFloor>('/me/floor')]);
   }
-  const STATUS_LABEL: Record<string, string> = {
-    received: 'waiting', validated: 'waiting', accepted: 'in kitchen', preparing: 'in kitchen',
-    ready: 'ready', on_delivery: 'out for delivery', completed: 'delivered',
-    rejected: 'rejected', cancelled: 'cancelled'
-  };
-  const STATUS_CLASS: Record<string, string> = {
-    received: 'bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200',
-    accepted: 'bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200',
-    ready: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200',
-    on_delivery: 'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200'
-  };
-  function statusLabel(o: StoreOrder) {
-    if (o.status === 'ready' && o.fulfillment.type !== 'delivery') return 'done';
-    return STATUS_LABEL[o.status] ?? o.status;
-  }
-  function hhmm(t?: string | null) {
-    return t ? new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+  async function loadLive() {
+    ({ live, pi } = await loadPiStatus());
   }
 
   onMount(() => {
+    Promise.all([loadFloor(), loadLive()])
+      .catch((e) => toast.error(e))
+      .finally(() => (loading = false));
     const t = setInterval(() => loadFloor().catch(() => {}), 15000);
-    init();
     return () => clearInterval(t);
   });
 
-  async function init() {
-    try {
-      who = await storeApi<Whoami>('/session');
-      await loadAll();
-    } catch (e) {
-      if (e instanceof ApiError && e.status === 401) {
-        await goto(base + '/login');
-        return;
-      }
-      err(e);
-    } finally {
-      loading = false;
-    }
-  }
-
-  async function logout() {
-    try {
-      await storeApi('/session', { method: 'DELETE' });
-    } catch {
-      /* ignore */
-    }
-    await goto(base + '/login');
-  }
-
-  async function saveLocation() {
-    if (!loc) return;
-    try {
-      loc = await storeApi<Location>('/me/location', {
-        method: 'PATCH',
-        body: JSON.stringify({
-          name: loc.name,
-          timezone: loc.timezone,
-          daily_reset_hour: loc.daily_reset_hour,
-          phone: loc.phone,
-          address_line1: loc.address_line1,
-          address_line2: loc.address_line2,
-          config: { ...(loc.config ?? {}), opening_hours: hoursConfig() }
-        })
-      });
-      hoursFromLoc(loc);
-      toast('location saved');
-    } catch (e) {
-      err(e);
-    }
-  }
-
-  async function addPrinter() {
-    if (addingPrinter) return;
-    if (!np.name.trim()) return toast('printer needs a name', 'error');
-    addingPrinter = true;
-    try {
-      await storeApi('/me/printers', { method: 'POST', body: JSON.stringify(np) });
-      np = { name: '', ip: '' };
-      printers = await storeApi<Printer[]>('/me/printers');
-      toast('printer added');
-    } catch (e) {
-      err(e);
-    } finally {
-      addingPrinter = false;
-    }
-  }
-  async function savePrinter(p: Printer) {
-    try {
-      await storeApi('/me/printers/' + p.id, {
-        method: 'PATCH',
-        body: JSON.stringify({ name: p.name, ip: p.ip })
-      });
-      toast('printer saved');
-    } catch (e) {
-      err(e);
-    }
-  }
-  async function makeReceiptPrinter(p: Printer) {
-    try {
-      await storeApi('/me/printers/' + p.id, {
-        method: 'PATCH',
-        body: JSON.stringify({ name: p.name, ip: p.ip, is_receipt: true })
-      });
-      printers = await storeApi<Printer[]>('/me/printers');
-      toast(`"${p.name}" now prints the customer receipt`);
-    } catch (e) {
-      err(e);
-    }
-  }
-  // How many menu categories (default printer) and items (own printer) send to
-  // this printer — read through the existing menu routes; null if unavailable.
-  async function menuUsage(p: Printer): Promise<{ cats: number; items: number } | null> {
-    try {
-      const menus = await storeApi<Menu[]>('/me/menu/menus');
-      const cats = (
-        await Promise.all(menus.map((m) => storeApi<Category[]>(`/me/menu/menus/${m.id}/categories`)))
-      ).flat();
-      const items = (
-        await Promise.all(cats.map((c) => storeApi<Item[]>(`/me/menu/categories/${c.id}/items`)))
-      ).flat();
-      return {
-        cats: cats.filter((c) => c.default_printer_id === p.id).length,
-        items: items.filter((it) => it.printer_id === p.id).length
-      };
-    } catch {
-      return null;
-    }
-  }
-  async function deletePrinter(p: Printer) {
-    // Deleting a printer unassigns it from the menu (categories/items keep no
-    // printer), so anything left without one prints on EVERY station.
-    const use = await menuUsage(p);
-    const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
-    const what =
-      use === null
-        ? 'Any menu categories or items sent to this printer'
-        : use.cats || use.items
-          ? `${plural(use.cats, 'category', 'categories')} and ${plural(use.items, 'item', 'items')} in the menu are sent to this printer. They`
-          : '';
-    const msg =
-      `Delete printer "${p.name}"?\n\n` +
-      (what
-        ? `${what} will lose it — anything left without a printer then prints on EVERY station until you assign a new printer in the menu.\n\n`
-        : 'No menu categories or items are sent to this printer.\n\n') +
-      'If the printer only moved or got a new IP address, cancel and edit its IP instead.';
-    if (!confirm(msg)) return;
-    try {
-      await storeApi('/me/printers/' + p.id, { method: 'DELETE' });
-      printers = await storeApi<Printer[]>('/me/printers');
-      toast('printer deleted');
-    } catch (e) {
-      err(e);
-    }
-  }
-
-  async function mintDevice() {
-    if (!nd.name.trim()) return toast('device needs a name', 'error');
-    try {
-      minted = await storeApi<Minted>('/me/devices', { method: 'POST', body: JSON.stringify(nd) });
-      nd = { name: '', kind: 'mobile' };
-      devices = await storeApi<Device[]>('/me/devices');
-    } catch (e) {
-      err(e);
-    }
-  }
-  async function revokeDevice(d: Device) {
-    if (!confirm(`Revoke "${d.name}"? Its key stops working immediately.`)) return;
-    try {
-      await storeApi('/me/devices/' + d.id + '/revoke', { method: 'POST' });
-      devices = await storeApi<Device[]>('/me/devices');
-      toast('device revoked');
-    } catch (e) {
-      err(e);
-    }
-  }
+  const today = $derived(orders.filter((o) => isToday(o.received_at)));
+  const count = (b: string) => today.filter((o) => orderBucket(o) === b).length;
+  const sales = $derived(today.reduce((n, o) => n + (o.money?.total_cents || 0), 0));
+  const driversOut = $derived(floor?.drivers.filter((d) => d.status === 'out') ?? []);
 </script>
 
-{#if loading}
-  <div class="text-slate-500 dark:text-slate-400">Loading…</div>
-{:else if who}
-  <div class="flex items-center justify-between mb-4">
-    <div>
-      <div class="text-lg font-semibold">{who.tenant.name}</div>
-      <div class="text-xs text-slate-500 dark:text-slate-400">
-        location <span class="mono">{who.location.name}</span>
-      </div>
-    </div>
-    <button class="btn btn-ghost btn-xs" onclick={logout}>log out</button>
-  </div>
+<svelte:head><title>Overview — {storeSession.who?.tenant.name ?? 'quicc'}</title></svelte:head>
 
-  {#if banner}
-    <div
-      class="rounded-md border px-4 py-3 text-sm mb-4 flex items-start gap-3 {banner.kind === 'error'
-        ? 'border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-900/60 dark:bg-rose-950/60 dark:text-rose-200'
-        : 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/50 dark:text-emerald-200'}"
-    >
-      <span class="flex-1 min-w-0 break-words">{banner.msg}</span>
-      <button type="button" class="shrink-0 opacity-60 hover:opacity-100 leading-none text-base" aria-label="dismiss" title="dismiss" onclick={dismissBanner}>×</button>
-    </div>
-  {/if}
+<PageHeader
+  title="Overview"
+  subtitle={floor?.last_sync_at ? `Synced from the restaurant tablet ${timeAgo(floor.last_sync_at)} · refreshes every 15 s` : "The restaurant tablet hasn't synced yet"}
+/>
 
-  {#if minted}
-    <div
-      class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 mb-4 dark:border-amber-500/40 dark:bg-amber-500/10"
-    >
-      <div class="text-sm font-semibold text-amber-900 dark:text-amber-200">
-        New device key — copy it now, it is never shown again
-      </div>
-      <div
-        class="mono mt-2 break-all bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-500/30 rounded px-2 py-1"
-      >
-        {minted.api_key}
-      </div>
-      <button class="btn btn-ghost btn-xs mt-3" onclick={() => (minted = null)}>dismiss</button>
-    </div>
-  {/if}
+<div class="grid gap-3.5" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))">
+  <StatTile {loading} label="Orders today" value={today.length} sub={today.length ? `${dollars(sales)} in sales` : 'none yet'} href="{base}/store/orders" />
+  <StatTile {loading} label="Waiting" value={count('waiting')} sub="not accepted yet" subTone={count('waiting') ? 'warn' : 'muted'} />
+  <StatTile {loading} label="In kitchen" value={count('kitchen')} sub="{count('ready')} ready for a driver" />
+  <StatTile {loading} label="Out for delivery" value={count('out')} sub="{driversOut.length} driver{driversOut.length === 1 ? '' : 's'} out" />
+</div>
 
-  <!-- Floor (read-only, synced from the store's agent) -->
-  <section class="card px-4 py-4 mb-4">
-    <div class="flex items-baseline justify-between mb-1">
-      <h2 class="font-semibold">Orders</h2>
-      <span class="text-xs text-slate-500 dark:text-slate-400">
-        {#if floor?.last_sync_at}agent last synced {fmtTime(floor.last_sync_at)}{:else}agent hasn't synced yet{/if}
-      </span>
-    </div>
-    <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">
-      Status, kitchen numbers and drivers are set on the restaurant tablet and synced here.
-    </p>
-    <div class="overflow-x-auto">
-      <table class="w-full text-sm">
-        <thead class="text-xs text-slate-500 dark:text-slate-400 text-left">
-          <tr><th class="py-1 pr-2">kitchen #</th><th class="pr-2">order</th><th class="pr-2">customer</th><th class="pr-2">type</th><th class="pr-2">status</th><th class="pr-2">ready by</th><th class="pr-2">driver</th><th class="text-right">total</th></tr>
-        </thead>
-        <tbody>
-          {#each orders as o (o.id)}
-            <tr class="border-t border-slate-200 dark:border-slate-800">
-              <td class="py-1 pr-2 mono font-semibold">{o.kitchen_order_number ?? '—'}</td>
-              <td class="pr-2 mono">#{o.source_event_id}</td>
-              <td class="pr-2">{o.customer.display_name ?? ''}</td>
-              <td class="pr-2">{o.fulfillment.type}</td>
-              <td class="pr-2"><span class="chip {STATUS_CLASS[o.status] ?? 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'}">{statusLabel(o)}</span></td>
-              <td class="pr-2">{hhmm(o.estimated_ready_at)}</td>
-              <td class="pr-2">{o.driver_name ?? ''}</td>
-              <td class="text-right mono">{dollars(o.money.total_cents)}</td>
-            </tr>
-          {:else}
-            <tr><td colspan="8" class="py-2 text-slate-500 dark:text-slate-400">No orders yet.</td></tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-    {#if floor && floor.drivers.length}
-      <div class="mt-3 pt-3 border-t border-slate-200 dark:border-slate-800 text-sm">
-        <span class="text-xs text-slate-500 dark:text-slate-400 mr-2">drivers (queue order)</span>
+<div class="grid gap-4 lg:grid-cols-2">
+  <Card title="Drivers" subtitle="In queue order, as the tablet has them">
+    {#if loading}
+      <Skeleton lines={2} />
+    {:else if floor?.drivers.length}
+      <div class="flex flex-wrap gap-2">
         {#each floor.drivers as d (d.id)}
-          <span class="chip mr-1 {d.status === 'out' ? 'bg-violet-100 text-violet-800 dark:bg-violet-900/40 dark:text-violet-200' : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'}">{d.name}{d.status === 'out' ? ' · out' : ''}</span>
+          <Badge tone={d.status === 'out' ? 'brand' : 'mute'} dot={d.status === 'out'}>{d.name}{d.status === 'out' ? ' · out' : ''}</Badge>
         {/each}
       </div>
+    {:else}
+      <p class="m-0 text-muted">No drivers clocked in.</p>
     {/if}
-  </section>
-
-  <!-- Location -->
-  {#if loc}
-    <section class="card px-4 py-4 mb-4">
-      <h2 class="font-semibold mb-3">Location</h2>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div><label class="lbl">Name</label><input class="field w-full" bind:value={loc.name} /></div>
-        <div><label class="lbl">Phone</label><input class="field w-full" bind:value={loc.phone} /></div>
-        <div>
-          <label class="lbl">Address line 1</label><input
-            class="field w-full"
-            bind:value={loc.address_line1}
-          />
-        </div>
-        <div>
-          <label class="lbl">Address line 2</label><input
-            class="field w-full"
-            bind:value={loc.address_line2}
-          />
-        </div>
-        <div>
-          <label class="lbl">Timezone</label><select class="field w-full" bind:value={loc.timezone}>
-            {#each TIMEZONES as tz}<option value={tz}>{tz}</option>{/each}
-          </select>
-        </div>
-        <div>
-          <label class="lbl">Daily reset hour</label><input
-            type="number"
-            min="0"
-            max="23"
-            class="field w-full"
-            bind:value={loc.daily_reset_hour}
-          />
-        </div>
-      </div>
-      <h3 class="font-semibold text-sm mt-5 mb-1">Opening hours</h3>
-      <p class="text-xs opacity-70 mb-2">
-        If the Pi goes offline for 2 minutes while you're open, the owner gets a Pushover. A close time
-        earlier than the open time runs past midnight.
-        {#if !hoursSet}<span class="font-semibold">No hours set — the offline alert is off.</span>{/if}
-      </p>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1">
-        {#each DAYS as [d, label]}
-          {#if hours[d]}
-            <div class="flex items-center gap-2 text-sm">
-              <label class="flex items-center gap-1 w-16"><input type="checkbox" bind:checked={hours[d].on} />{label}</label>
-              {#if hours[d].on}
-                <input type="time" class="field" bind:value={hours[d].open} />
-                <span>–</span>
-                <input type="time" class="field" bind:value={hours[d].close} />
-                {#if hours[d].extra.length}<span class="text-xs opacity-60">+{hours[d].extra.length} more</span>{/if}
-              {:else}
-                <span class="opacity-60">closed</span>
-              {/if}
-            </div>
-          {/if}
+  </Card>
+  <Card title="Printers" subtitle={pi !== 'none' && live?.reported_at ? `Reported by the Pi ${timeAgo(live.reported_at)}` : 'Live status from the Pi'}>
+    {#snippet actions()}<Button size="sm" href="{base}/store/printers">Manage</Button>{/snippet}
+    {#if loading}
+      <Skeleton lines={2} />
+    {:else if pi === 'none'}
+      <p class="m-0 text-muted">{PI_NOT_LINKED}</p>
+    {:else if !live}
+      <p class="m-0 text-muted">Couldn't read printer status.</p>
+    {:else if !live.agent_online}
+      <p class="m-0 text-warn font-medium">The Pi is offline — printer status unknown.</p>
+    {:else if live.printers?.length}
+      <ul class="flex flex-col gap-2">
+        {#each live.printers as p (p.name)}
+          <li class="flex items-center gap-2.5" title={p.last_checked ? 'checked ' + fmtTime(p.last_checked) : undefined}>
+            <Badge tone={p.up ? 'ok' : 'bad'} dot>{p.up ? 'Ready' : 'Not responding'}</Badge>
+            <span class="font-medium">{p.name}</span>
+            <span class="mono text-muted text-[13px]">{p.ip}</span>
+          </li>
         {/each}
-      </div>
-      <button class="btn btn-primary btn-xs mt-3" onclick={saveLocation}>save location</button>
-    </section>
+      </ul>
+    {:else}
+      <p class="m-0 text-muted">The Pi hasn't reported any printers.</p>
+    {/if}
+  </Card>
+</div>
+
+<Card title="Recent orders" padded={false}>
+  {#snippet actions()}<Button size="sm" href="{base}/store/orders" iconRight="chevron-right">All orders</Button>{/snippet}
+  {#if loading}
+    <div class="px-5 pb-5"><Skeleton lines={4} /></div>
+  {:else}
+    <OrdersTable orders={orders.slice(0, 10)} />
   {/if}
-
-  <!-- Printers -->
-  <section class="card px-4 py-4 mb-4">
-    <h2 class="font-semibold mb-1">Printers</h2>
-    <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">
-      Kitchen stations print only their own items (set per item / category in the Menu). The
-      <b>receipt printer</b> prints the full customer receipt. Changes reach the store's agent immediately.
-    </p>
-    <div class="space-y-2">
-      {#each printers as p (p.id)}
-        <div class="flex flex-wrap gap-2 items-center">
-          <input class="field grow" bind:value={p.name} placeholder="name" />
-          <input class="field w-40 mono" bind:value={p.ip} placeholder="ip" />
-          {#if p.is_receipt}
-            <span class="chip bg-sky-100 text-sky-800 dark:bg-sky-900/40 dark:text-sky-200" title="Prints the full customer receipt">receipt printer</span>
-          {:else}
-            <button class="btn btn-ghost btn-xs" onclick={() => makeReceiptPrinter(p)} title="Print the full customer receipt here">make receipt printer</button>
-          {/if}
-          <button class="btn btn-primary btn-xs" onclick={() => savePrinter(p)}>save</button>
-          <button class="btn btn-danger btn-xs" onclick={() => deletePrinter(p)}>delete</button>
-        </div>
-      {:else}
-        <div class="text-sm text-slate-500 dark:text-slate-400">No printers yet.</div>
-      {/each}
-    </div>
-    <div class="flex flex-wrap gap-2 items-end mt-3 pt-3 border-t border-slate-200 dark:border-slate-800">
-      <div><label class="lbl">name</label><input class="field" bind:value={np.name} placeholder="Kitchen" /></div>
-      <div>
-        <label class="lbl">ip</label><input class="field w-40 mono" bind:value={np.ip} placeholder="192.168.1.50" />
-      </div>
-      <button class="btn btn-primary btn-xs" disabled={addingPrinter} onclick={addPrinter}>{addingPrinter ? 'adding…' : 'add printer'}</button>
-    </div>
-  </section>
-
-  <!-- Devices -->
-  <section class="card px-4 py-4">
-    <h2 class="font-semibold mb-3">Devices</h2>
-    <div class="space-y-1">
-      {#each devices as d (d.id)}
-        <div
-          class="flex items-center justify-between gap-3 px-2.5 py-1.5 border-l-2 border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 rounded-r"
-        >
-          <div>
-            <span class="text-sm font-medium">{d.name}</span>
-            <span class="chip bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200 ml-1">{d.kind}</span>
-            {#if d.revoked_at}<span class="chip bg-rose-200 text-rose-900 dark:bg-rose-900/60 dark:text-rose-200 ml-1">revoked</span>{/if}
-            <div class="text-xs text-slate-500 dark:text-slate-400">
-              prefix <span class="mono">{d.key_prefix}</span>… · last-used {fmtTime(d.last_used_at)}
-            </div>
-          </div>
-          <button class="btn btn-ghost btn-xs" disabled={!!d.revoked_at} onclick={() => revokeDevice(d)}>revoke</button>
-        </div>
-      {:else}
-        <div class="text-sm text-slate-500 dark:text-slate-400">No devices yet.</div>
-      {/each}
-    </div>
-    <div class="flex flex-wrap gap-2 items-end mt-3 pt-3 border-t border-slate-200 dark:border-slate-800">
-      <div class="grow"><label class="lbl">name</label><input class="field w-full" bind:value={nd.name} placeholder="Front tablet" /></div>
-      <div>
-        <label class="lbl">kind</label>
-        <select class="field" bind:value={nd.kind}>
-          <option value="mobile">mobile</option>
-          <option value="kiosk">kiosk</option>
-          <option value="ingest">ingest</option>
-        </select>
-      </div>
-      <button class="btn btn-primary btn-xs" onclick={mintDevice}>mint key</button>
-    </div>
-  </section>
-{/if}
+</Card>
