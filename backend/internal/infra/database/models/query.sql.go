@@ -1081,6 +1081,42 @@ func (q *Queries) DetachModifierGroup(ctx context.Context, arg DetachModifierGro
 	return err
 }
 
+const diagReportExists = `-- name: DiagReportExists :one
+SELECT EXISTS (SELECT 1 FROM diag_reports WHERE id = $1)
+`
+
+func (q *Queries) DiagReportExists(ctx context.Context, id pgtype.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, diagReportExists, id)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const findDiagReportIDsByPrefix = `-- name: FindDiagReportIDsByPrefix :many
+SELECT id FROM diag_reports WHERE id::text LIKE $1::text || '%' ORDER BY received_at DESC LIMIT 2
+`
+
+// The page links carry only the first 8 hex chars of a report id.
+func (q *Queries) FindDiagReportIDsByPrefix(ctx context.Context, prefix string) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, findDiagReportIDsByPrefix, prefix)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getActiveDeviceByKeyHash = `-- name: GetActiveDeviceByKeyHash :one
 SELECT id, tenant_id, location_id, name, kind, key_hash, key_prefix,
        created_at, last_used_at, revoked_at
@@ -1134,6 +1170,35 @@ func (q *Queries) GetActiveOperatorTokenByHash(ctx context.Context, tokenHash st
 	return i, err
 }
 
+const getActiveTabletTokenByHash = `-- name: GetActiveTabletTokenByHash :one
+SELECT id, tenant_id, location_id, tablet_id, tablet_name, last_used_at
+FROM tablet_report_tokens
+WHERE token_hash = $1 AND revoked_at IS NULL
+`
+
+type GetActiveTabletTokenByHashRow struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	TabletID   string             `json:"tablet_id"`
+	TabletName string             `json:"tablet_name"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+}
+
+func (q *Queries) GetActiveTabletTokenByHash(ctx context.Context, tokenHash string) (GetActiveTabletTokenByHashRow, error) {
+	row := q.db.QueryRow(ctx, getActiveTabletTokenByHash, tokenHash)
+	var i GetActiveTabletTokenByHashRow
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.TabletID,
+		&i.TabletName,
+		&i.LastUsedAt,
+	)
+	return i, err
+}
+
 const getAgentBackupData = `-- name: GetAgentBackupData :one
 SELECT data, location_id, created_at FROM agent_backups WHERE id = $1
 `
@@ -1182,6 +1247,65 @@ func (q *Queries) GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKPara
 	var apk []byte
 	err := row.Scan(&apk)
 	return apk, err
+}
+
+const getDiagReport = `-- name: GetDiagReport :one
+SELECT r.id, r.tenant_id, r.location_id, r.tablet_id, r.tablet_name, r.via, r.kind, r.scenario,
+       r.outcome, r.headline, r.cause, r.fixed_by, r.app_version, r.agent_version,
+       r.created_at, r.received_at, r.paged_at, r.resolved_at, t.name AS store_name, r.report
+FROM diag_reports r JOIN tenants t ON t.id = r.tenant_id
+WHERE r.id = $1
+`
+
+type GetDiagReportRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	TabletID     string             `json:"tablet_id"`
+	TabletName   string             `json:"tablet_name"`
+	Via          string             `json:"via"`
+	Kind         string             `json:"kind"`
+	Scenario     string             `json:"scenario"`
+	Outcome      string             `json:"outcome"`
+	Headline     string             `json:"headline"`
+	Cause        string             `json:"cause"`
+	FixedBy      string             `json:"fixed_by"`
+	AppVersion   string             `json:"app_version"`
+	AgentVersion string             `json:"agent_version"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ReceivedAt   pgtype.Timestamptz `json:"received_at"`
+	PagedAt      pgtype.Timestamptz `json:"paged_at"`
+	ResolvedAt   pgtype.Timestamptz `json:"resolved_at"`
+	StoreName    string             `json:"store_name"`
+	Report       []byte             `json:"report"`
+}
+
+func (q *Queries) GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagReportRow, error) {
+	row := q.db.QueryRow(ctx, getDiagReport, id)
+	var i GetDiagReportRow
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.TabletID,
+		&i.TabletName,
+		&i.Via,
+		&i.Kind,
+		&i.Scenario,
+		&i.Outcome,
+		&i.Headline,
+		&i.Cause,
+		&i.FixedBy,
+		&i.AppVersion,
+		&i.AgentVersion,
+		&i.CreatedAt,
+		&i.ReceivedAt,
+		&i.PagedAt,
+		&i.ResolvedAt,
+		&i.StoreName,
+		&i.Report,
+	)
+	return i, err
 }
 
 const getLatestAppRelease = `-- name: GetLatestAppRelease :one
@@ -1947,6 +2071,57 @@ func (q *Queries) InsertAgentBackup(ctx context.Context, arg InsertAgentBackupPa
 	return i, err
 }
 
+const insertDiagReport = `-- name: InsertDiagReport :execrows
+INSERT INTO diag_reports (id, tenant_id, location_id, tablet_id, tablet_name, via, kind, scenario,
+                          outcome, headline, cause, fixed_by, app_version, agent_version, report, created_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+ON CONFLICT (id) DO NOTHING
+`
+
+type InsertDiagReportParams struct {
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	TabletID     string             `json:"tablet_id"`
+	TabletName   string             `json:"tablet_name"`
+	Via          string             `json:"via"`
+	Kind         string             `json:"kind"`
+	Scenario     string             `json:"scenario"`
+	Outcome      string             `json:"outcome"`
+	Headline     string             `json:"headline"`
+	Cause        string             `json:"cause"`
+	FixedBy      string             `json:"fixed_by"`
+	AppVersion   string             `json:"app_version"`
+	AgentVersion string             `json:"agent_version"`
+	Report       []byte             `json:"report"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) InsertDiagReport(ctx context.Context, arg InsertDiagReportParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertDiagReport,
+		arg.ID,
+		arg.TenantID,
+		arg.LocationID,
+		arg.TabletID,
+		arg.TabletName,
+		arg.Via,
+		arg.Kind,
+		arg.Scenario,
+		arg.Outcome,
+		arg.Headline,
+		arg.Cause,
+		arg.FixedBy,
+		arg.AppVersion,
+		arg.AgentVersion,
+		arg.Report,
+		arg.CreatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertDriver = `-- name: InsertDriver :exec
 INSERT INTO drivers (id, tenant_id, location_id, name, position, status, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -2026,6 +2201,55 @@ func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventPa
 		arg.SchemaVersion,
 	)
 	return err
+}
+
+const insertTabletReportToken = `-- name: InsertTabletReportToken :one
+INSERT INTO tablet_report_tokens (tenant_id, location_id, tablet_id, tablet_name, token_hash, key_prefix)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id
+`
+
+type InsertTabletReportTokenParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	TabletID   string      `json:"tablet_id"`
+	TabletName string      `json:"tablet_name"`
+	TokenHash  string      `json:"token_hash"`
+	KeyPrefix  string      `json:"key_prefix"`
+}
+
+func (q *Queries) InsertTabletReportToken(ctx context.Context, arg InsertTabletReportTokenParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, insertTabletReportToken,
+		arg.TenantID,
+		arg.LocationID,
+		arg.TabletID,
+		arg.TabletName,
+		arg.TokenHash,
+		arg.KeyPrefix,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const lastDiagPage = `-- name: LastDiagPage :one
+SELECT COALESCE(max(paged_at), 'epoch'::timestamptz)::timestamptz AS last_paged
+FROM diag_reports
+WHERE location_id = $1 AND scenario = $2 AND outcome = $3 AND paged_at IS NOT NULL
+`
+
+type LastDiagPageParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Scenario   string      `json:"scenario"`
+	Outcome    string      `json:"outcome"`
+}
+
+// When this (location, scenario, outcome) last paged the owner (throttle).
+func (q *Queries) LastDiagPage(ctx context.Context, arg LastDiagPageParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, lastDiagPage, arg.LocationID, arg.Scenario, arg.Outcome)
+	var last_paged pgtype.Timestamptz
+	err := row.Scan(&last_paged)
+	return last_paged, err
 }
 
 const lastFloorEventAt = `-- name: LastFloorEventAt :one
@@ -2353,6 +2577,95 @@ func (q *Queries) ListDevicesByLocation(ctx context.Context, locationID pgtype.U
 			&i.CreatedAt,
 			&i.LastUsedAt,
 			&i.RevokedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDiagReports = `-- name: ListDiagReports :many
+SELECT r.id, r.tenant_id, r.location_id, r.tablet_id, r.tablet_name, r.via, r.kind, r.scenario,
+       r.outcome, r.headline, r.cause, r.fixed_by, r.app_version, r.agent_version,
+       r.created_at, r.received_at, r.paged_at, r.resolved_at, t.name AS store_name
+FROM diag_reports r JOIN tenants t ON t.id = r.tenant_id
+WHERE ($1::uuid IS NULL OR r.tenant_id = $1)
+  AND ($2::text IS NULL OR r.kind = $2)
+  AND ($3::text IS NULL OR r.outcome = $3)
+  AND (NOT $4::bool OR r.resolved_at IS NULL)
+ORDER BY r.received_at DESC
+LIMIT $5::int
+`
+
+type ListDiagReportsParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	Kind       pgtype.Text `json:"kind"`
+	Outcome    pgtype.Text `json:"outcome"`
+	Unresolved bool        `json:"unresolved"`
+	MaxRows    int32       `json:"max_rows"`
+}
+
+type ListDiagReportsRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	TabletID     string             `json:"tablet_id"`
+	TabletName   string             `json:"tablet_name"`
+	Via          string             `json:"via"`
+	Kind         string             `json:"kind"`
+	Scenario     string             `json:"scenario"`
+	Outcome      string             `json:"outcome"`
+	Headline     string             `json:"headline"`
+	Cause        string             `json:"cause"`
+	FixedBy      string             `json:"fixed_by"`
+	AppVersion   string             `json:"app_version"`
+	AgentVersion string             `json:"agent_version"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ReceivedAt   pgtype.Timestamptz `json:"received_at"`
+	PagedAt      pgtype.Timestamptz `json:"paged_at"`
+	ResolvedAt   pgtype.Timestamptz `json:"resolved_at"`
+	StoreName    string             `json:"store_name"`
+}
+
+func (q *Queries) ListDiagReports(ctx context.Context, arg ListDiagReportsParams) ([]ListDiagReportsRow, error) {
+	rows, err := q.db.Query(ctx, listDiagReports,
+		arg.TenantID,
+		arg.Kind,
+		arg.Outcome,
+		arg.Unresolved,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDiagReportsRow
+	for rows.Next() {
+		var i ListDiagReportsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.TabletID,
+			&i.TabletName,
+			&i.Via,
+			&i.Kind,
+			&i.Scenario,
+			&i.Outcome,
+			&i.Headline,
+			&i.Cause,
+			&i.FixedBy,
+			&i.AppVersion,
+			&i.AgentVersion,
+			&i.CreatedAt,
+			&i.ReceivedAt,
+			&i.PagedAt,
+			&i.ResolvedAt,
+			&i.StoreName,
 		); err != nil {
 			return nil, err
 		}
@@ -3027,6 +3340,59 @@ func (q *Queries) ListRoutingByLocation(ctx context.Context, locationID pgtype.U
 	return items, nil
 }
 
+const listTabletTokens = `-- name: ListTabletTokens :many
+SELECT k.id, k.tenant_id, k.location_id, k.tablet_id, k.tablet_name, k.key_prefix,
+       k.created_at, k.last_used_at, k.revoked_at, l.name AS location_name
+FROM tablet_report_tokens k JOIN locations l ON l.id = k.location_id
+WHERE ($1::uuid IS NULL OR k.location_id = $1)
+ORDER BY k.created_at DESC
+LIMIT 500
+`
+
+type ListTabletTokensRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	TabletID     string             `json:"tablet_id"`
+	TabletName   string             `json:"tablet_name"`
+	KeyPrefix    string             `json:"key_prefix"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt   pgtype.Timestamptz `json:"last_used_at"`
+	RevokedAt    pgtype.Timestamptz `json:"revoked_at"`
+	LocationName string             `json:"location_name"`
+}
+
+func (q *Queries) ListTabletTokens(ctx context.Context, locationID pgtype.UUID) ([]ListTabletTokensRow, error) {
+	rows, err := q.db.Query(ctx, listTabletTokens, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTabletTokensRow
+	for rows.Next() {
+		var i ListTabletTokensRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.TabletID,
+			&i.TabletName,
+			&i.KeyPrefix,
+			&i.CreatedAt,
+			&i.LastUsedAt,
+			&i.RevokedAt,
+			&i.LocationName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTenants = `-- name: ListTenants :many
 SELECT id, slug, name, config, username, password_hash, created_at, store_id FROM tenants ORDER BY created_at ASC
 `
@@ -3105,6 +3471,15 @@ func (q *Queries) ListUnackedOrders(ctx context.Context, arg ListUnackedOrdersPa
 		return nil, err
 	}
 	return items, nil
+}
+
+const markDiagReportPaged = `-- name: MarkDiagReportPaged :exec
+UPDATE diag_reports SET paged_at = now() WHERE id = $1
+`
+
+func (q *Queries) MarkDiagReportPaged(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markDiagReportPaged, id)
+	return err
 }
 
 const markDispatchFailed = `-- name: MarkDispatchFailed :exec
@@ -3293,6 +3668,18 @@ func (q *Queries) PruneAppReleases(ctx context.Context, arg PruneAppReleasesPara
 	return err
 }
 
+const pruneDiagReports = `-- name: PruneDiagReports :execrows
+DELETE FROM diag_reports WHERE received_at < $1
+`
+
+func (q *Queries) PruneDiagReports(ctx context.Context, receivedAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneDiagReports, receivedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const resetDispatchBackoffForScope = `-- name: ResetDispatchBackoffForScope :exec
 UPDATE outbox_dispatches d
 SET next_attempt_at = NULL
@@ -3333,6 +3720,64 @@ UPDATE devices SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL
 func (q *Queries) RevokeDevice(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, revokeDevice, id)
 	return err
+}
+
+const revokeExcessTabletTokens = `-- name: RevokeExcessTabletTokens :execrows
+UPDATE tablet_report_tokens t SET revoked_at = now()
+WHERE t.location_id = $1::uuid AND t.revoked_at IS NULL AND t.id NOT IN (
+    SELECT k.id FROM tablet_report_tokens k
+    WHERE k.location_id = $1::uuid AND k.revoked_at IS NULL
+    ORDER BY k.created_at DESC, k.id DESC
+    LIMIT $2::int
+)
+`
+
+type RevokeExcessTabletTokensParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Keep       int32       `json:"keep"`
+}
+
+// Keep the newest `keep` active tokens of a location; revoke the rest.
+func (q *Queries) RevokeExcessTabletTokens(ctx context.Context, arg RevokeExcessTabletTokensParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeExcessTabletTokens, arg.LocationID, arg.Keep)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeTabletTokenByID = `-- name: RevokeTabletTokenByID :execrows
+UPDATE tablet_report_tokens SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1
+`
+
+func (q *Queries) RevokeTabletTokenByID(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeTabletTokenByID, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeTabletTokensForTablet = `-- name: RevokeTabletTokensForTablet :execrows
+
+UPDATE tablet_report_tokens SET revoked_at = now()
+WHERE location_id = $1 AND tablet_id = $2 AND revoked_at IS NULL
+`
+
+type RevokeTabletTokensForTabletParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	TabletID   string      `json:"tablet_id"`
+}
+
+// ---------------------------------------------------------------------------
+// 00010_diagnostics: tablet report tokens + troubleshooting reports
+// ---------------------------------------------------------------------------
+func (q *Queries) RevokeTabletTokensForTablet(ctx context.Context, arg RevokeTabletTokensForTabletParams) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeTabletTokensForTablet, arg.LocationID, arg.TabletID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const searchOrdersInScope = `-- name: SearchOrdersInScope :many
@@ -3455,6 +3900,25 @@ type SetCategoryPositionParams struct {
 func (q *Queries) SetCategoryPosition(ctx context.Context, arg SetCategoryPositionParams) error {
 	_, err := q.db.Exec(ctx, setCategoryPosition, arg.ID, arg.TenantID, arg.Position)
 	return err
+}
+
+const setDiagReportResolved = `-- name: SetDiagReportResolved :execrows
+UPDATE diag_reports
+SET resolved_at = CASE WHEN $1::bool THEN COALESCE(resolved_at, now()) ELSE NULL END
+WHERE id = $2
+`
+
+type SetDiagReportResolvedParams struct {
+	Resolved bool        `json:"resolved"`
+	ID       pgtype.UUID `json:"id"`
+}
+
+func (q *Queries) SetDiagReportResolved(ctx context.Context, arg SetDiagReportResolvedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setDiagReportResolved, arg.Resolved, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setItemPosition = `-- name: SetItemPosition :exec
@@ -3649,6 +4113,15 @@ UPDATE operator_tokens SET last_used_at = now() WHERE id = $1
 
 func (q *Queries) TouchOperatorToken(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, touchOperatorToken, id)
+	return err
+}
+
+const touchTabletToken = `-- name: TouchTabletToken :exec
+UPDATE tablet_report_tokens SET last_used_at = now() WHERE id = $1
+`
+
+func (q *Queries) TouchTabletToken(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, touchTabletToken, id)
 	return err
 }
 

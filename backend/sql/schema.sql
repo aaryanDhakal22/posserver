@@ -409,3 +409,44 @@ CREATE TABLE agent_backups (
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
 );
 CREATE INDEX idx_agent_backups_location ON agent_backups (location_id, created_at DESC);
+
+-- 00010_diagnostics: tablet report tokens + troubleshooting reports.
+CREATE TABLE tablet_report_tokens (
+    id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id    uuid        NOT NULL,
+    location_id  uuid        NOT NULL,
+    tablet_id    text        NOT NULL,
+    tablet_name  text        NOT NULL DEFAULT '',
+    token_hash   text        NOT NULL UNIQUE,
+    key_prefix   text        NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    last_used_at timestamptz,
+    revoked_at   timestamptz,
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_tablet_report_tokens_active ON tablet_report_tokens (location_id) WHERE revoked_at IS NULL;
+
+CREATE TABLE diag_reports (
+    id            uuid        PRIMARY KEY,
+    tenant_id     uuid        NOT NULL,
+    location_id   uuid        NOT NULL,
+    tablet_id     text        NOT NULL DEFAULT '',
+    tablet_name   text        NOT NULL DEFAULT '',
+    via           text        NOT NULL CHECK (via IN ('pi', 'direct')),
+    kind          text        NOT NULL,
+    scenario      text        NOT NULL DEFAULT '',
+    outcome       text        NOT NULL,
+    headline      text        NOT NULL DEFAULT '',
+    cause         text        NOT NULL DEFAULT '',
+    fixed_by      text        NOT NULL DEFAULT '',
+    app_version   text        NOT NULL DEFAULT '',
+    agent_version text        NOT NULL DEFAULT '',
+    report        jsonb       NOT NULL,
+    created_at    timestamptz NOT NULL,
+    received_at   timestamptz NOT NULL DEFAULT now(),
+    paged_at      timestamptz,
+    resolved_at   timestamptz,
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_diag_reports_location ON diag_reports (location_id, received_at DESC);
+CREATE INDEX idx_diag_reports_received ON diag_reports (received_at DESC);

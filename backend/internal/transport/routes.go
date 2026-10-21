@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"quiccpos/main/internal/app/agentsync"
+	diagApp "quiccpos/main/internal/app/diag"
 	menuApp "quiccpos/main/internal/app/menu"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
@@ -88,6 +89,8 @@ type RouterDeps struct {
 	OperatorService *operatorApp.Service
 	// AgentSync backs agent link / restore / backups / fleet health.
 	AgentSync *agentsync.Service
+	// Diag backs tablet diagnostics (report tokens, reports, admin view).
+	Diag *diagApp.Service
 }
 
 // RouteInfo is the JSON shape served at GET /__routes (shared across all
@@ -139,6 +142,9 @@ func routeTable(d RouterDeps) []routeDef {
 	admin := appMiddleware.AdminAuth(d.AdminAPIKey)
 	storeSession := appMiddleware.StoreSessionAuth(d.SessionSigner)
 	operatorAuth := appMiddleware.OperatorAuth(d.OperatorService, d.Meters)
+	// The tablet report key guards exactly one route (diag-reports) and is
+	// never combined with `device` — it must not reach orders or anything else.
+	reportKey := appMiddleware.ReportKeyAuth(d.Diag)
 
 	orderH := handler.NewOrderHandler(d.Service, d.Logger)
 	sseH := handler.NewSSEHandler(d.Broker, d.TenancyService, d.Logger, d.Meters)
@@ -153,6 +159,7 @@ func routeTable(d RouterDeps) []routeDef {
 	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
+	diagH := handler.NewDiagHandler(d.Diag, d.Logger)
 
 	appFS := webapp.FS()
 	appBuilt := webapp.Built()
@@ -201,6 +208,13 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", adminPrefix+"/devices/:id", "admin", "Hard-delete a device row", adminH.DeleteDevice, admin),
 		def("POST", adminPrefix+"/agent/ping", "admin", "Round-trip an agent over the duplex channel (debug)", agentRPCH.PingAgent, admin),
 
+		// Admin — tablet diagnostics (reports + tablet report tokens).
+		def("GET", adminPrefix+"/diag-reports", "admin", "Tablet diagnostics reports, newest first (?tenant_id&kind&outcome&unresolved&limit)", diagH.AdminList, admin),
+		def("GET", adminPrefix+"/diag-reports/:id", "admin", "One diagnostics report in full (uuid or 8-char prefix)", diagH.AdminGet, admin),
+		def("PATCH", adminPrefix+"/diag-reports/:id", "admin", "Mark a diagnostics report resolved / reopen it {resolved}", diagH.AdminResolve, admin),
+		def("GET", adminPrefix+"/tablet-tokens", "admin", "Tablet report tokens (?location_id), newest first", diagH.AdminListTokens, admin),
+		def("POST", adminPrefix+"/tablet-tokens/:id/revoke", "admin", "Revoke a tablet report token", diagH.AdminRevokeToken, admin),
+
 		// Admin — operator (call-center) accounts.
 		def("GET", adminPrefix+"/operators", "admin", "List operators + their allowed locations", operatorH.AdminList, admin),
 		def("POST", adminPrefix+"/operators", "admin", "Create an operator (username/password)", operatorH.AdminCreate, admin),
@@ -229,6 +243,12 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", storePrefix+"/agent/app/latest", "device", "Newest tablet-app release (?app=quibase; 204 none) — agent keys only", appRelH.Latest, device, agentOnly),
 		def("GET", storePrefix+"/agent/app/releases/:code/apk", "device", "Download a tablet-app APK (?app=quibase) — agent keys only", appRelH.APK, device, agentOnly),
 		def("POST", storePrefix+"/agent/revoke", "device", "Agent self-revoke (kills its own key) — agent keys only", storeH.AgentSelfRevoke, device, agentOnly),
+		def("POST", storePrefix+"/agent/tablet-tokens", "device", "Mint a tablet's diagnostics report token {tablet_id, tablet_name} — agent keys only", diagH.MintTabletToken, device, agentOnly),
+		def("DELETE", storePrefix+"/agent/tablet-tokens/:tablet_id", "device", "Revoke a tablet's report token (idempotent) — agent keys only", diagH.RevokeTabletToken, device, agentOnly),
+
+		// Tablet — direct diagnostics upload when the Pi is down. Auth is ONLY
+		// the tablet report key (X-Quibase-Report-Key); it opens nothing else.
+		def("POST", storePrefix+"/tablet/diag-reports", "report-key", "Tablet diagnostics report v1 (≤256 KB) sent straight to main", diagH.PostReport, reportKey),
 
 		// Store — browser manager session (signed httpOnly cookie).
 		def("POST", storePrefix+"/session", "none", "Manager login → set the scoped session cookie", storeH.SessionLogin),

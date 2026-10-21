@@ -82,11 +82,16 @@ type Querier interface {
 	DeleteTenantPrinters(ctx context.Context, tenantID pgtype.UUID) error
 	DetachGroupFromAllItems(ctx context.Context, arg DetachGroupFromAllItemsParams) error
 	DetachModifierGroup(ctx context.Context, arg DetachModifierGroupParams) error
+	DiagReportExists(ctx context.Context, id pgtype.UUID) (bool, error)
+	// The page links carry only the first 8 hex chars of a report id.
+	FindDiagReportIDsByPrefix(ctx context.Context, prefix string) ([]pgtype.UUID, error)
 	GetActiveDeviceByKeyHash(ctx context.Context, keyHash string) (Device, error)
 	GetActiveOperatorTokenByHash(ctx context.Context, tokenHash string) (GetActiveOperatorTokenByHashRow, error)
+	GetActiveTabletTokenByHash(ctx context.Context, tokenHash string) (GetActiveTabletTokenByHashRow, error)
 	GetAgentBackupData(ctx context.Context, id pgtype.UUID) (GetAgentBackupDataRow, error)
 	GetAgentState(ctx context.Context, locationID pgtype.UUID) (AgentState, error)
 	GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKParams) ([]byte, error)
+	GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagReportRow, error)
 	GetLatestAppRelease(ctx context.Context, app string) (GetLatestAppReleaseRow, error)
 	GetLineItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]LineItem, error)
 	GetLocationByID(ctx context.Context, id pgtype.UUID) (Location, error)
@@ -114,12 +119,16 @@ type Querier interface {
 	// Order routing: the external vendor's store_id → tenant (see app/tenancy.ResolveStore).
 	GetTenantByStoreID(ctx context.Context, storeID pgtype.Int8) (Tenant, error)
 	InsertAgentBackup(ctx context.Context, arg InsertAgentBackupParams) (InsertAgentBackupRow, error)
+	InsertDiagReport(ctx context.Context, arg InsertDiagReportParams) (int64, error)
 	InsertDriver(ctx context.Context, arg InsertDriverParams) error
 	InsertOutboxDispatch(ctx context.Context, arg InsertOutboxDispatchParams) error
 	// ───────────────────────────────────────────────────────────────────────────
 	// Outbox
 	// ───────────────────────────────────────────────────────────────────────────
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) error
+	InsertTabletReportToken(ctx context.Context, arg InsertTabletReportTokenParams) (pgtype.UUID, error)
+	// When this (location, scenario, outcome) last paged the owner (throttle).
+	LastDiagPage(ctx context.Context, arg LastDiagPageParams) (pgtype.Timestamptz, error)
 	LastFloorEventAt(ctx context.Context, arg LastFloorEventAtParams) (pgtype.Timestamptz, error)
 	ListAgentBackups(ctx context.Context, locationID pgtype.UUID) ([]ListAgentBackupsRow, error)
 	ListAgentHealth(ctx context.Context) ([]ListAgentHealthRow, error)
@@ -129,6 +138,7 @@ type Querier interface {
 	ListCategoriesByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuCategory, error)
 	ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) ([]MenuCategory, error)
 	ListDevicesByLocation(ctx context.Context, locationID pgtype.UUID) ([]Device, error)
+	ListDiagReports(ctx context.Context, arg ListDiagReportsParams) ([]ListDiagReportsRow, error)
 	ListDriverShifts(ctx context.Context, arg ListDriverShiftsParams) ([]DriverShift, error)
 	ListGroupsForItem(ctx context.Context, arg ListGroupsForItemParams) ([]ListGroupsForItemRow, error)
 	ListItemModifierGroupsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListItemModifierGroupsByLocationRow, error)
@@ -154,9 +164,11 @@ type Querier interface {
 	// best candidate first — available menus/categories first, then menu,
 	// category and item position. The router keeps the first row per name.
 	ListRoutingByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListRoutingByLocationRow, error)
+	ListTabletTokens(ctx context.Context, locationID pgtype.UUID) ([]ListTabletTokensRow, error)
 	ListTenants(ctx context.Context) ([]Tenant, error)
 	// Orders the agent hasn't confirmed: re-sent until it does.
 	ListUnackedOrders(ctx context.Context, arg ListUnackedOrdersParams) ([]ListUnackedOrdersRow, error)
+	MarkDiagReportPaged(ctx context.Context, id pgtype.UUID) error
 	MarkDispatchFailed(ctx context.Context, arg MarkDispatchFailedParams) error
 	MarkDispatchSucceeded(ctx context.Context, arg MarkDispatchSucceededParams) error
 	// Idempotency gate for agent floor events: 0 rows = already applied.
@@ -166,12 +178,20 @@ type Querier interface {
 	PendingEventsForHandler(ctx context.Context, arg PendingEventsForHandlerParams) ([]PendingEventsForHandlerRow, error)
 	PruneAgentBackups(ctx context.Context, locationID pgtype.UUID) error
 	PruneAppReleases(ctx context.Context, arg PruneAppReleasesParams) error
+	PruneDiagReports(ctx context.Context, receivedAt pgtype.Timestamptz) (int64, error)
 	// An agent for this (tenant, location) just (re)subscribed: make every still-
 	// pending, backed-off dispatch for the scope due now so its backlog drains
 	// within one dispatcher tick instead of waiting out the exponential backoff.
 	ResetDispatchBackoffForScope(ctx context.Context, arg ResetDispatchBackoffForScopeParams) error
 	RevokeAllOperatorTokens(ctx context.Context, operatorID pgtype.UUID) error
 	RevokeDevice(ctx context.Context, id pgtype.UUID) error
+	// Keep the newest `keep` active tokens of a location; revoke the rest.
+	RevokeExcessTabletTokens(ctx context.Context, arg RevokeExcessTabletTokensParams) (int64, error)
+	RevokeTabletTokenByID(ctx context.Context, id pgtype.UUID) (int64, error)
+	// ---------------------------------------------------------------------------
+	// 00010_diagnostics: tablet report tokens + troubleshooting reports
+	// ---------------------------------------------------------------------------
+	RevokeTabletTokensForTablet(ctx context.Context, arg RevokeTabletTokensForTabletParams) (int64, error)
 	// Filtered/sorted order history for the agent's store-manager web UI. Every
 	// filter is optional: empty text params and NULL time bounds match everything.
 	// `reverse` flips newest-first (default) to oldest-first without a second query.
@@ -179,6 +199,7 @@ type Querier interface {
 	// the repo's assemble() is reused unchanged.
 	SearchOrdersInScope(ctx context.Context, arg SearchOrdersInScopeParams) ([]Order, error)
 	SetCategoryPosition(ctx context.Context, arg SetCategoryPositionParams) error
+	SetDiagReportResolved(ctx context.Context, arg SetDiagReportResolvedParams) (int64, error)
 	SetItemPosition(ctx context.Context, arg SetItemPositionParams) error
 	SetItemPrinter(ctx context.Context, arg SetItemPrinterParams) error
 	SetMenuPosition(ctx context.Context, arg SetMenuPositionParams) error
@@ -192,6 +213,7 @@ type Querier interface {
 	SetTenantStoreID(ctx context.Context, arg SetTenantStoreIDParams) (Tenant, error)
 	TouchDevice(ctx context.Context, id pgtype.UUID) error
 	TouchOperatorToken(ctx context.Context, id pgtype.UUID) error
+	TouchTabletToken(ctx context.Context, id pgtype.UUID) error
 	// Updates the editable surface of a location in one shot. Pass current values
 	// for fields you don't want to change — there's no partial-update semantics.
 	UpdateLocationDetails(ctx context.Context, arg UpdateLocationDetailsParams) (Location, error)
