@@ -59,6 +59,28 @@ type Device struct {
 	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
 }
 
+type DiagReport struct {
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	TabletID     string             `json:"tablet_id"`
+	TabletName   string             `json:"tablet_name"`
+	Via          string             `json:"via"`
+	Kind         string             `json:"kind"`
+	Scenario     string             `json:"scenario"`
+	Outcome      string             `json:"outcome"`
+	Headline     string             `json:"headline"`
+	Cause        string             `json:"cause"`
+	FixedBy      string             `json:"fixed_by"`
+	AppVersion   string             `json:"app_version"`
+	AgentVersion string             `json:"agent_version"`
+	Report       []byte             `json:"report"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	ReceivedAt   pgtype.Timestamptz `json:"received_at"`
+	PagedAt      pgtype.Timestamptz `json:"paged_at"`
+	ResolvedAt   pgtype.Timestamptz `json:"resolved_at"`
+}
+
 type Driver struct {
 	ID         pgtype.UUID        `json:"id"`
 	TenantID   pgtype.UUID        `json:"tenant_id"`
@@ -319,6 +341,19 @@ type StatusEvent struct {
 	Actor      string             `json:"actor"`
 	ActorID    pgtype.UUID        `json:"actor_id"`
 	Reason     string             `json:"reason"`
+}
+
+type TabletReportToken struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	TabletID   string             `json:"tablet_id"`
+	TabletName string             `json:"tablet_name"`
+	TokenHash  string             `json:"token_hash"`
+	KeyPrefix  string             `json:"key_prefix"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
 }
 
 type Tenant struct {

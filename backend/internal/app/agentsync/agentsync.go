@@ -32,6 +32,7 @@ import (
 	sseBroker "quiccpos/main/internal/infra/sse"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
+	"quiccpos/main/internal/shared/ratelimit"
 	sseTransport "quiccpos/main/internal/transport/sse"
 
 	"github.com/google/uuid"
@@ -101,7 +102,7 @@ type Service struct {
 	offMu     sync.Mutex
 	offSince  map[uuid.UUID]time.Time // location → first seen offline
 	offPaged  map[uuid.UUID]bool
-	linkLimit *limiter
+	linkLimit *ratelimit.Window // failed link attempts
 }
 
 func New(pool *pgxpool.Pool, orders OrderLoader, drivers DriverMirror, broker Broker, tenancy *tenancyApp.Service,
@@ -115,7 +116,7 @@ func New(pool *pgxpool.Pool, orders OrderLoader, drivers DriverMirror, broker Br
 		OfflineAfter:   2 * time.Minute,
 		offSince:       map[uuid.UUID]time.Time{},
 		offPaged:       map[uuid.UUID]bool{},
-		linkLimit:      newLimiter(5, 10*time.Minute),
+		linkLimit:      ratelimit.New(5, 10*time.Minute),
 	}
 	s.redelivered, _ = m.Int64Counter("orders.redelivered", metric.WithDescription("Orders re-sent to an agent that had not acked them"))
 	s.acked, _ = m.Int64Counter("orders.agent_acked", metric.WithDescription("Orders acknowledged by an agent"))

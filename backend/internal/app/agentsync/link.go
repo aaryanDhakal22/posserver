@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	tenancyApp "quiccpos/main/internal/app/tenancy"
@@ -64,19 +63,19 @@ func (s *Service) Link(ctx context.Context, req LinkRequest) (*LinkResult, error
 	// Throttled per username (behind Traefik every caller shares the proxy's
 	// address) plus a global ceiling against spraying many usernames.
 	key := "u:" + strings.ToLower(strings.TrimSpace(req.Username))
-	if !s.linkLimit.allow(key) || !s.linkLimit.allowN(linkGlobalKey, linkGlobalMax) {
+	if !s.linkLimit.Allow(key) || !s.linkLimit.AllowN(linkGlobalKey, linkGlobalMax) {
 		return nil, ErrThrottled
 	}
 	tenant, err := s.tenancy.AuthenticateTenant(ctx, req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, tenancyApp.ErrInvalidCredentials) {
-			s.linkLimit.fail(key)
-			s.linkLimit.fail(linkGlobalKey)
+			s.linkLimit.Add(key)
+			s.linkLimit.Add(linkGlobalKey)
 			return nil, ErrBadCredentials
 		}
 		return nil, err
 	}
-	s.linkLimit.reset(key)
+	s.linkLimit.Reset(key)
 	loc, err := s.tenancy.PrimaryLocation(ctx, tenant.ID)
 	if err != nil {
 		return nil, fmt.Errorf("store has no location: %w", err)
@@ -140,61 +139,8 @@ func (s *Service) Credential(ctx context.Context, tenantID uuid.UUID) (*Manager,
 	return &Manager{Username: user, PasswordHash: hash}, nil
 }
 
-// limiter allows `max` failures per key within `window`.
-type limiter struct {
-	mu     sync.Mutex
-	max    int
-	window time.Duration
-	fails  map[string][]time.Time
-}
-
-func newLimiter(max int, window time.Duration) *limiter {
-	return &limiter{max: max, window: window, fails: map[string][]time.Time{}}
-}
-
-func (l *limiter) prune(key string, now time.Time) []time.Time {
-	var keep []time.Time
-	for _, t := range l.fails[key] {
-		if now.Sub(t) < l.window {
-			keep = append(keep, t)
-		}
-	}
-	if len(keep) == 0 {
-		delete(l.fails, key)
-	} else {
-		l.fails[key] = keep
-	}
-	return keep
-}
-
 // linkGlobalKey/Max cap failed links across all usernames per window.
 const (
 	linkGlobalKey = "*"
 	linkGlobalMax = 30
 )
-
-func (l *limiter) allow(key string) bool { return l.allowN(key, l.max) }
-
-func (l *limiter) allowN(key string, max int) bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return len(l.prune(key, time.Now())) < max
-}
-
-func (l *limiter) fail(key string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := time.Now()
-	if len(l.fails) > 10_000 { // random usernames: drop expired entries
-		for k := range l.fails {
-			l.prune(k, now)
-		}
-	}
-	l.fails[key] = append(l.prune(key, now), now)
-}
-
-func (l *limiter) reset(key string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	delete(l.fails, key)
-}

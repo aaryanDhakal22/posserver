@@ -20,6 +20,7 @@
   const nav = [
     { href: base + '/admin', label: 'Admin' },
     { href: base + '/admin/operators', label: 'Operators' },
+    { href: base + '/admin/diagnostics', label: 'Diagnostics' },
     { href: base + '/store', label: 'Store' },
     { href: base + '/store/menu', label: 'Menu' }
   ];

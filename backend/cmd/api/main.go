@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"quiccpos/main/internal/app/agentsync"
+	diagApp "quiccpos/main/internal/app/diag"
 	floorApp "quiccpos/main/internal/app/floor"
 	"quiccpos/main/internal/app/printerstatus"
 	"quiccpos/main/internal/casting/online"
@@ -226,6 +227,14 @@ func main() {
 	go agentSync.RunRedeliver(ctx)
 	go agentSync.RunOfflinePager(ctx)
 
+	// Tablet diagnostics: reports arrive via the Pi (RPC diag.report) or
+	// straight from the tablet (report key). Pages go to the OWNER only — a
+	// separate pager without the boss key.
+	ownerPager := pushover.New(agentSecrets.PushoverAppToken, agentSecrets.PushoverUserKey, "")
+	diagService := diagApp.New(pool, ownerPager, tenancyService, lgr)
+	requester.RegisterInbound(diagApp.MsgDiagReport, diagService.HandleRPC)
+	go diagService.RunPrune(ctx)
+
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
 	operatorService := operatorApp.NewService(operatorRepo, tenancyService, lgr)
 
@@ -278,6 +287,7 @@ func main() {
 		FloorService:    floorService,
 		OperatorService: operatorService,
 		AgentSync:       agentSync,
+		Diag:            diagService,
 	})
 
 	serverLogger := lgr.With().Str("module", "server").Logger()

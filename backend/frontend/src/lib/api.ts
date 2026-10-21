@@ -201,6 +201,57 @@ export interface OperatorAdmin {
   id: string; username: string; display_name: string; location_ids: string[]; created_at: string;
 }
 
+// --- tablet diagnostics (admin) -------------------------------------------
+/** One Quibase troubleshooting report as the admin list shows it. */
+export interface DiagSummary {
+  id: string;
+  tenant_id: string;
+  location_id: string;
+  store_name: string;
+  tablet_id: string;
+  tablet_name: string;
+  via: 'pi' | 'direct';
+  kind: string; // setup | guide | manual | full_check
+  scenario: string; // pi_unreachable | printer | no_orders | pi_swap | setup | '' (none)
+  outcome: string; // ok | fixed | needs_part | needs_owner | not_fixed | abandoned | info
+  headline: string;
+  cause: string;
+  fixed_by: string;
+  app_version: string;
+  agent_version: string;
+  created_at: string;
+  received_at: string;
+  paged_at: string | null;
+  resolved_at: string | null;
+}
+export interface DiagStep { id?: string; at?: string; answer?: string; result?: string; [k: string]: unknown }
+export interface DiagCheck { status?: string; plain?: string; details?: string; [k: string]: unknown }
+/** The stored report v1 (fields may be missing; newer tablets may add more). */
+export interface DiagReportDoc {
+  v?: number;
+  id?: string;
+  created_at?: string;
+  kind?: string;
+  scenario?: string | null;
+  outcome?: string;
+  headline?: string;
+  cause?: string;
+  fixed_by?: string;
+  note?: string;
+  steps?: DiagStep[];
+  checks?: Record<string, DiagCheck>;
+  tablet?: Record<string, unknown> & { checks?: Record<string, unknown> };
+  pi?: Record<string, unknown>;
+  log?: string[];
+  [k: string]: unknown;
+}
+export interface DiagDetail extends DiagSummary { report: DiagReportDoc; }
+export interface TabletToken {
+  id: string; tenant_id: string; location_id: string; location_name: string;
+  tablet_id: string; tablet_name: string; key_prefix: string;
+  created_at: string; last_used_at: string | null; revoked_at: string | null;
+}
+
 export function dollars(cents: number): string {
   return '$' + ((cents || 0) / 100).toFixed(2);
 }
