@@ -1,76 +1,344 @@
 version: "3"
 
+# main/ Taskfile — every secret-bearing task is wrapped in `DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run --`,
+# which injects DOPPLER_TOKEN from the gitignored {{.DOPPLER_TOKEN_FILE}}
+# (a dev service token) and runs `DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run --`. No `doppler login` /
+# `doppler setup` needed — same pattern as online/ and agent/. If a task
+# fails on secrets, check that .doppler-dev-main exists and is valid.
+#
+# Default invocation (`task`) prints this list.
+
 vars:
+  # Dev secrets come from a gitignored service-token file (no doppler login).
+  DOPPLER_TOKEN_FILE: .doppler-dev-main
   DEV_CONFIG: ./docker/docker-compose.dev.yml
+  COMPOSE: "docker compose -f ./docker/docker-compose.dev.yml"
   ENV_FILE: .env
+  MIGRATIONS_DIR: backend/internal/migrate/sql
+  API_BASE: "http://localhost:1323"
 
 tasks:
-  devup:
-    desc: Start the development environment
+  default:
+    desc: List all tasks
+    silent: true
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}} up
+      - task --list
 
-  devdown:
-    desc: Stop the development environment
+  # ──────────────────────────────────────────────────────────────────────
+  # Dev stack lifecycle
+  # ──────────────────────────────────────────────────────────────────────
+
+  devup:
+    desc: Start the dev stack (foreground)
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}} down
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} up
 
   devupd:
-    desc: Start the development environment in detached mode
+    desc: Start the dev stack (detached)
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}} up -d
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} up -d
+
+  devdown:
+    desc: Stop the dev stack
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} down
 
   devrestart:
-    desc: Restart the development environment
+    desc: Restart the dev stack
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}} down
-      - doppler run -- docker compose -f {{.DEV_CONFIG}} up
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} down
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} up
 
   devreset:
-    desc: Reset the development environment (removes containers and images)
+    desc: Wipe images + rebuild from scratch (keeps volumes)
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}} down
-      - doppler run -- docker compose -f {{.DEV_CONFIG}} down --rmi all
-      - doppler run -- docker compose -f {{.DEV_CONFIG}} up --build
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} down
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} down --rmi all
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} up --build
 
-  dev-del-volumes:
-    desc: Delete all volumes (wipes Postgres data)
+  dev-status:
+    aliases: [ps]
+    desc: Show running dev services
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}} down -v
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} ps
 
   dev-config:
-    desc: Print the resolved docker-compose config
+    desc: Print the resolved docker-compose config (post env-substitution)
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}} config
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} config
+
+  dev-rebuild:
+    desc: Rebuild the api image without recreating other services
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} build api
+
+  dev-recreate-api:
+    desc: Rebuild + restart only the api container
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} build api
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} up -d --force-recreate api
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Per-service utilities
+  # ──────────────────────────────────────────────────────────────────────
 
   dev-logs:
-    desc: "Tail logs for a service: task dev-logs -- api"
+    desc: "Tail logs for one or more services: task dev-logs -- api"
     cmds:
-      - doppler run -- docker compose -f {{.DEV_CONFIG}} logs {{.CLI_ARGS}}
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} logs -f --tail=200 {{.CLI_ARGS}}
+
+  dev-shell:
+    desc: "Exec a shell into a service: task dev-shell -- api"
+    interactive: true
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} exec {{.CLI_ARGS}} sh
+
+  dev-psql:
+    aliases: [psql]
+    desc: Open psql against the dev postgres
+    interactive: true
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c '{{.COMPOSE}} exec -e PGPASSWORD=$DB_PASSWORD postgres psql -U $DB_USER -d $DB_NAME'
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Database — volumes vs schema wipe
+  # ──────────────────────────────────────────────────────────────────────
+
+  dev-del-volumes:
+    desc: Stop the stack AND delete all volumes (full Postgres wipe)
+    prompt: This destroys the postgres + pgadmin volumes. Continue?
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} down -v
+
+  db-wipe:
+    desc: Drop + recreate the public schema (re-runs migrations on next start)
+    prompt: This drops every table in the dev DB. Continue?
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c '{{.COMPOSE}} exec -e PGPASSWORD=$DB_PASSWORD postgres psql -U $DB_USER -d $DB_NAME -c "DROP SCHEMA public CASCADE; CREATE SCHEMA public;"'
+      - 'echo "Schema wiped. Restart the api container with task dev-recreate-api to re-run migrations."'
+
+  db-dump:
+    desc: pg_dump the dev DB to ./dumps/dev-<unix>.sql
+    cmds:
+      - mkdir -p ./dumps
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c '{{.COMPOSE}} exec -T -e PGPASSWORD=$DB_PASSWORD postgres pg_dump -U $DB_USER -d $DB_NAME > ./dumps/dev-$(date +%s).sql'
+      - echo "Dump written to ./dumps/"
+
+  db-restore:
+    desc: "Restore a SQL dump into the dev DB: task db-restore -- ./dumps/dev-<unix>.sql"
+    prompt: This overwrites the current dev DB content. Continue?
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c '{{.COMPOSE}} exec -T -e PGPASSWORD=$DB_PASSWORD postgres psql -U $DB_USER -d $DB_NAME < {{.CLI_ARGS}}'
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Migrations (goose, against local Postgres)
+  # ──────────────────────────────────────────────────────────────────────
+
+  migrate-up:
+    aliases: [devmigrate]
+    desc: Apply all pending migrations
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c 'goose -dir {{.MIGRATIONS_DIR}} postgres "host=localhost port=$DB_PORT user=$DB_USER password=$DB_PASSWORD dbname=$DB_NAME sslmode=disable" up'
+
+  migrate-down:
+    desc: Roll back the most recent migration
+    prompt: Rolling back the latest migration may drop data. Continue?
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c 'goose -dir {{.MIGRATIONS_DIR}} postgres "host=localhost port=$DB_PORT user=$DB_USER password=$DB_PASSWORD dbname=$DB_NAME sslmode=disable" down'
+
+  migrate-status:
+    desc: Show applied vs pending migrations
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c 'goose -dir {{.MIGRATIONS_DIR}} postgres "host=localhost port=$DB_PORT user=$DB_USER password=$DB_PASSWORD dbname=$DB_NAME sslmode=disable" status'
+
+  migrate-create:
+    desc: "Scaffold a new SQL migration: task migrate-create -- name_in_snake_case"
+    cmds:
+      - goose -dir {{.MIGRATIONS_DIR}} -s create {{.CLI_ARGS}} sql
+
+  # ──────────────────────────────────────────────────────────────────────
+  # sqlc
+  # ──────────────────────────────────────────────────────────────────────
+
+  sqlc-gen:
+    aliases: [sqlc]
+    desc: Regenerate sqlc models inside the dev api container
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} exec api sh -c "cd /src && sqlc generate -f sql/sqlc.yaml"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Go code-quality (run locally, not in container)
+  # ──────────────────────────────────────────────────────────────────────
+
+  tidy:
+    desc: go mod tidy
+    dir: backend
+    cmds:
+      - go mod tidy
+
+  fmt:
+    desc: go fmt ./...
+    dir: backend
+    cmds:
+      - go fmt ./...
+
+  vet:
+    desc: go vet ./...
+    dir: backend
+    cmds:
+      - go vet ./...
+
+  build:
+    desc: Build the api binary locally to backend/tmp/main
+    dir: backend
+    cmds:
+      - go build -o ./tmp/main ./cmd/api
+
+  check:
+    desc: tidy + fmt + vet + build (run before pushing)
+    cmds:
+      - task: tidy
+      - task: fmt
+      - task: vet
+      - task: build
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Frontend (SvelteKit → embedded into the Go binary)
+  # ──────────────────────────────────────────────────────────────────────
+
+  ui-install:
+    desc: Install frontend deps
+    dir: backend/frontend
+    cmds:
+      - npm install
+
+  ui-dev:
+    desc: Vite dev server with HMR (proxies /api,/admin/v1,/store/v1 → :1323). Needs `task devup` running.
+    dir: backend/frontend
+    cmds:
+      - npm run dev
+
+  ui-build:
+    desc: Build the SvelteKit app and copy it into the Go embed dir
+    dir: backend/frontend
+    cmds:
+      - npm run build
+      # Clear the embed dir (keep the tracked placeholders), then drop in the build.
+      - find ../internal/transport/webapp/build -mindepth 1 ! -name .gitkeep ! -name .gitignore -exec rm -rf {} +
+      - cp -r build/. ../internal/transport/webapp/build/
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Admin / tenancy helpers (require ADMIN_API_KEY in Doppler)
+  # ──────────────────────────────────────────────────────────────────────
+
+  admin-key-gen:
+    desc: Print a freshly generated random key (does NOT persist — set it in Doppler yourself)
+    silent: true
+    cmds:
+      - 'echo "Generated key (copy into Doppler as ADMIN_API_KEY):"'
+      - openssl rand -hex 32
+
+  admin-overview:
+    desc: GET /admin/v1/overview as a pretty-printed JSON dump
+    cmds:
+      - |
+        DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c 'curl -s -H "Authorization: Bearer $ADMIN_API_KEY" {{.API_BASE}}/admin/v1/overview | jq .'
+
+  admin-tenants:
+    desc: List tenants via the admin API
+    cmds:
+      - |
+        DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c 'curl -s -H "Authorization: Bearer $ADMIN_API_KEY" {{.API_BASE}}/admin/v1/tenants | jq .'
+
+  admin-devices:
+    desc: List devices via the admin API (key_hash NOT shown — never stored cleartext)
+    cmds:
+      - |
+        DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c 'curl -s -H "Authorization: Bearer $ADMIN_API_KEY" {{.API_BASE}}/admin/v1/devices | jq .'
+
+  # ──────────────────────────────────────────────────────────────────────
+  # ElasticMQ (local SQS) helpers
+  # ──────────────────────────────────────────────────────────────────────
+
+  sqs-list:
+    desc: Show approximate message counts on the dev queue
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c 'aws --endpoint-url $SQS_ENDPOINT sqs get-queue-attributes --queue-url $SQS_QUEUE_URL --attribute-names All'
+
+  sqs-purge:
+    desc: Purge every message off the dev queue
+    prompt: This deletes every message currently queued. Continue?
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c 'aws --endpoint-url $SQS_ENDPOINT sqs purge-queue --queue-url $SQS_QUEUE_URL'
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Tests
+  # ──────────────────────────────────────────────────────────────────────
+
+  test:
+    desc: Run the main/ pytest suite (dev stack must be up)
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v
+
+  test-quick:
+    desc: Fast subset of main/ tests
+    cmds:
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v -m "not slow"
+
+  test-unit:
+    desc: Go unit tests (no Postgres, no Doppler needed)
+    dir: backend
+    cmds:
+      - go test ./...
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Deploy
+  # ──────────────────────────────────────────────────────────────────────
 
   transport-deploy:
-    desc: Transport deploy folder to the server
+    desc: rsync the deploy folder up to the home-server box
     cmds:
       - scp -r ./deploy/. homelab@zephyrus-prod:/srv/containers/posserver/
 
-  devmigrate:
-    desc: Run database migrations manually (requires postgres to be running)
-    cmds:
-      - goose -dir backend/internal/migrate/sql postgres "host=localhost port=5432 user={{.DB_USER}} password={{.DB_PASSWORD}} dbname={{.DB_NAME}} sslmode=disable" up
-    vars:
-      DB_USER:
-        sh: grep ^DB_USER {{.ENV_FILE}} | cut -d= -f2
-      DB_PASSWORD:
-        sh: grep ^DB_PASSWORD {{.ENV_FILE}} | cut -d= -f2
-      DB_NAME:
-        sh: grep ^DB_NAME {{.ENV_FILE}} | cut -d= -f2
+  # ──────────────────────────────────────────────────────────────────────
+  # Versioning
+  #
+  # Each repo holds a bare semver in ./VERSION (e.g. `0.1.0`); tags are
+  # `vX.Y.Z`. CI builds `prod-vX.Y.Z` from any pushed tag matching `v*`.
+  # The bump task auto-commits + tags but does NOT push — `git push --tags`
+  # is the explicit "release" step.
+  # ──────────────────────────────────────────────────────────────────────
 
-  test:
-    desc: "Run the main/ pytest suite under Doppler (dev stack must be up)"
+  version-current:
+    desc: Show the current version (./VERSION)
+    silent: true
     cmds:
-      - doppler run -- uv run --directory tests pytest -v
+      - ../scripts/version.sh current
 
-  test-quick:
-    desc: "Run only the fast subset of main/ tests"
+  version-describe:
+    desc: VERSION + git describe diagnostics
+    silent: true
     cmds:
-      - doppler run -- uv run --directory tests pytest -v -m "not slow"
+      - ../scripts/version.sh describe
+
+  version-init:
+    desc: "Create initial v0.1.0 (or override): task version-init -- 0.2.0"
+    cmds:
+      - ../scripts/version.sh init {{.CLI_ARGS}}
+
+  version-bump:
+    desc: "Bump and tag: task version-bump -- patch|minor|major"
+    cmds:
+      - ../scripts/version.sh bump {{.CLI_ARGS}}
+
+  version-tag:
+    desc: "(Re-)tag the current VERSION without bumping. Pass -f to overwrite."
+    cmds:
+      - ../scripts/version.sh tag {{.CLI_ARGS}}
+
+  release:
+    desc: "Bump (default patch) and push tag — CI builds prod-vX.Y.Z. task release -- minor"
+    cmds:
+      - ../scripts/version.sh bump {{- if .CLI_ARGS }} {{.CLI_ARGS}}{{- else }} patch{{- end }}
+      - git push origin HEAD
+      - git push origin --tags

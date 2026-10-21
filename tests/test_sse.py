@@ -1,133 +1,76 @@
-"""SSE stream tests for main/.
-
-Validates the /api/v1/events/orders endpoint: connection, event format, and
-_traceparent injection (so the agent can resume a distributed trace).
-"""
+"""main's device-authed SSE stream: store_config handshake first, scoped order
+frames with trace context, no cross-tenant leakage."""
 
 import json
-import time
-import threading
-from typing import Optional
 
-import pytest
 import requests
 
-from conftest import BASE_URL, API_KEY, RUN_OFFSET, SQS_QUEUE_URL
-from data import order_requests
+from conftest import API_V1, STORE_V1
+from sse import SSEStream
 
 
-def _sqs_wrap(payload: dict) -> dict:
-    return {
-        "OrderID": str(payload["order_id"]),
-        "Payload": json.dumps(payload),
-        "DateCreated": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "CreatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }
+def test_sse_requires_key(admin) -> None:
+    assert requests.get(f"{API_V1}/events/orders", timeout=5).status_code == 401
 
 
-class _SSECollector:
-    """Opens a long-lived GET on /api/v1/events/orders and collects parsed events."""
-
-    def __init__(self, base_url: str, api_key: str) -> None:
-        self.url = f"{base_url}/events/orders"
-        self.api_key = api_key
-        self.events: list[tuple[str, str]] = []
-        self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._ready = threading.Event()
-
-    def start(self) -> None:
-        def run() -> None:
-            with requests.get(
-                self.url,
-                headers={"X-API-Key": self.api_key, "Accept": "text/event-stream"},
-                stream=True,
-                timeout=30,
-            ) as resp:
-                assert resp.status_code == 200
-                self._ready.set()
-                event_type: Optional[str] = None
-                data_line: Optional[str] = None
-                for raw in resp.iter_lines(decode_unicode=True):
-                    if self._stop.is_set():
-                        return
-                    if raw is None:
-                        continue
-                    if raw == "":
-                        if event_type and data_line is not None:
-                            self.events.append((event_type, data_line))
-                        event_type, data_line = None, None
-                        continue
-                    if raw.startswith("event:"):
-                        event_type = raw.split(":", 1)[1].strip()
-                    elif raw.startswith("data:"):
-                        data_line = raw.split(":", 1)[1].strip()
-                    # ':' keep-alives / comments are ignored
-
-        self._thread = threading.Thread(target=run, daemon=True)
-        self._thread.start()
-        assert self._ready.wait(timeout=5), "SSE connection never established"
-
-    def stop(self) -> None:
-        self._stop.set()
-
-    def wait_for(self, predicate, timeout: float = 10.0) -> Optional[tuple[str, str]]:
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            for ev in self.events:
-                if predicate(ev):
-                    return ev
-            time.sleep(0.1)
-        return None
+def test_first_frame_is_store_config(store) -> None:
+    with SSEStream(store.key) as s:
+        frame = s.next()
+        assert frame["event"] == "store_config", frame
+        cfg = json.loads(frame["data"])
+        assert cfg["tenant"]["id"] == store.tenant_id
+        assert cfg["location"]["id"] == store.location_id
+        assert isinstance(cfg["printers"], list)
 
 
-def test_sse_connection_establishes(http: requests.Session) -> None:
-    """Just opening the connection should return 200 and the connected comment."""
-    with requests.get(
-        f"{BASE_URL}/events/orders",
-        headers={"X-API-Key": API_KEY, "Accept": "text/event-stream"},
-        stream=True,
-        timeout=5,
-    ) as resp:
-        assert resp.status_code == 200
-        assert resp.headers.get("Content-Type", "").startswith("text/event-stream")
-        first = next(resp.iter_lines(decode_unicode=True))
-        assert first == ": connected"
+def test_store_config_reflects_printer_added_by_manager(store) -> None:
+    mgr = store.manager_session()
+    r = mgr.post(f"{STORE_V1}/me/printers", json={"name": "Pizza", "ip": "10.0.0.42"}, timeout=5)
+    assert r.status_code == 201, r.text
+    with SSEStream(store.key) as s:
+        printers = json.loads(s.next()["data"])["printers"]
+        assert any(p["name"] == "Pizza" and p["ip"] == "10.0.0.42" for p in printers), printers
 
 
-def test_sse_delivers_order_event(sqs, http: requests.Session) -> None:
-    """Publish a synthetic order, then verify it surfaces as an SSE event."""
-    payload = dict(order_requests["sample_real_order"])
-    payload["order_id"] = payload["order_id"] + RUN_OFFSET + 42  # unique
-
-    collector = _SSECollector(BASE_URL, API_KEY)
-    collector.start()
-    try:
-        sqs.send_message(QueueUrl=SQS_QUEUE_URL, MessageBody=json.dumps(_sqs_wrap(payload)))
-
-        matched = collector.wait_for(
-            lambda ev: ev[0] == "order" and str(payload["order_id"]) in ev[1],
-            timeout=15,
-        )
-        assert matched, f"no matching order event received. saw={collector.events[:5]}"
-
-        _, data = matched
-        parsed = json.loads(data)
-        assert parsed["order_id"] == payload["order_id"]
-        # Trace context must be injected by the broker
-        assert "_traceparent" in parsed
-        tp = parsed["_traceparent"]
-        # W3C traceparent form: 00-<32 hex>-<16 hex>-<02 hex>
-        parts = tp.split("-")
-        assert len(parts) == 4, f"malformed traceparent: {tp}"
-        assert parts[0] == "00"
-        assert len(parts[1]) == 32
-        assert len(parts[2]) == 16
-    finally:
-        collector.stop()
+def test_order_frame_for_own_scope_with_traceparent(publish, store) -> None:
+    with SSEStream(store.key) as s:
+        assert s.next()["event"] == "store_config"
+        o = store.order()
+        publish(o)
+        got = s.wait_event("order", lambda d: d.get("source_event_id") == str(o["order_id"]))
+        assert got, "order never arrived on the store's SSE stream"
+        assert got["tenant_id"] == store.tenant_id
+        assert got["money"]["total_cents"] == 1234
+        parts = got.get("_traceparent", "").split("-")
+        assert len(parts) == 4 and parts[0] == "00" and len(parts[1]) == 32 and len(parts[2]) == 16, got.get("_traceparent")
 
 
-@pytest.mark.parametrize("missing_header", ["X-API-Key"])
-def test_sse_rejects_unauthenticated(missing_header: str) -> None:
-    resp = requests.get(f"{BASE_URL}/events/orders", timeout=5)
-    assert resp.status_code in (401, 403)
+def test_no_cross_tenant_leak(publish, make_store) -> None:
+    a, b = make_store(), make_store()
+    with SSEStream(b.key) as s:
+        assert s.next()["event"] == "store_config"
+        o = a.order()
+        publish(o)
+        leaked = s.wait_event("order", lambda d: d.get("source_event_id") == str(o["order_id"]), timeout=10)
+        assert leaked is None, f"store B's stream received store A's order: {leaked}"
+
+
+def test_printer_edit_pushes_store_config_live(store) -> None:
+    """Editing printers in /app/store pushes a fresh store_config frame to the
+    connected agent mid-stream — no reconnect needed."""
+    mgr = store.manager_session()
+    with SSEStream(store.key) as s:
+        assert s.next()["event"] == "store_config"
+        r = mgr.post(f"{STORE_V1}/me/printers", json={"name": "Wings", "ip": "10.0.0.50"}, timeout=5)
+        assert r.status_code == 201, r.text
+        pid = r.json()["id"]
+        pushed = s.wait_event("store_config", lambda d: any(p["name"] == "Wings" for p in d["printers"]), timeout=10)
+        assert pushed, "no live store_config after adding a printer"
+
+        mgr.patch(f"{STORE_V1}/me/printers/{pid}", json={"name": "Wings", "ip": "10.0.0.51"}, timeout=5)
+        pushed = s.wait_event("store_config", lambda d: any(p["ip"] == "10.0.0.51" for p in d["printers"]), timeout=10)
+        assert pushed, "no live store_config after editing a printer"
+
+        mgr.delete(f"{STORE_V1}/me/printers/{pid}", timeout=5)
+        pushed = s.wait_event("store_config", lambda d: not any(p["id"] == pid for p in d["printers"]), timeout=10)
+        assert pushed, "no live store_config after deleting a printer"

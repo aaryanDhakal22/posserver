@@ -11,3 +11,7 @@ sql:
         emit_interface: true
         emit_json_tags: true
         emit_prepared_queries: true
+        # Preserve the IP initialism the repos are written against (sqlc would
+        # otherwise emit the field as `Ip`).
+        rename:
+          ip: "IP"

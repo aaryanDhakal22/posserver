@@ -21,19 +21,34 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 #####################################
+##          FRONTEND BUILD          ##
+#####################################
+FROM node:20-bookworm AS frontend
+WORKDIR /fe
+COPY frontend/package.json frontend/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci
+COPY frontend/ ./
+RUN npm run build
+
+#####################################
 ##           BUILD STAGE           ##
 #####################################
 FROM builder AS prod
 
 COPY . .
 
+# Embed the compiled SvelteKit app (overwrites the .gitkeep placeholder).
+COPY --from=frontend /fe/build ./internal/transport/webapp/build
+
 ARG MAIN=./cmd/api
 ARG BIN=app
+ARG VERSION=dev
+ARG COMMIT=unknown
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath \
-    -ldflags="-w -s" \
+    -ldflags="-w -s -X main.version=${VERSION} -X main.commit=${COMMIT}" \
     -o /out/${BIN} \
     ${MAIN}
 

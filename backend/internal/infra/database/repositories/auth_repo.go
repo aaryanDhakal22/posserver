@@ -7,37 +7,67 @@ import (
 	domainAuth "quiccpos/main/internal/domain/auth"
 	"quiccpos/main/internal/infra/database/models"
 
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
 )
 
-var _ domainAuth.AuthKeyRepository = (*AuthKeyRepository)(nil)
+var _ domainAuth.Repository = (*DeviceAuthRepository)(nil)
 
-type AuthKeyRepository struct {
+// DeviceAuthRepository is the read-side of the devices table consumed by the
+// auth middleware. Writes (mint/revoke) flow through the tenancy admin repo
+// to keep the surfaces orthogonal — auth never mutates anything but
+// last_used_at.
+type DeviceAuthRepository struct {
 	pool   *pgxpool.Pool
 	logger zerolog.Logger
 }
 
-func NewAuthKeyRepository(pool *pgxpool.Pool, lg zerolog.Logger) *AuthKeyRepository {
-	return &AuthKeyRepository{
+func NewDeviceAuthRepository(pool *pgxpool.Pool, lg zerolog.Logger) *DeviceAuthRepository {
+	return &DeviceAuthRepository{
 		pool:   pool,
-		logger: lg.With().Str("module", "auth-key-repo").Logger(),
+		logger: lg.With().Str("module", "auth-repo").Logger(),
 	}
 }
 
-func (r *AuthKeyRepository) Get(ctx context.Context) (string, error) {
+func (r *DeviceAuthRepository) GetActiveByKeyHash(ctx context.Context, hash string) (*domainAuth.Device, error) {
 	q := models.New(r.pool)
-	key, err := q.GetAuthKey(ctx)
+	row, err := q.GetActiveDeviceByKeyHash(ctx, hash)
 	if err != nil {
-		return "", fmt.Errorf("get auth key: %w", err)
+		return nil, fmt.Errorf("get device by key hash: %w", err)
 	}
-	return key, nil
+	return toDomainDevice(row), nil
 }
 
-func (r *AuthKeyRepository) Set(ctx context.Context, key string) error {
+func (r *DeviceAuthRepository) Touch(ctx context.Context, id uuid.UUID) error {
 	q := models.New(r.pool)
-	if err := q.SetAuthKey(ctx, key); err != nil {
-		return fmt.Errorf("set auth key: %w", err)
+	if err := q.TouchDevice(ctx, pgtype.UUID{Bytes: id, Valid: true}); err != nil {
+		return fmt.Errorf("touch device: %w", err)
 	}
 	return nil
 }
+
+func toDomainDevice(row models.Device) *domainAuth.Device {
+	d := &domainAuth.Device{
+		ID:         uuid.UUID(row.ID.Bytes),
+		TenantID:   uuid.UUID(row.TenantID.Bytes),
+		LocationID: uuid.UUID(row.LocationID.Bytes),
+		Name:       row.Name,
+		Kind:       row.Kind,
+		KeyPrefix:  row.KeyPrefix,
+	}
+	if row.CreatedAt.Valid {
+		d.CreatedAt = row.CreatedAt.Time
+	}
+	if row.LastUsedAt.Valid {
+		t := row.LastUsedAt.Time
+		d.LastUsedAt = &t
+	}
+	if row.RevokedAt.Valid {
+		t := row.RevokedAt.Time
+		d.RevokedAt = &t
+	}
+	return d
+}
+

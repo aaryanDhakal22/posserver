@@ -17,7 +17,7 @@ services:
       retries: 10
     restart: unless-stopped
     networks:
-      - proxy
+      - internal
 
   api:
     container_name: quicc-staging-api
@@ -39,13 +39,25 @@ services:
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
       SQS_QUEUE_URL: ${SQS_QUEUE_URL}
       SQS_ENDPOINT: ${SQS_ENDPOINT:-}
-      ADMIN_PASSCODE: ${ADMIN_PASSCODE}
+      ADMIN_API_KEY: ${ADMIN_API_KEY}
+      SESSION_SECRET: ${SESSION_SECRET}
+      # Handed to a freshly linked agent (Pi set up / replaced) + main's own pages.
+      AGENT_SECRET_PUSHOVER_APP_TOKEN: ${AGENT_SECRET_PUSHOVER_APP_TOKEN:-}
+      AGENT_SECRET_PUSHOVER_USER_KEY: ${AGENT_SECRET_PUSHOVER_USER_KEY:-}
+      AGENT_SECRET_PUSHOVER_BOSS_KEY: ${AGENT_SECRET_PUSHOVER_BOSS_KEY:-}
+      AGENT_SECRET_OTLP_ENDPOINT: ${AGENT_SECRET_OTLP_ENDPOINT:-}
+      AGENT_SECRET_OTLP_HEADERS: ${AGENT_SECRET_OTLP_HEADERS:-}
+      AGENT_SECRET_TAILSCALE_AUTHKEY: ${AGENT_SECRET_TAILSCALE_AUTHKEY:-}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+      OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME}
     restart: unless-stopped
     depends_on:
       postgres:
         condition: service_healthy
     networks:
       - proxy
+      - internal
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.quicc-staging.rule=Host(`staging.quiccpos.com`)"
@@ -57,6 +69,7 @@ services:
 networks:
   proxy:
     external: true
+  internal:
 
 volumes:
   quicc_staging_postgres:

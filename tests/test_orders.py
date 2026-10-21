@@ -1,205 +1,112 @@
-import string
-import time
+"""SQS → online caster → Postgres → HTTP read-back, for every vendor fixture in
+data.py. Each fixture is re-addressed to the test's own throwaway store (its
+store_id + name) so routing is deterministic; the SQS message carries only
+`source=online` (scope attributes are optional for this source)."""
 
 import pytest
 import requests
-import boto3
-import json
 
-from conftest import *
+from conftest import API_V1, RUN_OFFSET, store_key, wait_order
 from data import order_requests
 
-# ---------------------------------------------------------------------------
-# Utilities
-# ---------------------------------------------------------------------------
+
+def _approx_cents(dollars: float) -> int:
+    return round(float(dollars) * 100)
 
 
-def _unique(order: dict) -> dict:
-    """Shallow-copy an order dict and apply the session run-offset to order_id."""
-    copy = dict(order)
-    copy["order_id"] = order["order_id"] + RUN_OFFSET
-    return copy
+def _assert_matches(label: str, sent: dict, got: dict, store) -> None:
+    assert got["tenant_id"] == store.tenant_id, f"[{label}] routed to the wrong tenant"
+    assert got["location_id"] == store.location_id, f"[{label}] wrong location"
+    assert got["source"] == "online", f"[{label}] source"
+    assert got["source_event_id"] == str(sent["order_id"]), f"[{label}] source_event_id"
+    assert got["status"] == "received", f"[{label}] status"
+    assert got["currency"] == "USD", f"[{label}] currency"
+    assert got["money"]["total_cents"] == _approx_cents(sent["order_total"]), f"[{label}] total_cents"
+    if "tip" in sent:
+        assert got["money"]["tip_cents"] == _approx_cents(sent["tip"]), f"[{label}] tip_cents"
+
+    sc = sent["customer"]
+    assert got["customer"]["display_name"] == (sc["first_name"] + " " + sc["last_name"]).strip()
+    assert got["customer"]["phone"] == sc["phone"], f"[{label}] customer.phone"
+    assert len(got.get("items") or []) == len(sent.get("items") or []), f"[{label}] items count"
+
+    if sent.get("service_type") == "delivery" and sent.get("delivery_address"):
+        sa, ga = sent["delivery_address"], got["fulfillment"].get("address") or {}
+        assert got["fulfillment"]["type"] == "delivery"
+        assert ga.get("line1") == sa["street"] and ga.get("city") == sa["city"]
+
+    md = got.get("source_metadata") or {}
+    assert md.get("store_id") == sent["store_id"], f"[{label}] source_metadata.store_id"
+    assert md.get("store_name") == sent["store_name"], f"[{label}] source_metadata.store_name"
 
 
-def _approx(a, b, rel: float = 1e-3) -> bool:
-    """Float equality tolerant of float32 storage precision."""
-    denom = max(abs(float(a)), abs(float(b)), 1e-9)
-    return abs(float(a) - float(b)) / denom < rel
+@pytest.mark.parametrize("name,fixture", list(order_requests.items()))
+def test_vendor_fixture_round_trip(publish, store, name: str, fixture: dict) -> None:
+    payload = dict(fixture)
+    payload["order_id"] = fixture["order_id"] + RUN_OFFSET
+    payload["store_id"] = store.store_id
+    payload["store_name"] = store.name
+
+    publish(payload)
+    got = wait_order(store.key, payload["order_id"])
+    _assert_matches(name, payload, got, store)
+
+    # Also readable by canonical id under the same scope.
+    r = requests.get(f"{API_V1}/orders/{got['id']}", headers=store_key(store.key), timeout=5)
+    assert r.status_code == 200, r.text
+    assert r.json()["source_event_id"] == str(payload["order_id"])
 
 
-def _count(obj: dict, key: str) -> int:
-    v = obj.get(key)
-    return len(v) if v else 0
+def test_list_returns_the_stores_orders_only(publish, make_store) -> None:
+    a, b = make_store(), make_store()
+    oa, ob = a.order(), b.order()
+    publish(oa)
+    publish(ob)
+    wait_order(a.key, oa["order_id"])
+    wait_order(b.key, ob["order_id"])
+
+    rows = requests.get(f"{API_V1}/orders", headers=store_key(a.key), params={"num": 50}, timeout=5).json()
+    ids = {r["source_event_id"] for r in rows}
+    assert str(oa["order_id"]) in ids
+    assert str(ob["order_id"]) not in ids, "store A's list leaked store B's order"
 
 
-def _assert_matches(label: str, sent: dict, got: dict) -> None:
-    """Assert that the retrieved order contains the expected data."""
-    assert got["order_id"] == sent["order_id"], f"[{label}] order_id"
-    assert got["store_id"] == sent["store_id"], f"[{label}] store_id"
-    assert got["store_name"] == sent["store_name"], f"[{label}] store_name"
-    assert got["service_type"] == sent["service_type"], f"[{label}] service_type"
-    assert got["is_tax_exempt"] == sent["is_tax_exempt"], f"[{label}] is_tax_exempt"
-    assert _approx(got["order_total"], sent["order_total"]), f"[{label}] order_total"
-    assert _approx(
-        got["balance_owing"], sent.get("balance_owing", 0)
-    ), f"[{label}] balance_owing"
+def test_pagination(store, publish) -> None:
+    orders = [store.order() for _ in range(3)]
+    for o in orders:
+        publish(o)
+    for o in orders:
+        wait_order(store.key, o["order_id"])
+    h = store_key(store.key)
 
-    gc, sc = got["customer"], sent["customer"]
-    assert gc["first_name"] == sc["first_name"], f"[{label}] customer.first_name"
-    assert gc["last_name"] == sc["last_name"], f"[{label}] customer.last_name"
-    assert gc["phone"] == sc["phone"], f"[{label}] customer.phone"
-
-    assert _count(got, "items") == _count(sent, "items"), f"[{label}] items count"
-    assert _count(got, "taxes") == _count(sent, "taxes"), f"[{label}] taxes count"
-    assert _count(got, "payments") == _count(
-        sent, "payments"
-    ), f"[{label}] payments count"
-    assert _count(got, "coupons") == _count(sent, "coupons"), f"[{label}] coupons count"
-    assert _count(got, "misc_charges") == _count(
-        sent, "misc_charges"
-    ), f"[{label}] misc_charges count"
-
-    if sent.get("delivery_address"):
-        da = got.get("delivery_address")
-        assert da, f"[{label}] expected delivery_address"
-        assert (
-            da["street"] == sent["delivery_address"]["street"]
-        ), f"[{label}] delivery_address.street"
-        assert (
-            da["city"] == sent["delivery_address"]["city"]
-        ), f"[{label}] delivery_address.city"
-
-    if sent.get("delivery_provider"):
-        dp = got.get("delivery_provider")
-        assert dp, f"[{label}] expected delivery_provider"
-        assert (
-            dp["provider_name"] == sent["delivery_provider"]["provider_name"]
-        ), f"[{label}] provider_name"
-        assert (
-            dp["delivery_id"] == sent["delivery_provider"]["delivery_id"]
-        ), f"[{label}] delivery_id"
-
-    if sent.get("items"):
-        assert sorted(i["name"] for i in got["items"]) == sorted(
-            i["name"] for i in sent["items"]
-        ), f"[{label}] item names"
-
-        assert sorted(len(i.get("modifiers") or []) for i in got["items"]) == sorted(
-            len(i.get("modifiers") or []) for i in sent["items"]
-        ), f"[{label}] modifier counts"
-
-    if sent.get("coupons"):
-        assert sorted(c["name"] for c in got["coupons"]) == sorted(
-            c["name"] for c in sent["coupons"]
-        ), f"[{label}] coupon names"
+    page = requests.get(f"{API_V1}/orders", headers=h, params={"offset": 0, "num": 2}, timeout=5)
+    assert page.status_code == 200 and len(page.json()) == 2
+    rest = requests.get(f"{API_V1}/orders", headers=h, params={"offset": 2, "num": 2}, timeout=5).json()
+    assert len(rest) == 1
+    assert {o["id"] for o in page.json()}.isdisjoint({o["id"] for o in rest})
 
 
-def _sqs_wrap(payload: dict) -> dict:
-    return {
-        "OrderID": str(payload["order_id"]),
-        "Payload": json.dumps(payload),
-        "DateCreated": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "CreatedAt": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }
+def test_pagination_bad_params_400(store) -> None:
+    h = store_key(store.key)
+    assert requests.get(f"{API_V1}/orders", headers=h, params={"offset": "abc"}, timeout=5).status_code == 400
+    assert requests.get(f"{API_V1}/orders", headers=h, params={"num": "xyz"}, timeout=5).status_code == 400
 
 
-def _wait_for_order(http: requests.Session, order_id: int, timeout: float = 10.0) -> dict:
-    """Poll GET /orders/{id} until the order appears in the DB or timeout."""
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        r = http.get(f"{BASE_URL}/orders/{order_id}")
-        if r.status_code == 200:
-            return r.json()
-        time.sleep(0.5)
-    raise TimeoutError(f"Order {order_id} not found in DB after {timeout}s")
+def test_v1_relay_envelope_is_unwrapped(store, publish) -> None:
+    """The v1 online relay (still in prod) wraps the vendor JSON as a string in
+    {"ID","Payload","DateCreated","CreatedAt"} with no MessageAttributes. v2
+    main unwraps it, so it can read the v1 queues (shadow run + cutover)."""
+    import json as _json
+    o = store.order()
+    v1 = {"ID": str(o["order_id"]), "Payload": _json.dumps(o),
+          "DateCreated": "2026-10-16", "CreatedAt": "2026-10-16T18:00:00Z"}
+    publish(_json.dumps(v1))
+    got = wait_order(store.key, o["order_id"])
+    assert got["tenant_id"] == store.tenant_id and got["source_event_id"] == str(o["order_id"])
 
 
-# ---------------------------------------------------------------------------
-# Testing SQS connection
-# ---------------------------------------------------------------------------
-
-
-def test_sanity_sqs_connection(sqs):
-
-    queues = sqs.list_queues().get("QueueUrls", [])
-    print(f"SQS queues: {queues}")
-
-
-def test_sanity_check(sqs):
-    payload = _unique(order_requests["sample_real_order"])
-    sqs_message = _sqs_wrap(payload)
-    post = sqs.send_message(QueueUrl=SQS_QUEUE_URL, MessageBody=json.dumps(sqs_message))
-    print(f"Message Sent: {post['MessageId']}")
-    assert post["MessageId"] is not None
-
-
-def test_sanity_env_vars():
-    assert SQS_QUEUE_URL is not None
-    assert SQS_ENDPOINT_URL is not None
-    assert AWS_ACCESS_KEY_ID is not None
-    assert AWS_SECRET_ACCESS_KEY is not None
-    assert AWS_REGION is not None
-
-
-# ---------------------------------------------------------------------------
-# Parametrized round-trip: one test per order in data.py
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize("name,order_data", list(order_requests.items()))
-def test_create_and_retrieve_by_id(sqs, http: requests.Session, name: str, order_data: dict):
-    payload = _unique(order_data)
-
-    sqs_message = _sqs_wrap(payload)
-    post = sqs.send_message(QueueUrl=SQS_QUEUE_URL, MessageBody=json.dumps(sqs_message))
-    assert "MessageId" in post, f"[{name}] SQS send failed: {post}"
-
-    got = _wait_for_order(http, payload["order_id"])
-    _assert_matches(name, payload, got)
-
-
-# ---------------------------------------------------------------------------
-# GET /orders/latest
-# ---------------------------------------------------------------------------
-
-
-def test_get_latest(sqs, http: requests.Session) -> None:
-    # Unix timestamp is always increasing and fits in int32 until 2038.
-    # It's larger than any data.py order_id + RUN_OFFSET (~260 M max),
-    # so it will always become the latest order in the DB.
-    sentinel_id = int(time.time())
-    payload = {**list(order_requests.values())[0], "order_id": sentinel_id}
-
-    sqs_message = _sqs_wrap(payload)
-    post = sqs.send_message(QueueUrl=SQS_QUEUE_URL, MessageBody=json.dumps(sqs_message))
-    assert "MessageId" in post, f"SQS send failed: {post}"
-
-    _wait_for_order(http, sentinel_id)
-
-    latest = http.get(f"{BASE_URL}/orders/latest")
-    assert latest.status_code == 200, f"GET /orders/latest failed: {latest.text}"
-    assert latest.json()["order_id"] == sentinel_id
-
-
-# ---------------------------------------------------------------------------
-# GET /orders pagination
-# ---------------------------------------------------------------------------
-
-
-def test_pagination_num_limit(http: requests.Session) -> None:
-    r = http.get(f"{BASE_URL}/orders", params={"offset": 0, "num": 2})
-    assert r.status_code == 200
-    assert isinstance(r.json(), list)
-    assert len(r.json()) <= 2
-
-
-def test_pagination_offset_shifts_window(http: requests.Session) -> None:
-    page0 = http.get(f"{BASE_URL}/orders", params={"offset": 0, "num": 3}).json()
-    page1 = http.get(f"{BASE_URL}/orders", params={"offset": 1, "num": 3}).json()
-    if len(page0) > 1 and len(page1) > 0:
-        assert page0[0]["order_id"] != page1[0]["order_id"]
-
-
-def test_pagination_bad_params(http: requests.Session) -> None:
-    assert http.get(f"{BASE_URL}/orders", params={"offset": "abc"}).status_code == 400
-    assert http.get(f"{BASE_URL}/orders", params={"num": "xyz"}).status_code == 400
+def test_order_list_paging_is_bounded(store) -> None:
+    h = store_key(store.key)
+    for q in ("num=0", "num=500", "num=-1", "offset=-5"):
+        assert requests.get(f"{API_V1}/orders?{q}", headers=h, timeout=5).status_code == 400, q
+    assert requests.get(f"{API_V1}/orders?num=200", headers=h, timeout=5).status_code == 200

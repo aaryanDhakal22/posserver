@@ -11,34 +11,205 @@ import (
 )
 
 type Querier interface {
-	CreateCoupon(ctx context.Context, arg []CreateCouponParams) (int64, error)
-	CreateCustomer(ctx context.Context, arg CreateCustomerParams) (int32, error)
-	CreateDeliveryAddress(ctx context.Context, arg CreateDeliveryAddressParams) (int32, error)
-	CreateDeliveryProvider(ctx context.Context, arg CreateDeliveryProviderParams) (int32, error)
-	CreateItem(ctx context.Context, arg []CreateItemParams) (int64, error)
-	CreateMiscCharge(ctx context.Context, arg []CreateMiscChargeParams) (int64, error)
-	CreateModifier(ctx context.Context, arg []CreateModifierParams) (int64, error)
-	CreateOrder(ctx context.Context, arg CreateOrderParams) (int32, error)
-	CreatePayment(ctx context.Context, arg []CreatePaymentParams) (int64, error)
-	CreateSingleItem(ctx context.Context, arg CreateSingleItemParams) (int32, error)
-	CreateTax(ctx context.Context, arg []CreateTaxParams) (int64, error)
-	GetAllOrders(ctx context.Context) ([]Order, error)
-	GetAuthKey(ctx context.Context) (string, error)
-	GetCouponsByOrderID(ctx context.Context, orderid pgtype.Int4) ([]Coupon, error)
-	GetCustomerByID(ctx context.Context, id int32) (Customer, error)
-	GetDeliveryAddressByID(ctx context.Context, id int32) (DeliveryAddress, error)
-	GetDeliveryProviderByID(ctx context.Context, id int32) (DeliveryProvider, error)
-	GetItemsByOrderID(ctx context.Context, orderid pgtype.Int4) ([]Item, error)
-	GetLatest(ctx context.Context) (Order, error)
-	GetMiscChargesByOrderID(ctx context.Context, orderid pgtype.Int4) ([]MiscCharge, error)
-	GetModifiersByItemID(ctx context.Context, itemid pgtype.Int4) ([]Modifier, error)
-	GetOrderByID(ctx context.Context, orderid int32) (Order, error)
-	GetOrdersPage(ctx context.Context, arg GetOrdersPageParams) ([]Order, error)
-	GetPaymentsByOrderID(ctx context.Context, orderid pgtype.Int4) ([]Payment, error)
-	GetTaxesByOrderID(ctx context.Context, orderid pgtype.Int4) ([]Tax, error)
-	IncrementOrderNumber(ctx context.Context) (int32, error)
-	ResetOrderNumber(ctx context.Context) error
-	SetAuthKey(ctx context.Context, key string) error
+	AddOperatorLocation(ctx context.Context, arg AddOperatorLocationParams) error
+	AttachModifierGroup(ctx context.Context, arg AttachModifierGroupParams) error
+	// Unflag the location's current receipt printer (one per location).
+	ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error
+	CountItemsForGroup(ctx context.Context, arg CountItemsForGroupParams) (int64, error)
+	CountPendingDispatches(ctx context.Context, handlerName string) (int64, error)
+	CountUnackedOrders(ctx context.Context, arg CountUnackedOrdersParams) (int64, error)
+	// App releases (Quibase APKs) ----------------------------------------------------
+	CreateAppRelease(ctx context.Context, arg CreateAppReleaseParams) (CreateAppReleaseRow, error)
+	// ───────────────────────────────────────────────────────────────────────────
+	// Devices (API keys)
+	// ───────────────────────────────────────────────────────────────────────────
+	CreateDevice(ctx context.Context, arg CreateDeviceParams) (Device, error)
+	CreateLineItem(ctx context.Context, arg CreateLineItemParams) error
+	CreateLocation(ctx context.Context, arg CreateLocationParams) (Location, error)
+	// ═══════════════════════════════════════════════════════════════════════════
+	// Menu module
+	// ═══════════════════════════════════════════════════════════════════════════
+	CreateMenu(ctx context.Context, arg CreateMenuParams) (Menu, error)
+	CreateMenuCategory(ctx context.Context, arg CreateMenuCategoryParams) (MenuCategory, error)
+	CreateMenuItem(ctx context.Context, arg CreateMenuItemParams) (MenuItem, error)
+	CreateModifierGroup(ctx context.Context, arg CreateModifierGroupParams) (ModifierGroup, error)
+	CreateModifierOption(ctx context.Context, arg CreateModifierOptionParams) (ModifierOption, error)
+	// ═══════════════════════════════════════════════════════════════════════════
+	// Operators (call-center order-takers)
+	// ═══════════════════════════════════════════════════════════════════════════
+	CreateOperator(ctx context.Context, arg CreateOperatorParams) (CreateOperatorRow, error)
+	CreateOperatorToken(ctx context.Context, arg CreateOperatorTokenParams) (OperatorToken, error)
+	// ───────────────────────────────────────────────────────────────────────────
+	// Orders
+	// ───────────────────────────────────────────────────────────────────────────
+	CreateOrder(ctx context.Context, arg CreateOrderParams) error
+	CreatePayment(ctx context.Context, arg CreatePaymentParams) error
+	// ───────────────────────────────────────────────────────────────────────────
+	// Printers
+	// ───────────────────────────────────────────────────────────────────────────
+	CreatePrinter(ctx context.Context, arg CreatePrinterParams) (Printer, error)
+	CreateStatusEvent(ctx context.Context, arg CreateStatusEventParams) error
+	// ───────────────────────────────────────────────────────────────────────────
+	// Tenants
+	// ───────────────────────────────────────────────────────────────────────────
+	// username/password_hash are optional (sqlc.narg → NULL when absent) so admin
+	// can still create credential-less tenants. Full-column RETURNING keeps sqlc
+	// mapping to the models.Tenant table struct (see toDomainTenant).
+	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
+	DeleteAppRelease(ctx context.Context, arg DeleteAppReleaseParams) (int64, error)
+	DeleteDevice(ctx context.Context, id pgtype.UUID) error
+	DeleteLocationDrivers(ctx context.Context, arg DeleteLocationDriversParams) error
+	DeleteMenu(ctx context.Context, arg DeleteMenuParams) error
+	DeleteMenuCategory(ctx context.Context, arg DeleteMenuCategoryParams) error
+	DeleteMenuItem(ctx context.Context, arg DeleteMenuItemParams) error
+	DeleteModifierGroup(ctx context.Context, arg DeleteModifierGroupParams) error
+	DeleteModifierOption(ctx context.Context, arg DeleteModifierOptionParams) error
+	DeleteOperator(ctx context.Context, id pgtype.UUID) error
+	DeleteOperatorLocations(ctx context.Context, operatorID pgtype.UUID) error
+	// Delete a single order. line_items / payments / status_events cascade via FK.
+	DeleteOrderByID(ctx context.Context, id pgtype.UUID) error
+	// Remove the outbox rows for one order (aggregate_id = order id). outbox_events
+	// has no FK to orders, so this is explicit; dispatches cascade off outbox_events.
+	DeleteOrderOutbox(ctx context.Context, aggregateID pgtype.UUID) error
+	DeletePrinter(ctx context.Context, id pgtype.UUID) error
+	// Used by the store-config editor's replace-all reconciliation.
+	DeletePrintersByLocation(ctx context.Context, locationID pgtype.UUID) error
+	DeleteTenant(ctx context.Context, id pgtype.UUID) error
+	DeleteTenantDevices(ctx context.Context, tenantID pgtype.UUID) error
+	DeleteTenantLocations(ctx context.Context, tenantID pgtype.UUID) error
+	DeleteTenantOrders(ctx context.Context, tenantID pgtype.UUID) error
+	DeleteTenantOutboxEvents(ctx context.Context, tenantID pgtype.UUID) error
+	DeleteTenantPrinters(ctx context.Context, tenantID pgtype.UUID) error
+	DetachGroupFromAllItems(ctx context.Context, arg DetachGroupFromAllItemsParams) error
+	DetachModifierGroup(ctx context.Context, arg DetachModifierGroupParams) error
+	GetActiveDeviceByKeyHash(ctx context.Context, keyHash string) (Device, error)
+	GetActiveOperatorTokenByHash(ctx context.Context, tokenHash string) (GetActiveOperatorTokenByHashRow, error)
+	GetAgentBackupData(ctx context.Context, id pgtype.UUID) (GetAgentBackupDataRow, error)
+	GetAgentState(ctx context.Context, locationID pgtype.UUID) (AgentState, error)
+	GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKParams) ([]byte, error)
+	GetLatestAppRelease(ctx context.Context, app string) (GetLatestAppReleaseRow, error)
+	GetLineItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]LineItem, error)
+	GetLocationByID(ctx context.Context, id pgtype.UUID) (Location, error)
+	GetMenuByID(ctx context.Context, arg GetMenuByIDParams) (Menu, error)
+	GetMenuCategoryByID(ctx context.Context, arg GetMenuCategoryByIDParams) (MenuCategory, error)
+	GetMenuItemByID(ctx context.Context, arg GetMenuItemByIDParams) (MenuItem, error)
+	GetModifierGroupByID(ctx context.Context, arg GetModifierGroupByIDParams) (ModifierGroup, error)
+	GetOperatorAuthByUsername(ctx context.Context, username string) (GetOperatorAuthByUsernameRow, error)
+	GetOperatorByID(ctx context.Context, id pgtype.UUID) (GetOperatorByIDRow, error)
+	GetOrderAgentFields(ctx context.Context, arg GetOrderAgentFieldsParams) (GetOrderAgentFieldsRow, error)
+	GetOrderBySourceEventInScope(ctx context.Context, arg GetOrderBySourceEventInScopeParams) (Order, error)
+	// Tenant/location-scoped lookup by canonical id. Read endpoints always
+	// supply the caller's scope so a cross-tenant id leak still 404s.
+	GetOrderInScope(ctx context.Context, arg GetOrderInScopeParams) (Order, error)
+	// Same as GetOrderInScope, row-locked: floor updates for one order apply one
+	// at a time (load + apply + write in a single transaction).
+	GetOrderInScopeForUpdate(ctx context.Context, arg GetOrderInScopeForUpdateParams) (Order, error)
+	GetOrdersPageInScope(ctx context.Context, arg GetOrdersPageInScopeParams) ([]Order, error)
+	GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error)
+	GetPrinterByID(ctx context.Context, id pgtype.UUID) (Printer, error)
+	GetStatusEventsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]StatusEvent, error)
+	// Login lookup: tenant id + stored password hash for a username.
+	GetTenantAuthByUsername(ctx context.Context, username pgtype.Text) (GetTenantAuthByUsernameRow, error)
+	GetTenantByID(ctx context.Context, id pgtype.UUID) (Tenant, error)
+	// Order routing: the external vendor's store_id → tenant (see app/tenancy.ResolveStore).
+	GetTenantByStoreID(ctx context.Context, storeID pgtype.Int8) (Tenant, error)
+	InsertAgentBackup(ctx context.Context, arg InsertAgentBackupParams) (InsertAgentBackupRow, error)
+	InsertDriver(ctx context.Context, arg InsertDriverParams) error
+	InsertOutboxDispatch(ctx context.Context, arg InsertOutboxDispatchParams) error
+	// ───────────────────────────────────────────────────────────────────────────
+	// Outbox
+	// ───────────────────────────────────────────────────────────────────────────
+	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) error
+	LastFloorEventAt(ctx context.Context, arg LastFloorEventAtParams) (pgtype.Timestamptz, error)
+	ListAgentBackups(ctx context.Context, locationID pgtype.UUID) ([]ListAgentBackupsRow, error)
+	ListAgentHealth(ctx context.Context) ([]ListAgentHealthRow, error)
+	ListAllDevices(ctx context.Context) ([]Device, error)
+	ListAllLocations(ctx context.Context) ([]Location, error)
+	ListAppReleases(ctx context.Context, app string) ([]ListAppReleasesRow, error)
+	ListCategoriesByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuCategory, error)
+	ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) ([]MenuCategory, error)
+	ListDevicesByLocation(ctx context.Context, locationID pgtype.UUID) ([]Device, error)
+	ListDriverShifts(ctx context.Context, arg ListDriverShiftsParams) ([]DriverShift, error)
+	ListGroupsForItem(ctx context.Context, arg ListGroupsForItemParams) ([]ListGroupsForItemRow, error)
+	ListItemModifierGroupsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListItemModifierGroupsByLocationRow, error)
+	ListItemsByCategory(ctx context.Context, categoryID pgtype.UUID) ([]MenuItem, error)
+	ListItemsByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuItem, error)
+	ListLocationDrivers(ctx context.Context, arg ListLocationDriversParams) ([]Driver, error)
+	ListLocationsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]Location, error)
+	ListMenusByLocation(ctx context.Context, locationID pgtype.UUID) ([]Menu, error)
+	ListModifierGroupsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ModifierGroup, error)
+	ListOperatorLocations(ctx context.Context, operatorID pgtype.UUID) ([]OperatorLocation, error)
+	ListOperators(ctx context.Context) ([]ListOperatorsRow, error)
+	ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) ([]ModifierOption, error)
+	ListOptionsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ModifierOption, error)
+	ListPrintersByLocation(ctx context.Context, locationID pgtype.UUID) ([]Printer, error)
+	// Top-level item names ordered at a location since a time, with counts — the
+	// input to the unmatched-names report.
+	ListRecentItemNames(ctx context.Context, arg ListRecentItemNamesParams) ([]ListRecentItemNamesRow, error)
+	// A replacement agent's open batch: everything the old agent filed under that
+	// batch, plus orders nobody accepted yet since the batch opened.
+	ListRestoreOrderIDs(ctx context.Context, arg ListRestoreOrderIDsParams) ([]pgtype.UUID, error)
+	// Kitchen routing table for one location: every menu item's name with its
+	// effective printer (the item's own printer, else its category's default),
+	// best candidate first — available menus/categories first, then menu,
+	// category and item position. The router keeps the first row per name.
+	ListRoutingByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListRoutingByLocationRow, error)
+	ListTenants(ctx context.Context) ([]Tenant, error)
+	// Orders the agent hasn't confirmed: re-sent until it does.
+	ListUnackedOrders(ctx context.Context, arg ListUnackedOrdersParams) ([]ListUnackedOrdersRow, error)
+	MarkDispatchFailed(ctx context.Context, arg MarkDispatchFailedParams) error
+	MarkDispatchSucceeded(ctx context.Context, arg MarkDispatchSucceededParams) error
+	// Idempotency gate for agent floor events: 0 rows = already applied.
+	MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeenParams) (int64, error)
+	// Agent reliability + recovery (00009) -------------------------------------------
+	MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) (int64, error)
+	PendingEventsForHandler(ctx context.Context, arg PendingEventsForHandlerParams) ([]PendingEventsForHandlerRow, error)
+	PruneAgentBackups(ctx context.Context, locationID pgtype.UUID) error
+	PruneAppReleases(ctx context.Context, arg PruneAppReleasesParams) error
+	// An agent for this (tenant, location) just (re)subscribed: make every still-
+	// pending, backed-off dispatch for the scope due now so its backlog drains
+	// within one dispatcher tick instead of waiting out the exponential backoff.
+	ResetDispatchBackoffForScope(ctx context.Context, arg ResetDispatchBackoffForScopeParams) error
+	RevokeAllOperatorTokens(ctx context.Context, operatorID pgtype.UUID) error
+	RevokeDevice(ctx context.Context, id pgtype.UUID) error
+	// Filtered/sorted order history for the agent's store-manager web UI. Every
+	// filter is optional: empty text params and NULL time bounds match everything.
+	// `reverse` flips newest-first (default) to oldest-first without a second query.
+	// Column list is identical to GetOrdersPageInScope so sqlc returns []Order and
+	// the repo's assemble() is reused unchanged.
+	SearchOrdersInScope(ctx context.Context, arg SearchOrdersInScopeParams) ([]Order, error)
+	SetCategoryPosition(ctx context.Context, arg SetCategoryPositionParams) error
+	SetItemPosition(ctx context.Context, arg SetItemPositionParams) error
+	SetItemPrinter(ctx context.Context, arg SetItemPrinterParams) error
+	SetMenuPosition(ctx context.Context, arg SetMenuPositionParams) error
+	SetOperatorPassword(ctx context.Context, arg SetOperatorPasswordParams) error
+	SetOptionPosition(ctx context.Context, arg SetOptionPositionParams) error
+	SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStatusParams) (int64, error)
+	SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptParams) (Printer, error)
+	// Set/rotate a tenant's store-manager login (username + already-hashed password).
+	SetTenantCredentials(ctx context.Context, arg SetTenantCredentialsParams) error
+	// Set/clear (NULL) a tenant's vendor store_id. Unique when present.
+	SetTenantStoreID(ctx context.Context, arg SetTenantStoreIDParams) (Tenant, error)
+	TouchDevice(ctx context.Context, id pgtype.UUID) error
+	TouchOperatorToken(ctx context.Context, id pgtype.UUID) error
+	// Updates the editable surface of a location in one shot. Pass current values
+	// for fields you don't want to change — there's no partial-update semantics.
+	UpdateLocationDetails(ctx context.Context, arg UpdateLocationDetailsParams) (Location, error)
+	UpdateMenu(ctx context.Context, arg UpdateMenuParams) (Menu, error)
+	UpdateMenuCategory(ctx context.Context, arg UpdateMenuCategoryParams) (MenuCategory, error)
+	UpdateMenuItem(ctx context.Context, arg UpdateMenuItemParams) (MenuItem, error)
+	UpdateModifierGroup(ctx context.Context, arg UpdateModifierGroupParams) (ModifierGroup, error)
+	UpdateModifierOption(ctx context.Context, arg UpdateModifierOptionParams) (ModifierOption, error)
+	UpdateOperatorProfile(ctx context.Context, arg UpdateOperatorProfileParams) (UpdateOperatorProfileRow, error)
+	// Applies an agent floor update (status + mirrored floor fields).
+	UpdateOrderFloor(ctx context.Context, arg UpdateOrderFloorParams) error
+	UpdatePrinter(ctx context.Context, arg UpdatePrinterParams) (Printer, error)
+	UpdateTenantConfig(ctx context.Context, arg UpdateTenantConfigParams) (Tenant, error)
+	UpsertAgentHealth(ctx context.Context, arg UpsertAgentHealthParams) error
+	UpsertAgentState(ctx context.Context, arg UpsertAgentStateParams) error
+	// A driver.shift event (clock-in, then the clock-out for the same shift id),
+	// keyed per location.
+	UpsertDriverShift(ctx context.Context, arg UpsertDriverShiftParams) error
 }
 
 var _ Querier = (*Queries)(nil)

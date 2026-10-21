@@ -23,21 +23,30 @@ services:
       target: dev
     environment:
       APP_ENV: dev
-      DB_HOST: 
+      DB_HOST:
       DB_PORT:
-      DB_USER: 
-      DB_NAME: 
-      SERVER_PORT: 
+      DB_USER:
+      DB_NAME:
+      SERVER_PORT:
       LOG_LEVEL:
-      LOG_OUTPUT: 
-      LOG_STYLE: 
+      LOG_OUTPUT:
+      LOG_STYLE:
       DB_PASSWORD:
       AWS_REGION:
       AWS_ACCESS_KEY_ID:
       AWS_SECRET_ACCESS_KEY:
       SQS_QUEUE_URL:
       SQS_ENDPOINT:
-      ADMIN_PASSCODE:
+      # Required: gates /admin/v1/* and the embedded /admin UI's mutations.
+      # Generate one with `task admin-key-gen` and put it in Doppler.
+      ADMIN_API_KEY:
+      AGENT_SECRET_PUSHOVER_APP_TOKEN:
+      AGENT_SECRET_PUSHOVER_USER_KEY:
+      AGENT_SECRET_PUSHOVER_BOSS_KEY:
+      AGENT_SECRET_OTLP_ENDPOINT:
+      AGENT_SECRET_OTLP_HEADERS:
+      AGENT_SECRET_TAILSCALE_AUTHKEY:
+      ORDER_REDELIVER_AFTER:
       OTEL_EXPORTER_OTLP_ENDPOINT:
       OTEL_EXPORTER_OTLP_HEADERS:
       OTEL_SERVICE_NAME:
@@ -47,10 +56,18 @@ services:
       - ../backend:/src
       - ~/.aws:/root/.aws:ro
     ports:
-      - "${SERVER_PORT:-1323}:1323"
+      # Host bind port is sourced from Doppler (DEV_HOST_PORT) so all modules
+      # coexist on one dev box without conflict. Container stays on 1323.
+      - "${DEV_HOST_PORT:-1323}:1323"
     depends_on:
       postgres:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://localhost:1323/health || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
 
   elasticmq:
     image: softwaremill/elasticmq-native:latest
