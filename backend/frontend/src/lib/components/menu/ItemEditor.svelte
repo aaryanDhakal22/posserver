@@ -9,7 +9,8 @@
     type LivePrinters,
     type ModifierGroup,
     type ModifierOption,
-    type ItemGroupLink
+    type ItemGroupLink,
+    printerLabel
   } from '$lib/api';
   import { confirmDialog } from '$lib/confirm.svelte';
   import { toast } from '$lib/toast.svelte';
@@ -221,7 +222,7 @@
       <select id="ie-printer" class="field" bind:value={printerId}>
         <option value={null}>{inheritedPrinter ? `Same as category (${inheritedPrinter})` : 'None — prints on every station'}</option>
         {#each printers as p (p.id)}
-          <option value={p.id}>{p.name}{upFor(p.name) === true ? ' · online' : upFor(p.name) === false ? ' · offline' : ''}</option>
+          <option value={p.id}>{printerLabel(p, printers)}{upFor(p.name) === true ? ' · online' : upFor(p.name) === false ? ' · offline' : ''}</option>
         {/each}
       </select>
       {#if printerId === null && !inheritedPrinter}

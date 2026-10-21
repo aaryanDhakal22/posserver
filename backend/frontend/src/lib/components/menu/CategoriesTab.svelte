@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { storeApi, type Category, type Item, type Menu, type Printer } from '$lib/api';
+  import { printerLabel, storeApi, type Category, type Item, type Menu, type Printer } from '$lib/api';
   import { confirmDialog } from '$lib/confirm.svelte';
   import { toast } from '$lib/toast.svelte';
   import Card from '$lib/ui/Card.svelte';
@@ -193,7 +193,7 @@
                 onchange={(e) => saveCategory(c, { default_printer_id: e.currentTarget.value || null }, 'Default printer saved')}
               >
                 <option value="">No default printer</option>
-                {#each printers as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
+                {#each printers as p (p.id)}<option value={p.id}>{printerLabel(p, printers)}</option>{/each}
               </select>
             </span>
             <span class="c-vis" role="cell">

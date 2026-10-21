@@ -12,7 +12,8 @@
     type Item,
     type Printer,
     type LivePrinters,
-    type UnmatchedName
+    type UnmatchedName,
+    printerLabel
   } from '$lib/api';
   import { confirmDialog } from '$lib/confirm.svelte';
   import { toast } from '$lib/toast.svelte';
@@ -61,7 +62,10 @@
   let noPrinterOnly = $state(false);
   let collapsed = $state<Record<string, boolean>>({});
 
-  const printerName = (id: string | null) => (id ? (printers.find((p) => p.id === id)?.name ?? '—') : '');
+  const printerName = (id: string | null) => {
+    const p = id ? printers.find((x) => x.id === id) : undefined;
+    return id ? (p ? printerLabel(p, printers) : '—') : '';
+  };
   const effective = (it: Item, c: Category) => it.printer_id ?? c.default_printer_id;
 
   // --- loading --------------------------------------------------------------
@@ -430,7 +434,7 @@
       <label for="f-printer" class="sr-only">Printer</label>
       <select id="f-printer" class="field !w-auto" bind:value={printerF}>
         <option value="">Any printer</option>
-        {#each printers as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
+        {#each printers as p (p.id)}<option value={p.id}>{printerLabel(p, printers)}</option>{/each}
         <option value="__none">No kitchen printer</option>
       </select>
       <button type="button" class="fchip" aria-pressed={outOnly} onclick={() => (outOnly = !outOnly)}>Out of stock</button>
@@ -640,7 +644,7 @@
         <!-- svelte-ignore a11y_autofocus -->
         <select id="cd-printer" class="field" bind:value={catDialog.printer} autofocus={catDialog.focus === 'printer'}>
           <option value="">None — items print on every station unless they have their own</option>
-          {#each printers as p (p.id)}<option value={p.id}>{p.name}</option>{/each}
+          {#each printers as p (p.id)}<option value={p.id}>{printerLabel(p, printers)}</option>{/each}
         </select>
         <p class="help">Items without their own printer use this one.</p>
       </div>
