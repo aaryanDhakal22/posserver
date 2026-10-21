@@ -103,6 +103,10 @@ type Service struct {
 	offSince  map[uuid.UUID]time.Time // location → first seen offline
 	offPaged  map[uuid.UUID]bool
 	linkLimit *ratelimit.Window // failed link attempts
+	// linkMu serializes links: each mints a key then revokes every other
+	// agent, so two overlapping links (a double tap, a retry after a
+	// timeout) would revoke each other's new key. main is one process.
+	linkMu sync.Mutex
 }
 
 func New(pool *pgxpool.Pool, orders OrderLoader, drivers DriverMirror, broker Broker, tenancy *tenancyApp.Service,

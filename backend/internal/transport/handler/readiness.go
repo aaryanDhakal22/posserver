@@ -39,9 +39,9 @@ func NewReadinessHandler(pool *pgxpool.Pool, sqsClient *sqs.Client, queueURL str
 }
 
 type readinessCheck struct {
-	OK    bool   `json:"ok"`
-	Err   string `json:"error,omitempty"`
-	MS    int64  `json:"latency_ms"`
+	OK  bool   `json:"ok"`
+	Err string `json:"error,omitempty"`
+	MS  int64  `json:"latency_ms"`
 }
 
 type readinessResponse struct {

@@ -201,9 +201,9 @@ INSERT INTO line_items (
 
 -- name: CreatePayment :exec
 INSERT INTO payments (
-    id, order_id, processor, status, amount_cents, token, last4, captured_at
+    id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8
+    $1, $2, $3, $4, $5, $6, $7, $8, $9
 );
 
 -- name: CreateStatusEvent :exec
@@ -357,7 +357,7 @@ FROM line_items WHERE order_id = $1
 ORDER BY parent_id NULLS FIRST, position;
 
 -- name: GetPaymentsByOrderID :many
-SELECT id, order_id, processor, status, amount_cents, token, last4, captured_at
+SELECT id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code
 FROM payments WHERE order_id = $1;
 
 -- name: GetStatusEventsByOrderID :many

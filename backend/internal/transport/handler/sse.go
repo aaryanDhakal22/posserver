@@ -11,8 +11,8 @@ import (
 	"quiccpos/main/internal/domain/tenancy"
 	sseBroker "quiccpos/main/internal/infra/sse"
 	"quiccpos/main/internal/observability"
-	sseTransport "quiccpos/main/internal/transport/sse"
 	appMiddleware "quiccpos/main/internal/transport/middleware"
+	sseTransport "quiccpos/main/internal/transport/sse"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"

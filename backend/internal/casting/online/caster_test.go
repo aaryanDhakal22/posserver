@@ -158,8 +158,13 @@ func TestCast_HappyPath(t *testing.T) {
 	if m.Tip != 302 {
 		t.Errorf("Tip = %d cents, want 302", m.Tip)
 	}
-	if got := len(m.Fees); got != 2 {
-		t.Errorf("Fees count = %d, want 2", got)
+	// Takeout: the vendor's $4 delivery charge isn't in order_total, so only
+	// the $0.50 other charge counts and the subtotal is the items' $29.72.
+	if got := len(m.Fees); got != 1 {
+		t.Errorf("Fees count = %d, want 1", got)
+	}
+	if m.Subtotal != 2972 {
+		t.Errorf("Subtotal = %d cents, want 2972", m.Subtotal)
 	}
 	// Reconciliation is validated inside order.NewOrder; if the err above
 	// were non-nil we'd never reach here.
@@ -390,7 +395,10 @@ func TestCast_CouponBecomesDiscount(t *testing.T) {
 
 func TestCast_FeeTypesNormalized(t *testing.T) {
 	c := newTestCaster(t)
-	agg, err := c.Cast(context.Background(), order.CastInput{Raw: []byte(samplePayload), TenantID: order.TenantID(testTenantID), LocationID: order.LocationID(testLocationID)})
+	// As a delivery (the delivery charge counts, and order_total includes it).
+	raw := strings.Replace(samplePayload, `"service_type": "takeout"`, `"service_type": "delivery"`, 1)
+	raw = strings.Replace(raw, `"order_total": 35.05`, `"order_total": 39.05`, 1)
+	agg, err := c.Cast(context.Background(), order.CastInput{Raw: []byte(raw), TenantID: order.TenantID(testTenantID), LocationID: order.LocationID(testLocationID)})
 	if err != nil {
 		t.Fatalf("Cast: %v", err)
 	}
@@ -564,5 +572,59 @@ func TestCast_RawPayloadPreserved(t *testing.T) {
 	raw[0] = 'X'
 	if got := agg.RawPayload(); string(got) != samplePayload {
 		t.Error("RawPayload aliases the input slice; aggregate should defensively copy")
+	}
+}
+
+// The real "sample_delayed_order" (tests/data.py): a takeout order whose
+// misc_charges list a $4 delivery charge that order_total leaves out, paid
+// cash (payments null, balance_owing = total).
+func TestBuildMoney_TakeoutIgnoresTheVendorsDeliveryCharge(t *testing.T) {
+	p := Payload{
+		ServiceType: "takeout",
+		OrderTotal:  6.88,
+		Taxes:       []Tax{{TaxName: "Sales Tax", TaxAmount: 0.39}},
+		MiscCharges: []MiscCharge{
+			{MiscChargeName: "delivery_charge", MiscChargeDesc: "Delivery Fee", MiscChargeAmount: 4},
+			{MiscChargeName: "other_charge", MiscChargeDesc: "Service Fee", MiscChargeAmount: 0.5},
+		},
+	}
+	m := buildMoney(p)
+	if m.Subtotal != 599 {
+		t.Errorf("subtotal = %d, want 599 (the items)", m.Subtotal)
+	}
+	if len(m.Fees) != 1 || m.Fees[0].Type != "other" || m.Fees[0].Amount != 50 {
+		t.Errorf("fees = %+v, want only the $0.50 service fee", m.Fees)
+	}
+
+	p.ServiceType = "delivery"
+	p.OrderTotal = 10.88
+	m = buildMoney(p)
+	if m.Subtotal != 599 || len(m.Fees) != 2 {
+		t.Errorf("delivery: subtotal %d fees %+v, want 599 and both fees", m.Subtotal, m.Fees)
+	}
+}
+
+func TestBuildPayments_BalanceOwingIsCash(t *testing.T) {
+	// Cash order: no payments, everything owing.
+	ps := buildPayments(nil, 6.88)
+	if len(ps) != 1 || ps[0].Processor != "cash" || ps[0].Amount != 688 || ps[0].Status != order.PaymentPending {
+		t.Fatalf("cash order → %+v, want one pending cash payment of 688", ps)
+	}
+	// Part-paid: card now, the rest in cash.
+	ps = buildPayments([]Payment{{Type: "Visa", Amount: 15, CardNumber: "xxxx4242"}}, 5.5)
+	if len(ps) != 2 || ps[0].Processor != "card" || ps[1].Processor != "cash" || ps[1].Amount != 550 {
+		t.Fatalf("part-paid → %+v, want card + 550 cash", ps)
+	}
+	// A cash payment already covering the balance isn't doubled.
+	ps = buildPayments([]Payment{{Type: "cash", Amount: 31.09}}, 31.09)
+	if len(ps) != 1 || ps[0].Amount != 3109 {
+		t.Fatalf("explicit cash → %+v, want it alone", ps)
+	}
+	// Prepaid (card / third party), nothing owing.
+	if ps = buildPayments([]Payment{{Type: "third_party", Amount: 16.25}}, 0); len(ps) != 1 || ps[0].Processor != "other" {
+		t.Fatalf("prepaid → %+v", ps)
+	}
+	if ps = buildPayments(nil, 0); ps != nil {
+		t.Fatalf("nothing paid or owing → %+v, want nil", ps)
 	}
 }

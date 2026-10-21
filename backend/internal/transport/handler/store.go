@@ -33,6 +33,7 @@ type StoreHandler struct {
 	svc    *tenancyApp.Service
 	signer *session.Signer
 	cfgPub *StoreConfigPublisher // live store_config push after location/printer edits
+	logins *loginLimiter
 	logger zerolog.Logger
 }
 
@@ -41,6 +42,7 @@ func NewStoreHandler(svc *tenancyApp.Service, signer *session.Signer, cfgPub *St
 		svc:    svc,
 		signer: signer,
 		cfgPub: cfgPub,
+		logins: newLoginLimiter(),
 		logger: logger.With().Str("module", "store-handler").Logger(),
 	}
 }
@@ -69,14 +71,19 @@ func (h *StoreHandler) SessionLogin(c *echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
 	}
+	if stop, err := h.logins.throttled(c, req.Username); stop {
+		return err
+	}
 	tenant, err := h.svc.AuthenticateTenant(ctx, req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, tenancyApp.ErrInvalidCredentials) {
+			h.logins.failed(req.Username)
 			return c.JSON(http.StatusUnauthorized, errResp("invalid username or password"))
 		}
 		h.logger.Error().Err(err).Msg("session login failed")
 		return c.JSON(http.StatusInternalServerError, errResp("login failed"))
 	}
+	h.logins.succeeded(req.Username)
 	loc, err := h.svc.PrimaryLocation(ctx, tenant.ID)
 	if err != nil {
 		if errors.Is(err, tenancyApp.ErrNoPrimaryLocation) {

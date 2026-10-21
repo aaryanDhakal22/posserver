@@ -70,4 +70,3 @@ func toDomainDevice(row models.Device) *domainAuth.Device {
 	}
 	return d
 }
-

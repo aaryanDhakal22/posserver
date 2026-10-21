@@ -18,6 +18,7 @@
   let banner = $state<{ msg: string; kind: 'ok' | 'error' | 'info' } | null>(null);
   let minted = $state<Minted | null>(null);
   let showNew = $state(false);
+  let creating = $state(false);
   let nt = $state({ slug: '', name: '', username: '', password: '', store_id: '' });
   // Default the login username to the store name (lowercased, punctuation/spaces
   // stripped) until the operator edits it by hand — matches the console's dev
@@ -28,9 +29,17 @@
     if (!usernameTouched) nt.username = storeUsername(nt.name);
   }
 
+  // Errors stay until dismissed or replaced; other messages auto-hide. The
+  // previous timer is cleared so a new message isn't cut short by an old one.
+  let bannerTimer: ReturnType<typeof setTimeout> | undefined;
   function toast(msg: string, kind: 'ok' | 'error' | 'info' = 'ok') {
+    clearTimeout(bannerTimer);
     banner = { msg, kind };
-    setTimeout(() => (banner = null), 4000);
+    bannerTimer = kind === 'error' ? undefined : setTimeout(() => (banner = null), 4000);
+  }
+  function dismissBanner() {
+    clearTimeout(bannerTimer);
+    banner = null;
   }
   function err(e: unknown) {
     toast(e instanceof ApiError ? e.message : String(e), 'error');
@@ -68,11 +77,13 @@
   }
 
   async function createTenant() {
+    if (creating) return;
     if (!nt.slug.trim() || !nt.name.trim()) return toast('tenant needs slug + name', 'error');
     if ((nt.username && !nt.password) || (!nt.username && nt.password))
       return toast('set both username and password, or neither', 'error');
     const storeId = parseStoreId(nt.store_id);
     if (storeId === undefined) return toast('store id must be a positive whole number (or blank)', 'error');
+    creating = true;
     try {
       await adminApi('/tenants', { method: 'POST', body: JSON.stringify({ ...nt, store_id: storeId }) });
       const hadLogin = !!nt.username;
@@ -82,6 +93,8 @@
       reload();
     } catch (e) {
       err(e);
+    } finally {
+      creating = false;
     }
   }
 
@@ -104,11 +117,12 @@
 
 {#if banner}
   <div
-    class="rounded-md border px-4 py-3 text-sm mb-4 {banner.kind === 'error'
+    class="rounded-md border px-4 py-3 text-sm mb-4 flex items-start gap-3 {banner.kind === 'error'
       ? 'border-rose-300 bg-rose-50 text-rose-900 dark:border-rose-900/60 dark:bg-rose-950/60 dark:text-rose-200'
       : 'border-emerald-300 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/50 dark:text-emerald-200'}"
   >
-    {banner.msg}
+    <span class="flex-1 min-w-0 break-words">{banner.msg}</span>
+    <button type="button" class="shrink-0 opacity-60 hover:opacity-100 leading-none text-base" aria-label="dismiss" title="dismiss" onclick={dismissBanner}>×</button>
   </div>
 {/if}
 
@@ -166,7 +180,7 @@
         </div>
       </div>
       <div class="flex items-center gap-3 mt-3">
-        <button class="btn btn-primary" onclick={createTenant}>create tenant</button>
+        <button class="btn btn-primary" disabled={creating} onclick={createTenant}>{creating ? 'creating…' : 'create tenant'}</button>
         <span class="text-xs text-slate-500 dark:text-slate-400">
           Creates the restaurant and its location. Set a username + password so the manager can sign in at /app/store.
         </span>

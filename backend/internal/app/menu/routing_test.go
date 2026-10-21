@@ -76,7 +76,7 @@ func TestUnmatchedNames(t *testing.T) {
 			{ItemID: uuid.New(), Name: "Garden Salad"}, // matched, no printer
 		}},
 		recent: []menuDom.ItemNameCount{
-			{Name: "pepperoni  pizza", Orders: 9, LastSeen: now},               // routes fine → not listed
+			{Name: "pepperoni  pizza", Orders: 9, LastSeen: now},                // routes fine → not listed
 			{Name: "Mystery Special", Orders: 2, LastSeen: now.Add(-time.Hour)}, // unmatched
 			{Name: "MYSTERY special", Orders: 5, LastSeen: now},                 // same name, other spelling
 			{Name: "Garden Salad", Orders: 1, LastSeen: now},                    // unassigned

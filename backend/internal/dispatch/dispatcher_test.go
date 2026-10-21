@@ -37,6 +37,21 @@ func newFakeRepo() *fakeRepo {
 	}
 }
 
+// isDispatched / failure read the fake under its lock (the dispatcher writes
+// from its own goroutine).
+func (r *fakeRepo) isDispatched(handler string, id uuid.UUID) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.dispatched[handler][id]
+}
+
+func (r *fakeRepo) failure(handler string, id uuid.UUID) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	msg, ok := r.failed[handler][id]
+	return msg, ok
+}
+
 func (r *fakeRepo) enqueue(handler string, ev order.DomainEvent) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -150,7 +165,7 @@ func TestDispatcher_HappyPath(t *testing.T) {
 	if got := h.calls.Load(); got != 1 {
 		t.Errorf("Handle called %d times, want exactly 1", got)
 	}
-	if !repo.dispatched[h.name][h.lastSeen.Load().ID] {
+	if !repo.isDispatched(h.name, h.lastSeen.Load().ID) {
 		t.Error("event was not marked dispatched")
 	}
 }
@@ -175,15 +190,15 @@ func TestDispatcher_TransientErrorRetries(t *testing.T) {
 	defer cancel()
 	go d.Run(ctx)
 
-	waitFor(t, 300*time.Millisecond, func() bool { return repo.dispatched[h.name][ev.ID] })
+	waitFor(t, 300*time.Millisecond, func() bool { return repo.isDispatched(h.name, ev.ID) })
 
 	if got := h.calls.Load(); got < 2 {
 		t.Errorf("Handle called %d times; expected at least 2 (one transient failure, then success)", got)
 	}
-	if msg, ok := repo.failed[h.name][ev.ID]; !ok || msg == "" {
+	if msg, ok := repo.failure(h.name, ev.ID); !ok || msg == "" {
 		t.Errorf("transient failure not recorded; got %q ok=%v", msg, ok)
 	}
-	if !repo.dispatched[h.name][ev.ID] {
+	if !repo.isDispatched(h.name, ev.ID) {
 		t.Error("event was never marked dispatched after retry")
 	}
 }
@@ -205,14 +220,14 @@ func TestDispatcher_PermanentErrorIsRecorded(t *testing.T) {
 	go d.Run(ctx)
 
 	waitFor(t, 100*time.Millisecond, func() bool {
-		_, ok := repo.failed[h.name][ev.ID]
+		_, ok := repo.failure(h.name, ev.ID)
 		return ok
 	})
 
-	if repo.dispatched[h.name][ev.ID] {
+	if repo.isDispatched(h.name, ev.ID) {
 		t.Error("permanent error was incorrectly marked dispatched")
 	}
-	if msg := repo.failed[h.name][ev.ID]; msg == "" {
+	if msg, _ := repo.failure(h.name, ev.ID); msg == "" {
 		t.Error("permanent failure not recorded")
 	}
 }

@@ -78,9 +78,11 @@ else
 fi
 echo "✓  Swapped Traefik priorities in ${ENV_FILE}"
 
-# Recreate API containers to pick up new priority labels (postgres untouched).
-$COMPOSE --profile blue  up -d --no-deps blue-api  2>/dev/null || true
-$COMPOSE --profile green up -d --no-deps green-api 2>/dev/null || true
+# Recreate the new slot to pick up its priority label (postgres untouched).
+# Only the new slot: the old one is stopped in step 6 anyway, and recreating
+# it would START it if it was already stopped — with whatever DB_NAME Doppler
+# now holds (on the v1 → v2 cutover: v1 against the v2 database).
+$COMPOSE --profile "$INACTIVE" up -d --no-deps ${INACTIVE}-api
 
 echo "▶  Waiting 3s for Traefik to pick up new labels ..."
 sleep 3

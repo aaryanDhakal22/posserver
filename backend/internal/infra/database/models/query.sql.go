@@ -685,9 +685,9 @@ func (q *Queries) CreateOrder(ctx context.Context, arg CreateOrderParams) error 
 
 const createPayment = `-- name: CreatePayment :exec
 INSERT INTO payments (
-    id, order_id, processor, status, amount_cents, token, last4, captured_at
+    id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8
+    $1, $2, $3, $4, $5, $6, $7, $8, $9
 )
 `
 
@@ -700,6 +700,7 @@ type CreatePaymentParams struct {
 	Token       string             `json:"token"`
 	Last4       string             `json:"last4"`
 	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
+	AuthCode    string             `json:"auth_code"`
 }
 
 func (q *Queries) CreatePayment(ctx context.Context, arg CreatePaymentParams) error {
@@ -712,6 +713,7 @@ func (q *Queries) CreatePayment(ctx context.Context, arg CreatePaymentParams) er
 		arg.Token,
 		arg.Last4,
 		arg.CapturedAt,
+		arg.AuthCode,
 	)
 	return err
 }
@@ -1878,7 +1880,7 @@ func (q *Queries) GetOrdersPageInScope(ctx context.Context, arg GetOrdersPageInS
 }
 
 const getPaymentsByOrderID = `-- name: GetPaymentsByOrderID :many
-SELECT id, order_id, processor, status, amount_cents, token, last4, captured_at
+SELECT id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code
 FROM payments WHERE order_id = $1
 `
 
@@ -1900,6 +1902,7 @@ func (q *Queries) GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID)
 			&i.Token,
 			&i.Last4,
 			&i.CapturedAt,
+			&i.AuthCode,
 		); err != nil {
 			return nil, err
 		}

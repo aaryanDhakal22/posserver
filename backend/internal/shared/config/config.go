@@ -94,7 +94,7 @@ func NewConfig(logger *zerolog.Logger) *Config {
 	}
 	logConfig := LogConfig{
 		Level:  cfg.GetEnv("LOG_LEVEL", false, "info"),
-		Output: getLogOutput(cfg.GetEnv("LOG_OUTPUT", false, "stdout")),
+		Output: getLogOutput(cfg.GetEnv("LOG_OUTPUT", false, "standard")),
 		Style:  cfg.GetEnv("LOG_STYLE", false, "console"),
 	}
 	sqsConfig := SQSConfig{
@@ -155,14 +155,4 @@ func getLogOutput(text string) io.Writer {
 	}
 	fmt.Println("Invalid log output, defaulting to stderr")
 	return os.Stderr
-}
-
-func getLogLevel() zerolog.Level {
-	text := os.Getenv("LOG_LEVEL")
-	logLevel, err := zerolog.ParseLevel(text)
-	if err != nil {
-		fmt.Println("Error parsing log level, defaulting to info")
-		logLevel = zerolog.InfoLevel
-	}
-	return logLevel
 }

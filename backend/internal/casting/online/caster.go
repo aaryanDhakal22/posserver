@@ -169,7 +169,7 @@ func (c *Caster) Cast(ctx context.Context, in order.CastInput) (*order.Order, er
 		Items:          items,
 		Money:          buildMoney(p),
 		Currency:       currencyUSD,
-		Payments:       buildPayments(p.Payments),
+		Payments:       buildPayments(p.Payments, p.BalanceOwing),
 		PlacedAt:       placedAt,
 		Notes:          p.Notes,
 		SourceMetadata: buildSourceMetadata(p),
@@ -323,10 +323,18 @@ func buildMoney(p Payload) order.MoneyBreakdown {
 		taxCents += dollarsToCents(t.TaxAmount)
 	}
 
+	delivery := strings.EqualFold(p.ServiceType, "delivery")
 	fees := make([]order.Fee, 0, len(p.MiscCharges))
 	for _, mc := range p.MiscCharges {
+		ft := feeType(mc.MiscChargeName)
+		// The vendor lists its delivery charge on takeout orders too, but
+		// leaves it out of order_total (v1 skipped it on the receipt).
+		// Counting it would shrink the derived subtotal below the items.
+		if ft == "delivery" && !delivery {
+			continue
+		}
 		fees = append(fees, order.Fee{
-			Type:   feeType(mc.MiscChargeName),
+			Type:   ft,
 			Label:  mc.MiscChargeDesc,
 			Amount: dollarsToCents(mc.MiscChargeAmount),
 		})
@@ -379,18 +387,18 @@ func feeType(vendorName string) string {
 }
 
 // buildPayments projects the vendor's raw Payment array onto the canonical
-// order.Payment slice. Empty / nil input → nil output, which downstream
-// consumers (agent receipt builder, Pushover) interpret as a cash order.
+// order.Payment slice. A cash order arrives with no payments and its total
+// in balance_owing (part-paid orders: a card payment plus the rest owing):
+// whatever is owing and not already covered by a cash payment becomes a
+// pending cash payment, so the receipt says what to collect and the driver
+// report counts it. Nothing paid and nothing owing → nil.
 //
 // Method classification: any vendor `type` starting with "cash" (case-
 // insensitive) maps to processor="cash". Everything else with a card_number
 // present maps to "card". Anything else maps to "other" (e.g. gift cards,
 // store credit).
-func buildPayments(src []Payment) []order.Payment {
-	if len(src) == 0 {
-		return nil
-	}
-	out := make([]order.Payment, 0, len(src))
+func buildPayments(src []Payment, balanceOwing float64) []order.Payment {
+	out := make([]order.Payment, 0, len(src)+1)
 	for _, p := range src {
 		processor := "other"
 		switch {
@@ -411,6 +419,23 @@ func buildPayments(src []Payment) []order.Payment {
 			op.Last4 = lastFour(p.CardNumber)
 		}
 		out = append(out, op)
+	}
+	var cash order.Money
+	for _, op := range out {
+		if op.Processor == "cash" {
+			cash += op.Amount
+		}
+	}
+	if owing := dollarsToCents(balanceOwing) - cash; owing > 0 {
+		out = append(out, order.Payment{
+			ID:        uuid.Must(uuid.NewV7()),
+			Processor: "cash",
+			Status:    order.PaymentPending,
+			Amount:    owing,
+		})
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

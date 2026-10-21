@@ -23,7 +23,16 @@
   let priceStr = $state((item.price_cents / 100).toFixed(2));
   let taxPct = $state((item.tax_rate_bps / 100).toString());
   let inStock = $state(item.in_stock);
-  let outUntil = $state(item.out_until ? item.out_until.slice(0, 16) : '');
+  // <input type="datetime-local"> holds local wall-clock time with no zone;
+  // out_until is a UTC instant. Convert both ways so a save doesn't shift it.
+  function toLocalInput(iso: string | null | undefined): string {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+  let outUntil = $state(toLocalInput(item.out_until));
   let tagsStr = $state((item.tags || []).join(', '));
   let printerId = $state<string | null>(item.printer_id);
 
@@ -49,15 +58,26 @@
   });
 
   async function save() {
+    const priceCents = toCents(priceStr);
+    if (priceCents === null || priceCents < 0) {
+      toast(`Price "${priceStr}" isn't a valid amount — use e.g. 12.50 (or 0 for free). Not saved.`, 'error');
+      return;
+    }
+    // "2026-10-22T09:00" (no zone) parses as local time — the instant the person picked.
+    const outUntilDate = !inStock && outUntil ? new Date(outUntil) : null;
+    if (outUntilDate && isNaN(outUntilDate.getTime())) {
+      toast('"Out of stock until" isn\'t a valid date/time. Not saved.', 'error');
+      return;
+    }
     try {
       await storeApi(`/me/menu/items/${item.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
           name, description,
-          price_cents: toCents(priceStr),
+          price_cents: priceCents,
           tax_rate_bps: Math.round((parseFloat(taxPct) || 0) * 100),
           in_stock: inStock,
-          out_until: !inStock && outUntil ? new Date(outUntil).toISOString() : null,
+          out_until: outUntilDate ? outUntilDate.toISOString() : null,
           tags: tagsStr.split(',').map((t) => t.trim()).filter(Boolean),
           attributes: item.attributes || {}
         })

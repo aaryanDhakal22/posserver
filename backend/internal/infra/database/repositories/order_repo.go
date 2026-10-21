@@ -412,6 +412,7 @@ func toPaymentRow(orderID order.ID, p order.Payment) models.CreatePaymentParams 
 		Token:       p.Token,
 		Last4:       p.Last4,
 		CapturedAt:  capturedAt,
+		AuthCode:    p.AuthCode,
 	}
 }
 
@@ -459,6 +460,7 @@ func (r *OrderRepository) assemble(ctx context.Context, q *models.Queries, row m
 			Amount:     order.Money(p.AmountCents),
 			Token:      p.Token,
 			Last4:      p.Last4,
+			AuthCode:   p.AuthCode,
 			CapturedAt: captured,
 		})
 	}

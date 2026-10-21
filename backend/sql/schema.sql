@@ -145,7 +145,8 @@ CREATE TABLE payments (
     amount_cents  bigint      NOT NULL,
     token         text        NOT NULL DEFAULT '',
     last4         text        NOT NULL DEFAULT '',
-    captured_at   timestamptz
+    captured_at   timestamptz,
+    auth_code     text        NOT NULL DEFAULT ''
 );
 CREATE INDEX idx_payments_order_id ON payments(order_id);
 
