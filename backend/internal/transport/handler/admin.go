@@ -91,6 +91,7 @@ type printerJSON struct {
 	Name       string    `json:"name"`
 	IP         string    `json:"ip"`
 	IsReceipt  bool      `json:"is_receipt"` // the location's receipt printer (else a kitchen station)
+	MAC        string    `json:"mac"`        // hardware address the Pi learned (empty = not known yet)
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 }
@@ -134,7 +135,7 @@ func toDeviceJSON(d tenancy.Device) deviceJSON {
 func toPrinterJSON(p tenancy.Printer) printerJSON {
 	return printerJSON{
 		ID: p.ID.String(), TenantID: p.TenantID.String(), LocationID: p.LocationID.String(),
-		Name: p.Name, IP: p.IP, IsReceipt: p.IsReceipt,
+		Name: p.Name, IP: p.IP, IsReceipt: p.IsReceipt, MAC: p.MAC,
 		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
 	}
 }

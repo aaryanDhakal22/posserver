@@ -68,6 +68,8 @@ export interface Printer {
   ip: string;
   /** The location's receipt printer (full customer receipt); others are kitchen stations. */
   is_receipt: boolean;
+  /** Hardware address the Pi learned ('' = not known yet) — how it follows the printer to a new IP. */
+  mac?: string;
   created_at: string;
   updated_at: string;
 }
@@ -344,10 +346,17 @@ export interface FloorDriver { id: string; name: string; position: number; statu
 export interface StoreFloor { drivers: FloorDriver[]; last_sync_at: string | null; }
 
 export interface LivePrinter {
-  name: string; ip: string; up: boolean; last_checked?: string | null; last_error?: string;
+  name: string; ip: string; mac?: string; up: boolean; last_checked?: string | null; last_error?: string;
 }
+/** A printer the Pi found on its network (TCP 9100) that isn't set up yet (agent ≥ 2.0.6). */
+export interface FoundPrinter { ip: string; mac: string; }
 export interface LivePrinters {
-  agent_online: boolean; printers: LivePrinter[]; reported_at?: string; age_seconds?: number;
+  agent_online: boolean; printers: LivePrinter[]; found?: FoundPrinter[]; reported_at?: string; age_seconds?: number;
+}
+/** GET /store/v1/me/printers/ip-changes — the Pi following a printer, or a manager edit. */
+export interface PrinterIPChange {
+  id: string; printer_id: string; printer_name: string;
+  old_ip: string; new_ip: string; mac: string; source: 'agent' | 'manager'; at: string;
 }
 
 // --- operators (admin) ---------------------------------------------------
@@ -438,21 +447,75 @@ export interface AgentHealth {
   /** The agent's raw heartbeat JSON — read defensively (older agents send less). */
   health: Record<string, unknown> | null;
 }
+/** The Pi's own update view out of its heartbeat (agent ≥ 2.0.6; older agents send none). */
+export interface HealthUpdate {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  /** idle | waiting_for_idle | requested | running | ok | up_to_date | failed | rolled_back */
+  state: string;
+  /** The Pi's last finished update / roll back, when it has one. */
+  last: { action: string; state: string; to_version: string; error: string; finished_at: string } | null;
+}
+
 /** Version + printer counts out of an agent heartbeat, when present. */
 export function healthInfo(h: AgentHealth | undefined | null): {
   version: string;
   printersUp: number | null;
   printersDown: number | null;
   problems: string[];
+  update: HealthUpdate | null;
 } {
   const raw = (h?.health && typeof h.health === 'object' ? h.health : {}) as Record<string, unknown>;
   const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  const str = (v: unknown) => (typeof v === 'string' ? v : '');
+  const obj = (v: unknown) => (v && typeof v === 'object' ? (v as Record<string, unknown>) : null);
+  const up = obj(raw.update);
+  const last = obj(up?.last);
   return {
-    version: typeof raw.version === 'string' ? raw.version : '',
+    version: str(raw.version),
     printersUp: num(raw.printers_up),
     printersDown: num(raw.printers_down),
-    problems: Array.isArray(raw.problems) ? raw.problems.filter((p): p is string => typeof p === 'string') : []
+    problems: Array.isArray(raw.problems) ? raw.problems.filter((p): p is string => typeof p === 'string') : [],
+    update: up
+      ? {
+          currentVersion: str(up.current_version),
+          latestVersion: str(up.latest_version),
+          updateAvailable: up.update_available === true,
+          state: str(up.state),
+          last: last
+            ? { action: str(last.action), state: str(last.state), to_version: str(last.to_version), error: str(last.error), finished_at: str(last.finished_at) }
+            : null
+        }
+      : null
   };
+}
+
+/** GET /admin/v1/agent-updates — one Pi update / roll back. */
+export interface AgentUpdate {
+  id: string;
+  tenant_id: string;
+  location_id: string;
+  action: 'update' | 'rollback';
+  /** admin | console | pi-web | boot */
+  requested_by: string;
+  force: boolean;
+  /** requested | waiting_for_idle | running | ok | up_to_date | failed | rolled_back | rejected | unreachable */
+  state: string;
+  from_version: string;
+  to_version: string;
+  error: string;
+  requested_at: string;
+  updated_at: string;
+}
+/** POST /admin/v1/agent/update|rollback → the Pi's answer. */
+export interface AgentUpdateResult {
+  id: string;
+  accepted: boolean;
+  /** requested | waiting_for_idle (accepted) · rejected (see code) · unreachable */
+  state: string;
+  /** '' | not_after_close | orders_open | update_in_progress | not_supported */
+  code: string;
 }
 
 /** GET /admin/v1/orders — the cross-tenant summary rows. */

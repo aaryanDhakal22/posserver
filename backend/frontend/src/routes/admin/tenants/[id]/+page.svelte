@@ -15,6 +15,7 @@
     timeAgo,
     type AdminOrderSummary,
     type AgentHealth,
+    type AgentUpdate,
     type Device,
     type DiagSummary,
     type Location,
@@ -24,6 +25,7 @@
     type Tenant
   } from '$lib/api';
   import { PI_BADGE, piStateFor } from '$lib/admin/stores';
+  import { loadUpdateHistory, requestPiUpdate, requesterText, updateErrorText, updateStateBadge, type UpdateOutcome } from '$lib/admin/updates';
   import { copyText, generatePassword } from '$lib/clipboard';
   import { confirmDialog } from '$lib/confirm.svelte';
   import { hoursFromConfig, hoursToConfig, todayHours, type WeekHours } from '$lib/hours';
@@ -65,6 +67,7 @@
   let orders = $state<AdminOrderSummary[]>([]);
   let diags = $state<DiagSummary[]>([]);
   let tokens = $state<TabletToken[]>([]);
+  let updates = $state<AgentUpdate[]>([]);
 
   const tenant = $derived<Tenant | null>(ov?.tenants.find((t) => t.id === id) ?? null);
   const loc = $derived<Location | null>(ov?.locations.find((l) => l.tenant_id === id) ?? null);
@@ -83,16 +86,18 @@
         return;
       }
       const l = ov.locations.find((x) => x.tenant_id === id);
-      const [f, o, d, tk] = await Promise.all([
+      const [f, o, d, tk, up] = await Promise.all([
         adminApi<AgentHealth[]>('/agents/health').catch(() => []),
         adminApi<AdminOrderSummary[]>(`/orders?tenant_id=${id}&limit=200`).catch(() => []),
         adminApi<DiagSummary[]>(`/diag-reports?tenant_id=${id}&limit=50`).catch(() => []),
-        l ? adminApi<TabletToken[]>(`/tablet-tokens?location_id=${l.id}`).catch(() => []) : Promise.resolve([])
+        l ? adminApi<TabletToken[]>(`/tablet-tokens?location_id=${l.id}`).catch(() => []) : Promise.resolve([]),
+        l ? loadUpdateHistory(l.id).catch(() => [] as AgentUpdate[]) : Promise.resolve([] as AgentUpdate[])
       ]);
       fleet = f;
       orders = o;
       diags = d;
       tokens = tk;
+      updates = up;
     } catch (e) {
       toast.error(e);
     } finally {
@@ -304,6 +309,45 @@
     }
   }
 
+  // --- Pi update / roll back --------------------------------------------------
+  // The Pi installs whatever its env's signed manifest says. A normal update
+  // only goes in right after Close batch (open batch empty) — otherwise the Pi
+  // refuses; Force skips that rule but still waits until no order is open.
+  let updateOpen = $state(false);
+  let forceUpdate = $state(false);
+  let updating = $state(false);
+  let updateOutcome = $state<UpdateOutcome | null>(null);
+  const lastUpdate = $derived(updates[0] ?? null);
+
+  async function runUpdate() {
+    if (!tenant || !loc) return;
+    updating = true;
+    try {
+      updateOutcome = await requestPiUpdate('update', tenant.id, loc.id, forceUpdate);
+      updateOpen = false;
+      if (updateOutcome.ok) toast.success(updateOutcome.text);
+      else toast.error(updateOutcome.text);
+      updates = await loadUpdateHistory(loc.id).catch(() => updates);
+    } finally {
+      updating = false;
+    }
+  }
+  async function rollBack() {
+    if (!tenant || !loc) return;
+    const ok = await confirmDialog({
+      title: 'Roll the Pi back?',
+      body:
+        'The Pi goes back to the agent it ran before its last update (rolling back again goes forward). ' +
+        'It only does this when no orders are open, and printing pauses for about a minute while it restarts.',
+      confirmLabel: 'Roll back'
+    });
+    if (!ok) return;
+    updateOutcome = await requestPiUpdate('rollback', tenant.id, loc.id);
+    if (updateOutcome.ok) toast.success(updateOutcome.text);
+    else toast.error(updateOutcome.text);
+    updates = await loadUpdateHistory(loc.id).catch(() => updates);
+  }
+
   // --- danger ---------------------------------------------------------------
   let confirmName = $state('');
   let deleting = $state(false);
@@ -360,7 +404,26 @@
           <div class="mt-1.5">
             <div class="kv"><span>Status</span><span><Badge tone={PI_BADGE[pi.pi].tone} dot>{pi.pi === 'online' ? 'Connected' : PI_BADGE[pi.pi].label}</Badge></span></div>
             <div class="kv"><span>{pi.pi === 'online' ? 'Last heartbeat' : 'Last seen'}</span><span>{pi.lastSeen ? timeAgo(pi.lastSeen) : '—'}</span></div>
-            <div class="kv"><span>Version</span><span class="mono">{info.version || '—'}</span></div>
+            <div class="kv">
+              <span>Version</span>
+              <span class="mono">
+                {info.version || '—'}
+                {#if info.update?.updateAvailable}
+                  <span class="text-warn"> · update available{info.update.latestVersion ? ` → ${info.update.latestVersion}` : ''}</span>
+                {/if}
+              </span>
+            </div>
+            {#if lastUpdate || info.update?.last}
+              {@const lu = lastUpdate ?? { action: (info.update?.last?.action === 'rollback' ? 'rollback' : 'update') as 'update' | 'rollback', state: info.update?.last?.state ?? '' }}
+              {@const b = updateStateBadge(lu)}
+              <div class="kv">
+                <span>Last update</span>
+                <span class="text-right">
+                  <Badge tone={b.tone}>{lu.action === 'rollback' ? 'Roll back' : 'Update'}: {b.label}</Badge>
+                  {#if lastUpdate}<span class="block text-xs text-muted mt-0.5">{timeAgo(lastUpdate.updated_at)}{lastUpdate.to_version ? ` · ${lastUpdate.to_version}` : ''}</span>{/if}
+                </span>
+              </div>
+            {/if}
             <div class="kv">
               <span>Printers</span>
               <span class="mono {info.printersDown ? 'text-bad' : ''}">
@@ -371,6 +434,13 @@
               <div class="kv"><span>Problems</span><span class="text-warn">{info.problems.join(' · ')}</span></div>
             {/if}
           </div>
+          <div class="flex flex-wrap gap-2 mt-3">
+            <Button size="sm" icon="download" disabled={!loc} onclick={() => ((forceUpdate = false), (updateOpen = true))}>Update Pi</Button>
+            <Button size="sm" variant="ghost" disabled={!loc} onclick={rollBack}>Roll back</Button>
+          </div>
+          {#if updateOutcome}
+            <p class="m-0 mt-2 text-[13px] {updateOutcome.ok ? 'text-ok' : 'text-warn'}" role="status">{updateOutcome.text}</p>
+          {/if}
         </div>
         <div class="card px-5 py-[18px]">
           <div class="eyebrow">Today</div>
@@ -540,6 +610,30 @@
           <p class="m-0 px-5 pb-5 text-muted">No tablet has a report key yet.</p>
         {/if}
       </Card>
+      <Card title="Update history" subtitle="Pi updates and roll backs — from here, the console, the Pi's own page or a fresh card" padded={false}>
+        {#if updates.length}
+          <div class="overflow-x-auto">
+            <table class="tbl stack min-w-[720px]">
+              <thead><tr><th>Action</th><th>Who</th><th>State</th><th>Versions</th><th>Error</th><th>When</th></tr></thead>
+              <tbody>
+                {#each updates as u (u.id)}
+                  {@const b = updateStateBadge(u)}
+                  <tr>
+                    <td class="font-semibold"><span>{u.action === 'rollback' ? 'Roll back' : 'Update'}{#if u.force}<Badge tone="warn" class="ml-2">Force</Badge>{/if}</span></td>
+                    <td data-label="Who">{requesterText(u.requested_by)}</td>
+                    <td data-label="State"><Badge tone={b.tone}>{b.label}</Badge></td>
+                    <td data-label="Versions" class="mono">{u.from_version || u.to_version ? `${u.from_version || '?'} → ${u.to_version || '?'}` : '—'}</td>
+                    <td data-label="Error" class="text-[13px] {u.error ? 'text-bad' : 'text-muted'}">{updateErrorText(u) || '—'}</td>
+                    <td data-label="When" title={fmtTime(u.requested_at)}>{timeAgo(u.updated_at)}</td>
+                  </tr>
+                {/each}
+              </tbody>
+            </table>
+          </div>
+        {:else}
+          <p class="m-0 px-5 pb-5 text-muted">No updates yet. Use “Update Pi” on the Overview tab.</p>
+        {/if}
+      </Card>
       <Dialog bind:open={mintOpen} title="Create a Pi key by hand" description="Mints an agent token for this store. Paste it into the Pi's setup screen — only needed when the manager-login link isn't an option.">
         <form
           id="mint-form"
@@ -587,4 +681,25 @@
       </section>
     {/if}
   </div>
+
+  <Dialog bind:open={updateOpen} title="Update the Pi?" description="It installs the newest agent published for this Pi (the signed release, checked like a fresh card)." width={480}>
+    <div class="flex flex-col gap-3 text-[14px]">
+      <p class="m-0">
+        <b>Normally</b> the Pi only updates right after <b>Close batch</b> — when the open batch has no orders. Otherwise it says no and nothing
+        changes.
+      </p>
+      <p class="m-0">Printing pauses for about a minute while the new agent starts. If it isn't healthy within 2 minutes, the Pi rolls back by itself.</p>
+      <label class="flex items-start gap-2 subcard px-3 py-2.5">
+        <input type="checkbox" class="check mt-0.5" bind:checked={forceUpdate} />
+        <span>
+          <b>Force</b> — install as soon as no orders are open
+          <span class="block text-[13px] text-muted">Skips the after-close rule; the Pi still waits until nothing is waiting, cooking, ready or out for delivery.</span>
+        </span>
+      </label>
+    </div>
+    {#snippet footer()}
+      <Button onclick={() => (updateOpen = false)}>Cancel</Button>
+      <Button variant={forceUpdate ? 'danger' : 'primary'} loading={updating} onclick={runUpdate}>{forceUpdate ? 'Force update' : 'Update Pi'}</Button>
+    {/snippet}
+  </Dialog>
 {/if}

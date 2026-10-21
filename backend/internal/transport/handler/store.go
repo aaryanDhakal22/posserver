@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
+	"time"
 
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/domain/tenancy"
@@ -209,18 +211,20 @@ func (h *StoreHandler) MeListPrinters(c *echo.Context) error {
 	return c.JSON(http.StatusOK, out)
 }
 
-// POST /store/v1/me/printers
+// POST /store/v1/me/printers {name, ip, mac?} — mac when the manager adds a
+// printer the Pi found on the network (the Pi follows it by MAC).
 func (h *StoreHandler) MeCreatePrinter(c *echo.Context) error {
 	ctx := c.Request().Context()
 	tid, lid, _ := meScope(c)
 	var req struct {
 		Name string `json:"name"`
 		IP   string `json:"ip"`
+		MAC  string `json:"mac"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
 	}
-	p, err := h.svc.CreatePrinter(ctx, lid, req.Name, req.IP)
+	p, err := h.svc.AddPrinter(ctx, lid, req.Name, req.IP, req.MAC)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, errResp(err.Error()))
 	}
@@ -283,6 +287,38 @@ func (h *StoreHandler) MeDeletePrinter(c *echo.Context) error {
 	}
 	h.cfgPub.Publish(ctx, tid, lid)
 	return c.NoContent(http.StatusNoContent)
+}
+
+// GET /store/v1/me/printers/ip-changes?limit=20 — this location's printer IP
+// changes, newest first: the Pi following a printer to a new IP (source
+// "agent") and manager edits (source "manager").
+func (h *StoreHandler) MeListPrinterIPChanges(c *echo.Context) error {
+	ctx := c.Request().Context()
+	_, lid, _ := meScope(c)
+	limit, _ := strconv.Atoi(c.QueryParam("limit"))
+	rows, err := h.svc.ListPrinterIPChanges(ctx, lid, limit)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("list printer ip changes failed")
+		return c.JSON(http.StatusInternalServerError, errResp("list failed"))
+	}
+	type changeJSON struct {
+		ID          string    `json:"id"`
+		PrinterID   string    `json:"printer_id"`
+		PrinterName string    `json:"printer_name"`
+		OldIP       string    `json:"old_ip"`
+		NewIP       string    `json:"new_ip"`
+		MAC         string    `json:"mac"`
+		Source      string    `json:"source"`
+		At          time.Time `json:"at"`
+	}
+	out := make([]changeJSON, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, changeJSON{
+			ID: r.ID.String(), PrinterID: r.PrinterID.String(), PrinterName: r.PrinterName,
+			OldIP: r.OldIP, NewIP: r.NewIP, MAC: r.MAC, Source: r.Source, At: r.At,
+		})
+	}
+	return c.JSON(http.StatusOK, out)
 }
 
 // GET /store/v1/me/devices

@@ -230,6 +230,7 @@ func buildStoreContext(t tenancy.Tenant, l tenancy.Location, printers []tenancy.
 			Name:      p.Name,
 			IP:        p.IP,
 			IsReceipt: p.IsReceipt,
+			MAC:       p.MAC,
 			UpdatedAt: p.UpdatedAt,
 		})
 	}

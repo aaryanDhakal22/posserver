@@ -17,16 +17,25 @@ import (
 type LivePrinter struct {
 	Name        string     `json:"name"`
 	IP          string     `json:"ip"`
+	MAC         string     `json:"mac,omitempty"` // hardware address the Pi learned (2.0.6+)
 	Up          bool       `json:"up"`
 	LastChecked *time.Time `json:"last_checked,omitempty"`
 	LastError   string     `json:"last_error,omitempty"`
 }
 
+// FoundPrinter is a printer the Pi found on its network (TCP 9100) that isn't
+// in the roster yet (2.0.6+).
+type FoundPrinter struct {
+	IP  string `json:"ip"`
+	MAC string `json:"mac"`
+}
+
 // Report mirrors the agent's printer.PrinterReport.
 type Report struct {
-	ReportedAt   time.Time     `json:"reported_at"`
-	AgentVersion string        `json:"agent_version"`
-	Printers     []LivePrinter `json:"printers"`
+	ReportedAt   time.Time      `json:"reported_at"`
+	AgentVersion string         `json:"agent_version"`
+	Printers     []LivePrinter  `json:"printers"`
+	Found        []FoundPrinter `json:"found,omitempty"`
 }
 
 type entry struct {

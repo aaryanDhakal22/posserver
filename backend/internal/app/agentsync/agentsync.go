@@ -103,6 +103,9 @@ type Service struct {
 	offSince  map[uuid.UUID]time.Time // location → first seen offline
 	offPaged  map[uuid.UUID]bool
 	linkLimit *ratelimit.Window // failed link attempts
+	// printersChanged pushes a fresh store_config after the agent changed
+	// the printers (OnPrintersChanged); nil = no push.
+	printersChanged func(ctx context.Context, tenantID, locationID uuid.UUID)
 	// linkMu serializes links: each mints a key then revokes every other
 	// agent, so two overlapping links (a double tap, a retry after a
 	// timeout) would revoke each other's new key. main is one process.

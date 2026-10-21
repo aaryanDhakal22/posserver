@@ -60,6 +60,9 @@
                 <span class="mono">{r.tenant.store_id ?? 'no store id'}</span> · {r.tenant.has_login ? r.tenant.username : 'no login'} · {r.ordersToday} order{r.ordersToday === 1 ? '' : 's'} today
               </span>
               <span class="text-xs {r.printersDown ? 'text-bad' : 'text-muted'} truncate">{seen(r)}{printers(r) !== '—' ? ` · printers ${printers(r)}` : ''}</span>
+              {#if r.updateAvailable}
+                <span class="text-xs text-warn truncate">Pi update available{r.latestVersion ? ` → ${r.latestVersion}` : ''}</span>
+              {/if}
             </span>
             <span class="text-muted shrink-0"><Icon name="chevron-right" size={18} /></span>
           </a>
@@ -90,7 +93,14 @@
                 <div class="text-xs text-muted mt-0.5">{seen(r)}</div>
               </td>
               <td class="mono {r.printersDown ? 'text-bad' : ''}">{printers(r)}</td>
-              <td class="mono text-text2">{r.version || '—'}</td>
+              <td class="mono text-text2">
+                {r.version || '—'}
+                {#if r.updateAvailable}
+                  <div class="text-xs text-warn mt-0.5" title="A newer agent is published — update it from the store's page">
+                    update available{r.latestVersion ? ` → ${r.latestVersion}` : ''}
+                  </div>
+                {/if}
+              </td>
               <td class="mono text-text2">{r.tenant.has_login ? r.tenant.username : '—'}</td>
               <td class="mono">{r.ordersToday}</td>
               <td class="text-right">

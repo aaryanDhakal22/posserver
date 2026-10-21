@@ -22,6 +22,7 @@ import (
 	"quiccpos/main/internal/shared/config"
 	"quiccpos/main/internal/shared/logger"
 	"quiccpos/main/internal/transport"
+	"quiccpos/main/internal/transport/handler"
 	"quiccpos/main/internal/transport/session"
 	"strings"
 	"syscall"
@@ -225,6 +226,15 @@ func main() {
 	requester.RegisterInbound(agentsync.MsgOrderAck, agentSync.HandleAck)
 	requester.RegisterInbound(agentsync.MsgAgentState, agentSync.HandleState)
 	requester.RegisterInbound(agentsync.MsgAgentHealth, agentSync.HandleHealth)
+	// Pi updates + printer auto-follow (2.0.6): update status reports, a
+	// printer the Pi followed to a new IP, a found printer added from the Pi.
+	// A printer change pushes the fresh store_config to the agent, the same
+	// way a manager edit in /app/store does.
+	requester.RegisterInbound(rpc.MsgAgentUpdateStatus, agentSync.HandleUpdateStatus)
+	requester.RegisterInbound(rpc.MsgPrinterMoved, agentSync.HandlePrinterMoved)
+	requester.RegisterInbound(rpc.MsgPrinterAdd, agentSync.HandlePrinterAdd)
+	storeConfigPub := handler.NewStoreConfigPublisher(broker, tenancyService, lgr)
+	agentSync.OnPrintersChanged(storeConfigPub.Publish)
 	go agentSync.RunRedeliver(ctx)
 	go agentSync.RunOfflinePager(ctx)
 
