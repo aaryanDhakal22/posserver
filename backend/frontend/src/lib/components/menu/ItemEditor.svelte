@@ -1,28 +1,48 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import {
-    storeApi, toCents,
-    type Item, type Printer, type LivePrinters, type ModifierGroup, type ModifierOption, type ItemGroupLink
+    storeApi,
+    toCents,
+    centsInput,
+    type Item,
+    type Printer,
+    type LivePrinters,
+    type ModifierGroup,
+    type ModifierOption,
+    type ItemGroupLink
   } from '$lib/api';
+  import { confirmDialog } from '$lib/confirm.svelte';
+  import { toast } from '$lib/toast.svelte';
+  import Drawer from '$lib/ui/Drawer.svelte';
+  import Button from '$lib/ui/Button.svelte';
+  import Switch from '$lib/ui/Switch.svelte';
+  import Icon from '$lib/ui/Icon.svelte';
+  import type { PiLink } from '$lib/store/pi';
 
+  // The item side panel. The parent keys it by item id, so the editable copy
+  // below is taken once per item.
   let {
-    item, printers, live, inheritedPrinter = '', onclose, onsaved, toast
+    item,
+    categoryName = '',
+    printers,
+    live,
+    piState = 'unknown',
+    inheritedPrinter = '',
+    onclose,
+    onsaved,
+    ondeleted
   }: {
     item: Item;
+    categoryName?: string;
     printers: Printer[];
     live: LivePrinters | null;
+    piState?: PiLink;
     inheritedPrinter?: string;
     onclose: () => void;
     onsaved: (catID: string) => void;
-    toast: (m: string, k?: 'ok' | 'error') => void;
+    ondeleted: (catID: string) => void;
   } = $props();
 
-  // editable copy
-  let name = $state(item.name);
-  let description = $state(item.description);
-  let priceStr = $state((item.price_cents / 100).toFixed(2));
-  let taxPct = $state((item.tax_rate_bps / 100).toString());
-  let inStock = $state(item.in_stock);
   // <input type="datetime-local"> holds local wall-clock time with no zone;
   // out_until is a UTC instant. Convert both ways so a save doesn't shift it.
   function toLocalInput(iso: string | null | undefined): string {
@@ -32,17 +52,49 @@
     const p = (n: number) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
   }
-  let outUntil = $state(toLocalInput(item.out_until));
-  let tagsStr = $state((item.tags || []).join(', '));
-  let printerId = $state<string | null>(item.printer_id);
+
+  const it0 = untrack(() => item);
+  let open = $state(true);
+  let name = $state(it0.name);
+  let description = $state(it0.description);
+  let priceStr = $state(centsInput(it0.price_cents));
+  let taxPct = $state((it0.tax_rate_bps / 100).toString());
+  let inStock = $state(it0.in_stock);
+  let outUntil = $state(toLocalInput(it0.out_until));
+  let tagsStr = $state((it0.tags || []).join(', '));
+  let printerId = $state<string | null>(it0.printer_id);
+  let priceErr = $state('');
+  let saving = $state(false);
 
   let attached = $state<ItemGroupLink[]>([]);
   let allGroups = $state<ModifierGroup[]>([]);
   let addGroupId = $state('');
-  // group id → example option names, shown as a subtitle under each attached group
+  // group id → example option names, shown under each attached group
   let examples = $state<Record<string, string[]>>({});
 
-  const upFor = (name: string) => live?.printers.find((p) => p.name === name)?.up;
+  // Unsaved edits to the form above (modifier groups save on their own).
+  const dirty = $derived(
+    name !== it0.name ||
+      description !== it0.description ||
+      priceStr !== centsInput(it0.price_cents) ||
+      taxPct !== (it0.tax_rate_bps / 100).toString() ||
+      inStock !== it0.in_stock ||
+      (!inStock && outUntil !== toLocalInput(it0.out_until)) ||
+      tagsStr !== (it0.tags || []).join(', ') ||
+      printerId !== it0.printer_id
+  );
+  async function beforeClose(): Promise<boolean> {
+    if (!dirty || saving) return !saving;
+    return confirmDialog({
+      title: 'Discard changes?',
+      body: `Your edits to “${it0.name}” haven't been saved.`,
+      confirmLabel: 'Discard changes',
+      cancelLabel: 'Keep editing',
+      danger: true
+    });
+  }
+
+  const upFor = (n: string) => (piState === 'online' ? live?.printers?.find((p) => p.name === n)?.up : undefined);
   const exampleLine = (gid: string) => (examples[gid] || []).slice(0, 4).join(', ');
 
   async function loadExamples(id: string) {
@@ -52,125 +104,175 @@
   }
 
   onMount(async () => {
-    attached = await storeApi<ItemGroupLink[]>(`/me/menu/items/${item.id}/modifier-groups`).catch(() => []);
+    attached = await storeApi<ItemGroupLink[]>(`/me/menu/items/${it0.id}/modifier-groups`).catch(() => []);
     allGroups = await storeApi<ModifierGroup[]>('/me/menu/modifier-groups').catch(() => []);
     await Promise.all(attached.map((a) => loadExamples(a.group.id)));
   });
 
   async function save() {
+    priceErr = '';
     const priceCents = toCents(priceStr);
     if (priceCents === null || priceCents < 0) {
-      toast(`Price "${priceStr}" isn't a valid amount — use e.g. 12.50 (or 0 for free). Not saved.`, 'error');
+      priceErr = `“${priceStr}” isn't a valid amount — use e.g. 12.50 (or 0 for free).`;
       return;
     }
     // "2026-10-22T09:00" (no zone) parses as local time — the instant the person picked.
     const outUntilDate = !inStock && outUntil ? new Date(outUntil) : null;
     if (outUntilDate && isNaN(outUntilDate.getTime())) {
-      toast('"Out of stock until" isn\'t a valid date/time. Not saved.', 'error');
+      toast.error('“Out of stock until” isn’t a valid date/time. Not saved.');
       return;
     }
+    saving = true;
     try {
-      await storeApi(`/me/menu/items/${item.id}`, {
+      await storeApi(`/me/menu/items/${it0.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
-          name, description,
+          name,
+          description,
           price_cents: priceCents,
           tax_rate_bps: Math.round((parseFloat(taxPct) || 0) * 100),
           in_stock: inStock,
           out_until: outUntilDate ? outUntilDate.toISOString() : null,
-          tags: tagsStr.split(',').map((t) => t.trim()).filter(Boolean),
-          attributes: item.attributes || {}
+          tags: tagsStr
+            .split(',')
+            .map((t) => t.trim())
+            .filter(Boolean),
+          attributes: it0.attributes || {}
         })
       });
-      if (printerId !== item.printer_id) {
-        await storeApi(`/me/menu/items/${item.id}/printer`, { method: 'PATCH', body: JSON.stringify({ printer_id: printerId }) });
+      if (printerId !== it0.printer_id) {
+        await storeApi(`/me/menu/items/${it0.id}/printer`, { method: 'PATCH', body: JSON.stringify({ printer_id: printerId }) });
       }
-      onsaved(item.category_id);
-    } catch (e) { toast(String(e), 'error'); }
+      onsaved(it0.category_id);
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function del() {
+    const ok = await confirmDialog({ title: `Delete “${it0.name}”?`, body: 'It disappears from the menu right away.', confirmLabel: 'Delete item', danger: true });
+    if (!ok) return;
+    try {
+      await storeApi(`/me/menu/items/${it0.id}`, { method: 'DELETE' });
+      ondeleted(it0.category_id);
+    } catch (e) {
+      toast.error(e);
+    }
   }
 
   async function attach() {
     if (!addGroupId) return;
     try {
       const gid = addGroupId;
-      await storeApi(`/me/menu/items/${item.id}/modifier-groups`, { method: 'POST', body: JSON.stringify({ group_id: gid }) });
-      attached = await storeApi<ItemGroupLink[]>(`/me/menu/items/${item.id}/modifier-groups`);
+      await storeApi(`/me/menu/items/${it0.id}/modifier-groups`, { method: 'POST', body: JSON.stringify({ group_id: gid }) });
+      attached = await storeApi<ItemGroupLink[]>(`/me/menu/items/${it0.id}/modifier-groups`);
       await loadExamples(gid);
       addGroupId = '';
-    } catch (e) { toast(String(e), 'error'); }
+      toast.success(`${attached.find((a) => a.group.id === gid)?.group.name ?? 'Group'} attached to ${it0.name}`);
+    } catch (e) {
+      toast.error(e);
+    }
   }
   async function detach(groupId: string) {
     try {
-      await storeApi(`/me/menu/items/${item.id}/modifier-groups/${groupId}`, { method: 'DELETE' });
-      attached = await storeApi<ItemGroupLink[]>(`/me/menu/items/${item.id}/modifier-groups`);
-    } catch (e) { toast(String(e), 'error'); }
+      const gname = attached.find((a) => a.group.id === groupId)?.group.name ?? 'Group';
+      await storeApi(`/me/menu/items/${it0.id}/modifier-groups/${groupId}`, { method: 'DELETE' });
+      attached = await storeApi<ItemGroupLink[]>(`/me/menu/items/${it0.id}/modifier-groups`);
+      toast.success(`${gname} removed from ${it0.name}`);
+    } catch (e) {
+      toast.error(e);
+    }
   }
 </script>
 
-<div class="fixed inset-0 bg-black/40 z-20" role="button" tabindex="-1" onclick={onclose} onkeydown={(e) => e.key === 'Escape' && onclose()}></div>
-<div class="fixed right-0 top-0 h-full w-full max-w-lg z-30 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 overflow-y-auto p-6 text-[15px]">
-  <div class="flex items-center justify-between mb-5">
-    <div class="text-lg font-semibold">Edit item</div>
-    <button class="btn btn-ghost btn-xs" onclick={onclose}>✕ close</button>
-  </div>
-
-  <div class="space-y-4">
-    <div><label class="lbl">Name</label><input class="field w-full" bind:value={name} /></div>
-    <div><label class="lbl">Description</label><textarea class="field w-full h-16" bind:value={description}></textarea></div>
-    <div class="grid grid-cols-2 gap-3">
-      <div><label class="lbl">Price ($)</label><input class="field w-full" bind:value={priceStr} /></div>
-      <div><label class="lbl">Tax rate (%)</label><input class="field w-full" bind:value={taxPct} /></div>
+<Drawer bind:open title={it0.name} eyebrow={categoryName} {onclose} {beforeClose}>
+  <form
+    id="item-form"
+    class="flex flex-col gap-4"
+    onsubmit={(e) => {
+      e.preventDefault();
+      save();
+    }}
+  >
+    <div>
+      <label class="lbl" for="ie-name">Name</label>
+      <input id="ie-name" class="field" bind:value={name} />
+      <p class="help">Online orders match items by this name (size ignored).</p>
     </div>
     <div>
-      <label class="lbl">Printer</label>
-      <select class="field w-full" bind:value={printerId}>
-        <option value={null}>— (use category default{#if inheritedPrinter}: {inheritedPrinter}{/if})</option>
-        {#each printers as p}
-          <option value={p.id}>{p.name}{#if upFor(p.name) === true} · online{:else if upFor(p.name) === false} · offline{/if}</option>
+      <label class="lbl" for="ie-desc">Description</label>
+      <textarea id="ie-desc" class="field" rows="2" bind:value={description} placeholder="Shown to call-center operators"></textarea>
+    </div>
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <label class="lbl" for="ie-price">Price ($)</label>
+        <input id="ie-price" class="field mono text-right" inputmode="decimal" bind:value={priceStr} aria-invalid={!!priceErr || undefined} />
+      </div>
+      <div>
+        <label class="lbl" for="ie-tax">Tax rate (%)</label>
+        <input id="ie-tax" class="field mono text-right" inputmode="decimal" bind:value={taxPct} />
+      </div>
+    </div>
+    {#if priceErr}<p class="field-error !-mt-2" role="alert">{priceErr}</p>{/if}
+    <div>
+      <label class="lbl" for="ie-printer">Kitchen printer</label>
+      <select id="ie-printer" class="field" bind:value={printerId}>
+        <option value={null}>{inheritedPrinter ? `Same as category (${inheritedPrinter})` : 'None — prints on every station'}</option>
+        {#each printers as p (p.id)}
+          <option value={p.id}>{p.name}{upFor(p.name) === true ? ' · online' : upFor(p.name) === false ? ' · offline' : ''}</option>
         {/each}
       </select>
-      {#if printerId === null}
-        <div class="text-xs text-slate-500 dark:text-slate-400 mt-1">
-          {#if inheritedPrinter}Inherits <span class="font-medium">🖨 {inheritedPrinter}</span> from its category.{:else}No category default set — this item won't print anywhere.{/if}
-        </div>
+      {#if printerId === null && !inheritedPrinter}
+        <p class="help !text-warn">Neither the item nor its category has a printer, so it prints on every kitchen station.</p>
       {/if}
-      {#if live && !live.agent_online}<div class="text-xs text-amber-600 dark:text-amber-400 mt-1">agent offline — printer status may be stale</div>{/if}
+      {#if piState === 'offline'}<p class="help !text-warn">The Pi is offline — printer status may be stale.</p>{/if}
     </div>
-    <div><label class="lbl">Tags (comma-separated)</label><input class="field w-full" bind:value={tagsStr} placeholder="High protein, Spicy" /></div>
-    <div class="flex items-center gap-2">
-      <input id="instock" type="checkbox" bind:checked={inStock} />
-      <label for="instock" class="text-sm">In stock</label>
+    <div>
+      <label class="lbl" for="ie-tags">Tags (comma-separated)</label>
+      <input id="ie-tags" class="field" bind:value={tagsStr} placeholder="High protein, Spicy" />
+    </div>
+    <div class="flex items-center gap-2.5">
+      <Switch bind:checked={inStock} label="In stock" />
+      <span>{inStock ? 'In stock' : 'Out of stock — the tablet shows it as 86’d'}</span>
     </div>
     {#if !inStock}
-      <div><label class="lbl">Out of stock until (optional)</label><input type="datetime-local" class="field w-full" bind:value={outUntil} /></div>
+      <div>
+        <label class="lbl" for="ie-until">Out of stock until (optional)</label>
+        <input id="ie-until" type="datetime-local" class="field" bind:value={outUntil} />
+      </div>
     {/if}
+  </form>
 
-    <div class="pt-3 border-t border-slate-200 dark:border-slate-800">
-      <label class="lbl">Modifier groups</label>
-      <div class="space-y-1.5">
-        {#each attached as a (a.group.id)}
-          <div class="flex items-center justify-between gap-2 subcard px-3 py-2">
-            <div class="min-w-0">
-              <div class="text-sm font-medium truncate">{a.group.name}{#if a.group.required} · <span class="text-slate-500">required</span>{/if}</div>
-              {#if exampleLine(a.group.id)}
-                <div class="text-xs text-slate-500 dark:text-slate-400 truncate">e.g. {exampleLine(a.group.id)}</div>
-              {/if}
-            </div>
-            <button class="btn btn-danger btn-xs shrink-0" onclick={() => detach(a.group.id)}>detach</button>
+  <div class="mt-5 pt-4 border-t border-border">
+    <span class="lbl !mb-0.5" id="ie-groups">Modifier groups</span>
+    <p class="help !mt-0 mb-2">Attaching or removing a group saves right away.</p>
+    <ul class="flex flex-col gap-1.5" aria-labelledby="ie-groups">
+      {#each attached as a (a.group.id)}
+        <li class="subcard flex items-center justify-between gap-2 px-3 py-2">
+          <div class="min-w-0">
+            <div class="font-medium truncate">{a.group.name}{#if a.group.required}<span class="text-muted font-normal"> · required</span>{/if}</div>
+            {#if exampleLine(a.group.id)}<div class="text-xs text-muted truncate">e.g. {exampleLine(a.group.id)}</div>{/if}
           </div>
-        {:else}
-          <div class="text-xs text-slate-500 dark:text-slate-400">No modifier groups attached.</div>
-        {/each}
-      </div>
-      <div class="flex gap-1 mt-2">
-        <select class="field flex-1" bind:value={addGroupId}>
-          <option value="">attach a group…</option>
-          {#each allGroups.filter((g) => !attached.some((a) => a.group.id === g.id)) as g}<option value={g.id}>{g.name}</option>{/each}
-        </select>
-        <button class="btn btn-ghost btn-xs" onclick={attach}>attach</button>
-      </div>
+          <Button size="xs" variant="ghost" icon="x" aria-label="Detach {a.group.name}" onclick={() => detach(a.group.id)} />
+        </li>
+      {:else}
+        <li class="text-[13px] text-muted">No modifier groups attached.</li>
+      {/each}
+    </ul>
+    <div class="flex gap-2 mt-2">
+      <label for="ie-attach" class="sr-only">Attach a modifier group</label>
+      <select id="ie-attach" class="field flex-1" bind:value={addGroupId}>
+        <option value="">Attach a group…</option>
+        {#each allGroups.filter((g) => !attached.some((a) => a.group.id === g.id)) as g (g.id)}<option value={g.id}>{g.name}</option>{/each}
+      </select>
+      <Button icon="plus" disabled={!addGroupId} onclick={attach}>Attach</Button>
     </div>
-
-    <button class="btn btn-primary w-full justify-center mt-2" onclick={save}>Save item</button>
   </div>
-</div>
+
+  {#snippet footer()}
+    <Button type="submit" form="item-form" variant="primary" class="flex-1" loading={saving}>Save item</Button>
+    <Button variant="danger-ghost" onclick={del}><Icon name="trash" size={16} />Delete</Button>
+  {/snippet}
+</Drawer>

@@ -10,6 +10,7 @@ import (
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/domain/tenancy"
+	"quiccpos/main/internal/transport/session"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -30,14 +31,16 @@ type AdminHandler struct {
 	svc      *tenancyApp.Service
 	orderSvc *orderApp.Service
 	cfgPub   *StoreConfigPublisher // live store_config push after location edits
+	signer   *session.Signer       // open-as-store: impersonated store session cookie
 	logger   zerolog.Logger
 }
 
-func NewAdminHandler(svc *tenancyApp.Service, orderSvc *orderApp.Service, cfgPub *StoreConfigPublisher, logger zerolog.Logger) *AdminHandler {
+func NewAdminHandler(svc *tenancyApp.Service, orderSvc *orderApp.Service, cfgPub *StoreConfigPublisher, signer *session.Signer, logger zerolog.Logger) *AdminHandler {
 	return &AdminHandler{
 		svc:      svc,
 		orderSvc: orderSvc,
 		cfgPub:   cfgPub,
+		signer:   signer,
 		logger:   logger.With().Str("module", "admin-handler").Logger(),
 	}
 }
@@ -153,7 +156,7 @@ func (h *AdminHandler) CreateTenant(c *echo.Context) error {
 	t, loc, err := h.svc.CreateTenant(c.Request().Context(), req.Slug, req.Name, req.Username, req.Password, req.StoreID)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("CreateTenant failed")
-		if errors.Is(err, tenancy.ErrStoreIDTaken) {
+		if errors.Is(err, tenancy.ErrStoreIDTaken) || errors.Is(err, tenancy.ErrUsernameTaken) {
 			return c.JSON(http.StatusConflict, errResp(err.Error()))
 		}
 		return c.JSON(http.StatusBadRequest, errResp(err.Error()))
@@ -207,9 +210,64 @@ func (h *AdminHandler) SetTenantCredentials(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
 	}
 	if err := h.svc.SetTenantCredentials(c.Request().Context(), id, req.Username, req.Password); err != nil {
+		if errors.Is(err, tenancy.ErrUsernameTaken) {
+			return c.JSON(http.StatusConflict, errResp(err.Error()))
+		}
 		return c.JSON(http.StatusBadRequest, errResp(err.Error()))
 	}
 	return c.NoContent(http.StatusNoContent)
+}
+
+// impersonatorAdmin labels a session opened from the admin surface (the single
+// shared ADMIN_API_KEY has no per-person identity). "admin" is also a reserved
+// store username so the label can't be confused with a real manager.
+const impersonatorAdmin = "admin"
+
+// POST /admin/v1/tenants/:id/store-session — open this tenant's store as its
+// manager: sets a store session cookie (session.ImpersonateTTL, stamped
+// impersonated_by=admin) so the admin's browser can use /app/store without the
+// manager's password. Audited at warn level; the cookie's scope is that one
+// tenant, exactly like the manager's own login.
+func (h *AdminHandler) OpenStoreSession(c *echo.Context) error {
+	ctx := c.Request().Context()
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errResp("id must be a uuid"))
+	}
+	t, err := h.svc.GetTenant(ctx, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.JSON(http.StatusNotFound, errResp("tenant not found"))
+		}
+		h.logger.Error().Ctx(ctx).Err(err).Str("tenant_id", id.String()).Msg("open store session: tenant lookup failed")
+		return c.JSON(http.StatusInternalServerError, errResp("tenant lookup failed"))
+	}
+	loc, err := h.svc.PrimaryLocation(ctx, t.ID)
+	if err != nil {
+		if errors.Is(err, tenancyApp.ErrNoPrimaryLocation) {
+			return c.JSON(http.StatusConflict, errResp("this store has no location yet"))
+		}
+		h.logger.Error().Ctx(ctx).Err(err).Str("tenant_id", id.String()).Msg("open store session: location lookup failed")
+		return c.JSON(http.StatusInternalServerError, errResp("location lookup failed"))
+	}
+	if err := h.signer.IssueAs(c.Response(), c.Request(), t.ID, loc.ID, impersonatorAdmin); err != nil {
+		h.logger.Error().Ctx(ctx).Err(err).Msg("open store session: issue failed")
+		return c.JSON(http.StatusInternalServerError, errResp("could not open store session"))
+	}
+	// Audit line: who/what/where, never the cookie value.
+	h.logger.Warn().Ctx(ctx).
+		Str("event", "admin opened store session").
+		Str("tenant_id", t.ID.String()).
+		Str("location_id", loc.ID.String()).
+		Str("impersonated_by", impersonatorAdmin).
+		Str("remote_ip", c.RealIP()).
+		Msg("admin opened store session")
+	return c.JSON(http.StatusOK, map[string]any{
+		"tenant_id":          t.ID.String(),
+		"location_id":        loc.ID.String(),
+		"tenant_name":        t.Name,
+		"expires_in_seconds": int(session.ImpersonateTTL.Seconds()),
+	})
 }
 
 // DELETE /admin/v1/orders/:id — delete a single order + children. Used to clean

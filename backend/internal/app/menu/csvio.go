@@ -183,17 +183,30 @@ func formatPrice(cents int64) string {
 
 // ImportResult summarizes an import (or, with DryRun, what it would do).
 type ImportResult struct {
-	DryRun           bool     `json:"dry_run"`
-	Replace          bool     `json:"replace"`
-	Rows             int      `json:"rows"`
-	MenusDeleted     int      `json:"menus_deleted"`
-	Menus            int      `json:"menus"`
-	Categories       int      `json:"categories"`
-	CategoryPrinters int      `json:"category_printers"`
-	Items            int      `json:"items"`
-	ItemsUpdated     int      `json:"items_updated"`
-	ItemPrinters     int      `json:"item_printers"`
-	Changes          []string `json:"changes"`
+	DryRun           bool `json:"dry_run"`
+	Replace          bool `json:"replace"`
+	Rows             int  `json:"rows"`
+	MenusDeleted     int  `json:"menus_deleted"`
+	Menus            int  `json:"menus"`
+	Categories       int  `json:"categories"`
+	CategoryPrinters int  `json:"category_printers"`
+	Items            int  `json:"items"`
+	ItemsUpdated     int  `json:"items_updated"`
+	ItemPrinters     int  `json:"item_printers"`
+	// PrintsOn counts the file's items by the printer they will print on
+	// (their own printer, else their category's default), in the store's
+	// printer order; printers no item prints on are left out.
+	PrintsOn []PrinterItems `json:"prints_on"`
+	// ItemsNoPrinter counts the file's items left without any printer — they
+	// print on every kitchen station.
+	ItemsNoPrinter int      `json:"items_no_printer"`
+	Changes        []string `json:"changes"`
+}
+
+// PrinterItems is one entry of ImportResult.PrintsOn.
+type PrinterItems struct {
+	Printer string `json:"printer"`
+	Items   int    `json:"items"`
 }
 
 func (r *ImportResult) note(format string, a ...any) {
@@ -237,11 +250,23 @@ func (s *Service) ImportCSV(ctx context.Context, tenantID, locationID uuid.UUID,
 		}
 	}
 	if len(unknown) > 0 {
-		return nil, &CSVError{Msg: fmt.Sprintf("printers not set up in /app/store: %s (have: %s)",
-			strings.Join(unknown, ", "), strings.Join(have, ", "))}
+		msg := fmt.Sprintf("This file sends items to printers that this store doesn't have yet: %s. "+
+			"Add them on the Printers page first, or clear the printer column.", strings.Join(unknown, ", "))
+		if len(have) > 0 {
+			msg += " This store has: " + strings.Join(have, ", ") + "."
+		}
+		return nil, &CSVError{Msg: msg}
 	}
 
-	res = &ImportResult{DryRun: dryRun, Replace: replace, Rows: len(rows), Changes: []string{}}
+	res = &ImportResult{DryRun: dryRun, Replace: replace, Rows: len(rows), PrintsOn: []PrinterItems{}, Changes: []string{}}
+	printsOn := map[uuid.UUID]int{}
+	defer func() {
+		for _, p := range printers {
+			if n := printsOn[p.ID]; n > 0 {
+				res.PrintsOn = append(res.PrintsOn, PrinterItems{Printer: p.Name, Items: n})
+			}
+		}
+	}()
 	menus, err := s.repo.ListMenusByLocation(ctx, locationID)
 	if err != nil {
 		return nil, err
@@ -333,6 +358,7 @@ func (s *Service) ImportCSV(ctx context.Context, tenantID, locationID uuid.UUID,
 			case !found:
 				res.Categories++
 				if want != nil {
+					res.CategoryPrinters++
 					res.note("+ category %q (printer %s)", cr.name, printerName[*want])
 				} else {
 					res.note("+ category %q", cr.name)
@@ -380,6 +406,9 @@ func (s *Service) ImportCSV(ctx context.Context, tenantID, locationID uuid.UUID,
 				}
 			}
 			nextItemPos := len(items)
+			// The category's items this file names, for res.PrintsOn.
+			var fileItems []*menuDom.Item
+			inFile := map[*menuDom.Item]bool{}
 
 			for _, r := range cr.rows {
 				k := normalizeItemName(r.Item)
@@ -423,6 +452,10 @@ func (s *Service) ImportCSV(ctx context.Context, tenantID, locationID uuid.UUID,
 					}
 					*it = next
 				}
+				if !inFile[it] {
+					inFile[it] = true
+					fileItems = append(fileItems, it)
+				}
 
 				if r.Printer == "" {
 					continue // blank = leave the item's printer alone
@@ -447,6 +480,16 @@ func (s *Service) ImportCSV(ctx context.Context, tenantID, locationID uuid.UUID,
 					}
 				}
 				it.PrinterID = target
+			}
+			for _, it := range fileItems {
+				switch {
+				case it.PrinterID != nil:
+					printsOn[*it.PrinterID]++
+				case cat.DefaultPrinterID != nil:
+					printsOn[*cat.DefaultPrinterID]++
+				default:
+					res.ItemsNoPrinter++
+				}
 			}
 		}
 	}

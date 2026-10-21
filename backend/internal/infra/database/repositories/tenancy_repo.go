@@ -53,6 +53,9 @@ func (r *TenancyRepository) CreateTenant(ctx context.Context, p tenancy.CreateTe
 		if isStoreIDViolation(err) {
 			return nil, nil, tenancy.ErrStoreIDTaken
 		}
+		if isUsernameViolation(err) {
+			return nil, nil, tenancy.ErrUsernameTaken
+		}
 		return nil, nil, fmt.Errorf("create tenant: %w", err)
 	}
 	loc, err := q.CreateLocation(ctx, models.CreateLocationParams{
@@ -96,11 +99,20 @@ func (r *TenancyRepository) SetTenantStoreID(ctx context.Context, id uuid.UUID, 
 }
 
 // isStoreIDViolation narrows a unique violation to the store_id index so a
-// slug/username clash on create still surfaces as its own error.
+// slug clash on create still surfaces as its own error.
 func isStoreIDViolation(err error) bool {
+	return isUniqueViolationOn(err, "idx_tenants_store_id")
+}
+
+// isUsernameViolation narrows a unique violation to the store-manager login.
+func isUsernameViolation(err error) bool {
+	return isUniqueViolationOn(err, "idx_tenants_username")
+}
+
+func isUniqueViolationOn(err error, constraint string) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation &&
-		pgErr.ConstraintName == "idx_tenants_store_id"
+		pgErr.ConstraintName == constraint
 }
 
 func toPgInt8(v *int64) pgtype.Int8 {
@@ -117,6 +129,9 @@ func (r *TenancyRepository) SetTenantCredentials(ctx context.Context, id uuid.UU
 		Username:     pgtype.Text{String: username, Valid: username != ""},
 		PasswordHash: pgtype.Text{String: passwordHash, Valid: passwordHash != ""},
 	}); err != nil {
+		if isUsernameViolation(err) {
+			return tenancy.ErrUsernameTaken
+		}
 		return fmt.Errorf("set tenant credentials: %w", err)
 	}
 	return nil

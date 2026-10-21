@@ -11,6 +11,10 @@ import (
 // (tenants.store_id is unique when present).
 var ErrStoreIDTaken = errors.New("store_id is already assigned to another tenant")
 
+// ErrUsernameTaken means another tenant already holds that store-manager login
+// (tenants.username is unique when present).
+var ErrUsernameTaken = errors.New("username already taken")
+
 // CreateTenantParams creates a tenant and its (only) location. PasswordHash is
 // already hashed by the service.
 type CreateTenantParams struct {
@@ -55,7 +59,8 @@ type Repository interface {
 	// CreateTenant persists a tenant together with its single location (one
 	// tenant = one restaurant = one location), in one transaction.
 	// Username/PasswordHash are optional ("" = NULL, a tenant that can't log
-	// in); StoreID is optional (nil = NULL) — a taken one is ErrStoreIDTaken.
+	// in); StoreID is optional (nil = NULL) — a taken one is ErrStoreIDTaken,
+	// a taken username ErrUsernameTaken.
 	CreateTenant(ctx context.Context, p CreateTenantParams) (*Tenant, *Location, error)
 	GetTenantByID(ctx context.Context, id uuid.UUID) (*Tenant, error)
 	// GetTenantByStoreID resolves the vendor store_id to its tenant. Returns
@@ -67,7 +72,8 @@ type Repository interface {
 	// GetTenantAuthByUsername resolves a store-manager username to its tenant id
 	// + password hash for login. Returns pgx.ErrNoRows if the username is unknown.
 	GetTenantAuthByUsername(ctx context.Context, username string) (*TenantAuth, error)
-	// SetTenantCredentials sets/rotates a tenant's login (passwordHash already hashed).
+	// SetTenantCredentials sets/rotates a tenant's login (passwordHash already
+	// hashed). A username held by another tenant returns ErrUsernameTaken.
 	SetTenantCredentials(ctx context.Context, id uuid.UUID, username, passwordHash string) error
 	ListTenants(ctx context.Context) ([]Tenant, error)
 	UpdateTenantConfig(ctx context.Context, id uuid.UUID, cfg Config) (*Tenant, error)

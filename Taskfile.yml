@@ -195,12 +195,13 @@ tasks:
       - go build -o ./tmp/main ./cmd/api
 
   check:
-    desc: tidy + fmt + vet + build (run before pushing)
+    desc: tidy + fmt + vet + build + ui-check (run before pushing)
     cmds:
       - task: tidy
       - task: fmt
       - task: vet
       - task: build
+      - task: ui-check
 
   # ──────────────────────────────────────────────────────────────────────
   # Frontend (SvelteKit → embedded into the Go binary)
@@ -217,6 +218,12 @@ tasks:
     dir: backend/frontend
     cmds:
       - npm run dev
+
+  ui-check:
+    desc: Type-check + lint the SvelteKit app (svelte-check)
+    dir: backend/frontend
+    cmds:
+      - npm run check
 
   ui-build:
     desc: Build the SvelteKit app and copy it into the Go embed dir
