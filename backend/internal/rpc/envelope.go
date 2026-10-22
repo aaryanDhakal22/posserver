@@ -36,6 +36,13 @@ const (
 	// Printer auto-follow + found printers (2.0.6), agent → main requests.
 	MsgPrinterMoved = "printer.moved" // {printer_id, old_ip, new_ip, mac} → {applied, reason}
 	MsgPrinterAdd   = "printer.add"   // {name, ip, mac} → {ok, id, name, ip} | {ok:false, code}
+
+	// Delivery maps (2.0.9). order.geo: main → agent, an order's location +
+	// route + drive times ({ok} | {ok:false, code:not_found}). geo.pin /
+	// geo.trip: agent → main requests (a staff pin; the best stop order).
+	MsgOrderGeo = "order.geo"
+	MsgGeoPin   = "geo.pin"
+	MsgGeoTrip  = "geo.trip"
 )
 
 // Envelope is the wire shape for every duplex message, both directions. It must

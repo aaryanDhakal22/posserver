@@ -37,7 +37,14 @@ type StoreHandler struct {
 	cfgPub *StoreConfigPublisher // live store_config push after location/printer edits
 	logins *loginLimiter
 	logger zerolog.Logger
+	// geocodeStore geocodes a saved location's address in the background
+	// (no-op on a manual pin); nil = off. See OnLocationSaved.
+	geocodeStore func(locationID uuid.UUID)
 }
+
+// OnLocationSaved registers the background store geocode run after a
+// location edit (the geo service; wired in routes).
+func (h *StoreHandler) OnLocationSaved(fn func(locationID uuid.UUID)) { h.geocodeStore = fn }
 
 func NewStoreHandler(svc *tenancyApp.Service, signer *session.Signer, cfgPub *StoreConfigPublisher, logger zerolog.Logger) *StoreHandler {
 	return &StoreHandler{
@@ -193,6 +200,9 @@ func (h *StoreHandler) MeUpdateLocation(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, errResp(err.Error()))
 	}
 	h.cfgPub.Publish(ctx, tid, lid)
+	if h.geocodeStore != nil {
+		h.geocodeStore(lid)
+	}
 	return c.JSON(http.StatusOK, toLocationJSON(*l))
 }
 

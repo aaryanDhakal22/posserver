@@ -252,7 +252,8 @@ const createLocation = `-- name: CreateLocation :one
 INSERT INTO locations (tenant_id, slug, name, timezone, daily_reset_hour)
 VALUES ($1, $2, $3, $4, $5)
 RETURNING id, tenant_id, slug, name, timezone, daily_reset_hour,
-          phone, address_line1, address_line2, config, store_type, created_at
+          phone, address_line1, address_line2, config, store_type, created_at,
+          lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox
 `
 
 type CreateLocationParams struct {
@@ -285,6 +286,14 @@ func (q *Queries) CreateLocation(ctx context.Context, arg CreateLocationParams) 
 		&i.Config,
 		&i.StoreType,
 		&i.CreatedAt,
+		&i.Lat,
+		&i.Lng,
+		&i.GeoSource,
+		&i.DeliveryRadiusM,
+		&i.MapUrl,
+		&i.MapSha256,
+		&i.MapVersion,
+		&i.MapBbox,
 	)
 	return i, err
 }
@@ -835,6 +844,20 @@ func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) (Ten
 	return i, err
 }
 
+const deferOrderGeoPush = `-- name: DeferOrderGeoPush :exec
+UPDATE order_geo SET next_try_at = $1 WHERE order_id = $2
+`
+
+type DeferOrderGeoPushParams struct {
+	NextTryAt pgtype.Timestamptz `json:"next_try_at"`
+	OrderID   pgtype.UUID        `json:"order_id"`
+}
+
+func (q *Queries) DeferOrderGeoPush(ctx context.Context, arg DeferOrderGeoPushParams) error {
+	_, err := q.db.Exec(ctx, deferOrderGeoPush, arg.NextTryAt, arg.OrderID)
+	return err
+}
+
 const deleteAppRelease = `-- name: DeleteAppRelease :execrows
 DELETE FROM app_releases WHERE app = $1 AND version_code = $2
 `
@@ -1097,6 +1120,24 @@ func (q *Queries) DiagReportExists(ctx context.Context, id pgtype.UUID) (bool, e
 	return exists, err
 }
 
+const enqueueMissingOrderGeo = `-- name: EnqueueMissingOrderGeo :execrows
+INSERT INTO order_geo (order_id, tenant_id, location_id)
+SELECT o.id, o.tenant_id, o.location_id FROM orders o
+WHERE o.fulfillment_type = 'delivery' AND o.received_at > $1::timestamptz
+  AND NOT EXISTS (SELECT 1 FROM order_geo g WHERE g.order_id = o.id)
+ON CONFLICT (order_id) DO NOTHING
+`
+
+// Safety net for the after-ingest enqueue: recent delivery orders that have
+// no order_geo row yet.
+func (q *Queries) EnqueueMissingOrderGeo(ctx context.Context, since pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, enqueueMissingOrderGeo, since)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const findDiagReportIDsByPrefix = `-- name: FindDiagReportIDsByPrefix :many
 SELECT id FROM diag_reports WHERE id::text LIKE $1::text || '%' ORDER BY received_at DESC LIMIT 2
 `
@@ -1339,6 +1380,30 @@ func (q *Queries) GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagRep
 	return i, err
 }
 
+const getGeoCache = `-- name: GetGeoCache :one
+
+SELECT address_key, lat, lng, quality, source, pinned, updated_at
+FROM geo_cache WHERE address_key = $1
+`
+
+// ───────────────────────────────────────────────────────────────────────────
+// Geo (2.0.9): geocode cache, per-order geo, driver runs
+// ───────────────────────────────────────────────────────────────────────────
+func (q *Queries) GetGeoCache(ctx context.Context, addressKey string) (GeoCache, error) {
+	row := q.db.QueryRow(ctx, getGeoCache, addressKey)
+	var i GeoCache
+	err := row.Scan(
+		&i.AddressKey,
+		&i.Lat,
+		&i.Lng,
+		&i.Quality,
+		&i.Source,
+		&i.Pinned,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getLatestAppRelease = `-- name: GetLatestAppRelease :one
 SELECT id, app, version_code, version_name, sha256, size, created_at
 FROM app_releases WHERE app = $1 ORDER BY version_code DESC LIMIT 1
@@ -1413,7 +1478,8 @@ func (q *Queries) GetLineItemsByOrderID(ctx context.Context, orderID pgtype.UUID
 
 const getLocationByID = `-- name: GetLocationByID :one
 SELECT id, tenant_id, slug, name, timezone, daily_reset_hour,
-       phone, address_line1, address_line2, config, store_type, created_at
+       phone, address_line1, address_line2, config, store_type, created_at,
+       lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox
 FROM locations WHERE id = $1
 `
 
@@ -1433,6 +1499,14 @@ func (q *Queries) GetLocationByID(ctx context.Context, id pgtype.UUID) (Location
 		&i.Config,
 		&i.StoreType,
 		&i.CreatedAt,
+		&i.Lat,
+		&i.Lng,
+		&i.GeoSource,
+		&i.DeliveryRadiusM,
+		&i.MapUrl,
+		&i.MapSha256,
+		&i.MapVersion,
+		&i.MapBbox,
 	)
 	return i, err
 }
@@ -1686,6 +1760,84 @@ func (q *Queries) GetOrderBySourceEventInScope(ctx context.Context, arg GetOrder
 		&i.AgentStatus,
 		&i.AgentStatusAt,
 		&i.AgentBatchID,
+	)
+	return i, err
+}
+
+const getOrderForGeo = `-- name: GetOrderForGeo :one
+SELECT o.id, o.tenant_id, o.location_id, o.fulfillment_type, o.fulfillment_address, o.status,
+       l.lat AS store_lat, l.lng AS store_lng, l.delivery_radius_m
+FROM orders o JOIN locations l ON l.id = o.location_id
+WHERE o.id = $1 AND o.tenant_id = $2 AND o.location_id = $3
+`
+
+type GetOrderForGeoParams struct {
+	OrderID    pgtype.UUID `json:"order_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+type GetOrderForGeoRow struct {
+	ID                 pgtype.UUID   `json:"id"`
+	TenantID           pgtype.UUID   `json:"tenant_id"`
+	LocationID         pgtype.UUID   `json:"location_id"`
+	FulfillmentType    string        `json:"fulfillment_type"`
+	FulfillmentAddress []byte        `json:"fulfillment_address"`
+	Status             string        `json:"status"`
+	StoreLat           pgtype.Float8 `json:"store_lat"`
+	StoreLng           pgtype.Float8 `json:"store_lng"`
+	DeliveryRadiusM    int32         `json:"delivery_radius_m"`
+}
+
+// What the geo worker needs to locate an order: its delivery address and
+// whether it is still open, plus its store's position + radius.
+func (q *Queries) GetOrderForGeo(ctx context.Context, arg GetOrderForGeoParams) (GetOrderForGeoRow, error) {
+	row := q.db.QueryRow(ctx, getOrderForGeo, arg.OrderID, arg.TenantID, arg.LocationID)
+	var i GetOrderForGeoRow
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.FulfillmentType,
+		&i.FulfillmentAddress,
+		&i.Status,
+		&i.StoreLat,
+		&i.StoreLng,
+		&i.DeliveryRadiusM,
+	)
+	return i, err
+}
+
+const getOrderGeo = `-- name: GetOrderGeo :one
+SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
+       polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
+       pushed_at, created_at, updated_at
+FROM order_geo WHERE order_id = $1
+`
+
+func (q *Queries) GetOrderGeo(ctx context.Context, orderID pgtype.UUID) (OrderGeo, error) {
+	row := q.db.QueryRow(ctx, getOrderGeo, orderID)
+	var i OrderGeo
+	err := row.Scan(
+		&i.OrderID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.State,
+		&i.Lat,
+		&i.Lng,
+		&i.Quality,
+		&i.DistanceM,
+		&i.DurationS,
+		&i.Polyline,
+		&i.OutsideArea,
+		&i.StoreToS,
+		&i.ToStoreS,
+		&i.Attempts,
+		&i.NextTryAt,
+		&i.LastError,
+		&i.PushedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -2134,6 +2286,47 @@ func (q *Queries) InsertAgentUpdate(ctx context.Context, arg InsertAgentUpdatePa
 	return err
 }
 
+const insertDeliveryRun = `-- name: InsertDeliveryRun :execrows
+INSERT INTO delivery_runs (id, tenant_id, location_id, batch_id, driver_id, driver_name,
+                           plan_id, suggested_ids, sent_ids, stops, at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT (id) DO NOTHING
+`
+
+type InsertDeliveryRunParams struct {
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	BatchID      pgtype.Int8        `json:"batch_id"`
+	DriverID     string             `json:"driver_id"`
+	DriverName   string             `json:"driver_name"`
+	PlanID       string             `json:"plan_id"`
+	SuggestedIds []byte             `json:"suggested_ids"`
+	SentIds      []byte             `json:"sent_ids"`
+	Stops        []byte             `json:"stops"`
+	At           pgtype.Timestamptz `json:"at"`
+}
+
+func (q *Queries) InsertDeliveryRun(ctx context.Context, arg InsertDeliveryRunParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertDeliveryRun,
+		arg.ID,
+		arg.TenantID,
+		arg.LocationID,
+		arg.BatchID,
+		arg.DriverID,
+		arg.DriverName,
+		arg.PlanID,
+		arg.SuggestedIds,
+		arg.SentIds,
+		arg.Stops,
+		arg.At,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertDiagReport = `-- name: InsertDiagReport :execrows
 INSERT INTO diag_reports (id, tenant_id, location_id, tablet_id, tablet_name, via, kind, scenario,
                           outcome, headline, cause, fixed_by, app_version, agent_version, report, created_at)
@@ -2214,6 +2407,26 @@ func (q *Queries) InsertDriver(ctx context.Context, arg InsertDriverParams) erro
 		arg.UpdatedAt,
 	)
 	return err
+}
+
+const insertOrderGeo = `-- name: InsertOrderGeo :execrows
+INSERT INTO order_geo (order_id, tenant_id, location_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (order_id) DO NOTHING
+`
+
+type InsertOrderGeoParams struct {
+	OrderID    pgtype.UUID `json:"order_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+func (q *Queries) InsertOrderGeo(ctx context.Context, arg InsertOrderGeoParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertOrderGeo, arg.OrderID, arg.TenantID, arg.LocationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertOutboxDispatch = `-- name: InsertOutboxDispatch :exec
@@ -2533,7 +2746,8 @@ func (q *Queries) ListAllDevices(ctx context.Context) ([]Device, error) {
 
 const listAllLocations = `-- name: ListAllLocations :many
 SELECT id, tenant_id, slug, name, timezone, daily_reset_hour,
-       phone, address_line1, address_line2, config, store_type, created_at
+       phone, address_line1, address_line2, config, store_type, created_at,
+       lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox
 FROM locations ORDER BY tenant_id, created_at ASC
 `
 
@@ -2559,6 +2773,14 @@ func (q *Queries) ListAllLocations(ctx context.Context) ([]Location, error) {
 			&i.Config,
 			&i.StoreType,
 			&i.CreatedAt,
+			&i.Lat,
+			&i.Lng,
+			&i.GeoSource,
+			&i.DeliveryRadiusM,
+			&i.MapUrl,
+			&i.MapSha256,
+			&i.MapVersion,
+			&i.MapBbox,
 		); err != nil {
 			return nil, err
 		}
@@ -2676,6 +2898,52 @@ func (q *Queries) ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) 
 			&i.DefaultPrinterID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDeliveryRuns = `-- name: ListDeliveryRuns :many
+SELECT id, tenant_id, location_id, batch_id, driver_id, driver_name, plan_id,
+       suggested_ids, sent_ids, stops, at, created_at
+FROM delivery_runs WHERE tenant_id = $1 AND location_id = $2
+ORDER BY at DESC LIMIT $3
+`
+
+type ListDeliveryRunsParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	Limit      int32       `json:"limit"`
+}
+
+func (q *Queries) ListDeliveryRuns(ctx context.Context, arg ListDeliveryRunsParams) ([]DeliveryRun, error) {
+	rows, err := q.db.Query(ctx, listDeliveryRuns, arg.TenantID, arg.LocationID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DeliveryRun
+	for rows.Next() {
+		var i DeliveryRun
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.BatchID,
+			&i.DriverID,
+			&i.DriverName,
+			&i.PlanID,
+			&i.SuggestedIds,
+			&i.SentIds,
+			&i.Stops,
+			&i.At,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -2846,6 +3114,57 @@ func (q *Queries) ListDriverShifts(ctx context.Context, arg ListDriverShiftsPara
 			&i.ClockIn,
 			&i.ClockOut,
 			&i.AutoOut,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listDueOrderGeo = `-- name: ListDueOrderGeo :many
+SELECT order_id, tenant_id, location_id, state, attempts, created_at, updated_at
+FROM order_geo
+WHERE pushed_at IS NULL AND next_try_at <= $1::timestamptz
+ORDER BY next_try_at ASC
+LIMIT $2
+`
+
+type ListDueOrderGeoParams struct {
+	Now     pgtype.Timestamptz `json:"now"`
+	MaxRows int32              `json:"max_rows"`
+}
+
+type ListDueOrderGeoRow struct {
+	OrderID    pgtype.UUID        `json:"order_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	State      string             `json:"state"`
+	Attempts   int32              `json:"attempts"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListDueOrderGeo(ctx context.Context, arg ListDueOrderGeoParams) ([]ListDueOrderGeoRow, error) {
+	rows, err := q.db.Query(ctx, listDueOrderGeo, arg.Now, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDueOrderGeoRow
+	for rows.Next() {
+		var i ListDueOrderGeoRow
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.State,
+			&i.Attempts,
+			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
@@ -3076,7 +3395,8 @@ func (q *Queries) ListLocationDrivers(ctx context.Context, arg ListLocationDrive
 
 const listLocationsByTenant = `-- name: ListLocationsByTenant :many
 SELECT id, tenant_id, slug, name, timezone, daily_reset_hour,
-       phone, address_line1, address_line2, config, store_type, created_at
+       phone, address_line1, address_line2, config, store_type, created_at,
+       lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox
 FROM locations WHERE tenant_id = $1 ORDER BY created_at ASC
 `
 
@@ -3102,7 +3422,46 @@ func (q *Queries) ListLocationsByTenant(ctx context.Context, tenantID pgtype.UUI
 			&i.Config,
 			&i.StoreType,
 			&i.CreatedAt,
+			&i.Lat,
+			&i.Lng,
+			&i.GeoSource,
+			&i.DeliveryRadiusM,
+			&i.MapUrl,
+			&i.MapSha256,
+			&i.MapVersion,
+			&i.MapBbox,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLocationsNeedingGeocode = `-- name: ListLocationsNeedingGeocode :many
+SELECT id, tenant_id FROM locations
+WHERE address_line1 <> '' AND lat IS NULL AND geo_source <> 'manual'
+`
+
+type ListLocationsNeedingGeocodeRow struct {
+	ID       pgtype.UUID `json:"id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+}
+
+// Startup backfill: stores with an address but no position yet.
+func (q *Queries) ListLocationsNeedingGeocode(ctx context.Context) ([]ListLocationsNeedingGeocodeRow, error) {
+	rows, err := q.db.Query(ctx, listLocationsNeedingGeocode)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLocationsNeedingGeocodeRow
+	for rows.Next() {
+		var i ListLocationsNeedingGeocodeRow
+		if err := rows.Scan(&i.ID, &i.TenantID); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -3174,6 +3533,59 @@ func (q *Queries) ListModifierGroupsByLocation(ctx context.Context, locationID p
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOpenLocatedDeliveries = `-- name: ListOpenLocatedDeliveries :many
+SELECT g.order_id, g.lat, g.lng FROM order_geo g JOIN orders o ON o.id = g.order_id
+WHERE g.tenant_id = $1 AND g.location_id = $2
+  AND g.state = 'located' AND g.lat IS NOT NULL AND g.lng IS NOT NULL
+  AND g.order_id <> $3
+  AND o.status NOT IN ('completed', 'cancelled', 'rejected')
+  AND o.received_at > $4::timestamptz
+ORDER BY o.placed_at ASC
+LIMIT $5
+`
+
+type ListOpenLocatedDeliveriesParams struct {
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	ExcludeID  pgtype.UUID        `json:"exclude_id"`
+	Since      pgtype.Timestamptz `json:"since"`
+	MaxRows    int32              `json:"max_rows"`
+}
+
+type ListOpenLocatedDeliveriesRow struct {
+	OrderID pgtype.UUID   `json:"order_id"`
+	Lat     pgtype.Float8 `json:"lat"`
+	Lng     pgtype.Float8 `json:"lng"`
+}
+
+// The location's other open (not delivered / cancelled) located deliveries,
+// for the drive-time table. received_at bounds it to the current service.
+func (q *Queries) ListOpenLocatedDeliveries(ctx context.Context, arg ListOpenLocatedDeliveriesParams) ([]ListOpenLocatedDeliveriesRow, error) {
+	rows, err := q.db.Query(ctx, listOpenLocatedDeliveries,
+		arg.TenantID,
+		arg.LocationID,
+		arg.ExcludeID,
+		arg.Since,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOpenLocatedDeliveriesRow
+	for rows.Next() {
+		var i ListOpenLocatedDeliveriesRow
+		if err := rows.Scan(&i.OrderID, &i.Lat, &i.Lng); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -3307,6 +3719,49 @@ func (q *Queries) ListOptionsByLocation(ctx context.Context, locationID pgtype.U
 			&i.Position,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOrderGeoByIDs = `-- name: ListOrderGeoByIDs :many
+SELECT g.order_id, g.state, g.lat, g.lng FROM order_geo g
+WHERE g.tenant_id = $1 AND g.location_id = $2 AND g.order_id = ANY($3::uuid[])
+`
+
+type ListOrderGeoByIDsParams struct {
+	TenantID   pgtype.UUID   `json:"tenant_id"`
+	LocationID pgtype.UUID   `json:"location_id"`
+	Ids        []pgtype.UUID `json:"ids"`
+}
+
+type ListOrderGeoByIDsRow struct {
+	OrderID pgtype.UUID   `json:"order_id"`
+	State   string        `json:"state"`
+	Lat     pgtype.Float8 `json:"lat"`
+	Lng     pgtype.Float8 `json:"lng"`
+}
+
+func (q *Queries) ListOrderGeoByIDs(ctx context.Context, arg ListOrderGeoByIDsParams) ([]ListOrderGeoByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listOrderGeoByIDs, arg.TenantID, arg.LocationID, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOrderGeoByIDsRow
+	for rows.Next() {
+		var i ListOrderGeoByIDsRow
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.State,
+			&i.Lat,
+			&i.Lng,
 		); err != nil {
 			return nil, err
 		}
@@ -3751,6 +4206,25 @@ func (q *Queries) MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeen
 	return result.RowsAffected(), nil
 }
 
+const markOrderGeoPushed = `-- name: MarkOrderGeoPushed :execrows
+UPDATE order_geo SET pushed_at = now()
+WHERE order_id = $1 AND updated_at = $2
+`
+
+type MarkOrderGeoPushedParams struct {
+	OrderID   pgtype.UUID        `json:"order_id"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+// Only when nothing changed since the pushed result was read.
+func (q *Queries) MarkOrderGeoPushed(ctx context.Context, arg MarkOrderGeoPushedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markOrderGeoPushed, arg.OrderID, arg.UpdatedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const markOrdersAcked = `-- name: MarkOrdersAcked :execrows
 
 UPDATE orders SET agent_ack_at = now()
@@ -3915,6 +4389,31 @@ func (q *Queries) PruneDiagReports(ctx context.Context, receivedAt pgtype.Timest
 	return result.RowsAffected(), nil
 }
 
+const requeueLocationOrderGeo = `-- name: RequeueLocationOrderGeo :execrows
+UPDATE order_geo g SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL, updated_at = now()
+FROM orders o
+WHERE o.id = g.order_id AND g.tenant_id = $1 AND g.location_id = $2
+  AND g.state <> 'pending'
+  AND o.status NOT IN ('completed', 'cancelled', 'rejected')
+  AND o.received_at > $3::timestamptz
+`
+
+type RequeueLocationOrderGeoParams struct {
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Since      pgtype.Timestamptz `json:"since"`
+}
+
+// The store moved: re-work the open deliveries (addresses are cached, so
+// this re-routes from the new position).
+func (q *Queries) RequeueLocationOrderGeo(ctx context.Context, arg RequeueLocationOrderGeoParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requeueLocationOrderGeo, arg.TenantID, arg.LocationID, arg.Since)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const resetDispatchBackoffForScope = `-- name: ResetDispatchBackoffForScope :exec
 UPDATE outbox_dispatches d
 SET next_attempt_at = NULL
@@ -3936,6 +4435,17 @@ type ResetDispatchBackoffForScopeParams struct {
 // within one dispatcher tick instead of waiting out the exponential backoff.
 func (q *Queries) ResetDispatchBackoffForScope(ctx context.Context, arg ResetDispatchBackoffForScopeParams) error {
 	_, err := q.db.Exec(ctx, resetDispatchBackoffForScope, arg.TenantID, arg.LocationID)
+	return err
+}
+
+const resetOrderGeoForPin = `-- name: ResetOrderGeoForPin :exec
+UPDATE order_geo SET state = 'pending', attempts = 0, next_try_at = now(),
+    last_error = '', pushed_at = NULL, updated_at = now()
+WHERE order_id = $1
+`
+
+func (q *Queries) ResetOrderGeoForPin(ctx context.Context, orderID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, resetOrderGeoForPin, orderID)
 	return err
 }
 
@@ -4013,6 +4523,70 @@ func (q *Queries) RevokeTabletTokensForTablet(ctx context.Context, arg RevokeTab
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const saveOrderGeoResult = `-- name: SaveOrderGeoResult :one
+UPDATE order_geo SET
+    state = $1, lat = $2, lng = $3, quality = $4,
+    distance_m = $5, duration_s = $6, polyline = $7,
+    outside_area = $8, store_to_s = $9, to_store_s = $10,
+    attempts = attempts + 1, next_try_at = now(), last_error = $11,
+    pushed_at = NULL, updated_at = now()
+WHERE order_id = $12
+RETURNING updated_at
+`
+
+type SaveOrderGeoResultParams struct {
+	State       string        `json:"state"`
+	Lat         pgtype.Float8 `json:"lat"`
+	Lng         pgtype.Float8 `json:"lng"`
+	Quality     string        `json:"quality"`
+	DistanceM   int32         `json:"distance_m"`
+	DurationS   int32         `json:"duration_s"`
+	Polyline    string        `json:"polyline"`
+	OutsideArea bool          `json:"outside_area"`
+	StoreToS    pgtype.Int4   `json:"store_to_s"`
+	ToStoreS    pgtype.Int4   `json:"to_store_s"`
+	LastError   string        `json:"last_error"`
+	OrderID     pgtype.UUID   `json:"order_id"`
+}
+
+// A final result (located / not_found). Clears pushed_at so it is (re)pushed.
+func (q *Queries) SaveOrderGeoResult(ctx context.Context, arg SaveOrderGeoResultParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, saveOrderGeoResult,
+		arg.State,
+		arg.Lat,
+		arg.Lng,
+		arg.Quality,
+		arg.DistanceM,
+		arg.DurationS,
+		arg.Polyline,
+		arg.OutsideArea,
+		arg.StoreToS,
+		arg.ToStoreS,
+		arg.LastError,
+		arg.OrderID,
+	)
+	var updated_at pgtype.Timestamptz
+	err := row.Scan(&updated_at)
+	return updated_at, err
+}
+
+const saveOrderGeoRetry = `-- name: SaveOrderGeoRetry :exec
+UPDATE order_geo SET attempts = attempts + 1, next_try_at = $1,
+    last_error = $2, updated_at = now()
+WHERE order_id = $3
+`
+
+type SaveOrderGeoRetryParams struct {
+	NextTryAt pgtype.Timestamptz `json:"next_try_at"`
+	LastError string             `json:"last_error"`
+	OrderID   pgtype.UUID        `json:"order_id"`
+}
+
+func (q *Queries) SaveOrderGeoRetry(ctx context.Context, arg SaveOrderGeoRetryParams) error {
+	_, err := q.db.Exec(ctx, saveOrderGeoRetry, arg.NextTryAt, arg.LastError, arg.OrderID)
+	return err
 }
 
 const searchOrdersInScope = `-- name: SearchOrdersInScope :many
@@ -4184,6 +4758,119 @@ type SetItemPrinterParams struct {
 func (q *Queries) SetItemPrinter(ctx context.Context, arg SetItemPrinterParams) error {
 	_, err := q.db.Exec(ctx, setItemPrinter, arg.ID, arg.TenantID, arg.PrinterID)
 	return err
+}
+
+const setLocationGeocoded = `-- name: SetLocationGeocoded :execrows
+UPDATE locations SET lat = $2, lng = $3, geo_source = 'geocoded'
+WHERE id = $1 AND geo_source <> 'manual'
+`
+
+type SetLocationGeocodedParams struct {
+	ID  pgtype.UUID   `json:"id"`
+	Lat pgtype.Float8 `json:"lat"`
+	Lng pgtype.Float8 `json:"lng"`
+}
+
+// The store address was geocoded. Never overrides a manual pin.
+func (q *Queries) SetLocationGeocoded(ctx context.Context, arg SetLocationGeocodedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setLocationGeocoded, arg.ID, arg.Lat, arg.Lng)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setLocationMap = `-- name: SetLocationMap :one
+UPDATE locations SET map_url = $2, map_sha256 = $3, map_version = $4, map_bbox = $5
+WHERE id = $1
+RETURNING id, tenant_id, slug, name, timezone, daily_reset_hour,
+          phone, address_line1, address_line2, config, store_type, created_at,
+          lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox
+`
+
+type SetLocationMapParams struct {
+	ID         pgtype.UUID `json:"id"`
+	MapUrl     string      `json:"map_url"`
+	MapSha256  string      `json:"map_sha256"`
+	MapVersion string      `json:"map_version"`
+	MapBbox    []float64   `json:"map_bbox"`
+}
+
+func (q *Queries) SetLocationMap(ctx context.Context, arg SetLocationMapParams) (Location, error) {
+	row := q.db.QueryRow(ctx, setLocationMap,
+		arg.ID,
+		arg.MapUrl,
+		arg.MapSha256,
+		arg.MapVersion,
+		arg.MapBbox,
+	)
+	var i Location
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.Slug,
+		&i.Name,
+		&i.Timezone,
+		&i.DailyResetHour,
+		&i.Phone,
+		&i.AddressLine1,
+		&i.AddressLine2,
+		&i.Config,
+		&i.StoreType,
+		&i.CreatedAt,
+		&i.Lat,
+		&i.Lng,
+		&i.GeoSource,
+		&i.DeliveryRadiusM,
+		&i.MapUrl,
+		&i.MapSha256,
+		&i.MapVersion,
+		&i.MapBbox,
+	)
+	return i, err
+}
+
+const setLocationPin = `-- name: SetLocationPin :one
+UPDATE locations SET lat = $2, lng = $3, geo_source = 'manual'
+WHERE id = $1
+RETURNING id, tenant_id, slug, name, timezone, daily_reset_hour,
+          phone, address_line1, address_line2, config, store_type, created_at,
+          lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox
+`
+
+type SetLocationPinParams struct {
+	ID  pgtype.UUID   `json:"id"`
+	Lat pgtype.Float8 `json:"lat"`
+	Lng pgtype.Float8 `json:"lng"`
+}
+
+// A manager / admin placed the store pin by hand: geocodes never move it.
+func (q *Queries) SetLocationPin(ctx context.Context, arg SetLocationPinParams) (Location, error) {
+	row := q.db.QueryRow(ctx, setLocationPin, arg.ID, arg.Lat, arg.Lng)
+	var i Location
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.Slug,
+		&i.Name,
+		&i.Timezone,
+		&i.DailyResetHour,
+		&i.Phone,
+		&i.AddressLine1,
+		&i.AddressLine2,
+		&i.Config,
+		&i.StoreType,
+		&i.CreatedAt,
+		&i.Lat,
+		&i.Lng,
+		&i.GeoSource,
+		&i.DeliveryRadiusM,
+		&i.MapUrl,
+		&i.MapSha256,
+		&i.MapVersion,
+		&i.MapBbox,
+	)
+	return i, err
 }
 
 const setMenuPosition = `-- name: SetMenuPosition :exec
@@ -4408,7 +5095,8 @@ UPDATE locations SET
     config         = $8
 WHERE id = $1
 RETURNING id, tenant_id, slug, name, timezone, daily_reset_hour,
-          phone, address_line1, address_line2, config, store_type, created_at
+          phone, address_line1, address_line2, config, store_type, created_at,
+          lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox
 `
 
 type UpdateLocationDetailsParams struct {
@@ -4449,6 +5137,14 @@ func (q *Queries) UpdateLocationDetails(ctx context.Context, arg UpdateLocationD
 		&i.Config,
 		&i.StoreType,
 		&i.CreatedAt,
+		&i.Lat,
+		&i.Lng,
+		&i.GeoSource,
+		&i.DeliveryRadiusM,
+		&i.MapUrl,
+		&i.MapSha256,
+		&i.MapVersion,
+		&i.MapBbox,
 	)
 	return i, err
 }
@@ -4914,4 +5610,72 @@ func (q *Queries) UpsertDriverShift(ctx context.Context, arg UpsertDriverShiftPa
 		arg.AutoOut,
 	)
 	return err
+}
+
+const upsertGeoCacheGeocoded = `-- name: UpsertGeoCacheGeocoded :exec
+INSERT INTO geo_cache (address_key, lat, lng, quality, source, pinned, updated_at)
+VALUES ($1, $2, $3, $4, $5, false, now())
+ON CONFLICT (address_key) DO UPDATE SET
+    lat = EXCLUDED.lat, lng = EXCLUDED.lng, quality = EXCLUDED.quality,
+    source = EXCLUDED.source, updated_at = now()
+WHERE geo_cache.pinned = false
+`
+
+type UpsertGeoCacheGeocodedParams struct {
+	AddressKey string  `json:"address_key"`
+	Lat        float64 `json:"lat"`
+	Lng        float64 `json:"lng"`
+	Quality    string  `json:"quality"`
+	Source     string  `json:"source"`
+}
+
+// A geocode result. A pinned entry is never overwritten by a geocode.
+func (q *Queries) UpsertGeoCacheGeocoded(ctx context.Context, arg UpsertGeoCacheGeocodedParams) error {
+	_, err := q.db.Exec(ctx, upsertGeoCacheGeocoded,
+		arg.AddressKey,
+		arg.Lat,
+		arg.Lng,
+		arg.Quality,
+		arg.Source,
+	)
+	return err
+}
+
+const upsertGeoCachePinned = `-- name: UpsertGeoCachePinned :exec
+INSERT INTO geo_cache (address_key, lat, lng, quality, source, pinned, updated_at)
+VALUES ($1, $2, $3, 'pinned', 'pin', true, now())
+ON CONFLICT (address_key) DO UPDATE SET
+    lat = EXCLUDED.lat, lng = EXCLUDED.lng, quality = 'pinned',
+    source = 'pin', pinned = true, updated_at = now()
+`
+
+type UpsertGeoCachePinnedParams struct {
+	AddressKey string  `json:"address_key"`
+	Lat        float64 `json:"lat"`
+	Lng        float64 `json:"lng"`
+}
+
+func (q *Queries) UpsertGeoCachePinned(ctx context.Context, arg UpsertGeoCachePinnedParams) error {
+	_, err := q.db.Exec(ctx, upsertGeoCachePinned, arg.AddressKey, arg.Lat, arg.Lng)
+	return err
+}
+
+const wakeLocationOrderGeo = `-- name: WakeLocationOrderGeo :execrows
+UPDATE order_geo SET next_try_at = now()
+WHERE tenant_id = $1 AND location_id = $2
+  AND pushed_at IS NULL AND state <> 'pending'
+`
+
+type WakeLocationOrderGeoParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+// The location's agent (re)connected: push everything it has not acked now.
+func (q *Queries) WakeLocationOrderGeo(ctx context.Context, arg WakeLocationOrderGeoParams) (int64, error) {
+	result, err := q.db.Exec(ctx, wakeLocationOrderGeo, arg.TenantID, arg.LocationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

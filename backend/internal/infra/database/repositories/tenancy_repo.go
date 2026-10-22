@@ -276,6 +276,53 @@ func (r *TenancyRepository) ListAllLocations(ctx context.Context) ([]tenancy.Loc
 	return out, nil
 }
 
+// SetLocationPin — see tenancy.Repository.
+func (r *TenancyRepository) SetLocationPin(ctx context.Context, id uuid.UUID, lat, lng float64) (*tenancy.Location, error) {
+	row, err := models.New(r.pool).SetLocationPin(ctx, models.SetLocationPinParams{
+		ID: pgtype.UUID{Bytes: id, Valid: true}, Lat: pgtype.Float8{Float64: lat, Valid: true}, Lng: pgtype.Float8{Float64: lng, Valid: true},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toDomainLocation(row), nil
+}
+
+// SetLocationGeocoded — see tenancy.Repository.
+func (r *TenancyRepository) SetLocationGeocoded(ctx context.Context, id uuid.UUID, lat, lng float64) (bool, error) {
+	n, err := models.New(r.pool).SetLocationGeocoded(ctx, models.SetLocationGeocodedParams{
+		ID: pgtype.UUID{Bytes: id, Valid: true}, Lat: pgtype.Float8{Float64: lat, Valid: true}, Lng: pgtype.Float8{Float64: lng, Valid: true},
+	})
+	return n > 0, err
+}
+
+// SetLocationMap — see tenancy.Repository.
+func (r *TenancyRepository) SetLocationMap(ctx context.Context, id uuid.UUID, m tenancy.LocationMap) (*tenancy.Location, error) {
+	bbox := m.BBox
+	if bbox == nil {
+		bbox = []float64{}
+	}
+	row, err := models.New(r.pool).SetLocationMap(ctx, models.SetLocationMapParams{
+		ID: pgtype.UUID{Bytes: id, Valid: true}, MapUrl: m.URL, MapSha256: m.SHA256, MapVersion: m.Version, MapBbox: bbox,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toDomainLocation(row), nil
+}
+
+// ListLocationsNeedingGeocode — see tenancy.Repository.
+func (r *TenancyRepository) ListLocationsNeedingGeocode(ctx context.Context) ([]tenancy.Location, error) {
+	rows, err := models.New(r.pool).ListLocationsNeedingGeocode(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]tenancy.Location, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, tenancy.Location{ID: uuid.UUID(row.ID.Bytes), TenantID: uuid.UUID(row.TenantID.Bytes)})
+	}
+	return out, nil
+}
+
 func (r *TenancyRepository) UpdateLocation(ctx context.Context, p tenancy.UpdateLocationParams) (*tenancy.Location, error) {
 	q := models.New(r.pool)
 	raw, err := marshalConfig(p.Config)
@@ -579,9 +626,20 @@ func toDomainLocation(row models.Location) *tenancy.Location {
 		AddressLine1:   row.AddressLine1,
 		AddressLine2:   row.AddressLine2,
 		Config:         unmarshalConfig(row.Config),
+
+		GeoSource:       row.GeoSource,
+		DeliveryRadiusM: int(row.DeliveryRadiusM),
+		MapURL:          row.MapUrl,
+		MapSHA256:       row.MapSha256,
+		MapVersion:      row.MapVersion,
+		MapBBox:         row.MapBbox,
 	}
 	if row.CreatedAt.Valid {
 		l.CreatedAt = row.CreatedAt.Time
+	}
+	if row.Lat.Valid && row.Lng.Valid {
+		lat, lng := row.Lat.Float64, row.Lng.Float64
+		l.Lat, l.Lng = &lat, &lng
 	}
 	return l
 }

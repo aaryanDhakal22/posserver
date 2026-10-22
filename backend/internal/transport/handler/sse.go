@@ -251,7 +251,24 @@ func buildStoreContext(t tenancy.Tenant, l tenancy.Location, printers []tenancy.
 			AddressLine1:   l.AddressLine1,
 			AddressLine2:   l.AddressLine2,
 			Config:         lCfg,
+
+			Lat:             l.Lat,
+			Lng:             l.Lng,
+			DeliveryRadiusM: l.DeliveryRadiusM,
+			Map:             mapContext(l),
 		},
 		Printers: prs,
 	}
+}
+
+// mapContext is the location's published map, nil when none.
+func mapContext(l tenancy.Location) *sseTransport.MapContext {
+	if l.MapURL == "" {
+		return nil
+	}
+	bbox := l.MapBBox
+	if bbox == nil {
+		bbox = []float64{}
+	}
+	return &sseTransport.MapContext{URL: l.MapURL, SHA256: l.MapSHA256, Version: l.MapVersion, BBox: bbox}
 }

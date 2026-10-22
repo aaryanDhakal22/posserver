@@ -42,6 +42,31 @@ type Location struct {
 	AddressLine2   string
 	Config         Config
 	CreatedAt      time.Time
+
+	// Store position (2.0.9). nil until geocoded from the address or pinned
+	// by hand; GeoSource is "" | "geocoded" | "manual" (a manual pin is never
+	// moved by a geocode).
+	Lat, Lng  *float64
+	GeoSource string
+	// DeliveryRadiusM: addresses farther than this (straight line from the
+	// store) are tagged "outside delivery area". Default 8047 (5 mi).
+	DeliveryRadiusM int
+	// The published offline map file the Pi downloads (MapURL "" = none).
+	// MapBBox is [minLng, minLat, maxLng, maxLat].
+	MapURL, MapSHA256, MapVersion string
+	MapBBox                       []float64
+}
+
+// Geo sources for Location.GeoSource.
+const (
+	GeoSourceGeocoded = "geocoded"
+	GeoSourceManual   = "manual"
+)
+
+// LocationMap is the published offline map file of a location.
+type LocationMap struct {
+	URL, SHA256, Version string
+	BBox                 []float64
 }
 
 type Device struct {

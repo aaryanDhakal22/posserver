@@ -61,6 +61,21 @@ type AppRelease struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type DeliveryRun struct {
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	BatchID      pgtype.Int8        `json:"batch_id"`
+	DriverID     string             `json:"driver_id"`
+	DriverName   string             `json:"driver_name"`
+	PlanID       string             `json:"plan_id"`
+	SuggestedIds []byte             `json:"suggested_ids"`
+	SentIds      []byte             `json:"sent_ids"`
+	Stops        []byte             `json:"stops"`
+	At           pgtype.Timestamptz `json:"at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+}
+
 type Device struct {
 	ID         pgtype.UUID        `json:"id"`
 	TenantID   pgtype.UUID        `json:"tenant_id"`
@@ -128,6 +143,16 @@ type FloorEventsSeen struct {
 	ReceivedAt pgtype.Timestamptz `json:"received_at"`
 }
 
+type GeoCache struct {
+	AddressKey string             `json:"address_key"`
+	Lat        float64            `json:"lat"`
+	Lng        float64            `json:"lng"`
+	Quality    string             `json:"quality"`
+	Source     string             `json:"source"`
+	Pinned     bool               `json:"pinned"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
 type ItemModifierGroup struct {
 	TenantID pgtype.UUID `json:"tenant_id"`
 	ItemID   pgtype.UUID `json:"item_id"`
@@ -153,18 +178,26 @@ type LineItem struct {
 }
 
 type Location struct {
-	ID             pgtype.UUID        `json:"id"`
-	TenantID       pgtype.UUID        `json:"tenant_id"`
-	Slug           string             `json:"slug"`
-	Name           string             `json:"name"`
-	Timezone       string             `json:"timezone"`
-	DailyResetHour int16              `json:"daily_reset_hour"`
-	Phone          string             `json:"phone"`
-	AddressLine1   string             `json:"address_line1"`
-	AddressLine2   string             `json:"address_line2"`
-	Config         []byte             `json:"config"`
-	StoreType      string             `json:"store_type"`
-	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	ID              pgtype.UUID        `json:"id"`
+	TenantID        pgtype.UUID        `json:"tenant_id"`
+	Slug            string             `json:"slug"`
+	Name            string             `json:"name"`
+	Timezone        string             `json:"timezone"`
+	DailyResetHour  int16              `json:"daily_reset_hour"`
+	Phone           string             `json:"phone"`
+	AddressLine1    string             `json:"address_line1"`
+	AddressLine2    string             `json:"address_line2"`
+	Config          []byte             `json:"config"`
+	StoreType       string             `json:"store_type"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	Lat             pgtype.Float8      `json:"lat"`
+	Lng             pgtype.Float8      `json:"lng"`
+	GeoSource       string             `json:"geo_source"`
+	DeliveryRadiusM int32              `json:"delivery_radius_m"`
+	MapUrl          string             `json:"map_url"`
+	MapSha256       string             `json:"map_sha256"`
+	MapVersion      string             `json:"map_version"`
+	MapBbox         []float64          `json:"map_bbox"`
 }
 
 type Menu struct {
@@ -302,6 +335,28 @@ type Order struct {
 	AgentStatus         []byte             `json:"agent_status"`
 	AgentStatusAt       pgtype.Timestamptz `json:"agent_status_at"`
 	AgentBatchID        pgtype.Int8        `json:"agent_batch_id"`
+}
+
+type OrderGeo struct {
+	OrderID     pgtype.UUID        `json:"order_id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	State       string             `json:"state"`
+	Lat         pgtype.Float8      `json:"lat"`
+	Lng         pgtype.Float8      `json:"lng"`
+	Quality     string             `json:"quality"`
+	DistanceM   int32              `json:"distance_m"`
+	DurationS   int32              `json:"duration_s"`
+	Polyline    string             `json:"polyline"`
+	OutsideArea bool               `json:"outside_area"`
+	StoreToS    pgtype.Int4        `json:"store_to_s"`
+	ToStoreS    pgtype.Int4        `json:"to_store_s"`
+	Attempts    int32              `json:"attempts"`
+	NextTryAt   pgtype.Timestamptz `json:"next_try_at"`
+	LastError   string             `json:"last_error"`
+	PushedAt    pgtype.Timestamptz `json:"pushed_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type OutboxDispatch struct {

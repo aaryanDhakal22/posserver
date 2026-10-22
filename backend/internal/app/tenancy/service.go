@@ -341,6 +341,53 @@ func (s *Service) UpdateLocation(ctx context.Context, p tenancy.UpdateLocationPa
 	return s.repo.UpdateLocation(ctx, p)
 }
 
+// SetLocationPin places the store pin by hand (a manager dragged it to the
+// door). Geocoding never moves a manual pin.
+func (s *Service) SetLocationPin(ctx context.Context, id uuid.UUID, lat, lng float64) (*tenancy.Location, error) {
+	if !validLatLng(lat, lng) {
+		return nil, errors.New("lat must be -90..90 and lng -180..180")
+	}
+	return s.repo.SetLocationPin(ctx, id, lat, lng)
+}
+
+// SetLocationGeocoded stores a geocoded store position (no-op on a manual pin).
+func (s *Service) SetLocationGeocoded(ctx context.Context, id uuid.UUID, lat, lng float64) (bool, error) {
+	return s.repo.SetLocationGeocoded(ctx, id, lat, lng)
+}
+
+// SetLocationMap publishes (or clears, with URL "") the location's offline
+// map file. A set map needs a sha256, a version and a 4-number bbox.
+func (s *Service) SetLocationMap(ctx context.Context, id uuid.UUID, m tenancy.LocationMap) (*tenancy.Location, error) {
+	if strings.TrimSpace(m.URL) == "" {
+		m = tenancy.LocationMap{}
+	} else {
+		if !strings.HasPrefix(m.URL, "https://") && !strings.HasPrefix(m.URL, "http://") {
+			return nil, errors.New("url must be http(s)")
+		}
+		if b, err := hex.DecodeString(m.SHA256); err != nil || len(b) != 32 {
+			return nil, errors.New("sha256 must be 64 hex characters")
+		}
+		if strings.TrimSpace(m.Version) == "" {
+			return nil, errors.New("version is required")
+		}
+		if len(m.BBox) != 4 || m.BBox[0] >= m.BBox[2] || m.BBox[1] >= m.BBox[3] ||
+			!validLatLng(m.BBox[1], m.BBox[0]) || !validLatLng(m.BBox[3], m.BBox[2]) {
+			return nil, errors.New("bbox must be [minLng, minLat, maxLng, maxLat]")
+		}
+		m.SHA256 = strings.ToLower(m.SHA256)
+	}
+	return s.repo.SetLocationMap(ctx, id, m)
+}
+
+// ListLocationsNeedingGeocode lists stores with an address but no position.
+func (s *Service) ListLocationsNeedingGeocode(ctx context.Context) ([]tenancy.Location, error) {
+	return s.repo.ListLocationsNeedingGeocode(ctx)
+}
+
+func validLatLng(lat, lng float64) bool {
+	return lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180 && !(lat == 0 && lng == 0)
+}
+
 // DeleteDevice hard-deletes a device. Prefer RevokeDevice for anything that was
 // ever live (keeps an audit tombstone); DeleteDevice is for cleanup of mistakes.
 func (s *Service) DeleteDevice(ctx context.Context, id uuid.UUID) error {

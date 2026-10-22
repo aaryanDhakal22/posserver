@@ -1,7 +1,10 @@
 package order
 
 import (
+	"encoding/json"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Floor flow: the restaurant's agent owns an order's life on the floor and
@@ -150,4 +153,19 @@ func (o *Order) applyFloorCancel(u FloorUpdate) string {
 		From: string(from), To: string(StatusCancelled), Actor: "agent", Reason: reason, Snapshot: o.Snapshot(),
 	})
 	return FloorApplied
+}
+
+// DeliveryRun is one run a driver was sent out on (agent floor event
+// delivery.run, 2.0.9): AUTO's suggestion vs what was actually sent, kept for
+// tuning past the Pi's batch retention.
+type DeliveryRun struct {
+	ID           uuid.UUID // the floor event id
+	BatchID      *int64
+	DriverID     string
+	DriverName   string
+	PlanID       string // "" when sent without an AUTO plan
+	SuggestedIDs []string
+	SentIDs      []string
+	Stops        json.RawMessage // [{order_id, eta}]
+	At           time.Time
 }

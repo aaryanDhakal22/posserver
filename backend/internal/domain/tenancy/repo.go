@@ -94,6 +94,15 @@ type Repository interface {
 	ListLocationsByTenant(ctx context.Context, tenantID uuid.UUID) ([]Location, error)
 	ListAllLocations(ctx context.Context) ([]Location, error)
 	UpdateLocation(ctx context.Context, p UpdateLocationParams) (*Location, error)
+	// SetLocationPin places the store pin by hand (geo_source manual).
+	SetLocationPin(ctx context.Context, id uuid.UUID, lat, lng float64) (*Location, error)
+	// SetLocationGeocoded stores a geocoded store position unless the pin was
+	// placed by hand; false when a manual pin kept it.
+	SetLocationGeocoded(ctx context.Context, id uuid.UUID, lat, lng float64) (bool, error)
+	// SetLocationMap sets (or, with URL "", clears) the published map file.
+	SetLocationMap(ctx context.Context, id uuid.UUID, m LocationMap) (*Location, error)
+	// ListLocationsNeedingGeocode: an address but no position (startup backfill).
+	ListLocationsNeedingGeocode(ctx context.Context) ([]Location, error)
 
 	CreateDevice(ctx context.Context, p CreateDeviceParams) (*Device, error)
 	ListDevicesByLocation(ctx context.Context, locationID uuid.UUID) ([]Device, error)

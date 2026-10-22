@@ -46,12 +46,22 @@ services:
       AGENT_SECRET_OTLP_ENDPOINT:
       AGENT_SECRET_OTLP_HEADERS:
       AGENT_SECRET_TAILSCALE_AUTHKEY:
+      # Maps (2.0.9). Empty GEO_OSRM_URL = routing off (orders still geocoded).
+      GEO_OSRM_URL:
+      GEO_CONTACT:
+      GOOGLE_MAPS_API_KEY:
+      GEO_CENSUS_URL:
+      GEO_NOMINATIM_URL:
       ORDER_REDELIVER_AFTER:
       OTEL_EXPORTER_OTLP_ENDPOINT:
       OTEL_EXPORTER_OTLP_HEADERS:
       OTEL_SERVICE_NAME:
       TZ: America/New_York
     restart: unless-stopped
+    # pytest runs a fake geo server on the host and points main at it through
+    # the dev-only POST /admin/v1/geo/test-providers (tests/test_geo.py).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ../backend:/src
       - ~/.aws:/root/.aws:ro

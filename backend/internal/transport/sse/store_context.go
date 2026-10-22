@@ -42,6 +42,22 @@ type LocationContext struct {
 	AddressLine1   string         `json:"address_line1"`
 	AddressLine2   string         `json:"address_line2"`
 	Config         map[string]any `json:"config"`
+	// Delivery maps (2.0.9): the store pin (null until geocoded / pinned),
+	// the "outside delivery area" radius and the offline map file the Pi
+	// downloads when its version changes (null = none published).
+	Lat             *float64    `json:"lat"`
+	Lng             *float64    `json:"lng"`
+	DeliveryRadiusM int         `json:"delivery_radius_m"`
+	Map             *MapContext `json:"map"`
+}
+
+// MapContext is a published PMTiles map file. BBox is [minLng, minLat,
+// maxLng, maxLat].
+type MapContext struct {
+	URL     string    `json:"url"`
+	SHA256  string    `json:"sha256"`
+	Version string    `json:"version"`
+	BBox    []float64 `json:"bbox"`
 }
 
 type PrinterContext struct {

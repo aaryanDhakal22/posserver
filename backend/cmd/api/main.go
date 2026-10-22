@@ -9,6 +9,7 @@ import (
 	"quiccpos/main/internal/app/agentsync"
 	diagApp "quiccpos/main/internal/app/diag"
 	floorApp "quiccpos/main/internal/app/floor"
+	geoApp "quiccpos/main/internal/app/geo"
 	"quiccpos/main/internal/app/printerstatus"
 	"quiccpos/main/internal/casting/online"
 	"quiccpos/main/internal/dispatch"
@@ -246,6 +247,22 @@ func main() {
 	requester.RegisterInbound(diagApp.MsgDiagReport, diagService.HandleRPC)
 	go diagService.RunPrune(ctx)
 
+	// Delivery maps (2.0.9): delivery orders are geocoded + routed in the
+	// background after ingest and pushed to the agent as RPC order.geo; a
+	// (re)connecting agent gets what it has not acked. The agent asks back
+	// with geo.pin (a staff pin) and geo.trip (best stop order).
+	geoCfg := geoApp.ConfigFromEnv()
+	geoService := geoApp.New(pool, tenancyService, requester, geoCfg, lgr)
+	geoService.OnStoreChanged(storeConfigPub.Publish)
+	svc.OnCreated(geoService.OnOrderCreated)
+	broker.OnSubscribe(geoService.WakeLocation)
+	requester.RegisterInbound(rpc.MsgGeoPin, geoService.HandlePin)
+	requester.RegisterInbound(rpc.MsgGeoTrip, geoService.HandleTrip)
+	floorService.OnDeliveryRun(repositories.NewDeliveryRunStore(pool))
+	mainLogger.Info().Str("geo_providers", geoService.Providers().Name()).Msg("geo worker configured")
+	go geoService.Run(ctx)
+	go geoService.BackfillStores(ctx)
+
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
 	operatorService := operatorApp.NewService(operatorRepo, tenancyService, lgr)
 
@@ -299,6 +316,8 @@ func main() {
 		OperatorService: operatorService,
 		AgentSync:       agentSync,
 		Diag:            diagService,
+		Geo:             geoService,
+		AppEnv:          cfg.AppConfig.AppEnv,
 	})
 
 	serverLogger := lgr.With().Str("module", "server").Logger()

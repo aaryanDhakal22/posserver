@@ -11,6 +11,7 @@ import (
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/domain/tenancy"
 	"quiccpos/main/internal/transport/session"
+	sseTransport "quiccpos/main/internal/transport/sse"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -33,7 +34,14 @@ type AdminHandler struct {
 	cfgPub   *StoreConfigPublisher // live store_config push after location edits
 	signer   *session.Signer       // open-as-store: impersonated store session cookie
 	logger   zerolog.Logger
+	// geocodeStore geocodes a saved location's address in the background
+	// (no-op on a manual pin); nil = off. See OnLocationSaved.
+	geocodeStore func(locationID uuid.UUID)
 }
+
+// OnLocationSaved registers the background store geocode run after a
+// location edit (the geo service; wired in routes).
+func (h *AdminHandler) OnLocationSaved(fn func(locationID uuid.UUID)) { h.geocodeStore = fn }
 
 func NewAdminHandler(svc *tenancyApp.Service, orderSvc *orderApp.Service, cfgPub *StoreConfigPublisher, signer *session.Signer, logger zerolog.Logger) *AdminHandler {
 	return &AdminHandler{
@@ -70,6 +78,12 @@ type locationJSON struct {
 	AddressLine2   string         `json:"address_line2"`
 	Config         map[string]any `json:"config"`
 	CreatedAt      time.Time      `json:"created_at"`
+	// Delivery maps (2.0.9).
+	Lat             *float64                 `json:"lat"`
+	Lng             *float64                 `json:"lng"`
+	GeoSource       string                   `json:"geo_source"` // "" | geocoded | manual
+	DeliveryRadiusM int                      `json:"delivery_radius_m"`
+	Map             *sseTransport.MapContext `json:"map"`
 }
 
 type deviceJSON struct {
@@ -121,6 +135,9 @@ func toLocationJSON(l tenancy.Location) locationJSON {
 		AddressLine1: l.AddressLine1, AddressLine2: l.AddressLine2,
 		Config:    cfg,
 		CreatedAt: l.CreatedAt,
+
+		Lat: l.Lat, Lng: l.Lng, GeoSource: l.GeoSource,
+		DeliveryRadiusM: l.DeliveryRadiusM, Map: mapContext(l),
 	}
 }
 
@@ -439,6 +456,9 @@ func (h *AdminHandler) UpdateLocation(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, errResp(err.Error()))
 	}
 	h.cfgPub.Publish(c.Request().Context(), l.TenantID, l.ID)
+	if h.geocodeStore != nil {
+		h.geocodeStore(l.ID)
+	}
 	return c.JSON(http.StatusOK, toLocationJSON(*l))
 }
 

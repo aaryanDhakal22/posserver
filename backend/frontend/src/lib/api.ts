@@ -46,6 +46,23 @@ export interface Location {
   address_line2: string;
   config: Record<string, unknown>;
   created_at: string;
+  /** Store pin (null until geocoded from the address or placed by hand). */
+  lat: number | null;
+  lng: number | null;
+  /** '' (not placed) | geocoded | manual (a hand-placed pin; geocoding never moves it). */
+  geo_source: '' | 'geocoded' | 'manual';
+  /** Orders farther than this from the store are tagged "outside delivery area". */
+  delivery_radius_m: number;
+  /** The offline map file the Pi downloads; null = none published. */
+  map: StoreMapFile | null;
+}
+
+export interface StoreMapFile {
+  url: string;
+  sha256: string;
+  version: string;
+  /** [minLng, minLat, maxLng, maxLat] */
+  bbox: number[];
 }
 
 export interface Device {

@@ -56,6 +56,7 @@ type Querier interface {
 	// can still create credential-less tenants. Full-column RETURNING keeps sqlc
 	// mapping to the models.Tenant table struct (see toDomainTenant).
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
+	DeferOrderGeoPush(ctx context.Context, arg DeferOrderGeoPushParams) error
 	DeleteAppRelease(ctx context.Context, arg DeleteAppReleaseParams) (int64, error)
 	DeleteDevice(ctx context.Context, id pgtype.UUID) error
 	DeleteLocationDrivers(ctx context.Context, arg DeleteLocationDriversParams) error
@@ -83,6 +84,9 @@ type Querier interface {
 	DetachGroupFromAllItems(ctx context.Context, arg DetachGroupFromAllItemsParams) error
 	DetachModifierGroup(ctx context.Context, arg DetachModifierGroupParams) error
 	DiagReportExists(ctx context.Context, id pgtype.UUID) (bool, error)
+	// Safety net for the after-ingest enqueue: recent delivery orders that have
+	// no order_geo row yet.
+	EnqueueMissingOrderGeo(ctx context.Context, since pgtype.Timestamptz) (int64, error)
 	// The page links carry only the first 8 hex chars of a report id.
 	FindDiagReportIDsByPrefix(ctx context.Context, prefix string) ([]pgtype.UUID, error)
 	GetActiveDeviceByKeyHash(ctx context.Context, keyHash string) (Device, error)
@@ -93,6 +97,10 @@ type Querier interface {
 	GetAgentUpdate(ctx context.Context, id pgtype.UUID) (AgentUpdate, error)
 	GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKParams) ([]byte, error)
 	GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagReportRow, error)
+	// ───────────────────────────────────────────────────────────────────────────
+	// Geo (2.0.9): geocode cache, per-order geo, driver runs
+	// ───────────────────────────────────────────────────────────────────────────
+	GetGeoCache(ctx context.Context, addressKey string) (GeoCache, error)
 	GetLatestAppRelease(ctx context.Context, app string) (GetLatestAppReleaseRow, error)
 	GetLineItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]LineItem, error)
 	GetLocationByID(ctx context.Context, id pgtype.UUID) (Location, error)
@@ -104,6 +112,10 @@ type Querier interface {
 	GetOperatorByID(ctx context.Context, id pgtype.UUID) (GetOperatorByIDRow, error)
 	GetOrderAgentFields(ctx context.Context, arg GetOrderAgentFieldsParams) (GetOrderAgentFieldsRow, error)
 	GetOrderBySourceEventInScope(ctx context.Context, arg GetOrderBySourceEventInScopeParams) (Order, error)
+	// What the geo worker needs to locate an order: its delivery address and
+	// whether it is still open, plus its store's position + radius.
+	GetOrderForGeo(ctx context.Context, arg GetOrderForGeoParams) (GetOrderForGeoRow, error)
+	GetOrderGeo(ctx context.Context, orderID pgtype.UUID) (OrderGeo, error)
 	// Tenant/location-scoped lookup by canonical id. Read endpoints always
 	// supply the caller's scope so a cross-tenant id leak still 404s.
 	GetOrderInScope(ctx context.Context, arg GetOrderInScopeParams) (Order, error)
@@ -124,8 +136,10 @@ type Querier interface {
 	// 00012: Pi updates (agent_updates)
 	// ---------------------------------------------------------------------------
 	InsertAgentUpdate(ctx context.Context, arg InsertAgentUpdateParams) error
+	InsertDeliveryRun(ctx context.Context, arg InsertDeliveryRunParams) (int64, error)
 	InsertDiagReport(ctx context.Context, arg InsertDiagReportParams) (int64, error)
 	InsertDriver(ctx context.Context, arg InsertDriverParams) error
+	InsertOrderGeo(ctx context.Context, arg InsertOrderGeoParams) (int64, error)
 	InsertOutboxDispatch(ctx context.Context, arg InsertOutboxDispatchParams) error
 	// ───────────────────────────────────────────────────────────────────────────
 	// Outbox
@@ -144,21 +158,29 @@ type Querier interface {
 	ListAppReleases(ctx context.Context, app string) ([]ListAppReleasesRow, error)
 	ListCategoriesByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuCategory, error)
 	ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) ([]MenuCategory, error)
+	ListDeliveryRuns(ctx context.Context, arg ListDeliveryRunsParams) ([]DeliveryRun, error)
 	ListDevicesByLocation(ctx context.Context, locationID pgtype.UUID) ([]Device, error)
 	ListDiagReports(ctx context.Context, arg ListDiagReportsParams) ([]ListDiagReportsRow, error)
 	ListDriverShifts(ctx context.Context, arg ListDriverShiftsParams) ([]DriverShift, error)
+	ListDueOrderGeo(ctx context.Context, arg ListDueOrderGeoParams) ([]ListDueOrderGeoRow, error)
 	ListGroupsForItem(ctx context.Context, arg ListGroupsForItemParams) ([]ListGroupsForItemRow, error)
 	ListItemModifierGroupsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListItemModifierGroupsByLocationRow, error)
 	ListItemsByCategory(ctx context.Context, categoryID pgtype.UUID) ([]MenuItem, error)
 	ListItemsByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuItem, error)
 	ListLocationDrivers(ctx context.Context, arg ListLocationDriversParams) ([]Driver, error)
 	ListLocationsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]Location, error)
+	// Startup backfill: stores with an address but no position yet.
+	ListLocationsNeedingGeocode(ctx context.Context) ([]ListLocationsNeedingGeocodeRow, error)
 	ListMenusByLocation(ctx context.Context, locationID pgtype.UUID) ([]Menu, error)
 	ListModifierGroupsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ModifierGroup, error)
+	// The location's other open (not delivered / cancelled) located deliveries,
+	// for the drive-time table. received_at bounds it to the current service.
+	ListOpenLocatedDeliveries(ctx context.Context, arg ListOpenLocatedDeliveriesParams) ([]ListOpenLocatedDeliveriesRow, error)
 	ListOperatorLocations(ctx context.Context, operatorID pgtype.UUID) ([]OperatorLocation, error)
 	ListOperators(ctx context.Context) ([]ListOperatorsRow, error)
 	ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) ([]ModifierOption, error)
 	ListOptionsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ModifierOption, error)
+	ListOrderGeoByIDs(ctx context.Context, arg ListOrderGeoByIDsParams) ([]ListOrderGeoByIDsRow, error)
 	ListPrinterIPChanges(ctx context.Context, arg ListPrinterIPChangesParams) ([]ListPrinterIPChangesRow, error)
 	ListPrintersByLocation(ctx context.Context, locationID pgtype.UUID) ([]Printer, error)
 	// Top-level item names ordered at a location since a time, with counts — the
@@ -181,6 +203,8 @@ type Querier interface {
 	MarkDispatchSucceeded(ctx context.Context, arg MarkDispatchSucceededParams) error
 	// Idempotency gate for agent floor events: 0 rows = already applied.
 	MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeenParams) (int64, error)
+	// Only when nothing changed since the pushed result was read.
+	MarkOrderGeoPushed(ctx context.Context, arg MarkOrderGeoPushedParams) (int64, error)
 	// Agent reliability + recovery (00009) -------------------------------------------
 	MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) (int64, error)
 	// The Pi followed a printer to a new IP. Applied only while the printer still
@@ -191,10 +215,14 @@ type Querier interface {
 	PruneAgentBackups(ctx context.Context, locationID pgtype.UUID) error
 	PruneAppReleases(ctx context.Context, arg PruneAppReleasesParams) error
 	PruneDiagReports(ctx context.Context, receivedAt pgtype.Timestamptz) (int64, error)
+	// The store moved: re-work the open deliveries (addresses are cached, so
+	// this re-routes from the new position).
+	RequeueLocationOrderGeo(ctx context.Context, arg RequeueLocationOrderGeoParams) (int64, error)
 	// An agent for this (tenant, location) just (re)subscribed: make every still-
 	// pending, backed-off dispatch for the scope due now so its backlog drains
 	// within one dispatcher tick instead of waiting out the exponential backoff.
 	ResetDispatchBackoffForScope(ctx context.Context, arg ResetDispatchBackoffForScopeParams) error
+	ResetOrderGeoForPin(ctx context.Context, orderID pgtype.UUID) error
 	RevokeAllOperatorTokens(ctx context.Context, operatorID pgtype.UUID) error
 	RevokeDevice(ctx context.Context, id pgtype.UUID) error
 	// Keep the newest `keep` active tokens of a location; revoke the rest.
@@ -204,6 +232,9 @@ type Querier interface {
 	// 00010_diagnostics: tablet report tokens + troubleshooting reports
 	// ---------------------------------------------------------------------------
 	RevokeTabletTokensForTablet(ctx context.Context, arg RevokeTabletTokensForTabletParams) (int64, error)
+	// A final result (located / not_found). Clears pushed_at so it is (re)pushed.
+	SaveOrderGeoResult(ctx context.Context, arg SaveOrderGeoResultParams) (pgtype.Timestamptz, error)
+	SaveOrderGeoRetry(ctx context.Context, arg SaveOrderGeoRetryParams) error
 	// Filtered/sorted order history for the agent's store-manager web UI. Every
 	// filter is optional: empty text params and NULL time bounds match everything.
 	// `reverse` flips newest-first (default) to oldest-first without a second query.
@@ -214,6 +245,11 @@ type Querier interface {
 	SetDiagReportResolved(ctx context.Context, arg SetDiagReportResolvedParams) (int64, error)
 	SetItemPosition(ctx context.Context, arg SetItemPositionParams) error
 	SetItemPrinter(ctx context.Context, arg SetItemPrinterParams) error
+	// The store address was geocoded. Never overrides a manual pin.
+	SetLocationGeocoded(ctx context.Context, arg SetLocationGeocodedParams) (int64, error)
+	SetLocationMap(ctx context.Context, arg SetLocationMapParams) (Location, error)
+	// A manager / admin placed the store pin by hand: geocodes never move it.
+	SetLocationPin(ctx context.Context, arg SetLocationPinParams) (Location, error)
 	SetMenuPosition(ctx context.Context, arg SetMenuPositionParams) error
 	SetOperatorPassword(ctx context.Context, arg SetOperatorPasswordParams) error
 	SetOptionPosition(ctx context.Context, arg SetOptionPositionParams) error
@@ -252,6 +288,11 @@ type Querier interface {
 	// A driver.shift event (clock-in, then the clock-out for the same shift id),
 	// keyed per location.
 	UpsertDriverShift(ctx context.Context, arg UpsertDriverShiftParams) error
+	// A geocode result. A pinned entry is never overwritten by a geocode.
+	UpsertGeoCacheGeocoded(ctx context.Context, arg UpsertGeoCacheGeocodedParams) error
+	UpsertGeoCachePinned(ctx context.Context, arg UpsertGeoCachePinnedParams) error
+	// The location's agent (re)connected: push everything it has not acked now.
+	WakeLocationOrderGeo(ctx context.Context, arg WakeLocationOrderGeoParams) (int64, error)
 }
 
 var _ Querier = (*Queries)(nil)

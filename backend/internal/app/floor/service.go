@@ -52,7 +52,12 @@ type event struct {
 	DriverID string     `json:"driver_id"`
 	ClockIn  time.Time  `json:"clock_in"`
 	ClockOut *time.Time `json:"clock_out"`
-	Drivers  []struct {
+	// delivery.run (2.0.9)
+	PlanID       string          `json:"plan_id"`
+	SuggestedIDs []string        `json:"suggested_ids"`
+	SentIDs      []string        `json:"sent_ids"`
+	Stops        json.RawMessage `json:"stops"`
+	Drivers      []struct {
 		ID       string `json:"id"`
 		Name     string `json:"name"`
 		Position int    `json:"position"`
@@ -65,12 +70,24 @@ type OrderLoader interface {
 	GetByID(ctx context.Context, scope order.Scope, id order.ID) (*order.Order, error)
 }
 
+// DeliveryRunStore keeps delivery.run events (idempotent on the event id):
+// returns applied or duplicate.
+type DeliveryRunStore interface {
+	SaveDeliveryRun(ctx context.Context, sc order.Scope, eventID uuid.UUID, r order.DeliveryRun) (string, error)
+	ListDeliveryRuns(ctx context.Context, sc order.Scope, limit int) ([]order.DeliveryRun, error)
+}
+
 type Service struct {
 	orders OrderLoader
 	repo   order.FloorRepository
+	runs   DeliveryRunStore
 	logger zerolog.Logger
 	meters observability.Meters
 }
+
+// OnDeliveryRun sets where delivery.run events are stored (nil = answered
+// invalid, as before 2.0.9).
+func (s *Service) OnDeliveryRun(st DeliveryRunStore) { s.runs = st }
 
 func NewService(orders OrderLoader, repo order.FloorRepository, logger zerolog.Logger, meters observability.Meters) *Service {
 	return &Service{orders: orders, repo: repo, logger: logger.With().Str("module", "floor").Logger(), meters: meters}
@@ -138,6 +155,18 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 		}
 		return s.repo.SaveDriverShift(ctx, sc, eid, order.DriverShift{ID: sid, DriverID: did, DriverName: ev.DriverName,
 			ClockIn: ev.ClockIn, ClockOut: ev.ClockOut, AutoOut: ev.Auto})
+	case "delivery.run":
+		if s.runs == nil || ev.At.IsZero() || len(ev.SentIDs) == 0 {
+			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
+		}
+		stops := ev.Stops
+		if len(stops) == 0 || string(stops) == "null" {
+			stops = json.RawMessage("[]")
+		}
+		return s.runs.SaveDeliveryRun(ctx, sc, eid, order.DeliveryRun{
+			BatchID: ev.BatchID, DriverID: ev.DriverID, DriverName: ev.DriverName, PlanID: ev.PlanID,
+			SuggestedIDs: ev.SuggestedIDs, SentIDs: ev.SentIDs, Stops: stops, At: ev.At,
+		})
 	default:
 		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 	}
@@ -202,4 +231,12 @@ func (s *Service) Shifts(ctx context.Context, sc order.Scope, since time.Time) (
 // LastSyncAt is when the location's agent last synced a floor event.
 func (s *Service) LastSyncAt(ctx context.Context, sc order.Scope) (*time.Time, error) {
 	return s.repo.LastFloorEventAt(ctx, sc)
+}
+
+// DeliveryRuns returns the location's newest driver runs (delivery.run).
+func (s *Service) DeliveryRuns(ctx context.Context, sc order.Scope, limit int) ([]order.DeliveryRun, error) {
+	if s.runs == nil {
+		return []order.DeliveryRun{}, nil
+	}
+	return s.runs.ListDeliveryRuns(ctx, sc, limit)
 }
