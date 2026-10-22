@@ -80,7 +80,14 @@ type Broker struct {
 	waker   Waker
 	logger  zerolog.Logger
 	meters  observability.Meters
+	// onSubscribe hooks run (off the caller's path) whenever a stream opens.
+	onSubscribe []func(scope Scope)
 }
+
+// OnSubscribe registers a hook called (in its own goroutine) whenever a
+// stream subscribes to a scope — e.g. the geo worker re-pushes what the
+// (re)connected agent has not acked. Wire before serving.
+func (b *Broker) OnSubscribe(fn func(scope Scope)) { b.onSubscribe = append(b.onSubscribe, fn) }
 
 func New(lg zerolog.Logger, meters observability.Meters) *Broker {
 	return &Broker{
@@ -122,6 +129,9 @@ func (b *Broker) SubscribeAs(ctx context.Context, scope Scope, deviceID uuid.UUI
 		} else {
 			b.waker.Wake()
 		}
+	}
+	for _, fn := range b.onSubscribe {
+		go fn(scope)
 	}
 
 	return ch, func() {

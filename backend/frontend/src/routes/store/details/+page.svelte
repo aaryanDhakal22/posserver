@@ -11,6 +11,7 @@
   import Skeleton from '$lib/ui/Skeleton.svelte';
   import HoursEditor from '$lib/components/HoursEditor.svelte';
   import LocationFields, { locationForm, type LocationForm } from '$lib/components/LocationFields.svelte';
+  import StoreMap from '$lib/components/StoreMap.svelte';
 
   // Location details + opening hours. PATCH /me/location is a full replace,
   // so every field goes back with the hours merged into the config.
@@ -33,6 +34,27 @@
     }
   });
 
+  // Only the position fields: a reload must not clobber unsaved form edits.
+  async function refreshPin() {
+    try {
+      const l = await storeApi<Location>('/me/location');
+      if (loc) loc = { ...loc, lat: l.lat, lng: l.lng, geo_source: l.geo_source, map: l.map, delivery_radius_m: l.delivery_radius_m };
+    } catch {
+      /* best effort */
+    }
+  }
+
+  async function savePin(lat: number, lng: number) {
+    try {
+      const l = await storeApi<Location>('/me/location/pin', { method: 'PUT', body: JSON.stringify({ lat, lng }) });
+      if (loc) loc = { ...loc, lat: l.lat, lng: l.lng, geo_source: l.geo_source };
+      toast.success('Store pin saved — the Pi gets it right away');
+    } catch (err) {
+      toast.error(err);
+      throw err;
+    }
+  }
+
   async function save(e: SubmitEvent) {
     e.preventDefault();
     if (!loc || saving) return;
@@ -49,6 +71,8 @@
       fill(l);
       if (storeSession.who) storeSession.who.location = l;
       toast.success('Details saved — the Pi gets them right away');
+      // The address is geocoded in the background; pick up the new pin.
+      if (l.geo_source !== 'manual') setTimeout(refreshPin, 2500);
     } catch (err) {
       toast.error(err);
     } finally {
@@ -73,4 +97,7 @@
     </Card>
     <div><Button type="submit" variant="primary" loading={saving}>Save details & hours</Button></div>
   </form>
+  <div class="max-w-[760px] mt-4">
+    <StoreMap {loc} onsave={savePin} idPrefix="sd-geo" />
+  </div>
 {/if}

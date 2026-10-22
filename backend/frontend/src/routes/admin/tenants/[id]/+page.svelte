@@ -41,6 +41,7 @@
   import EmptyState from '$lib/ui/EmptyState.svelte';
   import SecretReveal from '$lib/ui/SecretReveal.svelte';
   import LocationFields, { locationForm, type LocationForm } from '$lib/components/LocationFields.svelte';
+  import StoreMap from '$lib/components/StoreMap.svelte';
   import HoursEditor from '$lib/components/HoursEditor.svelte';
 
   // One store, admin view. Moved here from the old TenantRow/LocationRow:
@@ -192,6 +193,18 @@
 
   // --- location -------------------------------------------------------------
   let savingLoc = $state(false);
+  async function saveStorePin(lat: number, lng: number) {
+    if (!loc) return;
+    try {
+      const l = await adminApi<Location>(`/locations/${loc.id}/pin`, { method: 'PUT', body: JSON.stringify({ lat, lng }) });
+      if (ov) ov = { ...ov, locations: ov.locations.map((x) => (x.id === l.id ? { ...x, lat: l.lat, lng: l.lng, geo_source: l.geo_source } : x)) };
+      toast.success('Store pin saved — the Pi gets it right away');
+    } catch (e) {
+      toast.error(e);
+      throw e;
+    }
+  }
+
   async function saveLocation() {
     if (!loc) return;
     let cfg: Record<string, unknown>;
@@ -218,6 +231,8 @@
       toast.success('Location saved — the Pi gets it right away');
       await reload();
       resetForms();
+      // The address is geocoded in the background; pick up the new store pin.
+      if (loc && loc.geo_source !== 'manual') setTimeout(() => void reload(), 2500);
     } catch (e) {
       toast.error(e);
     } finally {
@@ -551,6 +566,9 @@
             </div>
           </div>
         </Card>
+        <div class="max-w-[720px]">
+          <StoreMap {loc} onsave={saveStorePin} idPrefix="td-geo" />
+        </div>
       {:else}
         <EmptyState icon="alert" title="This store has no location" body="Every store gets its location when it's created — this one predates that. Re-run the migrations." />
       {/if}

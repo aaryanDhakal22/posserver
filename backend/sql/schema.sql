@@ -24,6 +24,15 @@ CREATE TABLE locations (
     config            jsonb       NOT NULL DEFAULT '{}'::jsonb,
     store_type        text        NOT NULL DEFAULT 'restaurant',
     created_at        timestamptz NOT NULL DEFAULT now(),
+    -- 00013_geo: store position, delivery radius, published offline map.
+    lat               double precision,
+    lng               double precision,
+    geo_source        text        NOT NULL DEFAULT '',
+    delivery_radius_m integer     NOT NULL DEFAULT 8047,
+    map_url           text        NOT NULL DEFAULT '',
+    map_sha256        text        NOT NULL DEFAULT '',
+    map_version       text        NOT NULL DEFAULT '',
+    map_bbox          double precision[] NOT NULL DEFAULT '{}',
     UNIQUE (tenant_id, slug),
     UNIQUE (id, tenant_id)
 );
@@ -485,3 +494,63 @@ CREATE TABLE agent_updates (
 );
 CREATE INDEX idx_agent_updates_location ON agent_updates (location_id, requested_at DESC);
 CREATE INDEX idx_agent_updates_requested ON agent_updates (requested_at DESC);
+
+-- 00013_geo: geocode cache, per-order geo + push state, driver runs.
+CREATE TABLE geo_cache (
+    address_key text             PRIMARY KEY,
+    lat         double precision NOT NULL,
+    lng         double precision NOT NULL,
+    quality     text             NOT NULL,
+    source      text             NOT NULL DEFAULT '',
+    pinned      boolean          NOT NULL DEFAULT false,
+    updated_at  timestamptz      NOT NULL DEFAULT now()
+);
+
+-- order_geo: one row per delivery order, written right after ingest (state
+--   'pending') and worked by the geo worker: geocode → route from the store →
+--   drive times to the other open deliveries → RPC order.geo to the agent.
+--   pushed_at NULL = the agent has not acked the latest result yet (re-pushed
+--   when it reconnects). next_try_at drives both geocode retries and pushes.
+CREATE TABLE order_geo (
+    order_id     uuid             PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+    tenant_id    uuid             NOT NULL,
+    location_id  uuid             NOT NULL,
+    state        text             NOT NULL DEFAULT 'pending' CHECK (state IN ('pending', 'located', 'not_found')),
+    lat          double precision,
+    lng          double precision,
+    quality      text             NOT NULL DEFAULT '',
+    distance_m   integer          NOT NULL DEFAULT 0,
+    duration_s   integer          NOT NULL DEFAULT 0,
+    polyline     text             NOT NULL DEFAULT '',
+    outside_area boolean          NOT NULL DEFAULT false,
+    store_to_s   integer,
+    to_store_s   integer,
+    attempts     integer          NOT NULL DEFAULT 0,
+    next_try_at  timestamptz      NOT NULL DEFAULT now(),
+    last_error   text             NOT NULL DEFAULT '',
+    pushed_at    timestamptz,
+    created_at   timestamptz      NOT NULL DEFAULT now(),
+    updated_at   timestamptz      NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_order_geo_due ON order_geo (next_try_at) WHERE pushed_at IS NULL;
+CREATE INDEX idx_order_geo_location ON order_geo (location_id, state);
+
+-- delivery_runs: every run a driver was sent out on (agent floor event
+--   delivery.run) — AUTO's suggestion vs what was actually sent, kept past the
+--   Pi's batch retention for tuning. id = the floor event id (idempotent).
+CREATE TABLE delivery_runs (
+    id            uuid        PRIMARY KEY,
+    tenant_id     uuid        NOT NULL,
+    location_id   uuid        NOT NULL,
+    batch_id      bigint,
+    driver_id     text        NOT NULL DEFAULT '',
+    driver_name   text        NOT NULL DEFAULT '',
+    plan_id       text        NOT NULL DEFAULT '',
+    suggested_ids jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    sent_ids      jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    stops         jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    at            timestamptz NOT NULL,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_delivery_runs_location ON delivery_runs (location_id, at DESC);

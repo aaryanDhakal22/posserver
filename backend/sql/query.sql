@@ -62,21 +62,25 @@ DELETE FROM devices WHERE id = $1;
 INSERT INTO locations (tenant_id, slug, name, timezone, daily_reset_hour)
 VALUES ($1, $2, $3, $4, $5)
 RETURNING id, tenant_id, slug, name, timezone, daily_reset_hour,
-          phone, address_line1, address_line2, config, store_type, created_at;
+          phone, address_line1, address_line2, config, store_type, created_at,
+          lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox;
 
 -- name: GetLocationByID :one
 SELECT id, tenant_id, slug, name, timezone, daily_reset_hour,
-       phone, address_line1, address_line2, config, store_type, created_at
+       phone, address_line1, address_line2, config, store_type, created_at,
+       lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox
 FROM locations WHERE id = $1;
 
 -- name: ListLocationsByTenant :many
 SELECT id, tenant_id, slug, name, timezone, daily_reset_hour,
-       phone, address_line1, address_line2, config, store_type, created_at
+       phone, address_line1, address_line2, config, store_type, created_at,
+       lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox
 FROM locations WHERE tenant_id = $1 ORDER BY created_at ASC;
 
 -- name: ListAllLocations :many
 SELECT id, tenant_id, slug, name, timezone, daily_reset_hour,
-       phone, address_line1, address_line2, config, store_type, created_at
+       phone, address_line1, address_line2, config, store_type, created_at,
+       lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox
 FROM locations ORDER BY tenant_id, created_at ASC;
 
 -- name: UpdateLocationDetails :one
@@ -92,7 +96,33 @@ UPDATE locations SET
     config         = $8
 WHERE id = $1
 RETURNING id, tenant_id, slug, name, timezone, daily_reset_hour,
-          phone, address_line1, address_line2, config, store_type, created_at;
+          phone, address_line1, address_line2, config, store_type, created_at,
+          lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox;
+
+-- name: SetLocationPin :one
+-- A manager / admin placed the store pin by hand: geocodes never move it.
+UPDATE locations SET lat = $2, lng = $3, geo_source = 'manual'
+WHERE id = $1
+RETURNING id, tenant_id, slug, name, timezone, daily_reset_hour,
+          phone, address_line1, address_line2, config, store_type, created_at,
+          lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox;
+
+-- name: SetLocationGeocoded :execrows
+-- The store address was geocoded. Never overrides a manual pin.
+UPDATE locations SET lat = $2, lng = $3, geo_source = 'geocoded'
+WHERE id = $1 AND geo_source <> 'manual';
+
+-- name: SetLocationMap :one
+UPDATE locations SET map_url = $2, map_sha256 = $3, map_version = $4, map_bbox = $5
+WHERE id = $1
+RETURNING id, tenant_id, slug, name, timezone, daily_reset_hour,
+          phone, address_line1, address_line2, config, store_type, created_at,
+          lat, lng, geo_source, delivery_radius_m, map_url, map_sha256, map_version, map_bbox;
+
+-- name: ListLocationsNeedingGeocode :many
+-- Startup backfill: stores with an address but no position yet.
+SELECT id, tenant_id FROM locations
+WHERE address_line1 <> '' AND lat IS NULL AND geo_source <> 'manual';
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- Devices (API keys)
@@ -930,3 +960,135 @@ FROM agent_updates
 WHERE (sqlc.narg(location_id)::uuid IS NULL OR location_id = sqlc.narg(location_id))
 ORDER BY requested_at DESC
 LIMIT sqlc.arg(max_rows)::int;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- Geo (2.0.9): geocode cache, per-order geo, driver runs
+-- ───────────────────────────────────────────────────────────────────────────
+
+-- name: GetGeoCache :one
+SELECT address_key, lat, lng, quality, source, pinned, updated_at
+FROM geo_cache WHERE address_key = $1;
+
+-- name: UpsertGeoCacheGeocoded :exec
+-- A geocode result. A pinned entry is never overwritten by a geocode.
+INSERT INTO geo_cache (address_key, lat, lng, quality, source, pinned, updated_at)
+VALUES ($1, $2, $3, $4, $5, false, now())
+ON CONFLICT (address_key) DO UPDATE SET
+    lat = EXCLUDED.lat, lng = EXCLUDED.lng, quality = EXCLUDED.quality,
+    source = EXCLUDED.source, updated_at = now()
+WHERE geo_cache.pinned = false;
+
+-- name: UpsertGeoCachePinned :exec
+INSERT INTO geo_cache (address_key, lat, lng, quality, source, pinned, updated_at)
+VALUES ($1, $2, $3, 'pinned', 'pin', true, now())
+ON CONFLICT (address_key) DO UPDATE SET
+    lat = EXCLUDED.lat, lng = EXCLUDED.lng, quality = 'pinned',
+    source = 'pin', pinned = true, updated_at = now();
+
+-- name: InsertOrderGeo :execrows
+INSERT INTO order_geo (order_id, tenant_id, location_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (order_id) DO NOTHING;
+
+-- name: EnqueueMissingOrderGeo :execrows
+-- Safety net for the after-ingest enqueue: recent delivery orders that have
+-- no order_geo row yet.
+INSERT INTO order_geo (order_id, tenant_id, location_id)
+SELECT o.id, o.tenant_id, o.location_id FROM orders o
+WHERE o.fulfillment_type = 'delivery' AND o.received_at > @since::timestamptz
+  AND NOT EXISTS (SELECT 1 FROM order_geo g WHERE g.order_id = o.id)
+ON CONFLICT (order_id) DO NOTHING;
+
+-- name: ListDueOrderGeo :many
+SELECT order_id, tenant_id, location_id, state, attempts, created_at, updated_at
+FROM order_geo
+WHERE pushed_at IS NULL AND next_try_at <= @now::timestamptz
+ORDER BY next_try_at ASC
+LIMIT @max_rows;
+
+-- name: GetOrderGeo :one
+SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
+       polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
+       pushed_at, created_at, updated_at
+FROM order_geo WHERE order_id = $1;
+
+-- name: GetOrderForGeo :one
+-- What the geo worker needs to locate an order: its delivery address and
+-- whether it is still open, plus its store's position + radius.
+SELECT o.id, o.tenant_id, o.location_id, o.fulfillment_type, o.fulfillment_address, o.status,
+       l.lat AS store_lat, l.lng AS store_lng, l.delivery_radius_m
+FROM orders o JOIN locations l ON l.id = o.location_id
+WHERE o.id = @order_id AND o.tenant_id = @tenant_id AND o.location_id = @location_id;
+
+-- name: SaveOrderGeoResult :one
+-- A final result (located / not_found). Clears pushed_at so it is (re)pushed.
+UPDATE order_geo SET
+    state = @state, lat = sqlc.narg('lat'), lng = sqlc.narg('lng'), quality = @quality,
+    distance_m = @distance_m, duration_s = @duration_s, polyline = @polyline,
+    outside_area = @outside_area, store_to_s = sqlc.narg('store_to_s'), to_store_s = sqlc.narg('to_store_s'),
+    attempts = attempts + 1, next_try_at = now(), last_error = @last_error,
+    pushed_at = NULL, updated_at = now()
+WHERE order_id = @order_id
+RETURNING updated_at;
+
+-- name: SaveOrderGeoRetry :exec
+UPDATE order_geo SET attempts = attempts + 1, next_try_at = @next_try_at,
+    last_error = @last_error, updated_at = now()
+WHERE order_id = @order_id;
+
+-- name: MarkOrderGeoPushed :execrows
+-- Only when nothing changed since the pushed result was read.
+UPDATE order_geo SET pushed_at = now()
+WHERE order_id = @order_id AND updated_at = @updated_at;
+
+-- name: DeferOrderGeoPush :exec
+UPDATE order_geo SET next_try_at = @next_try_at WHERE order_id = @order_id;
+
+-- name: WakeLocationOrderGeo :execrows
+-- The location's agent (re)connected: push everything it has not acked now.
+UPDATE order_geo SET next_try_at = now()
+WHERE tenant_id = @tenant_id AND location_id = @location_id
+  AND pushed_at IS NULL AND state <> 'pending';
+
+-- name: ResetOrderGeoForPin :exec
+UPDATE order_geo SET state = 'pending', attempts = 0, next_try_at = now(),
+    last_error = '', pushed_at = NULL, updated_at = now()
+WHERE order_id = @order_id;
+
+-- name: RequeueLocationOrderGeo :execrows
+-- The store moved: re-work the open deliveries (addresses are cached, so
+-- this re-routes from the new position).
+UPDATE order_geo g SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL, updated_at = now()
+FROM orders o
+WHERE o.id = g.order_id AND g.tenant_id = @tenant_id AND g.location_id = @location_id
+  AND g.state <> 'pending'
+  AND o.status NOT IN ('completed', 'cancelled', 'rejected')
+  AND o.received_at > @since::timestamptz;
+
+-- name: ListOpenLocatedDeliveries :many
+-- The location's other open (not delivered / cancelled) located deliveries,
+-- for the drive-time table. received_at bounds it to the current service.
+SELECT g.order_id, g.lat, g.lng FROM order_geo g JOIN orders o ON o.id = g.order_id
+WHERE g.tenant_id = @tenant_id AND g.location_id = @location_id
+  AND g.state = 'located' AND g.lat IS NOT NULL AND g.lng IS NOT NULL
+  AND g.order_id <> @exclude_id
+  AND o.status NOT IN ('completed', 'cancelled', 'rejected')
+  AND o.received_at > @since::timestamptz
+ORDER BY o.placed_at ASC
+LIMIT @max_rows;
+
+-- name: ListOrderGeoByIDs :many
+SELECT g.order_id, g.state, g.lat, g.lng FROM order_geo g
+WHERE g.tenant_id = @tenant_id AND g.location_id = @location_id AND g.order_id = ANY(@ids::uuid[]);
+
+-- name: InsertDeliveryRun :execrows
+INSERT INTO delivery_runs (id, tenant_id, location_id, batch_id, driver_id, driver_name,
+                           plan_id, suggested_ids, sent_ids, stops, at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+ON CONFLICT (id) DO NOTHING;
+
+-- name: ListDeliveryRuns :many
+SELECT id, tenant_id, location_id, batch_id, driver_id, driver_name, plan_id,
+       suggested_ids, sent_ids, stops, at, created_at
+FROM delivery_runs WHERE tenant_id = $1 AND location_id = $2
+ORDER BY at DESC LIMIT $3;

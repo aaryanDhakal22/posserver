@@ -25,6 +25,15 @@ type Service struct {
 	waker  Waker
 	logger zerolog.Logger
 	tracer trace.Tracer
+	// afterCreate hooks run after an order is persisted (not for duplicates).
+	// They must not fail ingest — each handles its own errors.
+	afterCreate []func(ctx context.Context, o *order.Order)
+}
+
+// OnCreated registers a hook that runs after an order is persisted (the geo
+// worker enqueues delivery orders here). Wire before ingest starts.
+func (s *Service) OnCreated(fn func(ctx context.Context, o *order.Order)) {
+	s.afterCreate = append(s.afterCreate, fn)
 }
 
 func NewOrderService(repo order.OrderRepository, waker Waker, logger zerolog.Logger) *Service {
@@ -70,6 +79,9 @@ func (s *Service) Create(ctx context.Context, o *order.Order) error {
 	log.Debug().Ctx(ctx).Msg("Create persisted; waking dispatcher")
 	if s.waker != nil {
 		s.waker.Wake()
+	}
+	for _, fn := range s.afterCreate {
+		fn(ctx, o)
 	}
 	return nil
 }

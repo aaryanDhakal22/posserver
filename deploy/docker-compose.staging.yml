@@ -48,6 +48,15 @@ services:
       AGENT_SECRET_OTLP_ENDPOINT: ${AGENT_SECRET_OTLP_ENDPOINT:-}
       AGENT_SECRET_OTLP_HEADERS: ${AGENT_SECRET_OTLP_HEADERS:-}
       AGENT_SECRET_TAILSCALE_AUTHKEY: ${AGENT_SECRET_TAILSCALE_AUTHKEY:-}
+      # Maps (2.0.9): GEO_OSRM_URL=http://osrm:5000 reaches the `osrm` container,
+      # which joins this compose's `internal` network (quicc-staging_internal; see
+      # quicc-ops deploy/osrm). GEO_CONTACT = Nominatim's contact; Google is
+      # optional (a key switches geocoding + routing); the URL overrides are for tests.
+      GEO_OSRM_URL: ${GEO_OSRM_URL:-}
+      GEO_CONTACT: ${GEO_CONTACT:-}
+      GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
+      GEO_CENSUS_URL: ${GEO_CENSUS_URL:-}
+      GEO_NOMINATIM_URL: ${GEO_NOMINATIM_URL:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
       OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME}

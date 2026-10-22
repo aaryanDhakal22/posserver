@@ -25,6 +25,7 @@ import (
 
 	"quiccpos/main/internal/app/agentsync"
 	diagApp "quiccpos/main/internal/app/diag"
+	geoApp "quiccpos/main/internal/app/geo"
 	menuApp "quiccpos/main/internal/app/menu"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
@@ -91,6 +92,10 @@ type RouterDeps struct {
 	AgentSync *agentsync.Service
 	// Diag backs tablet diagnostics (report tokens, reports, admin view).
 	Diag *diagApp.Service
+	// Geo backs delivery maps: store pin, published map, store geocoding.
+	Geo *geoApp.Service
+	// AppEnv gates dev-only routes (the geo test-provider override).
+	AppEnv string
 }
 
 // RouteInfo is the JSON shape served at GET /__routes (shared across all
@@ -161,6 +166,11 @@ func routeTable(d RouterDeps) []routeDef {
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
 	diagH := handler.NewDiagHandler(d.Diag, d.Logger)
 	agentUpdateH := handler.NewAgentUpdateHandler(d.AgentSync, d.Requester, d.Logger)
+	geoH := handler.NewGeoHandler(d.TenancyService, d.Geo, cfgPub, d.AppEnv, d.Logger)
+	if d.Geo != nil {
+		adminH.OnLocationSaved(d.Geo.GeocodeStoreAsync)
+		storeH.OnLocationSaved(d.Geo.GeocodeStoreAsync)
+	}
 
 	appFS := webapp.FS()
 	appBuilt := webapp.Built()
@@ -204,6 +214,12 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", adminPrefix+"/orders/:id", "admin", "Delete a single order + children (cleanup)", adminH.DeleteOrder, admin),
 		def("GET", adminPrefix+"/locations", "admin", "List all locations", adminH.ListLocations, admin),
 		def("PATCH", adminPrefix+"/locations/:id", "admin", "Edit a location (full replace)", adminH.UpdateLocation, admin),
+		def("PUT", adminPrefix+"/locations/:id/pin", "admin", "Place a store pin by hand {lat, lng} (geo_source manual; pushes store_config)", geoH.AdminSetPin, admin),
+		def("PATCH", adminPrefix+"/locations/:id/map", "admin", "Publish the store's offline map {url, sha256, version, bbox} ({url:\"\"} clears; pushes store_config)", geoH.AdminSetMap, admin),
+		def("GET", adminPrefix+"/delivery-runs", "admin", "A location's driver runs, newest first (?tenant_id&location_id&limit=50)", floorH.AdminDeliveryRuns, admin),
+		def("GET", adminPrefix+"/geo", "admin", "Active geocoding/routing providers", geoH.AdminStatus, admin),
+		def("POST", adminPrefix+"/geo/test-providers", "admin", "DEV ONLY: point the geo providers at a test fake {census_url, nominatim_url, osrm_url}", geoH.DevSetProviders, admin),
+		def("DELETE", adminPrefix+"/geo/test-providers", "admin", "DEV ONLY: restore the env geo providers", geoH.DevResetProviders, admin),
 		def("POST", adminPrefix+"/devices", "admin", "Mint an agent device (cleartext key once)", adminH.MintAgentDevice, admin),
 		def("GET", adminPrefix+"/devices", "admin", "List all devices", adminH.ListDevices, admin),
 		def("POST", adminPrefix+"/devices/:id/revoke", "admin", "Revoke a device (tombstone)", adminH.RevokeDevice, admin),
@@ -263,7 +279,9 @@ func routeTable(d RouterDeps) []routeDef {
 		// Store — session-scoped self-service (location from the cookie, not the URL).
 		def("GET", storePrefix+"/me/location", "store-session", "This manager's location", storeH.MeGetLocation, storeSession),
 		def("PATCH", storePrefix+"/me/location", "store-session", "Edit this manager's location", storeH.MeUpdateLocation, storeSession),
+		def("PUT", storePrefix+"/me/location/pin", "store-session", "Place the store pin by hand {lat, lng} (Store › Details map)", geoH.MeSetPin, storeSession),
 		def("GET", storePrefix+"/me/orders", "store-session", "Recent orders with the agent-synced floor status (?limit)", floorH.MeListOrders, storeSession),
+		def("GET", storePrefix+"/me/delivery-runs", "store-session", "Driver runs sent (AUTO suggestion vs sent), newest first (?limit=50)", floorH.MeDeliveryRuns, storeSession),
 		def("GET", storePrefix+"/me/floor", "store-session", "Driver roster + last agent floor sync", floorH.MeGetFloor, storeSession),
 		def("GET", storePrefix+"/me/printers/live", "store-session", "Agent-reported live printer roster + reachability", printerStatusH.MeGetLive, storeSession),
 		def("GET", storePrefix+"/me/printers/ip-changes", "store-session", "Printer IP changes, newest first (?limit=20) — the Pi following a printer + manager edits", storeH.MeListPrinterIPChanges, storeSession),
