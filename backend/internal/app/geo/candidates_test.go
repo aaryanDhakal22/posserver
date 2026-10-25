@@ -254,3 +254,35 @@ func TestConfidenceKeepsRealAmbiguity(t *testing.T) {
 		t.Error("identical lines without zips, far apart: check")
 	}
 }
+
+// Staging 2026-10-25: an online delivery whose house the geocoders can't find
+// comes back as several street-level points of the input's own road (Nominatim
+// ways). That is an approximate location (2.0.9 placed it as approx), not a
+// choice for staff — and identical labels are offered only once.
+func TestStreetLevelMatchesOfTheInputStreetAreConfident(t *testing.T) {
+	at := func(line1, zip string, lat, lng float64) Candidate {
+		return newCandidate(line1, "Towson", "MD", zip, Point{Lat: lat, Lng: lng}, QualityApprox)
+	}
+	dulaney := []Candidate{at("Dulaney Valley Road", "21204", 39.4027006, -76.6020055),
+		at("Dulaney Valley Road", "21204", 39.4097999, -76.6005963), at("Dulaney Valley Road", "21204", 39.4025591, -76.601907)}
+	if !Confident(Address{Line1: "204 Dulaney Valley Rd", City: "Towson", State: "MD", Zip: "21204"}, dulaney) {
+		t.Error("street-level points of the input's road: confident (approx)")
+	}
+	if got := len(collapse(dulaney)); got != 1 {
+		t.Errorf("identical labels collapse to one, got %d", got)
+	}
+	cromwell := []Candidate{at("Cromwell Bridge Road", "21286", 39.3996736, -76.5775528),
+		at("Cromwell Bridge Road", "21284", 39.4013787, -76.5702961)}
+	if !Confident(Address{Line1: "1764 Cromwell Bridge Rd", City: "Towson", State: "MD", Zip: "21286"}, cromwell) {
+		t.Error("the same road across a zip line, 0.7 km apart: confident")
+	}
+	// Another road, or the same road name far away: still check.
+	other := []Candidate{at("Cromwell Bridge Road", "21286", 39.3996, -76.5775), at("Bridge Road", "21286", 39.41, -76.57)}
+	if Confident(Address{Line1: "1764 Cromwell Bridge Rd", Zip: "21286"}, other) {
+		t.Error("street-level match of another street: check")
+	}
+	far := []Candidate{at("Main Street", "21286", 39.39, -76.57), at("Main Street", "21157", 39.57, -76.99)}
+	if Confident(Address{Line1: "12 Main St"}, far) {
+		t.Error("the same street name 40 km apart: check")
+	}
+}

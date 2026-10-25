@@ -100,11 +100,51 @@ func collapse(cs []Candidate) []Candidate {
 	}
 	out := []Candidate{cs[0]}
 	for _, c := range cs[1:] {
-		if !sameAddress(cs[0], c) {
+		if !sameAddress(cs[0], c) && !sameLabel(out, c) {
 			out = append(out, c)
 		}
 	}
 	return out
+}
+
+// sameLabel: c reads exactly like a candidate already kept (street-level
+// matches of one road come back as several points with one label) — staff
+// can't choose between identical lines, so it isn't offered twice.
+func sameLabel(kept []Candidate, c Candidate) bool {
+	for _, k := range kept {
+		if strings.EqualFold(k.Label, c.Label) {
+			return true
+		}
+	}
+	return false
+}
+
+// StreetLevelSpanM: street-level matches of the input's own street further
+// apart than this are treated as different places (check).
+const StreetLevelSpanM = 3000
+
+// streetLevel: the geocoder could not find the house, only the input's street
+// — every candidate has no house number, names the input's street, and they
+// lie within StreetLevelSpanM of the top one. That is an approximate location
+// (2.0.9 placed it as approx), not a choice for staff to make.
+func streetLevel(in Address, cs []Candidate) bool {
+	line := in.Line1
+	if line == "" {
+		line = in.Oneline
+	}
+	s := StreetName(line)
+	if s == "" {
+		return false
+	}
+	for _, c := range cs {
+		if HouseNumber(c.Line1) != "" || StreetName(c.Line1) != s {
+			return false
+		}
+		if HaversineM(cs[0].Point(), c.Point()) > StreetLevelSpanM {
+			return false
+		}
+	}
+	return true
 }
 
 // sameAddress: b repeats a. Both have the same house number and street name
@@ -145,6 +185,9 @@ func Confident(in Address, cs []Candidate) bool {
 	case 0:
 		return false
 	case 1:
+		return true
+	}
+	if streetLevel(in, cs) {
 		return true
 	}
 	if !Agrees(in, cs[0]) {
