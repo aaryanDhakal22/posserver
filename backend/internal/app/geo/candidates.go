@@ -140,11 +140,26 @@ func streetLevel(in Address, cs []Candidate) bool {
 		if HouseNumber(c.Line1) != "" || StreetName(c.Line1) != s {
 			return false
 		}
-		if HaversineM(cs[0].Point(), c.Point()) > StreetLevelSpanM {
+	}
+	// Far-apart points of one road: the top one still decides when it is the
+	// only far one in the input's own town + zip (a long road through several
+	// towns); two far points that both fit the input are a real choice.
+	top := sameTownAndZip(in, cs[0])
+	for _, c := range cs[1:] {
+		if HaversineM(cs[0].Point(), c.Point()) <= StreetLevelSpanM {
+			continue
+		}
+		if !top || sameTownAndZip(in, c) {
 			return false
 		}
 	}
 	return true
+}
+
+// sameTownAndZip: the candidate names the input's city and zip (both given).
+func sameTownAndZip(in Address, c Candidate) bool {
+	z := zip5.FindString(in.Zip)
+	return z != "" && in.City != "" && strings.EqualFold(strings.TrimSpace(in.City), c.City) && zip5.FindString(c.PostalCode) == z
 }
 
 // sameAddress: b repeats a. Both have the same house number and street name

@@ -130,7 +130,7 @@ func TestConfidenceRule(t *testing.T) {
 		{"top has another house number", []Candidate{c("939 Taylor Ave", "21286", 39.1), c("931 Taylor Ave", "21204", 39.2)}, false},
 		{"top has another street", []Candidate{c("931 Tyler Ave", "21286", 39.1), c("931 Taylor Ave", "21204", 39.2)}, false},
 		{"top has another zip", []Candidate{c("931 Taylor Ave", "21204", 39.1), c("931 Taylor Ave", "21093", 39.2)}, false},
-		{"street-level matches only", []Candidate{c("Taylor Ave", "21286", 39.1), c("Taylor Ave", "21204", 39.2)}, false},
+		{"street-level, far apart, only the top in the input's town + zip", []Candidate{c("Taylor Ave", "21286", 39.1), c("Taylor Ave", "21204", 39.2)}, true},
 	}
 	for _, tc := range cases {
 		if got := Confident(in, tc.cs); got != tc.want {
@@ -284,5 +284,17 @@ func TestStreetLevelMatchesOfTheInputStreetAreConfident(t *testing.T) {
 	far := []Candidate{at("Main Street", "21286", 39.39, -76.57), at("Main Street", "21157", 39.57, -76.99)}
 	if Confident(Address{Line1: "12 Main St"}, far) {
 		t.Error("the same street name 40 km apart: check")
+	}
+	// A long road through three towns (Putty Hill Ave, staging 2026-10-25):
+	// the top match in the input's town + zip is used; without a town, check.
+	putty := []Candidate{
+		newCandidate("Putty Hill Avenue", "Parkville", "MD", "21234", Point{Lat: 39.3806534, Lng: -76.529737}, QualityApprox),
+		newCandidate("Putty Hill Avenue", "Carney", "MD", "21234", Point{Lat: 39.3797595, Lng: -76.521974}, QualityApprox),
+		newCandidate("Putty Hill Avenue", "Towson", "MD", "21234", Point{Lat: 39.391643, Lng: -76.565511}, QualityApprox)}
+	if !Confident(Address{Line1: "1774 Putty Hill Ave", City: "Parkville", State: "MD", Zip: "21234"}, putty) {
+		t.Error("long road, top in the input's town + zip: confident")
+	}
+	if Confident(Address{Line1: "1774 Putty Hill Ave", State: "MD", Zip: "21234"}, putty) {
+		t.Error("long road, no town given: check")
 	}
 }
