@@ -844,6 +844,20 @@ func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) (Ten
 	return i, err
 }
 
+const deferExternalStopPush = `-- name: DeferExternalStopPush :exec
+UPDATE geo_external_stops SET next_try_at = $1 WHERE order_id = $2
+`
+
+type DeferExternalStopPushParams struct {
+	NextTryAt pgtype.Timestamptz `json:"next_try_at"`
+	OrderID   pgtype.UUID        `json:"order_id"`
+}
+
+func (q *Queries) DeferExternalStopPush(ctx context.Context, arg DeferExternalStopPushParams) error {
+	_, err := q.db.Exec(ctx, deferExternalStopPush, arg.NextTryAt, arg.OrderID)
+	return err
+}
+
 const deferOrderGeoPush = `-- name: DeferOrderGeoPush :exec
 UPDATE order_geo SET next_try_at = $1 WHERE order_id = $2
 `
@@ -882,6 +896,65 @@ DELETE FROM devices WHERE id = $1
 func (q *Queries) DeleteDevice(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteDevice, id)
 	return err
+}
+
+const deleteExternalStop = `-- name: DeleteExternalStop :execrows
+DELETE FROM geo_external_stops
+WHERE order_id = $1 AND tenant_id = $2 AND location_id = $3
+`
+
+type DeleteExternalStopParams struct {
+	OrderID    pgtype.UUID `json:"order_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+func (q *Queries) DeleteExternalStop(ctx context.Context, arg DeleteExternalStopParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExternalStop, arg.OrderID, arg.TenantID, arg.LocationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteExternalWork = `-- name: DeleteExternalWork :exec
+DELETE FROM geo_external_work WHERE order_id = $1
+`
+
+func (q *Queries) DeleteExternalWork(ctx context.Context, orderID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteExternalWork, orderID)
+	return err
+}
+
+const deleteExternalWorkIfDone = `-- name: DeleteExternalWorkIfDone :exec
+DELETE FROM geo_external_work w USING geo_external_stops s
+WHERE w.order_id = $1 AND s.order_id = w.order_id
+  AND s.pushed_at IS NOT NULL AND s.state <> 'check' AND s.state <> 'pending'
+`
+
+// After the agent acked a result that needs no address any more.
+func (q *Queries) DeleteExternalWorkIfDone(ctx context.Context, orderID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, deleteExternalWorkIfDone, orderID)
+	return err
+}
+
+const deleteExternalWorkRead = `-- name: DeleteExternalWorkRead :execrows
+DELETE FROM geo_external_work WHERE order_id = $1 AND created_at = $2
+`
+
+type DeleteExternalWorkReadParams struct {
+	OrderID pgtype.UUID        `json:"order_id"`
+	ReadAt  pgtype.Timestamptz `json:"read_at"`
+}
+
+// The worker's own located / given-up work row only (created_at as read): a
+// geo.locate that replaced it meanwhile keeps its new address.
+func (q *Queries) DeleteExternalWorkRead(ctx context.Context, arg DeleteExternalWorkReadParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExternalWorkRead, arg.OrderID, arg.ReadAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteLocationDrivers = `-- name: DeleteLocationDrivers :exec
@@ -1380,6 +1453,69 @@ func (q *Queries) GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagRep
 	return i, err
 }
 
+const getExternalStop = `-- name: GetExternalStop :one
+SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
+       polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
+       pushed_at, created_at, updated_at, expires_at, confirmed
+FROM geo_external_stops
+WHERE order_id = $1 AND tenant_id = $2 AND location_id = $3
+`
+
+type GetExternalStopParams struct {
+	OrderID    pgtype.UUID `json:"order_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+func (q *Queries) GetExternalStop(ctx context.Context, arg GetExternalStopParams) (GeoExternalStop, error) {
+	row := q.db.QueryRow(ctx, getExternalStop, arg.OrderID, arg.TenantID, arg.LocationID)
+	var i GeoExternalStop
+	err := row.Scan(
+		&i.OrderID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.State,
+		&i.Lat,
+		&i.Lng,
+		&i.Quality,
+		&i.DistanceM,
+		&i.DurationS,
+		&i.Polyline,
+		&i.OutsideArea,
+		&i.StoreToS,
+		&i.ToStoreS,
+		&i.Attempts,
+		&i.NextTryAt,
+		&i.LastError,
+		&i.PushedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ExpiresAt,
+		&i.Confirmed,
+	)
+	return i, err
+}
+
+const getExternalWork = `-- name: GetExternalWork :one
+SELECT order_id, address, address_key, candidates, confirmed_address, created_at, discard_at
+FROM geo_external_work WHERE order_id = $1
+`
+
+func (q *Queries) GetExternalWork(ctx context.Context, orderID pgtype.UUID) (GeoExternalWork, error) {
+	row := q.db.QueryRow(ctx, getExternalWork, orderID)
+	var i GeoExternalWork
+	err := row.Scan(
+		&i.OrderID,
+		&i.Address,
+		&i.AddressKey,
+		&i.Candidates,
+		&i.ConfirmedAddress,
+		&i.CreatedAt,
+		&i.DiscardAt,
+	)
+	return i, err
+}
+
 const getGeoCache = `-- name: GetGeoCache :one
 
 SELECT address_key, lat, lng, quality, source, pinned, updated_at
@@ -1508,6 +1644,29 @@ func (q *Queries) GetLocationByID(ctx context.Context, id pgtype.UUID) (Location
 		&i.MapVersion,
 		&i.MapBbox,
 	)
+	return i, err
+}
+
+const getLocationGeo = `-- name: GetLocationGeo :one
+SELECT lat, lng, delivery_radius_m FROM locations WHERE id = $1 AND tenant_id = $2
+`
+
+type GetLocationGeoParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+}
+
+type GetLocationGeoRow struct {
+	Lat             pgtype.Float8 `json:"lat"`
+	Lng             pgtype.Float8 `json:"lng"`
+	DeliveryRadiusM int32         `json:"delivery_radius_m"`
+}
+
+// The store's position + radius (an external stop has no orders row to join).
+func (q *Queries) GetLocationGeo(ctx context.Context, arg GetLocationGeoParams) (GetLocationGeoRow, error) {
+	row := q.db.QueryRow(ctx, getLocationGeo, arg.LocationID, arg.TenantID)
+	var i GetLocationGeoRow
+	err := row.Scan(&i.Lat, &i.Lng, &i.DeliveryRadiusM)
 	return i, err
 }
 
@@ -1811,7 +1970,7 @@ func (q *Queries) GetOrderForGeo(ctx context.Context, arg GetOrderForGeoParams) 
 const getOrderGeo = `-- name: GetOrderGeo :one
 SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
        polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
-       pushed_at, created_at, updated_at
+       pushed_at, created_at, updated_at, candidates, confirmed_address, confirmed
 FROM order_geo WHERE order_id = $1
 `
 
@@ -1838,6 +1997,9 @@ func (q *Queries) GetOrderGeo(ctx context.Context, orderID pgtype.UUID) (OrderGe
 		&i.PushedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Candidates,
+		&i.ConfirmedAddress,
+		&i.Confirmed,
 	)
 	return i, err
 }
@@ -3126,6 +3288,57 @@ func (q *Queries) ListDriverShifts(ctx context.Context, arg ListDriverShiftsPara
 	return items, nil
 }
 
+const listDueExternalStops = `-- name: ListDueExternalStops :many
+SELECT order_id, tenant_id, location_id, state, attempts, created_at, updated_at
+FROM geo_external_stops
+WHERE pushed_at IS NULL AND next_try_at <= $1::timestamptz AND expires_at > $1::timestamptz
+ORDER BY next_try_at ASC
+LIMIT $2
+`
+
+type ListDueExternalStopsParams struct {
+	Now     pgtype.Timestamptz `json:"now"`
+	MaxRows int32              `json:"max_rows"`
+}
+
+type ListDueExternalStopsRow struct {
+	OrderID    pgtype.UUID        `json:"order_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	State      string             `json:"state"`
+	Attempts   int32              `json:"attempts"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) ListDueExternalStops(ctx context.Context, arg ListDueExternalStopsParams) ([]ListDueExternalStopsRow, error) {
+	rows, err := q.db.Query(ctx, listDueExternalStops, arg.Now, arg.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListDueExternalStopsRow
+	for rows.Next() {
+		var i ListDueExternalStopsRow
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.State,
+			&i.Attempts,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDueOrderGeo = `-- name: ListDueOrderGeo :many
 SELECT order_id, tenant_id, location_id, state, attempts, created_at, updated_at
 FROM order_geo
@@ -3166,6 +3379,50 @@ func (q *Queries) ListDueOrderGeo(ctx context.Context, arg ListDueOrderGeoParams
 			&i.Attempts,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExternalStopsByIDs = `-- name: ListExternalStopsByIDs :many
+SELECT order_id, state, lat, lng FROM geo_external_stops
+WHERE tenant_id = $1 AND location_id = $2 AND order_id = ANY($3::uuid[])
+  AND expires_at > now()
+`
+
+type ListExternalStopsByIDsParams struct {
+	TenantID   pgtype.UUID   `json:"tenant_id"`
+	LocationID pgtype.UUID   `json:"location_id"`
+	Ids        []pgtype.UUID `json:"ids"`
+}
+
+type ListExternalStopsByIDsRow struct {
+	OrderID pgtype.UUID   `json:"order_id"`
+	State   string        `json:"state"`
+	Lat     pgtype.Float8 `json:"lat"`
+	Lng     pgtype.Float8 `json:"lng"`
+}
+
+func (q *Queries) ListExternalStopsByIDs(ctx context.Context, arg ListExternalStopsByIDsParams) ([]ListExternalStopsByIDsRow, error) {
+	rows, err := q.db.Query(ctx, listExternalStopsByIDs, arg.TenantID, arg.LocationID, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListExternalStopsByIDsRow
+	for rows.Next() {
+		var i ListExternalStopsByIDsRow
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.State,
+			&i.Lat,
+			&i.Lng,
 		); err != nil {
 			return nil, err
 		}
@@ -3344,6 +3601,54 @@ func (q *Queries) ListItemsByLocation(ctx context.Context, locationID pgtype.UUI
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLiveExternalStops = `-- name: ListLiveExternalStops :many
+SELECT order_id, lat, lng FROM geo_external_stops
+WHERE tenant_id = $1 AND location_id = $2
+  AND state = 'located' AND lat IS NOT NULL AND lng IS NOT NULL
+  AND order_id <> $3 AND expires_at > now()
+ORDER BY created_at ASC
+LIMIT $4
+`
+
+type ListLiveExternalStopsParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	ExcludeID  pgtype.UUID `json:"exclude_id"`
+	MaxRows    int32       `json:"max_rows"`
+}
+
+type ListLiveExternalStopsRow struct {
+	OrderID pgtype.UUID   `json:"order_id"`
+	Lat     pgtype.Float8 `json:"lat"`
+	Lng     pgtype.Float8 `json:"lng"`
+}
+
+// The location's other located external stops, for the drive-time table.
+func (q *Queries) ListLiveExternalStops(ctx context.Context, arg ListLiveExternalStopsParams) ([]ListLiveExternalStopsRow, error) {
+	rows, err := q.db.Query(ctx, listLiveExternalStops,
+		arg.TenantID,
+		arg.LocationID,
+		arg.ExcludeID,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLiveExternalStopsRow
+	for rows.Next() {
+		var i ListLiveExternalStopsRow
+		if err := rows.Scan(&i.OrderID, &i.Lat, &i.Lng); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -3907,7 +4212,9 @@ const listRestoreOrderIDs = `-- name: ListRestoreOrderIDs :many
 SELECT id FROM orders
 WHERE tenant_id = $1 AND location_id = $2
   AND (agent_batch_id = $3
-       OR (status = 'received' AND received_at >= $4))
+       OR (status = 'received' AND received_at >= $4)
+       -- 2.1.0: a future order the agent scheduled survives batch close.
+       OR (status = 'scheduled' AND received_at >= $4::timestamptz - interval '14 days'))
 ORDER BY received_at ASC
 LIMIT 2000
 `
@@ -4175,6 +4482,24 @@ func (q *Queries) MarkDispatchSucceeded(ctx context.Context, arg MarkDispatchSuc
 	return err
 }
 
+const markExternalStopPushed = `-- name: MarkExternalStopPushed :execrows
+UPDATE geo_external_stops SET pushed_at = now(), confirmed = false
+WHERE order_id = $1 AND updated_at = $2
+`
+
+type MarkExternalStopPushedParams struct {
+	OrderID   pgtype.UUID        `json:"order_id"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) MarkExternalStopPushed(ctx context.Context, arg MarkExternalStopPushedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markExternalStopPushed, arg.OrderID, arg.UpdatedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const markFloorEventSeen = `-- name: MarkFloorEventSeen :execrows
 INSERT INTO floor_events_seen (event_id, tenant_id, location_id, order_id, type, result)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -4207,7 +4532,7 @@ func (q *Queries) MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeen
 }
 
 const markOrderGeoPushed = `-- name: MarkOrderGeoPushed :execrows
-UPDATE order_geo SET pushed_at = now()
+UPDATE order_geo SET pushed_at = now(), confirmed = false
 WHERE order_id = $1 AND updated_at = $2
 `
 
@@ -4216,7 +4541,8 @@ type MarkOrderGeoPushedParams struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
-// Only when nothing changed since the pushed result was read.
+// Only when nothing changed since the pushed result was read. An acked push
+// spends confirmed (only the push right after geo.pin / geo.choose has it).
 func (q *Queries) MarkOrderGeoPushed(ctx context.Context, arg MarkOrderGeoPushedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markOrderGeoPushed, arg.OrderID, arg.UpdatedAt)
 	if err != nil {
@@ -4389,8 +4715,54 @@ func (q *Queries) PruneDiagReports(ctx context.Context, receivedAt pgtype.Timest
 	return result.RowsAffected(), nil
 }
 
+const pruneExternalStops = `-- name: PruneExternalStops :execrows
+DELETE FROM geo_external_stops WHERE expires_at <= $1::timestamptz
+`
+
+func (q *Queries) PruneExternalStops(ctx context.Context, now pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneExternalStops, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const pruneExternalWork = `-- name: PruneExternalWork :execrows
+DELETE FROM geo_external_work WHERE discard_at <= $1::timestamptz
+`
+
+func (q *Queries) PruneExternalWork(ctx context.Context, now pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneExternalWork, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const requeueLocationExternalStops = `-- name: RequeueLocationExternalStops :execrows
+UPDATE geo_external_stops SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL,
+    confirmed = false, updated_at = now()
+WHERE tenant_id = $1 AND location_id = $2
+  AND state = 'located' AND lat IS NOT NULL AND expires_at > now()
+`
+
+type RequeueLocationExternalStopsParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+// The store moved: re-route the located stops from their own point.
+func (q *Queries) RequeueLocationExternalStops(ctx context.Context, arg RequeueLocationExternalStopsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requeueLocationExternalStops, arg.TenantID, arg.LocationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const requeueLocationOrderGeo = `-- name: RequeueLocationOrderGeo :execrows
-UPDATE order_geo g SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL, updated_at = now()
+UPDATE order_geo g SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL,
+    confirmed = false, updated_at = now()
 FROM orders o
 WHERE o.id = g.order_id AND g.tenant_id = $1 AND g.location_id = $2
   AND g.state <> 'pending'
@@ -4438,9 +4810,29 @@ func (q *Queries) ResetDispatchBackoffForScope(ctx context.Context, arg ResetDis
 	return err
 }
 
+const resetOrderGeoForChoice = `-- name: ResetOrderGeoForChoice :exec
+UPDATE order_geo SET state = 'pending', attempts = 0, next_try_at = now(),
+    last_error = '', pushed_at = NULL, candidates = NULL,
+    confirmed_address = $1, confirmed = true, updated_at = now()
+WHERE order_id = $2
+`
+
+type ResetOrderGeoForChoiceParams struct {
+	ConfirmedAddress []byte      `json:"confirmed_address"`
+	OrderID          pgtype.UUID `json:"order_id"`
+}
+
+// Staff picked a candidate (geo.choose): the pinned geo_cache entry is
+// already saved; re-work the order and push it with the confirmed address.
+func (q *Queries) ResetOrderGeoForChoice(ctx context.Context, arg ResetOrderGeoForChoiceParams) error {
+	_, err := q.db.Exec(ctx, resetOrderGeoForChoice, arg.ConfirmedAddress, arg.OrderID)
+	return err
+}
+
 const resetOrderGeoForPin = `-- name: ResetOrderGeoForPin :exec
 UPDATE order_geo SET state = 'pending', attempts = 0, next_try_at = now(),
-    last_error = '', pushed_at = NULL, updated_at = now()
+    last_error = '', pushed_at = NULL, candidates = NULL, confirmed_address = NULL,
+    confirmed = true, updated_at = now()
 WHERE order_id = $1
 `
 
@@ -4525,14 +4917,92 @@ func (q *Queries) RevokeTabletTokensForTablet(ctx context.Context, arg RevokeTab
 	return result.RowsAffected(), nil
 }
 
-const saveOrderGeoResult = `-- name: SaveOrderGeoResult :one
-UPDATE order_geo SET
+const saveExternalStopResult = `-- name: SaveExternalStopResult :one
+UPDATE geo_external_stops SET
     state = $1, lat = $2, lng = $3, quality = $4,
     distance_m = $5, duration_s = $6, polyline = $7,
     outside_area = $8, store_to_s = $9, to_store_s = $10,
     attempts = attempts + 1, next_try_at = now(), last_error = $11,
     pushed_at = NULL, updated_at = now()
-WHERE order_id = $12
+WHERE order_id = $12 AND updated_at = $13
+RETURNING updated_at
+`
+
+type SaveExternalStopResultParams struct {
+	State       string             `json:"state"`
+	Lat         pgtype.Float8      `json:"lat"`
+	Lng         pgtype.Float8      `json:"lng"`
+	Quality     string             `json:"quality"`
+	DistanceM   int32              `json:"distance_m"`
+	DurationS   int32              `json:"duration_s"`
+	Polyline    string             `json:"polyline"`
+	OutsideArea bool               `json:"outside_area"`
+	StoreToS    pgtype.Int4        `json:"store_to_s"`
+	ToStoreS    pgtype.Int4        `json:"to_store_s"`
+	LastError   string             `json:"last_error"`
+	OrderID     pgtype.UUID        `json:"order_id"`
+	ReadAt      pgtype.Timestamptz `json:"read_at"`
+}
+
+// A final result (located / check / not_found); see SaveExternalStopRetry.
+func (q *Queries) SaveExternalStopResult(ctx context.Context, arg SaveExternalStopResultParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, saveExternalStopResult,
+		arg.State,
+		arg.Lat,
+		arg.Lng,
+		arg.Quality,
+		arg.DistanceM,
+		arg.DurationS,
+		arg.Polyline,
+		arg.OutsideArea,
+		arg.StoreToS,
+		arg.ToStoreS,
+		arg.LastError,
+		arg.OrderID,
+		arg.ReadAt,
+	)
+	var updated_at pgtype.Timestamptz
+	err := row.Scan(&updated_at)
+	return updated_at, err
+}
+
+const saveExternalStopRetry = `-- name: SaveExternalStopRetry :execrows
+UPDATE geo_external_stops SET attempts = attempts + 1, next_try_at = $1,
+    last_error = $2, updated_at = now()
+WHERE order_id = $3 AND updated_at = $4
+`
+
+type SaveExternalStopRetryParams struct {
+	NextTryAt pgtype.Timestamptz `json:"next_try_at"`
+	LastError string             `json:"last_error"`
+	OrderID   pgtype.UUID        `json:"order_id"`
+	ReadAt    pgtype.Timestamptz `json:"read_at"`
+}
+
+// Both guarded by the updated_at the worker read: a re-locate, pin or
+// choice that arrived meanwhile wins (the row is due again anyway).
+func (q *Queries) SaveExternalStopRetry(ctx context.Context, arg SaveExternalStopRetryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, saveExternalStopRetry,
+		arg.NextTryAt,
+		arg.LastError,
+		arg.OrderID,
+		arg.ReadAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const saveOrderGeoResult = `-- name: SaveOrderGeoResult :one
+UPDATE order_geo SET
+    state = $1, lat = $2, lng = $3, quality = $4,
+    candidates = $5,
+    distance_m = $6, duration_s = $7, polyline = $8,
+    outside_area = $9, store_to_s = $10, to_store_s = $11,
+    attempts = attempts + 1, next_try_at = now(), last_error = $12,
+    pushed_at = NULL, updated_at = now()
+WHERE order_id = $13
 RETURNING updated_at
 `
 
@@ -4541,6 +5011,7 @@ type SaveOrderGeoResultParams struct {
 	Lat         pgtype.Float8 `json:"lat"`
 	Lng         pgtype.Float8 `json:"lng"`
 	Quality     string        `json:"quality"`
+	Candidates  []byte        `json:"candidates"`
 	DistanceM   int32         `json:"distance_m"`
 	DurationS   int32         `json:"duration_s"`
 	Polyline    string        `json:"polyline"`
@@ -4551,13 +5022,15 @@ type SaveOrderGeoResultParams struct {
 	OrderID     pgtype.UUID   `json:"order_id"`
 }
 
-// A final result (located / not_found). Clears pushed_at so it is (re)pushed.
+// A final result (located / check / not_found). Clears pushed_at so it is
+// (re)pushed. candidates is set for check only (NULL otherwise).
 func (q *Queries) SaveOrderGeoResult(ctx context.Context, arg SaveOrderGeoResultParams) (pgtype.Timestamptz, error) {
 	row := q.db.QueryRow(ctx, saveOrderGeoResult,
 		arg.State,
 		arg.Lat,
 		arg.Lng,
 		arg.Quality,
+		arg.Candidates,
 		arg.DistanceM,
 		arg.DurationS,
 		arg.Polyline,
@@ -4728,6 +5201,74 @@ func (q *Queries) SetDiagReportResolved(ctx context.Context, arg SetDiagReportRe
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setExternalStopPoint = `-- name: SetExternalStopPoint :execrows
+UPDATE geo_external_stops SET state = 'pending', lat = $1, lng = $2, quality = $3,
+    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = true, updated_at = now()
+WHERE order_id = $4 AND tenant_id = $5 AND location_id = $6
+`
+
+type SetExternalStopPointParams struct {
+	Lat        pgtype.Float8 `json:"lat"`
+	Lng        pgtype.Float8 `json:"lng"`
+	Quality    string        `json:"quality"`
+	OrderID    pgtype.UUID   `json:"order_id"`
+	TenantID   pgtype.UUID   `json:"tenant_id"`
+	LocationID pgtype.UUID   `json:"location_id"`
+}
+
+// A pin or a chosen candidate: re-route from this point and push it again,
+// confirmed (staff's own pick).
+func (q *Queries) SetExternalStopPoint(ctx context.Context, arg SetExternalStopPointParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setExternalStopPoint,
+		arg.Lat,
+		arg.Lng,
+		arg.Quality,
+		arg.OrderID,
+		arg.TenantID,
+		arg.LocationID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setExternalWorkCandidates = `-- name: SetExternalWorkCandidates :execrows
+UPDATE geo_external_work SET candidates = $1
+WHERE order_id = $2 AND created_at = $3
+`
+
+type SetExternalWorkCandidatesParams struct {
+	Candidates []byte             `json:"candidates"`
+	OrderID    pgtype.UUID        `json:"order_id"`
+	ReadAt     pgtype.Timestamptz `json:"read_at"`
+}
+
+// Guarded by the created_at the worker read: a geo.locate that replaced the
+// work row meanwhile (new address) is not overwritten.
+func (q *Queries) SetExternalWorkCandidates(ctx context.Context, arg SetExternalWorkCandidatesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setExternalWorkCandidates, arg.Candidates, arg.OrderID, arg.ReadAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setExternalWorkConfirmed = `-- name: SetExternalWorkConfirmed :exec
+UPDATE geo_external_work SET candidates = NULL, confirmed_address = $1
+WHERE order_id = $2
+`
+
+type SetExternalWorkConfirmedParams struct {
+	ConfirmedAddress []byte      `json:"confirmed_address"`
+	OrderID          pgtype.UUID `json:"order_id"`
+}
+
+func (q *Queries) SetExternalWorkConfirmed(ctx context.Context, arg SetExternalWorkConfirmedParams) error {
+	_, err := q.db.Exec(ctx, setExternalWorkConfirmed, arg.ConfirmedAddress, arg.OrderID)
+	return err
 }
 
 const setItemPosition = `-- name: SetItemPosition :exec
@@ -5612,6 +6153,69 @@ func (q *Queries) UpsertDriverShift(ctx context.Context, arg UpsertDriverShiftPa
 	return err
 }
 
+const upsertExternalStop = `-- name: UpsertExternalStop :execrows
+
+INSERT INTO geo_external_stops (order_id, tenant_id, location_id, expires_at)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (order_id) DO UPDATE SET
+    state = 'pending', lat = NULL, lng = NULL, quality = '', distance_m = 0, duration_s = 0,
+    polyline = '', outside_area = false, store_to_s = NULL, to_store_s = NULL, attempts = 0,
+    next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = false, created_at = now(), updated_at = now(),
+    expires_at = EXCLUDED.expires_at
+WHERE geo_external_stops.tenant_id = EXCLUDED.tenant_id AND geo_external_stops.location_id = EXCLUDED.location_id
+`
+
+type UpsertExternalStopParams struct {
+	OrderID    pgtype.UUID        `json:"order_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+}
+
+// ---------------------------------------------------------------------------
+// External stops (2.1.0): POS deliveries the agent asks main to locate (RPC
+// geo.locate). No orders row; a point + push state, and the address text in
+// geo_external_work only while it is needed.
+// ---------------------------------------------------------------------------
+// A (re)locate request: back to pending with no point, a fresh 24 h expiry.
+func (q *Queries) UpsertExternalStop(ctx context.Context, arg UpsertExternalStopParams) (int64, error) {
+	result, err := q.db.Exec(ctx, upsertExternalStop,
+		arg.OrderID,
+		arg.TenantID,
+		arg.LocationID,
+		arg.ExpiresAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const upsertExternalWork = `-- name: UpsertExternalWork :exec
+INSERT INTO geo_external_work (order_id, address, address_key, discard_at)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (order_id) DO UPDATE SET
+    address = EXCLUDED.address, address_key = EXCLUDED.address_key, candidates = NULL,
+    confirmed_address = NULL, created_at = now(), discard_at = EXCLUDED.discard_at
+`
+
+type UpsertExternalWorkParams struct {
+	OrderID    pgtype.UUID        `json:"order_id"`
+	Address    []byte             `json:"address"`
+	AddressKey string             `json:"address_key"`
+	DiscardAt  pgtype.Timestamptz `json:"discard_at"`
+}
+
+func (q *Queries) UpsertExternalWork(ctx context.Context, arg UpsertExternalWorkParams) error {
+	_, err := q.db.Exec(ctx, upsertExternalWork,
+		arg.OrderID,
+		arg.Address,
+		arg.AddressKey,
+		arg.DiscardAt,
+	)
+	return err
+}
+
 const upsertGeoCacheGeocoded = `-- name: UpsertGeoCacheGeocoded :exec
 INSERT INTO geo_cache (address_key, lat, lng, quality, source, pinned, updated_at)
 VALUES ($1, $2, $3, $4, $5, false, now())
@@ -5658,6 +6262,25 @@ type UpsertGeoCachePinnedParams struct {
 func (q *Queries) UpsertGeoCachePinned(ctx context.Context, arg UpsertGeoCachePinnedParams) error {
 	_, err := q.db.Exec(ctx, upsertGeoCachePinned, arg.AddressKey, arg.Lat, arg.Lng)
 	return err
+}
+
+const wakeLocationExternalStops = `-- name: WakeLocationExternalStops :execrows
+UPDATE geo_external_stops SET next_try_at = now()
+WHERE tenant_id = $1 AND location_id = $2
+  AND pushed_at IS NULL AND state <> 'pending'
+`
+
+type WakeLocationExternalStopsParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+func (q *Queries) WakeLocationExternalStops(ctx context.Context, arg WakeLocationExternalStopsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, wakeLocationExternalStops, arg.TenantID, arg.LocationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const wakeLocationOrderGeo = `-- name: WakeLocationOrderGeo :execrows

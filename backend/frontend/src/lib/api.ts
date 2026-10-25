@@ -339,7 +339,7 @@ export interface ItemGroupLink { group: ModifierGroup; attach_position: number; 
 export interface StoreOrder {
   id: string;
   source_event_id: string;
-  status: string; // received | accepted | ready | on_delivery | completed | …
+  status: string; // received | scheduled | accepted | ready | on_delivery | completed | …
   customer: { display_name?: string };
   fulfillment: { type: string };
   money: { total_cents: number };

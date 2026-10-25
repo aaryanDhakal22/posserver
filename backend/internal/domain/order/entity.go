@@ -56,6 +56,9 @@ type Status string
 const (
 	StatusReceived  Status = "received"
 	StatusValidated Status = "validated"
+	// StatusScheduled: a future order the agent confirmed a lead time for;
+	// it rings again at promised_at − lead and is accepted then (2.1.0).
+	StatusScheduled Status = "scheduled"
 	StatusAccepted  Status = "accepted"
 	StatusPreparing Status = "preparing"
 	StatusReady     Status = "ready"

@@ -116,3 +116,64 @@ func TestApplyFloorUpdateIgnoresStaleFields(t *testing.T) {
 		t.Fatalf("status: %s %s", r, o.Status())
 	}
 }
+
+func TestFloorScheduledRanksBetweenValidatedAndAccepted(t *testing.T) {
+	if got, ok := FloorStatus("scheduled"); !ok || got != StatusScheduled {
+		t.Fatalf("FloorStatus(scheduled) = %s %v", got, ok)
+	}
+	if !(floorRank[StatusValidated] < floorRank[StatusScheduled] && floorRank[StatusScheduled] < floorRank[StatusAccepted]) {
+		t.Fatalf("ranks: validated %d, scheduled %d, accepted %d", floorRank[StatusValidated], floorRank[StatusScheduled], floorRank[StatusAccepted])
+	}
+
+	o, _ := NewOrder(stubInput())
+	o.PullEvents()
+	t0 := time.Now().UTC()
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusScheduled, At: t0}); r != FloorApplied || o.Status() != StatusScheduled {
+		t.Fatalf("schedule: %s %s", r, o.Status())
+	}
+	evs := o.PullEvents()
+	var p StatusChangedPayload
+	if len(evs) != 1 || json.Unmarshal(evs[0].Payload, &p) != nil || p.From != "received" || p.To != "scheduled" {
+		t.Fatalf("events: %+v", evs)
+	}
+	// A late "scheduled" after accept never moves the order back.
+	k := 1101
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusAccepted, KitchenNumber: &k, At: t0.Add(time.Minute)}); r != FloorApplied || o.Status() != StatusAccepted {
+		t.Fatalf("accept after schedule: %s %s", r, o.Status())
+	}
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusScheduled, At: t0.Add(2 * time.Minute)}); r != FloorStale || o.Status() != StatusAccepted {
+		t.Fatalf("late scheduled: %s %s", r, o.Status())
+	}
+
+	// A scheduled order nobody accepted can still be cancelled.
+	o2, _ := NewOrder(stubInput())
+	o2.ApplyFloorUpdate(FloorUpdate{Status: StatusScheduled, At: t0})
+	if r := o2.ApplyFloorUpdate(FloorUpdate{Status: StatusCancelled, At: t0.Add(time.Hour)}); r != FloorApplied || o2.Status() != StatusCancelled {
+		t.Fatalf("cancel scheduled: %s %s", r, o2.Status())
+	}
+}
+
+func TestValidRunStops(t *testing.T) {
+	cases := []struct {
+		raw string
+		ok  bool
+		n   int
+	}{
+		{``, true, 0},
+		{`null`, true, 0},
+		{`[]`, true, 0},
+		{`[{"order_id":"o1","eta":"2026-10-25T18:00:00Z"}]`, true, 1},
+		{`[{"opaque_id":"pos:0123456789ab","source":"pos","placed_at":"2026-10-25T17:40:00Z","sent_at":"2026-10-25T17:41:00Z","out_at":"2026-10-25T18:00:00Z","delivered_at":null,"distance_m":2400}]`, true, 1},
+		{`[{"order_id":"o1"},{"opaque_id":"pos:ab","source":"pos"}]`, true, 2},
+		{`[{"eta":"x"}]`, false, 0},
+		{`[null]`, false, 0},
+		{`{"order_id":"o1"}`, false, 0},
+		{`["o1"]`, false, 0},
+	}
+	for _, c := range cases {
+		ok, n := ValidRunStops(json.RawMessage(c.raw))
+		if ok != c.ok || n != c.n {
+			t.Errorf("%s: ok=%v n=%d, want %v %d", c.raw, ok, n, c.ok, c.n)
+		}
+	}
+}

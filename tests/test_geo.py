@@ -58,6 +58,8 @@ class FakeGeo:
 
     def __init__(self) -> None:
         self.known: dict[str, tuple[float, float]] = {}  # lowercased street -> (lat, lng)
+        # lowercased street -> several Census matches [(matchedAddress, lat, lng)] (2.1.0 candidates)
+        self.multi: dict[str, list[tuple[str, float, float]]] = {}
         self.census_hits = 0
         srv = ThreadingHTTPServer(("0.0.0.0", 0), self._handler())
         srv.daemon_threads = True
@@ -67,6 +69,10 @@ class FakeGeo:
 
     def add(self, street: str, lat: float, lng: float) -> None:
         self.known[street.lower()] = (lat, lng)
+
+    def add_matches(self, street: str, matches: list[tuple[str, float, float]]) -> None:
+        """Census answers `street` with every match (best first)."""
+        self.multi[street.lower()] = matches
 
     def close(self) -> None:
         self.srv.shutdown()
@@ -93,7 +99,8 @@ class FakeGeo:
                     fake.census_hits += 1
                     street = q.get("address", "").split(",")[0].strip().lower()
                     hit = fake.known.get(street)
-                    matches = []
+                    matches = [{"coordinates": {"x": lng, "y": lat}, "matchedAddress": m}
+                               for m, lat, lng in fake.multi.get(street, [])]
                     if hit:
                         matches = [{"coordinates": {"x": hit[1], "y": hit[0]},
                                     "matchedAddress": street.upper() + ", BAYONNE, NJ, 07002"}]
@@ -316,13 +323,15 @@ def test_pin_is_cached_for_the_address_and_repushed(admin, store, publish, fake_
         o = _delivery(store, street)
         publish(o)
         oid = wait_order(store.key, o["order_id"])["id"]
-        assert _next_geo(s, oid)["state"] == "not_found"
+        g = _next_geo(s, oid)
+        assert g["state"] == "not_found" and "confirmed" not in g
 
         r = _rpc(store.key, "geo.pin", {"order_id": oid, "lat": 40.6650, "lng": -74.1180})
         assert r.status_code == 200, r.text
         assert r.json()["payload"] == {"ok": True}
         g = _next_geo(s, oid)
         assert g["state"] == "located" and g["quality"] == "pinned"
+        assert g["confirmed"] is True  # the push right after geo.pin
         assert (g["lat"], g["lng"]) == (40.6650, -74.1180) and g["polyline"] == "fake_polyline"
 
         # The next order to the same address (spelled differently) lands on the pin.
@@ -331,6 +340,7 @@ def test_pin_is_cached_for_the_address_and_repushed(admin, store, publish, fake_
         o2id = wait_order(store.key, o2["order_id"])["id"]
         g = _next_geo(s, o2id)
         assert g["state"] == "located" and g["quality"] == "pinned" and (g["lat"], g["lng"]) == (40.6650, -74.1180)
+        assert "confirmed" not in g  # a pinned cache hit is not a confirmation
 
     # Bad / foreign pins.
     assert _rpc(store.key, "geo.pin", {"order_id": oid, "lat": 400, "lng": 0}).status_code == 400

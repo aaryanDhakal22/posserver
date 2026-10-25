@@ -3,6 +3,8 @@ data.py. Each fixture is re-addressed to the test's own throwaway store (its
 store_id + name) so routing is deterministic; the SQS message carries only
 `source=online` (scope attributes are optional for this source)."""
 
+from datetime import datetime
+
 import pytest
 import requests
 
@@ -34,6 +36,15 @@ def _assert_matches(label: str, sent: dict, got: dict, store) -> None:
         sa, ga = sent["delivery_address"], got["fulfillment"].get("address") or {}
         assert got["fulfillment"]["type"] == "delivery"
         assert ga.get("line1") == sa["street"] and ga.get("city") == sa["city"]
+
+    # Future / deferred orders: deferred_date → fulfillment.promised_at (UTC).
+    promised = (got.get("fulfillment") or {}).get("promised_at")
+    if sent.get("deferred_date"):
+        want = datetime.strptime(sent["deferred_date"], "%Y-%m-%dT%H:%M:%S%z")
+        assert promised, f"[{label}] promised_at missing for deferred_date {sent['deferred_date']}"
+        assert datetime.fromisoformat(promised.replace("Z", "+00:00")) == want, f"[{label}] promised_at {promised}"
+    else:
+        assert not promised, f"[{label}] promised_at set without a deferred_date"
 
     md = got.get("source_metadata") or {}
     assert md.get("store_id") == sent["store_id"], f"[{label}] source_metadata.store_id"

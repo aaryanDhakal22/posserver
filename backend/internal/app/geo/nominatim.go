@@ -56,8 +56,20 @@ type nominatimHit struct {
 	Type    string `json:"type"`
 	Address struct {
 		HouseNumber string `json:"house_number"`
+		Road        string `json:"road"`
+		City        string `json:"city"`
+		Town        string `json:"town"`
+		Village     string `json:"village"`
+		Hamlet      string `json:"hamlet"`
+		Suburb      string `json:"suburb"`
+		State       string `json:"state"`
+		StateCode   string `json:"ISO3166-2-lvl4"` // "US-MD"
+		Postcode    string `json:"postcode"`
 	} `json:"address"`
 }
+
+// nominatimLimit is how many matches Nominatim is asked for (candidates).
+const nominatimLimit = 5
 
 // UserAgent is the identifying UA Nominatim's policy asks for.
 func (n *Nominatim) UserAgent() string {
@@ -73,7 +85,7 @@ func (n *Nominatim) Geocode(ctx context.Context, a Address, near *Point) (Geocod
 	q := url.Values{}
 	q.Set("format", "jsonv2")
 	q.Set("addressdetails", "1")
-	q.Set("limit", "1")
+	q.Set("limit", strconv.Itoa(nominatimLimit))
 	q.Set("countrycodes", "us")
 	if a.Line1 != "" && (a.City != "" || a.Zip != "") {
 		q.Set("street", stripUnit(a.Line1))
@@ -99,22 +111,45 @@ func (n *Nominatim) Geocode(ctx context.Context, a Address, near *Point) (Geocod
 }
 
 func parseNominatim(hits []nominatimHit, a Address) (GeocodeResult, error) {
-	if len(hits) == 0 {
-		return GeocodeResult{}, ErrNotFound
-	}
-	h := hits[0]
-	lat, err1 := strconv.ParseFloat(h.Lat, 64)
-	lng, err2 := strconv.ParseFloat(h.Lon, 64)
-	if err1 != nil || err2 != nil {
-		return GeocodeResult{}, fmt.Errorf("nominatim: bad coordinates %q,%q", h.Lat, h.Lon)
-	}
-	q := QualityApprox
 	in := HouseNumber(a.Line1)
 	if in == "" {
 		in = HouseNumber(a.Oneline)
 	}
-	if in != "" && strings.EqualFold(strings.TrimSpace(h.Address.HouseNumber), in) {
-		q = QualityExact
+	cs := make([]Candidate, 0, len(hits))
+	for _, h := range hits {
+		lat, err1 := strconv.ParseFloat(h.Lat, 64)
+		lng, err2 := strconv.ParseFloat(h.Lon, 64)
+		if err1 != nil || err2 != nil {
+			if len(cs) == 0 && len(hits) == 1 {
+				return GeocodeResult{}, fmt.Errorf("nominatim: bad coordinates %q,%q", h.Lat, h.Lon)
+			}
+			continue
+		}
+		q := QualityApprox
+		if in != "" && strings.EqualFold(strings.TrimSpace(h.Address.HouseNumber), in) {
+			q = QualityExact
+		}
+		ad := h.Address
+		line1 := strings.TrimSpace(ad.HouseNumber + " " + ad.Road)
+		city := firstNonEmpty(ad.City, ad.Town, ad.Village, ad.Hamlet, ad.Suburb)
+		state := ad.State
+		if code, ok := strings.CutPrefix(ad.StateCode, "US-"); ok && code != "" {
+			state = code
+		}
+		zip := ad.Postcode
+		if z := zip5.FindString(zip); z != "" {
+			zip = z
+		}
+		cs = append(cs, newCandidate(line1, city, state, zip, Point{Lat: lat, Lng: lng}, q))
 	}
-	return GeocodeResult{Point: Point{Lat: lat, Lng: lng}, Quality: q, Source: "nominatim"}, nil
+	return resultFrom(cs, "nominatim")
+}
+
+func firstNonEmpty(vs ...string) string {
+	for _, v := range vs {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }

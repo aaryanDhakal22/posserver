@@ -526,3 +526,15 @@ order_requests = {
         ],
     },
 }
+
+# A scheduled (future) delivery, 2.1.0: the vendor's deferred_date is a
+# promise time far ahead — main casts it to fulfillment.promised_at and the
+# agent holds the order as a future order until promised_at − lead.
+order_requests["future_scheduled_delivery"] = {
+    **__import__("copy").deepcopy(order_requests["delivery_with_address"]),
+    "order_id": 1006,
+    "submitted_date": "2026-10-25T11:00:00-0400",
+    "print_date": "2026-10-25T11:00:00-0400",
+    "deferred_date": "2030-06-14T18:30:00-0400",
+    "notes": "Scheduled for later",
+}

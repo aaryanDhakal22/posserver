@@ -258,6 +258,11 @@ func main() {
 	broker.OnSubscribe(geoService.WakeLocation)
 	requester.RegisterInbound(rpc.MsgGeoPin, geoService.HandlePin)
 	requester.RegisterInbound(rpc.MsgGeoTrip, geoService.HandleTrip)
+	// 2.1.0: POS deliveries (external stops — no orders row) + address
+	// candidates (geo.choose, for online orders and stops alike).
+	requester.RegisterInbound(rpc.MsgGeoLocate, geoService.HandleLocate)
+	requester.RegisterInbound(rpc.MsgGeoForget, geoService.HandleForget)
+	requester.RegisterInbound(rpc.MsgGeoChoose, geoService.HandleChoose)
 	floorService.OnDeliveryRun(repositories.NewDeliveryRunStore(pool))
 	mainLogger.Info().Str("geo_providers", geoService.Providers().Name()).Msg("geo worker configured")
 	go geoService.Run(ctx)

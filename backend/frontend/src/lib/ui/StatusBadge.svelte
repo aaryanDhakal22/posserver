@@ -6,6 +6,7 @@
   const LABEL: Record<string, string> = {
     received: 'Waiting',
     validated: 'Waiting',
+    scheduled: 'Scheduled',
     accepted: 'In kitchen',
     preparing: 'In kitchen',
     ready: 'Ready',
@@ -17,6 +18,7 @@
   const TONE: Record<string, Tone> = {
     received: 'warn',
     validated: 'warn',
+    scheduled: 'mute',
     accepted: 'info',
     preparing: 'info',
     ready: 'ok',
@@ -36,6 +38,7 @@
     switch (o.status) {
       case 'received':
       case 'validated':
+      case 'scheduled': // a future order (2.1.0): confirmed, rings again later
         return 'waiting';
       case 'accepted':
       case 'preparing':
