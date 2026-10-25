@@ -36,6 +36,12 @@ func latlng(p Point) string {
 type googleGeocode struct {
 	Status  string `json:"status"`
 	Results []struct {
+		FormattedAddress  string `json:"formatted_address"`
+		AddressComponents []struct {
+			LongName  string   `json:"long_name"`
+			ShortName string   `json:"short_name"`
+			Types     []string `json:"types"`
+		} `json:"address_components"`
 		PartialMatch bool `json:"partial_match"`
 		Geometry     struct {
 			Location struct {
@@ -70,15 +76,35 @@ func parseGoogleGeocode(body googleGeocode) (GeocodeResult, error) {
 	default:
 		return GeocodeResult{}, fmt.Errorf("google geocode: %s %s", body.Status, body.ErrorMessage)
 	}
-	if len(body.Results) == 0 {
-		return GeocodeResult{}, ErrNotFound
+	cs := make([]Candidate, 0, len(body.Results))
+	for _, r := range body.Results {
+		q := QualityApprox
+		if !r.PartialMatch && (r.Geometry.LocationType == "ROOFTOP" || r.Geometry.LocationType == "RANGE_INTERPOLATED") {
+			q = QualityExact
+		}
+		comp := map[string]string{}
+		for _, c := range r.AddressComponents {
+			for _, t := range c.Types {
+				if _, ok := comp[t]; ok {
+					continue
+				}
+				if t == "administrative_area_level_1" || t == "route" {
+					comp[t] = c.ShortName
+				} else {
+					comp[t] = c.LongName
+				}
+			}
+		}
+		line1 := strings.TrimSpace(comp["street_number"] + " " + comp["route"])
+		city := firstNonEmpty(comp["locality"], comp["sublocality"], comp["neighborhood"], comp["administrative_area_level_3"])
+		c := newCandidate(line1, city, comp["administrative_area_level_1"], comp["postal_code"],
+			Point{Lat: r.Geometry.Location.Lat, Lng: r.Geometry.Location.Lng}, q)
+		if line1 == "" && r.FormattedAddress != "" {
+			c.Label = strings.TrimSuffix(r.FormattedAddress, ", USA")
+		}
+		cs = append(cs, c)
 	}
-	r := body.Results[0]
-	q := QualityApprox
-	if !r.PartialMatch && (r.Geometry.LocationType == "ROOFTOP" || r.Geometry.LocationType == "RANGE_INTERPOLATED") {
-		q = QualityExact
-	}
-	return GeocodeResult{Point: Point{Lat: r.Geometry.Location.Lat, Lng: r.Geometry.Location.Lng}, Quality: q, Source: "google"}, nil
+	return resultFrom(cs, "google")
 }
 
 type googleDirections struct {

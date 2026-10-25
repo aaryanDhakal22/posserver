@@ -156,11 +156,14 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 		return s.repo.SaveDriverShift(ctx, sc, eid, order.DriverShift{ID: sid, DriverID: did, DriverName: ev.DriverName,
 			ClockIn: ev.ClockIn, ClockOut: ev.ClockOut, AutoOut: ev.Auto})
 	case "delivery.run":
-		if s.runs == nil || ev.At.IsZero() || len(ev.SentIDs) == 0 {
+		// POS stops (2.1.0) are anonymous ({opaque_id, source:"pos", …}) and
+		// stored as sent — no order lookup. A POS-only run has no sent_ids.
+		okStops, nStops := order.ValidRunStops(ev.Stops)
+		if s.runs == nil || ev.At.IsZero() || !okStops || (len(ev.SentIDs) == 0 && nStops == 0) {
 			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 		}
 		stops := ev.Stops
-		if len(stops) == 0 || string(stops) == "null" {
+		if nStops == 0 {
 			stops = json.RawMessage("[]")
 		}
 		return s.runs.SaveDeliveryRun(ctx, sc, eid, order.DeliveryRun{

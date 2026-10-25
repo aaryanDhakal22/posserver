@@ -153,6 +153,39 @@ type GeoCache struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
+type GeoExternalStop struct {
+	OrderID     pgtype.UUID        `json:"order_id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	State       string             `json:"state"`
+	Lat         pgtype.Float8      `json:"lat"`
+	Lng         pgtype.Float8      `json:"lng"`
+	Quality     string             `json:"quality"`
+	DistanceM   int32              `json:"distance_m"`
+	DurationS   int32              `json:"duration_s"`
+	Polyline    string             `json:"polyline"`
+	OutsideArea bool               `json:"outside_area"`
+	StoreToS    pgtype.Int4        `json:"store_to_s"`
+	ToStoreS    pgtype.Int4        `json:"to_store_s"`
+	Attempts    int32              `json:"attempts"`
+	NextTryAt   pgtype.Timestamptz `json:"next_try_at"`
+	LastError   string             `json:"last_error"`
+	PushedAt    pgtype.Timestamptz `json:"pushed_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
+}
+
+type GeoExternalWork struct {
+	OrderID          pgtype.UUID        `json:"order_id"`
+	Address          []byte             `json:"address"`
+	AddressKey       string             `json:"address_key"`
+	Candidates       []byte             `json:"candidates"`
+	ConfirmedAddress []byte             `json:"confirmed_address"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	DiscardAt        pgtype.Timestamptz `json:"discard_at"`
+}
+
 type ItemModifierGroup struct {
 	TenantID pgtype.UUID `json:"tenant_id"`
 	ItemID   pgtype.UUID `json:"item_id"`
@@ -338,25 +371,27 @@ type Order struct {
 }
 
 type OrderGeo struct {
-	OrderID     pgtype.UUID        `json:"order_id"`
-	TenantID    pgtype.UUID        `json:"tenant_id"`
-	LocationID  pgtype.UUID        `json:"location_id"`
-	State       string             `json:"state"`
-	Lat         pgtype.Float8      `json:"lat"`
-	Lng         pgtype.Float8      `json:"lng"`
-	Quality     string             `json:"quality"`
-	DistanceM   int32              `json:"distance_m"`
-	DurationS   int32              `json:"duration_s"`
-	Polyline    string             `json:"polyline"`
-	OutsideArea bool               `json:"outside_area"`
-	StoreToS    pgtype.Int4        `json:"store_to_s"`
-	ToStoreS    pgtype.Int4        `json:"to_store_s"`
-	Attempts    int32              `json:"attempts"`
-	NextTryAt   pgtype.Timestamptz `json:"next_try_at"`
-	LastError   string             `json:"last_error"`
-	PushedAt    pgtype.Timestamptz `json:"pushed_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	OrderID          pgtype.UUID        `json:"order_id"`
+	TenantID         pgtype.UUID        `json:"tenant_id"`
+	LocationID       pgtype.UUID        `json:"location_id"`
+	State            string             `json:"state"`
+	Lat              pgtype.Float8      `json:"lat"`
+	Lng              pgtype.Float8      `json:"lng"`
+	Quality          string             `json:"quality"`
+	DistanceM        int32              `json:"distance_m"`
+	DurationS        int32              `json:"duration_s"`
+	Polyline         string             `json:"polyline"`
+	OutsideArea      bool               `json:"outside_area"`
+	StoreToS         pgtype.Int4        `json:"store_to_s"`
+	ToStoreS         pgtype.Int4        `json:"to_store_s"`
+	Attempts         int32              `json:"attempts"`
+	NextTryAt        pgtype.Timestamptz `json:"next_try_at"`
+	LastError        string             `json:"last_error"`
+	PushedAt         pgtype.Timestamptz `json:"pushed_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	Candidates       []byte             `json:"candidates"`
+	ConfirmedAddress []byte             `json:"confirmed_address"`
 }
 
 type OutboxDispatch struct {

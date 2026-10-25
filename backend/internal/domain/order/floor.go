@@ -26,18 +26,21 @@ const (
 var floorRank = map[Status]int{
 	StatusReceived:   0,
 	StatusValidated:  1,
-	StatusAccepted:   2,
-	StatusPreparing:  3,
-	StatusReady:      4,
-	StatusOnDelivery: 5,
-	StatusCompleted:  6,
+	StatusScheduled:  2, // 2.1.0: a future order, confirmed but not yet accepted
+	StatusAccepted:   3,
+	StatusPreparing:  4,
+	StatusReady:      5,
+	StatusOnDelivery: 6,
+	StatusCompleted:  7,
 }
 
 // FloorStatus maps an agent floor state to main's status. delivered →
 // completed; cancelled (never accepted, closed out with the batch) →
-// cancelled; unknown → false.
+// cancelled; scheduled (a future order, 2.1.0) → scheduled; unknown → false.
 func FloorStatus(agentState string) (Status, bool) {
 	switch agentState {
+	case "scheduled":
+		return StatusScheduled, true
 	case "accepted":
 		return StatusAccepted, true
 	case "ready":
@@ -134,10 +137,11 @@ func (o *Order) ApplyFloorUpdate(u FloorUpdate) string {
 }
 
 // applyFloorCancel: the agent cancels an order nobody accepted when it closes
-// the batch. Only an order main still has as not-yet-accepted can be cancelled
-// this way; anything further along (or already terminal) is stale.
+// the batch. Only an order main still has as not-yet-accepted (incl. a
+// scheduled future order) can be cancelled this way; anything further along
+// (or already terminal) is stale.
 func (o *Order) applyFloorCancel(u FloorUpdate) string {
-	if o.status != StatusReceived && o.status != StatusValidated {
+	if o.status != StatusReceived && o.status != StatusValidated && o.status != StatusScheduled {
 		return FloorStale
 	}
 	at := u.At.UTC()
@@ -166,6 +170,33 @@ type DeliveryRun struct {
 	PlanID       string // "" when sent without an AUTO plan
 	SuggestedIDs []string
 	SentIDs      []string
-	Stops        json.RawMessage // [{order_id, eta}]
-	At           time.Time
+	// Stops: [{order_id, eta}] for online orders; a POS stop (2.1.0) is
+	// anonymous — {opaque_id, source:"pos", placed_at, sent_at, out_at,
+	// delivered_at, distance_m} — and stored as sent (no order lookup).
+	Stops json.RawMessage
+	At    time.Time
+}
+
+// ValidRunStops reports whether a delivery.run stops value is a JSON array of
+// objects, and whether it holds at least one stop. A POS-only run (2.1.0) may
+// have no sent_ids — its stops carry opaque ids instead.
+func ValidRunStops(raw json.RawMessage) (ok bool, n int) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return true, 0
+	}
+	var stops []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &stops); err != nil {
+		return false, 0
+	}
+	for _, s := range stops {
+		if s == nil {
+			return false, 0
+		}
+		_, hasOrder := s["order_id"]
+		_, hasOpaque := s["opaque_id"]
+		if !hasOrder && !hasOpaque {
+			return false, 0
+		}
+	}
+	return true, len(stops)
 }

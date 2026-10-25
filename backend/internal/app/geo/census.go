@@ -48,22 +48,42 @@ func (c *Census) Geocode(ctx context.Context, a Address, _ *Point) (GeocodeResul
 }
 
 func parseCensus(body censusResponse, a Address) (GeocodeResult, error) {
-	if len(body.Result.AddressMatches) == 0 {
-		return GeocodeResult{}, ErrNotFound
-	}
-	m := body.Result.AddressMatches[0]
-	if m.Coordinates.X == 0 && m.Coordinates.Y == 0 {
-		return GeocodeResult{}, ErrNotFound
-	}
-	q := QualityApprox
 	in := HouseNumber(a.Line1)
 	if in == "" {
 		in = HouseNumber(a.Oneline)
 	}
-	if in != "" && HouseNumber(m.MatchedAddress) == in {
-		q = QualityExact
+	cs := make([]Candidate, 0, len(body.Result.AddressMatches))
+	for _, m := range body.Result.AddressMatches {
+		if m.Coordinates.X == 0 && m.Coordinates.Y == 0 {
+			continue
+		}
+		q := QualityApprox
+		if in != "" && HouseNumber(m.MatchedAddress) == in {
+			q = QualityExact
+		}
+		line1, city, state, zip := splitCensusAddress(m.MatchedAddress)
+		cs = append(cs, newCandidate(titleCase(line1), titleCase(city), strings.ToUpper(state), zip,
+			Point{Lat: m.Coordinates.Y, Lng: m.Coordinates.X}, q))
 	}
-	return GeocodeResult{Point: Point{Lat: m.Coordinates.Y, Lng: m.Coordinates.X}, Quality: q, Source: "census"}, nil
+	return resultFrom(cs, "census")
+}
+
+// splitCensusAddress splits "584 BROADWAY, BAYONNE, NJ, 07002".
+func splitCensusAddress(s string) (line1, city, state, zip string) {
+	parts := strings.Split(s, ",")
+	for i := range parts {
+		parts[i] = strings.TrimSpace(parts[i])
+	}
+	switch {
+	case len(parts) >= 4:
+		n := len(parts)
+		return strings.Join(parts[:n-3], ", "), parts[n-3], parts[n-2], parts[n-1]
+	case len(parts) == 3:
+		return parts[0], parts[1], parts[2], ""
+	case len(parts) == 2:
+		return parts[0], parts[1], "", ""
+	}
+	return s, "", "", ""
 }
 
 // --- shared HTTP ----------------------------------------------------------------

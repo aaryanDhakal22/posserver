@@ -69,14 +69,17 @@ const (
 const (
 	StatePending  = "pending"
 	StateLocated  = "located"
+	StateCheck    = "check" // ambiguous: staff pick a candidate (2.1.0)
 	StateNotFound = "not_found"
 )
 
-// GeocodeResult is one provider's answer.
+// GeocodeResult is one provider's answer: the best match, plus every match
+// it returned (best first, de-duplicated by point) for the confidence rule.
 type GeocodeResult struct {
 	Point
-	Quality string
-	Source  string // census | nominatim | google
+	Quality    string
+	Source     string // census | nominatim | google
+	Candidates []Candidate
 }
 
 // RouteResult is one driving route.

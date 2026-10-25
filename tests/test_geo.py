@@ -58,6 +58,8 @@ class FakeGeo:
 
     def __init__(self) -> None:
         self.known: dict[str, tuple[float, float]] = {}  # lowercased street -> (lat, lng)
+        # lowercased street -> several Census matches [(matchedAddress, lat, lng)] (2.1.0 candidates)
+        self.multi: dict[str, list[tuple[str, float, float]]] = {}
         self.census_hits = 0
         srv = ThreadingHTTPServer(("0.0.0.0", 0), self._handler())
         srv.daemon_threads = True
@@ -67,6 +69,10 @@ class FakeGeo:
 
     def add(self, street: str, lat: float, lng: float) -> None:
         self.known[street.lower()] = (lat, lng)
+
+    def add_matches(self, street: str, matches: list[tuple[str, float, float]]) -> None:
+        """Census answers `street` with every match (best first)."""
+        self.multi[street.lower()] = matches
 
     def close(self) -> None:
         self.srv.shutdown()
@@ -93,7 +99,8 @@ class FakeGeo:
                     fake.census_hits += 1
                     street = q.get("address", "").split(",")[0].strip().lower()
                     hit = fake.known.get(street)
-                    matches = []
+                    matches = [{"coordinates": {"x": lng, "y": lat}, "matchedAddress": m}
+                               for m, lat, lng in fake.multi.get(street, [])]
                     if hit:
                         matches = [{"coordinates": {"x": hit[1], "y": hit[0]},
                                     "matchedAddress": street.upper() + ", BAYONNE, NJ, 07002"}]

@@ -56,9 +56,14 @@ type Querier interface {
 	// can still create credential-less tenants. Full-column RETURNING keeps sqlc
 	// mapping to the models.Tenant table struct (see toDomainTenant).
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
+	DeferExternalStopPush(ctx context.Context, arg DeferExternalStopPushParams) error
 	DeferOrderGeoPush(ctx context.Context, arg DeferOrderGeoPushParams) error
 	DeleteAppRelease(ctx context.Context, arg DeleteAppReleaseParams) (int64, error)
 	DeleteDevice(ctx context.Context, id pgtype.UUID) error
+	DeleteExternalStop(ctx context.Context, arg DeleteExternalStopParams) (int64, error)
+	DeleteExternalWork(ctx context.Context, orderID pgtype.UUID) error
+	// After the agent acked a result that needs no address any more.
+	DeleteExternalWorkIfDone(ctx context.Context, orderID pgtype.UUID) error
 	DeleteLocationDrivers(ctx context.Context, arg DeleteLocationDriversParams) error
 	DeleteMenu(ctx context.Context, arg DeleteMenuParams) error
 	DeleteMenuCategory(ctx context.Context, arg DeleteMenuCategoryParams) error
@@ -97,6 +102,8 @@ type Querier interface {
 	GetAgentUpdate(ctx context.Context, id pgtype.UUID) (AgentUpdate, error)
 	GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKParams) ([]byte, error)
 	GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagReportRow, error)
+	GetExternalStop(ctx context.Context, arg GetExternalStopParams) (GeoExternalStop, error)
+	GetExternalWork(ctx context.Context, orderID pgtype.UUID) (GeoExternalWork, error)
 	// ───────────────────────────────────────────────────────────────────────────
 	// Geo (2.0.9): geocode cache, per-order geo, driver runs
 	// ───────────────────────────────────────────────────────────────────────────
@@ -104,6 +111,8 @@ type Querier interface {
 	GetLatestAppRelease(ctx context.Context, app string) (GetLatestAppReleaseRow, error)
 	GetLineItemsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]LineItem, error)
 	GetLocationByID(ctx context.Context, id pgtype.UUID) (Location, error)
+	// The store's position + radius (an external stop has no orders row to join).
+	GetLocationGeo(ctx context.Context, arg GetLocationGeoParams) (GetLocationGeoRow, error)
 	GetMenuByID(ctx context.Context, arg GetMenuByIDParams) (Menu, error)
 	GetMenuCategoryByID(ctx context.Context, arg GetMenuCategoryByIDParams) (MenuCategory, error)
 	GetMenuItemByID(ctx context.Context, arg GetMenuItemByIDParams) (MenuItem, error)
@@ -162,11 +171,15 @@ type Querier interface {
 	ListDevicesByLocation(ctx context.Context, locationID pgtype.UUID) ([]Device, error)
 	ListDiagReports(ctx context.Context, arg ListDiagReportsParams) ([]ListDiagReportsRow, error)
 	ListDriverShifts(ctx context.Context, arg ListDriverShiftsParams) ([]DriverShift, error)
+	ListDueExternalStops(ctx context.Context, arg ListDueExternalStopsParams) ([]ListDueExternalStopsRow, error)
 	ListDueOrderGeo(ctx context.Context, arg ListDueOrderGeoParams) ([]ListDueOrderGeoRow, error)
+	ListExternalStopsByIDs(ctx context.Context, arg ListExternalStopsByIDsParams) ([]ListExternalStopsByIDsRow, error)
 	ListGroupsForItem(ctx context.Context, arg ListGroupsForItemParams) ([]ListGroupsForItemRow, error)
 	ListItemModifierGroupsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListItemModifierGroupsByLocationRow, error)
 	ListItemsByCategory(ctx context.Context, categoryID pgtype.UUID) ([]MenuItem, error)
 	ListItemsByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuItem, error)
+	// The location's other located external stops, for the drive-time table.
+	ListLiveExternalStops(ctx context.Context, arg ListLiveExternalStopsParams) ([]ListLiveExternalStopsRow, error)
 	ListLocationDrivers(ctx context.Context, arg ListLocationDriversParams) ([]Driver, error)
 	ListLocationsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]Location, error)
 	// Startup backfill: stores with an address but no position yet.
@@ -201,6 +214,7 @@ type Querier interface {
 	MarkDiagReportPaged(ctx context.Context, id pgtype.UUID) error
 	MarkDispatchFailed(ctx context.Context, arg MarkDispatchFailedParams) error
 	MarkDispatchSucceeded(ctx context.Context, arg MarkDispatchSucceededParams) error
+	MarkExternalStopPushed(ctx context.Context, arg MarkExternalStopPushedParams) (int64, error)
 	// Idempotency gate for agent floor events: 0 rows = already applied.
 	MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeenParams) (int64, error)
 	// Only when nothing changed since the pushed result was read.
@@ -215,6 +229,10 @@ type Querier interface {
 	PruneAgentBackups(ctx context.Context, locationID pgtype.UUID) error
 	PruneAppReleases(ctx context.Context, arg PruneAppReleasesParams) error
 	PruneDiagReports(ctx context.Context, receivedAt pgtype.Timestamptz) (int64, error)
+	PruneExternalStops(ctx context.Context, now pgtype.Timestamptz) (int64, error)
+	PruneExternalWork(ctx context.Context, now pgtype.Timestamptz) (int64, error)
+	// The store moved: re-route the located stops from their own point.
+	RequeueLocationExternalStops(ctx context.Context, arg RequeueLocationExternalStopsParams) (int64, error)
 	// The store moved: re-work the open deliveries (addresses are cached, so
 	// this re-routes from the new position).
 	RequeueLocationOrderGeo(ctx context.Context, arg RequeueLocationOrderGeoParams) (int64, error)
@@ -222,6 +240,9 @@ type Querier interface {
 	// pending, backed-off dispatch for the scope due now so its backlog drains
 	// within one dispatcher tick instead of waiting out the exponential backoff.
 	ResetDispatchBackoffForScope(ctx context.Context, arg ResetDispatchBackoffForScopeParams) error
+	// Staff picked a candidate (geo.choose): the pinned geo_cache entry is
+	// already saved; re-work the order and push it with the confirmed address.
+	ResetOrderGeoForChoice(ctx context.Context, arg ResetOrderGeoForChoiceParams) error
 	ResetOrderGeoForPin(ctx context.Context, orderID pgtype.UUID) error
 	RevokeAllOperatorTokens(ctx context.Context, operatorID pgtype.UUID) error
 	RevokeDevice(ctx context.Context, id pgtype.UUID) error
@@ -232,7 +253,13 @@ type Querier interface {
 	// 00010_diagnostics: tablet report tokens + troubleshooting reports
 	// ---------------------------------------------------------------------------
 	RevokeTabletTokensForTablet(ctx context.Context, arg RevokeTabletTokensForTabletParams) (int64, error)
-	// A final result (located / not_found). Clears pushed_at so it is (re)pushed.
+	// A final result (located / check / not_found); see SaveExternalStopRetry.
+	SaveExternalStopResult(ctx context.Context, arg SaveExternalStopResultParams) (pgtype.Timestamptz, error)
+	// Both guarded by the updated_at the worker read: a re-locate, pin or
+	// choice that arrived meanwhile wins (the row is due again anyway).
+	SaveExternalStopRetry(ctx context.Context, arg SaveExternalStopRetryParams) (int64, error)
+	// A final result (located / check / not_found). Clears pushed_at so it is
+	// (re)pushed. candidates is set for check only (NULL otherwise).
 	SaveOrderGeoResult(ctx context.Context, arg SaveOrderGeoResultParams) (pgtype.Timestamptz, error)
 	SaveOrderGeoRetry(ctx context.Context, arg SaveOrderGeoRetryParams) error
 	// Filtered/sorted order history for the agent's store-manager web UI. Every
@@ -243,6 +270,10 @@ type Querier interface {
 	SearchOrdersInScope(ctx context.Context, arg SearchOrdersInScopeParams) ([]Order, error)
 	SetCategoryPosition(ctx context.Context, arg SetCategoryPositionParams) error
 	SetDiagReportResolved(ctx context.Context, arg SetDiagReportResolvedParams) (int64, error)
+	// A pin or a chosen candidate: re-route from this point and push it again.
+	SetExternalStopPoint(ctx context.Context, arg SetExternalStopPointParams) (int64, error)
+	SetExternalWorkCandidates(ctx context.Context, arg SetExternalWorkCandidatesParams) error
+	SetExternalWorkConfirmed(ctx context.Context, arg SetExternalWorkConfirmedParams) error
 	SetItemPosition(ctx context.Context, arg SetItemPositionParams) error
 	SetItemPrinter(ctx context.Context, arg SetItemPrinterParams) error
 	// The store address was geocoded. Never overrides a manual pin.
@@ -288,9 +319,18 @@ type Querier interface {
 	// A driver.shift event (clock-in, then the clock-out for the same shift id),
 	// keyed per location.
 	UpsertDriverShift(ctx context.Context, arg UpsertDriverShiftParams) error
+	// ---------------------------------------------------------------------------
+	// External stops (2.1.0): POS deliveries the agent asks main to locate (RPC
+	// geo.locate). No orders row; a point + push state, and the address text in
+	// geo_external_work only while it is needed.
+	// ---------------------------------------------------------------------------
+	// A (re)locate request: back to pending with no point, a fresh 24 h expiry.
+	UpsertExternalStop(ctx context.Context, arg UpsertExternalStopParams) (int64, error)
+	UpsertExternalWork(ctx context.Context, arg UpsertExternalWorkParams) error
 	// A geocode result. A pinned entry is never overwritten by a geocode.
 	UpsertGeoCacheGeocoded(ctx context.Context, arg UpsertGeoCacheGeocodedParams) error
 	UpsertGeoCachePinned(ctx context.Context, arg UpsertGeoCachePinnedParams) error
+	WakeLocationExternalStops(ctx context.Context, arg WakeLocationExternalStopsParams) (int64, error)
 	// The location's agent (re)connected: push everything it has not acked now.
 	WakeLocationOrderGeo(ctx context.Context, arg WakeLocationOrderGeoParams) (int64, error)
 }

@@ -178,3 +178,26 @@ def test_driver_ids_are_per_location(make_store) -> None:
         fl = st.manager_session().get(f"{STORE_V1}/me/floor", timeout=5).json()
         assert [d["name"] for d in fl["drivers"]] == [name]
         assert [s["driver_name"] for s in fl["shifts"]] == [name]
+
+
+def test_scheduled_ranks_between_received_and_accepted(store, publish) -> None:
+    """2.1.0: a future order the agent confirmed a lead time for is mirrored as
+    `scheduled`; accept moves it on; a late `scheduled` never moves it back."""
+    o = store.order(service_type="delivery", deferred_date="2030-06-14T18:30:00-0400",
+                    delivery_address={"street": "1 Later Ln", "city": "Towson", "state": "MD", "zip": "21286",
+                                      "suite": "", "cross_streets": "", "buz": ""})
+    publish(o)
+    got = wait_order(store.key, o["order_id"])
+    oid = got["id"]
+    promised = datetime.fromisoformat(got["fulfillment"]["promised_at"].replace("Z", "+00:00"))
+    assert promised == datetime(2030, 6, 14, 22, 30, tzinfo=timezone.utc)
+
+    sch = _status(oid, "scheduled", agent_status={"state": "scheduled", "scheduled_lead_minutes": 45}, batch_id=1)
+    assert _results(_send(store.key, [sch])) == {sch["event_id"]: "applied"}
+    assert wait_order(store.key, o["order_id"])["status"] == "scheduled"
+
+    acc = _status(oid, "accepted", kitchen_number=1107)
+    late = _status(oid, "scheduled")
+    assert _results(_send(store.key, [acc, late])) == {acc["event_id"]: "applied", late["event_id"]: "stale"}
+    got = wait_order(store.key, o["order_id"])
+    assert got["status"] == "accepted" and got["kitchen_order_number"] == 1107

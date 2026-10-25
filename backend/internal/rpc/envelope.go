@@ -43,6 +43,14 @@ const (
 	MsgOrderGeo = "order.geo"
 	MsgGeoPin   = "geo.pin"
 	MsgGeoTrip  = "geo.trip"
+
+	// POS deliveries + address candidates (2.1.0), agent → main requests.
+	// geo.locate: locate a delivery main has no order for (an external stop,
+	// answered later by order.geo with the agent's id); geo.forget: drop it;
+	// geo.choose: staff picked candidate #index of a check result.
+	MsgGeoLocate = "geo.locate"
+	MsgGeoForget = "geo.forget"
+	MsgGeoChoose = "geo.choose"
 )
 
 // Envelope is the wire shape for every duplex message, both directions. It must
