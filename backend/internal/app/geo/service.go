@@ -74,9 +74,10 @@ type Queries interface {
 	DeferExternalStopPush(ctx context.Context, arg models.DeferExternalStopPushParams) error
 	WakeLocationExternalStops(ctx context.Context, arg models.WakeLocationExternalStopsParams) (int64, error)
 	SetExternalStopPoint(ctx context.Context, arg models.SetExternalStopPointParams) (int64, error)
-	SetExternalWorkCandidates(ctx context.Context, arg models.SetExternalWorkCandidatesParams) error
+	SetExternalWorkCandidates(ctx context.Context, arg models.SetExternalWorkCandidatesParams) (int64, error)
 	SetExternalWorkConfirmed(ctx context.Context, arg models.SetExternalWorkConfirmedParams) error
 	DeleteExternalWork(ctx context.Context, orderID pgtype.UUID) error
+	DeleteExternalWorkRead(ctx context.Context, arg models.DeleteExternalWorkReadParams) (int64, error)
 	DeleteExternalWorkIfDone(ctx context.Context, orderID pgtype.UUID) error
 	DeleteExternalStop(ctx context.Context, arg models.DeleteExternalStopParams) (int64, error)
 	PruneExternalStops(ctx context.Context, now pgtype.Timestamptz) (int64, error)
@@ -601,6 +602,11 @@ type Push struct {
 	Candidates []Candidate `json:"candidates,omitempty"`
 	// After a pick: the chosen candidate's address parts.
 	ConfirmedAddress *ConfirmedAddress `json:"confirmed_address,omitempty"`
+	// Confirmed: this push is the direct result of staff's geo.choose or
+	// geo.pin (the agent emits address.confirmed only then). Absent on every
+	// other push — a first locate, a cache hit on a pinned address, a re-route
+	// after the store moved, a re-push after the acked one.
+	Confirmed bool `json:"confirmed,omitempty"`
 }
 
 // geoRow is the push-relevant part of an order_geo row or an external stop.
@@ -610,6 +616,7 @@ type geoRow struct {
 	distanceM, durationS     int32
 	outside                  bool
 	storeToS, toStoreS       pgtype.Int4
+	confirmed                bool // the row's pending pin / choice (located only)
 }
 
 // buildPush fills the payload from a stored result (drive times included).
@@ -619,6 +626,7 @@ func (s *Service) buildPush(ctx context.Context, scope sseBroker.Scope, id uuid.
 	if g.state == StateLocated && g.lat.Valid && g.lng.Valid {
 		lat, lng := g.lat.Float64, g.lng.Float64
 		p.Lat, p.Lng, p.Quality = &lat, &lng, g.quality
+		p.Confirmed = g.confirmed
 		if g.storeToS.Valid {
 			v := int(g.storeToS.Int32)
 			p.StoreToS = &v
@@ -666,7 +674,8 @@ func (s *Service) push(ctx context.Context, scope sseBroker.Scope, id uuid.UUID)
 		return nil
 	}
 	p := s.buildPush(ctx, scope, id, geoRow{state: g.State, quality: g.Quality, polyline: g.Polyline, lat: g.Lat, lng: g.Lng,
-		distanceM: g.DistanceM, durationS: g.DurationS, outside: g.OutsideArea, storeToS: g.StoreToS, toStoreS: g.ToStoreS})
+		distanceM: g.DistanceM, durationS: g.DurationS, outside: g.OutsideArea, storeToS: g.StoreToS, toStoreS: g.ToStoreS,
+		confirmed: g.Confirmed})
 	switch g.State {
 	case StateCheck:
 		p.Candidates = decodeCandidates(g.Candidates)

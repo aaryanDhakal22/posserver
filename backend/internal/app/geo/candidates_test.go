@@ -170,3 +170,87 @@ func TestStreetNameAndDedupe(t *testing.T) {
 		t.Errorf("titleCase = %q", titleCase("931 E TAYLOR AVE"))
 	}
 }
+
+// offset moves p north by m meters (1 deg lat ≈ 111.2 km).
+func offset(p Point, m float64) Point { return Point{Lat: p.Lat + m/111195, Lng: p.Lng} }
+
+// The same house returned twice must not send a normal order to check.
+func TestConfidenceCollapsesTheSameAddress(t *testing.T) {
+	home := Point{Lat: 39.3982, Lng: -76.5895}
+	at := func(line1, city, zip string, p Point) Candidate {
+		return newCandidate(line1, city, "MD", zip, p, QualityExact)
+	}
+	withZip := Address{Line1: "931 Taylor Ave", City: "Towson", State: "MD", Zip: "21286"}
+	noZip := Address{Line1: "931 Taylor Ave", City: "Towson", State: "MD"}
+	cases := []struct {
+		name string
+		cs   []Candidate
+		left int // after collapse
+	}{
+		{"Ave vs Avenue ~20 m apart", []Candidate{
+			at("931 Taylor Ave", "Towson", "21286", home), at("931 Taylor Avenue", "Towson", "21286", offset(home, 20))}, 1},
+		{"Nominatim node (no zip) + its building", []Candidate{
+			at("931 Taylor Avenue", "Towson", "21286", home), at("931 Taylor Avenue", "Towson", "", offset(home, 35))}, 1},
+		{"E-prefixed duplicate within 150 m", []Candidate{
+			at("931 E Taylor Ave", "Towson", "21286", home), at("931 Taylor Ave", "Towson", "21286", offset(home, 120))}, 1},
+		{"identical line + zip, points 600 m apart", []Candidate{
+			at("931 Taylor Ave", "Towson", "21286", home), at("931 TAYLOR AVE", "Towson", "21286", offset(home, 600))}, 1},
+		{"duplicate collapsed, a different address kept", []Candidate{
+			at("931 Taylor Ave", "Towson", "21286", home), at("931 Taylor Avenue", "Towson", "21286", offset(home, 20)),
+			at("913 Taylor Ave", "Towson", "21286", offset(home, 200))}, 2},
+	}
+	for _, tc := range cases {
+		if got := collapse(tc.cs); len(got) != tc.left || got[0] != tc.cs[0] {
+			t.Errorf("%s: collapse = %+v", tc.name, got)
+		}
+		for _, in := range []Address{withZip, noZip} {
+			if !Confident(in, tc.cs) {
+				t.Errorf("%s: input %+v must be confident", tc.name, in)
+			}
+		}
+	}
+
+	// Zips disagree but the points are one house (a zip boundary): not
+	// collapsed (the zip differs), yet an input without a zip is confident
+	// — every agreeing candidate is within 150 m of the top.
+	split := []Candidate{at("931 Taylor Ave", "Towson", "21286", home), at("931 Taylor Ave", "Towson", "21204", offset(home, 40))}
+	if len(collapse(split)) != 2 || !Confident(noZip, split) {
+		t.Errorf("zip boundary: collapse %d, confident %v", len(collapse(split)), Confident(noZip, split))
+	}
+
+	// The provider path collapses too: a check result never offers the same
+	// house twice.
+	r, err := resultFrom([]Candidate{
+		at("931 Taylor Ave", "Towson", "21286", home), at("931 Taylor Avenue", "Towson", "21286", offset(home, 20)),
+		at("931 W Taylor Ave", "Towson", "21204", Point{Lat: 39.4021, Lng: -76.6181})}, "fake")
+	if err != nil || len(r.Candidates) != 2 || r.Candidates[1].Line1 != "931 W Taylor Ave" {
+		t.Fatalf("resultFrom = %+v, %v", r.Candidates, err)
+	}
+}
+
+// Genuinely different addresses still need staff.
+func TestConfidenceKeepsRealAmbiguity(t *testing.T) {
+	at := func(line1, city, zip string, lat, lng float64) Candidate {
+		return newCandidate(line1, city, "MD", zip, Point{Lat: lat, Lng: lng}, QualityExact)
+	}
+	twoTowns := []Candidate{at("100 Main St", "Annapolis", "21401", 38.9774, -76.4878), at("100 Main St", "Laurel", "20707", 39.1094, -76.8572)}
+	if len(collapse(twoTowns)) != 2 {
+		t.Error("two towns must not collapse")
+	}
+	if Confident(Address{Line1: "100 Main St", State: "MD"}, twoTowns) {
+		t.Error("100 Main St in two towns, no zip: check")
+	}
+	if !Confident(Address{Line1: "100 Main St", City: "Annapolis", State: "MD", Zip: "21401"}, twoTowns) {
+		t.Error("the zip picks the top one: confident")
+	}
+	// Same zip, same number + street name, other direction, 2.5 km apart.
+	ew := []Candidate{at("931 E Taylor Ave", "Towson", "21286", 39.3982, -76.5895), at("931 W Taylor Ave", "Towson", "21286", 39.4021, -76.6181)}
+	if len(collapse(ew)) != 2 || Confident(Address{Line1: "931 Taylor Ave", City: "Towson", State: "MD", Zip: "21286"}, ew) {
+		t.Error("E vs W Taylor in one zip, far apart: check")
+	}
+	// Two towns with identical lines but no zips: not the same address.
+	noZips := []Candidate{at("100 Main Street", "Annapolis", "", 38.9776, -76.4881), at("100 Main Street", "Laurel", "", 39.1094, -76.8572)}
+	if len(collapse(noZips)) != 2 || Confident(Address{Line1: "100 Main St", State: "MD"}, noZips) {
+		t.Error("identical lines without zips, far apart: check")
+	}
+}

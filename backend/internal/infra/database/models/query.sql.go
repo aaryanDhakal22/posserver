@@ -938,6 +938,25 @@ func (q *Queries) DeleteExternalWorkIfDone(ctx context.Context, orderID pgtype.U
 	return err
 }
 
+const deleteExternalWorkRead = `-- name: DeleteExternalWorkRead :execrows
+DELETE FROM geo_external_work WHERE order_id = $1 AND created_at = $2
+`
+
+type DeleteExternalWorkReadParams struct {
+	OrderID pgtype.UUID        `json:"order_id"`
+	ReadAt  pgtype.Timestamptz `json:"read_at"`
+}
+
+// The worker's own located / given-up work row only (created_at as read): a
+// geo.locate that replaced it meanwhile keeps its new address.
+func (q *Queries) DeleteExternalWorkRead(ctx context.Context, arg DeleteExternalWorkReadParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExternalWorkRead, arg.OrderID, arg.ReadAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteLocationDrivers = `-- name: DeleteLocationDrivers :exec
 DELETE FROM drivers WHERE tenant_id = $1 AND location_id = $2
 `
@@ -1437,7 +1456,7 @@ func (q *Queries) GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagRep
 const getExternalStop = `-- name: GetExternalStop :one
 SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
        polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
-       pushed_at, created_at, updated_at, expires_at
+       pushed_at, created_at, updated_at, expires_at, confirmed
 FROM geo_external_stops
 WHERE order_id = $1 AND tenant_id = $2 AND location_id = $3
 `
@@ -1472,6 +1491,7 @@ func (q *Queries) GetExternalStop(ctx context.Context, arg GetExternalStopParams
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ExpiresAt,
+		&i.Confirmed,
 	)
 	return i, err
 }
@@ -1950,7 +1970,7 @@ func (q *Queries) GetOrderForGeo(ctx context.Context, arg GetOrderForGeoParams) 
 const getOrderGeo = `-- name: GetOrderGeo :one
 SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
        polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
-       pushed_at, created_at, updated_at, candidates, confirmed_address
+       pushed_at, created_at, updated_at, candidates, confirmed_address, confirmed
 FROM order_geo WHERE order_id = $1
 `
 
@@ -1979,6 +1999,7 @@ func (q *Queries) GetOrderGeo(ctx context.Context, orderID pgtype.UUID) (OrderGe
 		&i.UpdatedAt,
 		&i.Candidates,
 		&i.ConfirmedAddress,
+		&i.Confirmed,
 	)
 	return i, err
 }
@@ -4462,7 +4483,7 @@ func (q *Queries) MarkDispatchSucceeded(ctx context.Context, arg MarkDispatchSuc
 }
 
 const markExternalStopPushed = `-- name: MarkExternalStopPushed :execrows
-UPDATE geo_external_stops SET pushed_at = now()
+UPDATE geo_external_stops SET pushed_at = now(), confirmed = false
 WHERE order_id = $1 AND updated_at = $2
 `
 
@@ -4511,7 +4532,7 @@ func (q *Queries) MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeen
 }
 
 const markOrderGeoPushed = `-- name: MarkOrderGeoPushed :execrows
-UPDATE order_geo SET pushed_at = now()
+UPDATE order_geo SET pushed_at = now(), confirmed = false
 WHERE order_id = $1 AND updated_at = $2
 `
 
@@ -4520,7 +4541,8 @@ type MarkOrderGeoPushedParams struct {
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
-// Only when nothing changed since the pushed result was read.
+// Only when nothing changed since the pushed result was read. An acked push
+// spends confirmed (only the push right after geo.pin / geo.choose has it).
 func (q *Queries) MarkOrderGeoPushed(ctx context.Context, arg MarkOrderGeoPushedParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markOrderGeoPushed, arg.OrderID, arg.UpdatedAt)
 	if err != nil {
@@ -4718,7 +4740,8 @@ func (q *Queries) PruneExternalWork(ctx context.Context, now pgtype.Timestamptz)
 }
 
 const requeueLocationExternalStops = `-- name: RequeueLocationExternalStops :execrows
-UPDATE geo_external_stops SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL, updated_at = now()
+UPDATE geo_external_stops SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL,
+    confirmed = false, updated_at = now()
 WHERE tenant_id = $1 AND location_id = $2
   AND state = 'located' AND lat IS NOT NULL AND expires_at > now()
 `
@@ -4738,7 +4761,8 @@ func (q *Queries) RequeueLocationExternalStops(ctx context.Context, arg RequeueL
 }
 
 const requeueLocationOrderGeo = `-- name: RequeueLocationOrderGeo :execrows
-UPDATE order_geo g SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL, updated_at = now()
+UPDATE order_geo g SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL,
+    confirmed = false, updated_at = now()
 FROM orders o
 WHERE o.id = g.order_id AND g.tenant_id = $1 AND g.location_id = $2
   AND g.state <> 'pending'
@@ -4789,7 +4813,7 @@ func (q *Queries) ResetDispatchBackoffForScope(ctx context.Context, arg ResetDis
 const resetOrderGeoForChoice = `-- name: ResetOrderGeoForChoice :exec
 UPDATE order_geo SET state = 'pending', attempts = 0, next_try_at = now(),
     last_error = '', pushed_at = NULL, candidates = NULL,
-    confirmed_address = $1, updated_at = now()
+    confirmed_address = $1, confirmed = true, updated_at = now()
 WHERE order_id = $2
 `
 
@@ -4807,7 +4831,8 @@ func (q *Queries) ResetOrderGeoForChoice(ctx context.Context, arg ResetOrderGeoF
 
 const resetOrderGeoForPin = `-- name: ResetOrderGeoForPin :exec
 UPDATE order_geo SET state = 'pending', attempts = 0, next_try_at = now(),
-    last_error = '', pushed_at = NULL, candidates = NULL, confirmed_address = NULL, updated_at = now()
+    last_error = '', pushed_at = NULL, candidates = NULL, confirmed_address = NULL,
+    confirmed = true, updated_at = now()
 WHERE order_id = $1
 `
 
@@ -5180,7 +5205,7 @@ func (q *Queries) SetDiagReportResolved(ctx context.Context, arg SetDiagReportRe
 
 const setExternalStopPoint = `-- name: SetExternalStopPoint :execrows
 UPDATE geo_external_stops SET state = 'pending', lat = $1, lng = $2, quality = $3,
-    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, updated_at = now()
+    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = true, updated_at = now()
 WHERE order_id = $4 AND tenant_id = $5 AND location_id = $6
 `
 
@@ -5193,7 +5218,8 @@ type SetExternalStopPointParams struct {
 	LocationID pgtype.UUID   `json:"location_id"`
 }
 
-// A pin or a chosen candidate: re-route from this point and push it again.
+// A pin or a chosen candidate: re-route from this point and push it again,
+// confirmed (staff's own pick).
 func (q *Queries) SetExternalStopPoint(ctx context.Context, arg SetExternalStopPointParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setExternalStopPoint,
 		arg.Lat,
@@ -5209,18 +5235,25 @@ func (q *Queries) SetExternalStopPoint(ctx context.Context, arg SetExternalStopP
 	return result.RowsAffected(), nil
 }
 
-const setExternalWorkCandidates = `-- name: SetExternalWorkCandidates :exec
-UPDATE geo_external_work SET candidates = $1 WHERE order_id = $2
+const setExternalWorkCandidates = `-- name: SetExternalWorkCandidates :execrows
+UPDATE geo_external_work SET candidates = $1
+WHERE order_id = $2 AND created_at = $3
 `
 
 type SetExternalWorkCandidatesParams struct {
-	Candidates []byte      `json:"candidates"`
-	OrderID    pgtype.UUID `json:"order_id"`
+	Candidates []byte             `json:"candidates"`
+	OrderID    pgtype.UUID        `json:"order_id"`
+	ReadAt     pgtype.Timestamptz `json:"read_at"`
 }
 
-func (q *Queries) SetExternalWorkCandidates(ctx context.Context, arg SetExternalWorkCandidatesParams) error {
-	_, err := q.db.Exec(ctx, setExternalWorkCandidates, arg.Candidates, arg.OrderID)
-	return err
+// Guarded by the created_at the worker read: a geo.locate that replaced the
+// work row meanwhile (new address) is not overwritten.
+func (q *Queries) SetExternalWorkCandidates(ctx context.Context, arg SetExternalWorkCandidatesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setExternalWorkCandidates, arg.Candidates, arg.OrderID, arg.ReadAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setExternalWorkConfirmed = `-- name: SetExternalWorkConfirmed :exec
@@ -6127,7 +6160,7 @@ VALUES ($1, $2, $3, $4)
 ON CONFLICT (order_id) DO UPDATE SET
     state = 'pending', lat = NULL, lng = NULL, quality = '', distance_m = 0, duration_s = 0,
     polyline = '', outside_area = false, store_to_s = NULL, to_store_s = NULL, attempts = 0,
-    next_try_at = now(), last_error = '', pushed_at = NULL, created_at = now(), updated_at = now(),
+    next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = false, created_at = now(), updated_at = now(),
     expires_at = EXCLUDED.expires_at
 WHERE geo_external_stops.tenant_id = EXCLUDED.tenant_id AND geo_external_stops.location_id = EXCLUDED.location_id
 `

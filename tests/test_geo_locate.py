@@ -62,7 +62,7 @@ def test_geo_locate_without_an_order_and_shared_drive_times(admin, store, publis
         g = _next_geo(s, stop)
         assert g["state"] == "located" and g["quality"] == "exact"
         assert abs(g["lat"] - 40.6600) < 1e-6 and g["polyline"] == "fake_polyline" and g["store_to_s"] > 0
-        assert "candidates" not in g and "confirmed_address" not in g
+        assert "candidates" not in g and "confirmed_address" not in g and "confirmed" not in g
         pair = [t for t in g["times"] if t["other"] == a_id]
         assert len(pair) == 1 and pair[0]["to_s"] > 0 and pair[0]["from_s"] > 0
 
@@ -103,7 +103,7 @@ def test_geo_locate_ambiguous_then_choose(admin, store, fake_geo) -> None:
     with SSEStream(store.key) as s:
         assert _locate(store.key, stop, street) == {"ok": True}
         g = _next_geo(s, stop)
-        assert g["state"] == "check" and "lat" not in g and "quality" not in g
+        assert g["state"] == "check" and "lat" not in g and "quality" not in g and "confirmed" not in g
         cands = g["candidates"]
         assert len(cands) == 3
         assert set(cands[0]) == {"label", "line1", "city", "state", "postal_code", "lat", "lng"}
@@ -118,13 +118,14 @@ def test_geo_locate_ambiguous_then_choose(admin, store, fake_geo) -> None:
         assert g["state"] == "located" and g["quality"] == "pinned"
         assert (g["lat"], g["lng"]) == (matches[1][1], matches[1][2])
         assert g["confirmed_address"] == {"line1": cands[1]["line1"], "city": "Bayonne", "state": "NJ", "postal_code": "07002"}
-        assert "candidates" not in g
+        assert "candidates" not in g and g["confirmed"] is True
 
         # The same address again (another POS check) lands on the pick.
         again = str(uuid.uuid4())
         _locate(store.key, again, street)
         g = _next_geo(s, again)
         assert g["state"] == "located" and g["quality"] == "pinned" and (g["lat"], g["lng"]) == (matches[1][1], matches[1][2])
+        assert "confirmed" not in g  # a pinned cache hit is not a confirmation
 
     r = _rpc(store.key, "geo.choose", {"order_id": str(uuid.uuid4()), "index": 0})
     assert r.status_code == 200 and r.json()["payload"] == {"ok": False, "code": "not_found"}
@@ -149,12 +150,31 @@ def test_online_order_check_then_choose(admin, store, publish, fake_geo) -> None
         assert g["state"] == "located" and g["quality"] == "pinned"
         assert (g["lat"], g["lng"]) == (matches[2][1], matches[2][2])
         assert g["confirmed_address"]["city"] == "Newark" and g["confirmed_address"]["postal_code"] == "07105"
+        assert g["confirmed"] is True
 
         # A later pin replaces the pick (and drops the confirmed address).
         r = _rpc(store.key, "geo.pin", {"order_id": oid, "lat": 40.6650, "lng": -74.1180})
         assert r.status_code == 200 and r.json()["payload"] == {"ok": True}
         g = _next_geo(s, oid)
         assert g["quality"] == "pinned" and (g["lat"], g["lng"]) == (40.6650, -74.1180) and "confirmed_address" not in g
+        assert g["confirmed"] is True
+
+
+def test_online_order_with_a_duplicate_match_is_located(admin, store, publish, fake_geo) -> None:
+    """The geocoder returning one house twice (~20 m apart, "ST" vs "STREET")
+    is not ambiguous: a normal online order is located as before 2.1.0."""
+    _pin_store(admin, store)
+    street = _street()
+    s_ = street.upper()
+    fake_geo.add_matches(street, [(f"{s_.replace(' STREET', ' ST')}, BAYONNE, NJ, 07002", 40.6690, -74.1143),
+                                  (f"{s_}, BAYONNE, NJ, 07002", 40.6692, -74.1143)])
+    with SSEStream(store.key) as s:
+        o = _delivery(store, street)
+        publish(o)
+        oid = wait_order(store.key, o["order_id"])["id"]
+        g = _next_geo(s, oid)
+        assert g["state"] == "located" and g["quality"] == "exact" and (g["lat"], g["lng"]) == (40.6690, -74.1143)
+        assert "candidates" not in g and "confirmed" not in g
 
 
 def test_geo_pin_an_external_stop(admin, store, fake_geo) -> None:
@@ -163,12 +183,12 @@ def test_geo_pin_an_external_stop(admin, store, fake_geo) -> None:
     with SSEStream(store.key) as s:
         _locate(store.key, stop, _street())  # unknown to every geocoder
         g = _next_geo(s, stop)
-        assert g["state"] == "not_found" and "lat" not in g
+        assert g["state"] == "not_found" and "lat" not in g and "confirmed" not in g
         r = _rpc(store.key, "geo.pin", {"order_id": stop, "lat": 40.6655, "lng": -74.1170})
         assert r.status_code == 200 and r.json()["payload"] == {"ok": True}
         g = _next_geo(s, stop)
         assert g["state"] == "located" and g["quality"] == "pinned" and (g["lat"], g["lng"]) == (40.6655, -74.1170)
-        assert g["polyline"] == "fake_polyline"
+        assert g["polyline"] == "fake_polyline" and g["confirmed"] is True
 
     # geo.trip orders external stops with online orders.
     r = _rpc(store.key, "geo.trip", {"order_ids": [stop]})

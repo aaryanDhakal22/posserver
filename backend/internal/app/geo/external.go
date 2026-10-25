@@ -326,23 +326,37 @@ func (s *Service) locateStop(ctx context.Context, scope sseBroker.Scope, id uuid
 	if res.toStore != nil {
 		p.ToStoreS = pgtype.Int4{Int32: int32(*res.toStore), Valid: true}
 	}
-	if _, err := s.q.SaveExternalStopResult(ctx, p); errors.Is(err, pgx.ErrNoRows) {
-		return false, nil // re-located / pinned / forgotten meanwhile: due again
-	} else if err != nil {
-		return false, err
-	}
-	if work != nil {
+	// The result and its work-row follow-up commit together, and the
+	// follow-up only touches the work row this run read (created_at): a
+	// geo.locate racing in with a new address keeps its row, and its stop
+	// reset makes the result save miss (due again).
+	saved := false
+	if err := s.tx(ctx, func(q Queries) error {
+		if _, err := q.SaveExternalStopResult(ctx, p); errors.Is(err, pgx.ErrNoRows) {
+			return nil // re-located / pinned / forgotten meanwhile: due again
+		} else if err != nil {
+			return err
+		}
+		saved = true
+		if work == nil {
+			return nil
+		}
 		switch {
 		case res.state == StateCheck:
-			if err := s.q.SetExternalWorkCandidates(ctx, models.SetExternalWorkCandidatesParams{OrderID: pgUUID(id), Candidates: candidatesJSON(res.candidates)}); err != nil {
-				return false, err
-			}
+			_, err := q.SetExternalWorkCandidates(ctx, models.SetExternalWorkCandidatesParams{
+				OrderID: pgUUID(id), Candidates: candidatesJSON(res.candidates), ReadAt: work.CreatedAt})
+			return err
 		case decodeConfirmed(work.ConfirmedAddress) == nil:
 			// Located or given up: the address text is not needed any more.
-			if err := s.q.DeleteExternalWork(ctx, pgUUID(id)); err != nil {
-				return false, err
-			}
+			_, err := q.DeleteExternalWorkRead(ctx, models.DeleteExternalWorkReadParams{OrderID: pgUUID(id), ReadAt: work.CreatedAt})
+			return err
 		}
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	if !saved {
+		return false, nil
 	}
 	s.located.Add(ctx, 1, metric.WithAttributes(attribute.String("result", res.state), attribute.String("kind", "external")))
 	s.logger.Info().Ctx(ctx).Str("order_id", id.String()).Str("state", res.state).Str("quality", res.quality).
@@ -362,7 +376,8 @@ func (s *Service) pushStop(ctx context.Context, scope sseBroker.Scope, id uuid.U
 		return nil
 	}
 	p := s.buildPush(ctx, scope, id, geoRow{state: st.State, quality: st.Quality, polyline: st.Polyline, lat: st.Lat, lng: st.Lng,
-		distanceM: st.DistanceM, durationS: st.DurationS, outside: st.OutsideArea, storeToS: st.StoreToS, toStoreS: st.ToStoreS})
+		distanceM: st.DistanceM, durationS: st.DurationS, outside: st.OutsideArea, storeToS: st.StoreToS, toStoreS: st.ToStoreS,
+		confirmed: st.Confirmed})
 	if st.State == StateCheck || st.State == StateLocated {
 		if w, err := s.q.GetExternalWork(ctx, pgUUID(id)); err == nil {
 			if st.State == StateCheck {

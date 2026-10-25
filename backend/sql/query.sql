@@ -1011,7 +1011,7 @@ LIMIT @max_rows;
 -- name: GetOrderGeo :one
 SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
        polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
-       pushed_at, created_at, updated_at, candidates, confirmed_address
+       pushed_at, created_at, updated_at, candidates, confirmed_address, confirmed
 FROM order_geo WHERE order_id = $1;
 
 -- name: GetOrderForGeo :one
@@ -1041,8 +1041,9 @@ UPDATE order_geo SET attempts = attempts + 1, next_try_at = @next_try_at,
 WHERE order_id = @order_id;
 
 -- name: MarkOrderGeoPushed :execrows
--- Only when nothing changed since the pushed result was read.
-UPDATE order_geo SET pushed_at = now()
+-- Only when nothing changed since the pushed result was read. An acked push
+-- spends confirmed (only the push right after geo.pin / geo.choose has it).
+UPDATE order_geo SET pushed_at = now(), confirmed = false
 WHERE order_id = @order_id AND updated_at = @updated_at;
 
 -- name: DeferOrderGeoPush :exec
@@ -1056,7 +1057,8 @@ WHERE tenant_id = @tenant_id AND location_id = @location_id
 
 -- name: ResetOrderGeoForPin :exec
 UPDATE order_geo SET state = 'pending', attempts = 0, next_try_at = now(),
-    last_error = '', pushed_at = NULL, candidates = NULL, confirmed_address = NULL, updated_at = now()
+    last_error = '', pushed_at = NULL, candidates = NULL, confirmed_address = NULL,
+    confirmed = true, updated_at = now()
 WHERE order_id = @order_id;
 
 -- name: ResetOrderGeoForChoice :exec
@@ -1064,13 +1066,14 @@ WHERE order_id = @order_id;
 -- already saved; re-work the order and push it with the confirmed address.
 UPDATE order_geo SET state = 'pending', attempts = 0, next_try_at = now(),
     last_error = '', pushed_at = NULL, candidates = NULL,
-    confirmed_address = @confirmed_address, updated_at = now()
+    confirmed_address = @confirmed_address, confirmed = true, updated_at = now()
 WHERE order_id = @order_id;
 
 -- name: RequeueLocationOrderGeo :execrows
 -- The store moved: re-work the open deliveries (addresses are cached, so
 -- this re-routes from the new position).
-UPDATE order_geo g SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL, updated_at = now()
+UPDATE order_geo g SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL,
+    confirmed = false, updated_at = now()
 FROM orders o
 WHERE o.id = g.order_id AND g.tenant_id = @tenant_id AND g.location_id = @location_id
   AND g.state <> 'pending'
@@ -1118,7 +1121,7 @@ VALUES (@order_id, @tenant_id, @location_id, @expires_at)
 ON CONFLICT (order_id) DO UPDATE SET
     state = 'pending', lat = NULL, lng = NULL, quality = '', distance_m = 0, duration_s = 0,
     polyline = '', outside_area = false, store_to_s = NULL, to_store_s = NULL, attempts = 0,
-    next_try_at = now(), last_error = '', pushed_at = NULL, created_at = now(), updated_at = now(),
+    next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = false, created_at = now(), updated_at = now(),
     expires_at = EXCLUDED.expires_at
 WHERE geo_external_stops.tenant_id = EXCLUDED.tenant_id AND geo_external_stops.location_id = EXCLUDED.location_id;
 
@@ -1132,7 +1135,7 @@ ON CONFLICT (order_id) DO UPDATE SET
 -- name: GetExternalStop :one
 SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
        polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
-       pushed_at, created_at, updated_at, expires_at
+       pushed_at, created_at, updated_at, expires_at, confirmed
 FROM geo_external_stops
 WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id;
 
@@ -1170,7 +1173,7 @@ UPDATE geo_external_stops SET attempts = attempts + 1, next_try_at = @next_try_a
 WHERE order_id = @order_id AND updated_at = @read_at;
 
 -- name: MarkExternalStopPushed :execrows
-UPDATE geo_external_stops SET pushed_at = now()
+UPDATE geo_external_stops SET pushed_at = now(), confirmed = false
 WHERE order_id = @order_id AND updated_at = @updated_at;
 
 -- name: DeferExternalStopPush :exec
@@ -1182,13 +1185,17 @@ WHERE tenant_id = @tenant_id AND location_id = @location_id
   AND pushed_at IS NULL AND state <> 'pending';
 
 -- name: SetExternalStopPoint :execrows
--- A pin or a chosen candidate: re-route from this point and push it again.
+-- A pin or a chosen candidate: re-route from this point and push it again,
+-- confirmed (staff's own pick).
 UPDATE geo_external_stops SET state = 'pending', lat = @lat, lng = @lng, quality = @quality,
-    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, updated_at = now()
+    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = true, updated_at = now()
 WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id;
 
--- name: SetExternalWorkCandidates :exec
-UPDATE geo_external_work SET candidates = sqlc.narg('candidates') WHERE order_id = @order_id;
+-- name: SetExternalWorkCandidates :execrows
+-- Guarded by the created_at the worker read: a geo.locate that replaced the
+-- work row meanwhile (new address) is not overwritten.
+UPDATE geo_external_work SET candidates = sqlc.narg('candidates')
+WHERE order_id = @order_id AND created_at = @read_at;
 
 -- name: SetExternalWorkConfirmed :exec
 UPDATE geo_external_work SET candidates = NULL, confirmed_address = @confirmed_address
@@ -1196,6 +1203,11 @@ WHERE order_id = @order_id;
 
 -- name: DeleteExternalWork :exec
 DELETE FROM geo_external_work WHERE order_id = $1;
+
+-- name: DeleteExternalWorkRead :execrows
+-- The worker's own located / given-up work row only (created_at as read): a
+-- geo.locate that replaced it meanwhile keeps its new address.
+DELETE FROM geo_external_work WHERE order_id = @order_id AND created_at = @read_at;
 
 -- name: DeleteExternalWorkIfDone :exec
 -- After the agent acked a result that needs no address any more.
@@ -1229,6 +1241,7 @@ WHERE tenant_id = @tenant_id AND location_id = @location_id AND order_id = ANY(@
 
 -- name: RequeueLocationExternalStops :execrows
 -- The store moved: re-route the located stops from their own point.
-UPDATE geo_external_stops SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL, updated_at = now()
+UPDATE geo_external_stops SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL,
+    confirmed = false, updated_at = now()
 WHERE tenant_id = @tenant_id AND location_id = @location_id
   AND state = 'located' AND lat IS NOT NULL AND expires_at > now();

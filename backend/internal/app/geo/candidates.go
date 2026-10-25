@@ -79,17 +79,68 @@ func dedupe(cs []Candidate) []Candidate {
 // resultFrom builds a GeocodeResult from deduplicated candidates (the top one
 // is the result's point + quality). ErrNotFound when there are none.
 func resultFrom(cs []Candidate, source string) (GeocodeResult, error) {
-	cs = dedupe(cs)
+	cs = collapse(dedupe(cs))
 	if len(cs) == 0 {
 		return GeocodeResult{}, ErrNotFound
 	}
 	return GeocodeResult{Point: cs[0].Point(), Quality: cs[0].Quality, Source: source, Candidates: cs}, nil
 }
 
-// Confident is the rule that lets main place an address without asking staff:
-// exactly one candidate, or the top candidate agrees with the input on house
-// number + street name + zip and no other candidate does.
+// SameAddressM: a candidate this close to the top one, with its house number
+// + street name (+ zip when both have one), is the same address — the same
+// house returned twice (a Nominatim node + its building, "Ave" vs "Avenue").
+const SameAddressM = 150
+
+// collapse drops the candidates that repeat the top one (sameAddress), so a
+// duplicate neither makes the address look ambiguous nor takes a slot of the
+// candidates staff pick from. Genuinely different addresses stay.
+func collapse(cs []Candidate) []Candidate {
+	if len(cs) < 2 {
+		return cs
+	}
+	out := []Candidate{cs[0]}
+	for _, c := range cs[1:] {
+		if !sameAddress(cs[0], c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// sameAddress: b repeats a. Both have the same house number and street name
+// (street type + direction ignored, as in Agrees) and no conflicting zip, and
+// either sit within SameAddressM or carry the very same street line and zip
+// (then the labels are identical: nothing for staff to choose between). A
+// different direction or street type far away ("931 E Taylor Ave" vs "931 W
+// Taylor Ave" in one zip) is a different address.
+func sameAddress(a, b Candidate) bool {
+	hn := HouseNumber(a.Line1)
+	if hn == "" || HouseNumber(b.Line1) != hn {
+		return false
+	}
+	s := StreetName(a.Line1)
+	if s == "" || StreetName(b.Line1) != s {
+		return false
+	}
+	za, zb := zip5.FindString(a.PostalCode), zip5.FindString(b.PostalCode)
+	if za != "" && zb != "" && za != zb {
+		return false
+	}
+	if HaversineM(a.Point(), b.Point()) <= SameAddressM {
+		return true
+	}
+	return za != "" && za == zb && normWords(stripUnit(a.Line1)) == normWords(stripUnit(b.Line1))
+}
+
+// Confident is the rule that lets main place an address without asking staff.
+// Repeats of the top candidate are collapsed first (collapse), then: exactly
+// one candidate, or the top candidate agrees with the input on house number +
+// street name + zip and every other candidate that agrees too sits within
+// SameAddressM of it (the same house — e.g. an input without a zip matching
+// one point twice). Only a genuinely different address that also fits the
+// input means check.
 func Confident(in Address, cs []Candidate) bool {
+	cs = collapse(cs)
 	switch len(cs) {
 	case 0:
 		return false
@@ -100,7 +151,7 @@ func Confident(in Address, cs []Candidate) bool {
 		return false
 	}
 	for _, c := range cs[1:] {
-		if Agrees(in, c) {
+		if Agrees(in, c) && HaversineM(cs[0].Point(), c.Point()) > SameAddressM {
 			return false
 		}
 	}

@@ -37,6 +37,9 @@ type fakeDB struct {
 	store    models.GetLocationGeoRow
 	scope    sseBroker.Scope
 	wakes    int
+	// afterStopSave runs right after a successful SaveExternalStopResult
+	// (outside the lock): a test plays a concurrent RPC there.
+	afterStopSave func()
 }
 
 func newFakeDB(now func() time.Time, scope sseBroker.Scope, store Point) *fakeDB {
@@ -175,7 +178,7 @@ func (f *fakeDB) MarkOrderGeoPushed(_ context.Context, a models.MarkOrderGeoPush
 	if !ok || !g.UpdatedAt.Time.Equal(a.UpdatedAt.Time) {
 		return 0, nil
 	}
-	g.PushedAt = ts(f.now())
+	g.PushedAt, g.Confirmed = ts(f.now()), false
 	return 1, nil
 }
 
@@ -197,8 +200,30 @@ func (f *fakeDB) ResetOrderGeoForChoice(_ context.Context, a models.ResetOrderGe
 	defer f.mu.Unlock()
 	g := f.orderGeo[fromPg(a.OrderID)]
 	g.State, g.Attempts, g.NextTryAt, g.LastError, g.PushedAt = StatePending, 0, ts(f.now()), "", pgtype.Timestamptz{}
-	g.Candidates, g.ConfirmedAddress, g.UpdatedAt = nil, a.ConfirmedAddress, f.stamp()
+	g.Candidates, g.ConfirmedAddress, g.Confirmed, g.UpdatedAt = nil, a.ConfirmedAddress, true, f.stamp()
 	return nil
+}
+
+func (f *fakeDB) ResetOrderGeoForPin(_ context.Context, id pgtype.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	g := f.orderGeo[fromPg(id)]
+	g.State, g.Attempts, g.NextTryAt, g.LastError, g.PushedAt = StatePending, 0, ts(f.now()), "", pgtype.Timestamptz{}
+	g.Candidates, g.ConfirmedAddress, g.Confirmed, g.UpdatedAt = nil, nil, true, f.stamp()
+	return nil
+}
+
+func (f *fakeDB) RequeueLocationOrderGeo(_ context.Context, a models.RequeueLocationOrderGeoParams) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var n int64
+	for _, g := range f.orderGeo {
+		if g.TenantID == a.TenantID && g.LocationID == a.LocationID && g.State != StatePending {
+			g.State, g.Attempts, g.NextTryAt, g.PushedAt, g.Confirmed, g.UpdatedAt = StatePending, 0, ts(f.now()), pgtype.Timestamptz{}, false, f.stamp()
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (f *fakeDB) ListOpenLocatedDeliveries(_ context.Context, a models.ListOpenLocatedDeliveriesParams) ([]models.ListOpenLocatedDeliveriesRow, error) {
@@ -235,7 +260,7 @@ func (f *fakeDB) UpsertExternalWork(_ context.Context, a models.UpsertExternalWo
 		return fmt.Errorf("fk: no stop")
 	}
 	f.work[fromPg(a.OrderID)] = &models.GeoExternalWork{OrderID: a.OrderID, Address: a.Address, AddressKey: a.AddressKey,
-		CreatedAt: ts(f.now()), DiscardAt: a.DiscardAt}
+		CreatedAt: f.stamp(), DiscardAt: a.DiscardAt}
 	return nil
 }
 
@@ -291,6 +316,12 @@ func (f *fakeDB) SaveExternalStopResult(_ context.Context, a models.SaveExternal
 	s.StoreToS, s.ToStoreS, s.LastError = a.StoreToS, a.ToStoreS, a.LastError
 	s.Attempts++
 	s.NextTryAt, s.PushedAt, s.UpdatedAt = ts(f.now()), pgtype.Timestamptz{}, f.stamp()
+	if hook := f.afterStopSave; hook != nil {
+		f.afterStopSave = nil
+		f.mu.Unlock()
+		hook()
+		f.mu.Lock()
+	}
 	return s.UpdatedAt, nil
 }
 
@@ -301,7 +332,7 @@ func (f *fakeDB) MarkExternalStopPushed(_ context.Context, a models.MarkExternal
 	if !ok || !s.UpdatedAt.Time.Equal(a.UpdatedAt.Time) {
 		return 0, nil
 	}
-	s.PushedAt = ts(f.now())
+	s.PushedAt, s.Confirmed = ts(f.now()), false
 	return 1, nil
 }
 
@@ -337,16 +368,31 @@ func (f *fakeDB) SetExternalStopPoint(_ context.Context, a models.SetExternalSto
 	}
 	s.State, s.Lat, s.Lng, s.Quality = StatePending, a.Lat, a.Lng, a.Quality
 	s.Attempts, s.NextTryAt, s.LastError, s.PushedAt, s.UpdatedAt = 0, ts(f.now()), "", pgtype.Timestamptz{}, f.stamp()
+	s.Confirmed = true
 	return 1, nil
 }
 
-func (f *fakeDB) SetExternalWorkCandidates(_ context.Context, a models.SetExternalWorkCandidatesParams) error {
+func (f *fakeDB) RequeueLocationExternalStops(_ context.Context, a models.RequeueLocationExternalStopsParams) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if w, ok := f.work[fromPg(a.OrderID)]; ok {
-		w.Candidates = a.Candidates
+	var n int64
+	for _, s := range f.stops {
+		if s.TenantID == a.TenantID && s.LocationID == a.LocationID && s.State == StateLocated && s.Lat.Valid {
+			s.State, s.Attempts, s.NextTryAt, s.PushedAt, s.Confirmed, s.UpdatedAt = StatePending, 0, ts(f.now()), pgtype.Timestamptz{}, false, f.stamp()
+			n++
+		}
 	}
-	return nil
+	return n, nil
+}
+
+func (f *fakeDB) SetExternalWorkCandidates(_ context.Context, a models.SetExternalWorkCandidatesParams) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if w, ok := f.work[fromPg(a.OrderID)]; ok && w.CreatedAt.Time.Equal(a.ReadAt.Time) {
+		w.Candidates = a.Candidates
+		return 1, nil
+	}
+	return 0, nil
 }
 
 func (f *fakeDB) SetExternalWorkConfirmed(_ context.Context, a models.SetExternalWorkConfirmedParams) error {
@@ -363,6 +409,16 @@ func (f *fakeDB) DeleteExternalWork(_ context.Context, id pgtype.UUID) error {
 	defer f.mu.Unlock()
 	delete(f.work, fromPg(id))
 	return nil
+}
+
+func (f *fakeDB) DeleteExternalWorkRead(_ context.Context, a models.DeleteExternalWorkReadParams) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if w, ok := f.work[fromPg(a.OrderID)]; ok && w.CreatedAt.Time.Equal(a.ReadAt.Time) {
+		delete(f.work, fromPg(a.OrderID))
+		return 1, nil
+	}
+	return 0, nil
 }
 
 func (f *fakeDB) DeleteExternalWorkIfDone(_ context.Context, id pgtype.UUID) error {

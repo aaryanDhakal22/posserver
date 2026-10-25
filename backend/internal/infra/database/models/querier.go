@@ -64,6 +64,9 @@ type Querier interface {
 	DeleteExternalWork(ctx context.Context, orderID pgtype.UUID) error
 	// After the agent acked a result that needs no address any more.
 	DeleteExternalWorkIfDone(ctx context.Context, orderID pgtype.UUID) error
+	// The worker's own located / given-up work row only (created_at as read): a
+	// geo.locate that replaced it meanwhile keeps its new address.
+	DeleteExternalWorkRead(ctx context.Context, arg DeleteExternalWorkReadParams) (int64, error)
 	DeleteLocationDrivers(ctx context.Context, arg DeleteLocationDriversParams) error
 	DeleteMenu(ctx context.Context, arg DeleteMenuParams) error
 	DeleteMenuCategory(ctx context.Context, arg DeleteMenuCategoryParams) error
@@ -217,7 +220,8 @@ type Querier interface {
 	MarkExternalStopPushed(ctx context.Context, arg MarkExternalStopPushedParams) (int64, error)
 	// Idempotency gate for agent floor events: 0 rows = already applied.
 	MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeenParams) (int64, error)
-	// Only when nothing changed since the pushed result was read.
+	// Only when nothing changed since the pushed result was read. An acked push
+	// spends confirmed (only the push right after geo.pin / geo.choose has it).
 	MarkOrderGeoPushed(ctx context.Context, arg MarkOrderGeoPushedParams) (int64, error)
 	// Agent reliability + recovery (00009) -------------------------------------------
 	MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) (int64, error)
@@ -270,9 +274,12 @@ type Querier interface {
 	SearchOrdersInScope(ctx context.Context, arg SearchOrdersInScopeParams) ([]Order, error)
 	SetCategoryPosition(ctx context.Context, arg SetCategoryPositionParams) error
 	SetDiagReportResolved(ctx context.Context, arg SetDiagReportResolvedParams) (int64, error)
-	// A pin or a chosen candidate: re-route from this point and push it again.
+	// A pin or a chosen candidate: re-route from this point and push it again,
+	// confirmed (staff's own pick).
 	SetExternalStopPoint(ctx context.Context, arg SetExternalStopPointParams) (int64, error)
-	SetExternalWorkCandidates(ctx context.Context, arg SetExternalWorkCandidatesParams) error
+	// Guarded by the created_at the worker read: a geo.locate that replaced the
+	// work row meanwhile (new address) is not overwritten.
+	SetExternalWorkCandidates(ctx context.Context, arg SetExternalWorkCandidatesParams) (int64, error)
 	SetExternalWorkConfirmed(ctx context.Context, arg SetExternalWorkConfirmedParams) error
 	SetItemPosition(ctx context.Context, arg SetItemPositionParams) error
 	SetItemPrinter(ctx context.Context, arg SetItemPrinterParams) error

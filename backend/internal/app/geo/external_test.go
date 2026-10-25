@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -339,4 +340,174 @@ func insertParams(h *harness, id uuid.UUID) models.InsertOrderGeoParams {
 
 func listLive(h *harness) models.ListLiveExternalStopsParams {
 	return models.ListLiveExternalStopsParams{TenantID: pgUUID(h.scope.TenantID), LocationID: pgUUID(h.scope.LocationID), MaxRows: 40}
+}
+
+// A normal online order whose address the geocoder returns twice (~20 m
+// apart) is located, as before 2.1.0, not sent to check.
+func TestOnlineOrderDuplicateMatchIsLocated(t *testing.T) {
+	h := newHarness(t)
+	h.knows("931 Taylor Ave",
+		cand("931 Taylor Ave", "Towson", "21286", 39.3982, -76.5895),
+		cand("931 Taylor Avenue", "Towson", "21286", 39.39838, -76.5895))
+	for _, zip := range []string{"21286", ""} {
+		id := uuid.New()
+		h.db.addOrder(id, order.Address{Line1: "931 Taylor Ave", City: "Towson", State: "MD", PostalCode: zip})
+		h.svc.q.InsertOrderGeo(context.Background(), insertParams(h, id))
+		h.drain()
+		p := onlyPush(t, h, id)
+		if p.State != StateLocated || p.Lat == nil || *p.Lat != 39.3982 || p.Candidates != nil || p.Confirmed {
+			t.Fatalf("zip %q: push = %+v", zip, p)
+		}
+	}
+}
+
+// geo.locate with a new address while the worker finishes the old one: the
+// worker's save + work-row follow-up must not drop (or overwrite) the new
+// work row.
+func TestExternalStopWorkRaceKeepsTheNewAddress(t *testing.T) {
+	for _, first := range []string{"located", "check"} {
+		t.Run(first, func(t *testing.T) {
+			h := newHarness(t)
+			h.knows("1 Old Rd", cand("1 Old Rd", "Towson", "21286", 39.3900, -76.5800))
+			h.knows("931 Taylor Ave", cand("931 E Taylor Ave", "Towson", "21286", 39.3982, -76.5895),
+				cand("931 W Taylor Ave", "Towson", "21204", 39.4021, -76.6181))
+			h.knows("2 New Rd", cand("2 New Rd", "Towson", "21286", 39.4100, -76.6000))
+			stop := uuid.New()
+			old := "1 Old Rd"
+			if first == "check" {
+				old = "931 Taylor Ave" // no zip: ambiguous
+			}
+			h.rpc(h.svc.HandleLocate, locateBody(stop, old, ""))
+			h.db.afterStopSave = func() { h.rpc(h.svc.HandleLocate, locateBody(stop, "2 New Rd", "21286")) }
+			// One worker round: it saves the old result, the new locate lands.
+			rows, _ := h.db.ListDueExternalStops(context.Background(), models.ListDueExternalStopsParams{Now: ts(h.clock), MaxRows: 50})
+			if len(rows) != 1 {
+				t.Fatalf("due = %+v", rows)
+			}
+			h.svc.processStop(context.Background(), rows[0])
+			w := h.db.work[stop]
+			if w == nil || !strings.Contains(string(w.Address), "2 New Rd") {
+				t.Fatalf("the new address was dropped: %+v", w)
+			}
+			if w.Candidates != nil {
+				t.Fatalf("the new work row got the old run's candidates: %s", w.Candidates)
+			}
+			if st := h.db.stops[stop]; st.State != StatePending {
+				t.Fatalf("stop = %+v, want pending again", st)
+			}
+			h.drain()
+			p := h.agent.take()
+			if len(p) != 1 || p[0].State != StateLocated || *p[0].Lat != 39.4100 {
+				t.Fatalf("pushes = %+v, want the new address located", p)
+			}
+			if _, ok := h.db.work[stop]; ok {
+				t.Error("the new address must be dropped once it is located")
+			}
+		})
+	}
+}
+
+// "confirmed": true rides only the push that comes straight from geo.pin /
+// geo.choose — never a first locate, a pinned cache hit or a later re-route.
+func TestConfirmedOnlyOnPinAndChoosePushes(t *testing.T) {
+	wire := func(p Push) map[string]any {
+		raw, _ := json.Marshal(p)
+		var m map[string]any
+		_ = json.Unmarshal(raw, &m)
+		return m
+	}
+	ctx := context.Background()
+
+	t.Run("online pin", func(t *testing.T) {
+		h := newHarness(t)
+		h.knows("5 Oak St", cand("5 Oak St", "Towson", "21286", 39.3950, -76.5850))
+		id := uuid.New()
+		h.db.addOrder(id, order.Address{Line1: "5 Oak St", City: "Towson", State: "MD", PostalCode: "21286"})
+		h.svc.q.InsertOrderGeo(ctx, insertParams(h, id))
+		h.drain()
+		if p := onlyPush(t, h, id); p.Confirmed {
+			t.Fatalf("first locate: %+v", p)
+		} else if _, ok := wire(p)["confirmed"]; ok {
+			t.Errorf("confirmed must be absent on the wire: %v", wire(p))
+		}
+		h.rpc(h.svc.HandlePin, map[string]any{"order_id": id.String(), "lat": 39.3960, "lng": -76.5860})
+		h.drain()
+		p := onlyPush(t, h, id)
+		if !p.Confirmed || p.Quality != QualityPinned || wire(p)["confirmed"] != true {
+			t.Fatalf("pin push = %+v", p)
+		}
+		// The store moved: re-routed, not re-confirmed.
+		h.svc.StoreMoved(ctx, h.scope.TenantID, h.scope.LocationID)
+		h.drain()
+		if p := onlyPush(t, h, id); p.Confirmed || p.Quality != QualityPinned {
+			t.Errorf("re-route push = %+v", p)
+		}
+		// Another order at the pinned address: a cache hit, not a confirmation.
+		o2 := uuid.New()
+		h.db.addOrder(o2, order.Address{Line1: "5 Oak St", City: "Towson", State: "MD", PostalCode: "21286"})
+		h.svc.q.InsertOrderGeo(ctx, insertParams(h, o2))
+		h.drain()
+		if p := onlyPush(t, h, o2); p.Confirmed || p.Quality != QualityPinned {
+			t.Errorf("pinned cache hit = %+v", p)
+		}
+	})
+
+	t.Run("online choose, offline then reconnect", func(t *testing.T) {
+		h := newHarness(t)
+		h.knows("100 Main St", cand("100 Main St", "Annapolis", "21401", 38.9774, -76.4878),
+			cand("100 Main St", "Laurel", "20707", 39.1094, -76.8572))
+		id := uuid.New()
+		h.db.addOrder(id, order.Address{Line1: "100 Main St", State: "MD"})
+		h.svc.q.InsertOrderGeo(ctx, insertParams(h, id))
+		h.drain()
+		if p := onlyPush(t, h, id); p.State != StateCheck || p.Confirmed {
+			t.Fatalf("check push = %+v", p)
+		}
+		h.rpc(h.svc.HandleChoose, map[string]any{"order_id": id.String(), "index": 1})
+		h.agent.offline = true
+		h.drain()
+		h.agent.offline = false
+		h.db.orderGeo[id].NextTryAt = ts(h.clock) // the reconnect wake
+		h.drain()
+		if p := onlyPush(t, h, id); !p.Confirmed || p.ConfirmedAddress == nil || p.ConfirmedAddress.City != "Laurel" {
+			t.Fatalf("chosen push (after reconnect) = %+v", p)
+		}
+		if h.db.orderGeo[id].Confirmed {
+			t.Error("an acked push must spend confirmed")
+		}
+	})
+
+	t.Run("external stop choose + pin", func(t *testing.T) {
+		h := newHarness(t)
+		h.knows("931 Taylor Ave", cand("931 E Taylor Ave", "Towson", "21286", 39.3982, -76.5895),
+			cand("931 W Taylor Ave", "Towson", "21204", 39.4021, -76.6181))
+		stop := uuid.New()
+		h.rpc(h.svc.HandleLocate, locateBody(stop, "931 Taylor Ave", ""))
+		h.drain()
+		if p := onlyPush(t, h, stop); p.State != StateCheck || p.Confirmed {
+			t.Fatalf("check push = %+v", p)
+		}
+		h.rpc(h.svc.HandleChoose, map[string]any{"order_id": stop.String(), "index": 0})
+		h.drain()
+		if p := onlyPush(t, h, stop); !p.Confirmed || wire(p)["confirmed"] != true {
+			t.Fatalf("chosen push = %+v", p)
+		}
+		h.rpc(h.svc.HandlePin, map[string]any{"order_id": stop.String(), "lat": 39.3990, "lng": -76.5900})
+		h.drain()
+		if p := onlyPush(t, h, stop); !p.Confirmed || *p.Lat != 39.3990 {
+			t.Fatalf("pinned push = %+v", p)
+		}
+		h.svc.StoreMoved(ctx, h.scope.TenantID, h.scope.LocationID)
+		h.drain()
+		if p := onlyPush(t, h, stop); p.Confirmed {
+			t.Errorf("re-route push = %+v", p)
+		}
+		// The same address again: the pinned cache answers, unconfirmed.
+		again := uuid.New()
+		h.rpc(h.svc.HandleLocate, locateBody(again, "931 Taylor Ave", ""))
+		h.drain()
+		if p := onlyPush(t, h, again); p.Confirmed || p.Quality != QualityPinned {
+			t.Errorf("pinned cache hit = %+v", p)
+		}
+	})
 }
