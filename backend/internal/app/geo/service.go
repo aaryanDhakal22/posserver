@@ -85,6 +85,13 @@ type Queries interface {
 	ListLiveExternalStops(ctx context.Context, arg models.ListLiveExternalStopsParams) ([]models.ListLiveExternalStopsRow, error)
 	ListExternalStopsByIDs(ctx context.Context, arg models.ListExternalStopsByIDsParams) ([]models.ListExternalStopsByIDsRow, error)
 	RequeueLocationExternalStops(ctx context.Context, arg models.RequeueLocationExternalStopsParams) (int64, error)
+
+	// 2.2.0 location.radius.
+	SetLocationDeliveryRadius(ctx context.Context, arg models.SetLocationDeliveryRadiusParams) (int64, error)
+	ListOpenLocatedOrderGeoForRadius(ctx context.Context, arg models.ListOpenLocatedOrderGeoForRadiusParams) ([]models.ListOpenLocatedOrderGeoForRadiusRow, error)
+	SetOrderGeoOutsideArea(ctx context.Context, arg models.SetOrderGeoOutsideAreaParams) (int64, error)
+	ListLiveExternalStopsForRadius(ctx context.Context, arg models.ListLiveExternalStopsForRadiusParams) ([]models.ListLiveExternalStopsForRadiusRow, error)
+	SetExternalStopOutsideArea(ctx context.Context, arg models.SetExternalStopOutsideAreaParams) (int64, error)
 }
 
 const (

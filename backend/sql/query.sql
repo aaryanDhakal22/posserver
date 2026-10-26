@@ -1272,3 +1272,32 @@ UPDATE geo_external_stops SET state = 'pending', attempts = 0, next_try_at = now
     confirmed = false, updated_at = now()
 WHERE tenant_id = @tenant_id AND location_id = @location_id
   AND state = 'located' AND lat IS NOT NULL AND expires_at > now();
+
+-- name: SetLocationDeliveryRadius :execrows
+-- 2.2.0 location.radius: the Pi (tablet settings) sets the delivery radius.
+UPDATE locations SET delivery_radius_m = @radius_m
+WHERE id = @location_id AND tenant_id = @tenant_id;
+
+-- name: ListOpenLocatedOrderGeoForRadius :many
+-- The location's open located deliveries with their outside_area flag (a
+-- new radius re-flags them).
+SELECT g.order_id, g.lat, g.lng, g.outside_area FROM order_geo g JOIN orders o ON o.id = g.order_id
+WHERE g.tenant_id = @tenant_id AND g.location_id = @location_id
+  AND g.state = 'located' AND g.lat IS NOT NULL AND g.lng IS NOT NULL
+  AND o.status NOT IN ('completed', 'cancelled', 'rejected')
+  AND o.received_at > @since::timestamptz;
+
+-- name: SetOrderGeoOutsideArea :execrows
+-- A new radius flipped the flag: re-push the row (the worker sends order.geo).
+UPDATE order_geo SET outside_area = @outside_area, pushed_at = NULL, next_try_at = now(), updated_at = now()
+WHERE order_id = @order_id AND state = 'located' AND outside_area <> @outside_area;
+
+-- name: ListLiveExternalStopsForRadius :many
+SELECT order_id, lat, lng, outside_area FROM geo_external_stops
+WHERE tenant_id = @tenant_id AND location_id = @location_id
+  AND state = 'located' AND lat IS NOT NULL AND lng IS NOT NULL AND expires_at > now();
+
+-- name: SetExternalStopOutsideArea :execrows
+UPDATE geo_external_stops SET outside_area = @outside_area, pushed_at = NULL, next_try_at = now(), updated_at = now()
+WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id
+  AND state = 'located' AND outside_area <> @outside_area;

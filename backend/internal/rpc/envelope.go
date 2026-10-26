@@ -51,6 +51,10 @@ const (
 	MsgGeoLocate = "geo.locate"
 	MsgGeoForget = "geo.forget"
 	MsgGeoChoose = "geo.choose"
+
+	// Delivery radius from the tablet (2.2.0), agent → main request:
+	// {radius_m} → {radius_m}; a bad radius is a 400.
+	MsgLocationRadius = "location.radius"
 )
 
 // Envelope is the wire shape for every duplex message, both directions. It must

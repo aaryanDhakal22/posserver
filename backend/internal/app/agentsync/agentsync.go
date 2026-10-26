@@ -315,6 +315,10 @@ type AgentHealth struct {
 	Connected    bool            `json:"connected"`
 	At           time.Time       `json:"at"`
 	Health       json.RawMessage `json:"health"`
+	// Tablets (2.2.0) are the report's paired tablets with their Quibase
+	// version [{device_id, name, app_version, last_seen_at, connected}];
+	// [] from an older agent.
+	Tablets json.RawMessage `json:"tablets"`
 }
 
 // Fleet lists every location's latest health + whether its agent is connected.
@@ -327,9 +331,20 @@ func (s *Service) Fleet(ctx context.Context) ([]AgentHealth, error) {
 	for _, r := range rows {
 		sc := sseBroker.Scope{TenantID: fromPg(r.TenantID), LocationID: fromPg(r.LocationID)}
 		out = append(out, AgentHealth{LocationID: sc.LocationID, TenantID: sc.TenantID, LocationName: r.LocationName,
-			Connected: s.broker.SubscribersFor(sc) > 0, At: r.At.Time, Health: r.Health})
+			Connected: s.broker.SubscribersFor(sc) > 0, At: r.At.Time, Health: r.Health, Tablets: healthTablets(r.Health)})
 	}
 	return out, nil
+}
+
+// healthTablets pulls the tablets array out of an agent.health report.
+func healthTablets(raw []byte) json.RawMessage {
+	var h struct {
+		Tablets json.RawMessage `json:"tablets"`
+	}
+	if json.Unmarshal(raw, &h) != nil || len(h.Tablets) == 0 || h.Tablets[0] != '[' {
+		return json.RawMessage(`[]`)
+	}
+	return h.Tablets
 }
 
 // errNotLinked etc. are mapped to HTTP statuses by the handler.

@@ -3738,6 +3738,49 @@ func (q *Queries) ListLiveExternalStops(ctx context.Context, arg ListLiveExterna
 	return items, nil
 }
 
+const listLiveExternalStopsForRadius = `-- name: ListLiveExternalStopsForRadius :many
+SELECT order_id, lat, lng, outside_area FROM geo_external_stops
+WHERE tenant_id = $1 AND location_id = $2
+  AND state = 'located' AND lat IS NOT NULL AND lng IS NOT NULL AND expires_at > now()
+`
+
+type ListLiveExternalStopsForRadiusParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+type ListLiveExternalStopsForRadiusRow struct {
+	OrderID     pgtype.UUID   `json:"order_id"`
+	Lat         pgtype.Float8 `json:"lat"`
+	Lng         pgtype.Float8 `json:"lng"`
+	OutsideArea bool          `json:"outside_area"`
+}
+
+func (q *Queries) ListLiveExternalStopsForRadius(ctx context.Context, arg ListLiveExternalStopsForRadiusParams) ([]ListLiveExternalStopsForRadiusRow, error) {
+	rows, err := q.db.Query(ctx, listLiveExternalStopsForRadius, arg.TenantID, arg.LocationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLiveExternalStopsForRadiusRow
+	for rows.Next() {
+		var i ListLiveExternalStopsForRadiusRow
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.Lat,
+			&i.Lng,
+			&i.OutsideArea,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listLocationDrivers = `-- name: ListLocationDrivers :many
 SELECT id, tenant_id, location_id, name, position, status, updated_at
 FROM drivers WHERE tenant_id = $1 AND location_id = $2
@@ -3970,6 +4013,54 @@ func (q *Queries) ListOpenLocatedDeliveries(ctx context.Context, arg ListOpenLoc
 	for rows.Next() {
 		var i ListOpenLocatedDeliveriesRow
 		if err := rows.Scan(&i.OrderID, &i.Lat, &i.Lng); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listOpenLocatedOrderGeoForRadius = `-- name: ListOpenLocatedOrderGeoForRadius :many
+SELECT g.order_id, g.lat, g.lng, g.outside_area FROM order_geo g JOIN orders o ON o.id = g.order_id
+WHERE g.tenant_id = $1 AND g.location_id = $2
+  AND g.state = 'located' AND g.lat IS NOT NULL AND g.lng IS NOT NULL
+  AND o.status NOT IN ('completed', 'cancelled', 'rejected')
+  AND o.received_at > $3::timestamptz
+`
+
+type ListOpenLocatedOrderGeoForRadiusParams struct {
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Since      pgtype.Timestamptz `json:"since"`
+}
+
+type ListOpenLocatedOrderGeoForRadiusRow struct {
+	OrderID     pgtype.UUID   `json:"order_id"`
+	Lat         pgtype.Float8 `json:"lat"`
+	Lng         pgtype.Float8 `json:"lng"`
+	OutsideArea bool          `json:"outside_area"`
+}
+
+// The location's open located deliveries with their outside_area flag (a
+// new radius re-flags them).
+func (q *Queries) ListOpenLocatedOrderGeoForRadius(ctx context.Context, arg ListOpenLocatedOrderGeoForRadiusParams) ([]ListOpenLocatedOrderGeoForRadiusRow, error) {
+	rows, err := q.db.Query(ctx, listOpenLocatedOrderGeoForRadius, arg.TenantID, arg.LocationID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListOpenLocatedOrderGeoForRadiusRow
+	for rows.Next() {
+		var i ListOpenLocatedOrderGeoForRadiusRow
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.Lat,
+			&i.Lng,
+			&i.OutsideArea,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -5296,6 +5387,32 @@ func (q *Queries) SetDiagReportResolved(ctx context.Context, arg SetDiagReportRe
 	return result.RowsAffected(), nil
 }
 
+const setExternalStopOutsideArea = `-- name: SetExternalStopOutsideArea :execrows
+UPDATE geo_external_stops SET outside_area = $1, pushed_at = NULL, next_try_at = now(), updated_at = now()
+WHERE order_id = $2 AND tenant_id = $3 AND location_id = $4
+  AND state = 'located' AND outside_area <> $1
+`
+
+type SetExternalStopOutsideAreaParams struct {
+	OutsideArea bool        `json:"outside_area"`
+	OrderID     pgtype.UUID `json:"order_id"`
+	TenantID    pgtype.UUID `json:"tenant_id"`
+	LocationID  pgtype.UUID `json:"location_id"`
+}
+
+func (q *Queries) SetExternalStopOutsideArea(ctx context.Context, arg SetExternalStopOutsideAreaParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setExternalStopOutsideArea,
+		arg.OutsideArea,
+		arg.OrderID,
+		arg.TenantID,
+		arg.LocationID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setExternalStopPoint = `-- name: SetExternalStopPoint :execrows
 UPDATE geo_external_stops SET state = 'pending', lat = $1, lng = $2, quality = $3,
     attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = true, updated_at = now()
@@ -5392,6 +5509,26 @@ type SetItemPrinterParams struct {
 func (q *Queries) SetItemPrinter(ctx context.Context, arg SetItemPrinterParams) error {
 	_, err := q.db.Exec(ctx, setItemPrinter, arg.ID, arg.TenantID, arg.PrinterID)
 	return err
+}
+
+const setLocationDeliveryRadius = `-- name: SetLocationDeliveryRadius :execrows
+UPDATE locations SET delivery_radius_m = $1
+WHERE id = $2 AND tenant_id = $3
+`
+
+type SetLocationDeliveryRadiusParams struct {
+	RadiusM    int32       `json:"radius_m"`
+	LocationID pgtype.UUID `json:"location_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+}
+
+// 2.2.0 location.radius: the Pi (tablet settings) sets the delivery radius.
+func (q *Queries) SetLocationDeliveryRadius(ctx context.Context, arg SetLocationDeliveryRadiusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setLocationDeliveryRadius, arg.RadiusM, arg.LocationID, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setLocationGeocoded = `-- name: SetLocationGeocoded :execrows
@@ -5578,6 +5715,25 @@ func (q *Queries) SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStat
 		arg.TenantID,
 		arg.LocationID,
 	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setOrderGeoOutsideArea = `-- name: SetOrderGeoOutsideArea :execrows
+UPDATE order_geo SET outside_area = $1, pushed_at = NULL, next_try_at = now(), updated_at = now()
+WHERE order_id = $2 AND state = 'located' AND outside_area <> $1
+`
+
+type SetOrderGeoOutsideAreaParams struct {
+	OutsideArea bool        `json:"outside_area"`
+	OrderID     pgtype.UUID `json:"order_id"`
+}
+
+// A new radius flipped the flag: re-push the row (the worker sends order.geo).
+func (q *Queries) SetOrderGeoOutsideArea(ctx context.Context, arg SetOrderGeoOutsideAreaParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setOrderGeoOutsideArea, arg.OutsideArea, arg.OrderID)
 	if err != nil {
 		return 0, err
 	}
