@@ -107,7 +107,7 @@ type FloorRepository interface {
 	// floor changes (status + fields, new status_events, outbox events), all in
 	// one transaction. FloorDuplicate if eventID was already seen; the error
 	// wraps pgx.ErrNoRows when the order isn't in scope.
-	ApplyFloorUpdate(ctx context.Context, scope Scope, id ID, eventID uuid.UUID, apply func(o *Order) string) (string, error)
+	ApplyFloorUpdate(ctx context.Context, scope Scope, id ID, eventID uuid.UUID, typ string, apply func(o *Order) string) (string, error)
 	// MarkFloorEventSeen records an event that changed nothing (not_found /
 	// invalid); dup=true if it was already recorded.
 	MarkFloorEventSeen(ctx context.Context, scope Scope, eventID uuid.UUID, orderID *uuid.UUID, typ, result string) (dup bool, err error)

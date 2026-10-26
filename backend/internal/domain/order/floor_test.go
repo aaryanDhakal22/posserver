@@ -177,3 +177,88 @@ func TestValidRunStops(t *testing.T) {
 		}
 	}
 }
+
+// 2.2.1: a delivery that came back with its driver — the one backwards step.
+func TestApplyNotDelivered(t *testing.T) {
+	t0 := time.Now().UTC().Truncate(time.Millisecond)
+	out := func() *Order {
+		o, _ := NewOrder(stubInput())
+		o.ApplyFloorUpdate(FloorUpdate{Status: StatusOnDelivery, DriverName: "Sam", At: t0})
+		o.PullEvents()
+		return o
+	}
+
+	// retry from on_delivery: ready, no driver, one status_changed event.
+	o := out()
+	if r := o.ApplyNotDelivered(NotDeliveredUpdate{Action: NotDeliveredRetry, At: t0.Add(time.Minute)}); r != FloorApplied {
+		t.Fatalf("retry: %s", r)
+	}
+	if o.Status() != StatusReady || o.DriverName() != "" || !o.FloorAt().Equal(t0.Add(time.Minute)) {
+		t.Fatalf("after retry: %s %q %v", o.Status(), o.DriverName(), o.FloorAt())
+	}
+	h := o.StatusHistory()
+	if last := h[len(h)-1]; last.From != StatusOnDelivery || last.To != StatusReady || last.Actor != "agent" || last.Reason == "" {
+		t.Fatalf("history: %+v", last)
+	}
+	evs := o.PullEvents()
+	var p StatusChangedPayload
+	if len(evs) != 1 || json.Unmarshal(evs[0].Payload, &p) != nil || p.From != "on_delivery" || p.To != "ready" {
+		t.Fatalf("events: %+v", evs)
+	}
+	// Replayed (or a second retry): nothing more to undo.
+	if r := o.ApplyNotDelivered(NotDeliveredUpdate{Action: NotDeliveredRetry, At: t0.Add(2 * time.Minute)}); r != FloorStale {
+		t.Fatalf("retry again: %s", r)
+	}
+	// It goes out again with someone else and is delivered: forward as usual.
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusOnDelivery, DriverName: "Ann", At: t0.Add(3 * time.Minute)}); r != FloorApplied {
+		t.Fatalf("out again: %s", r)
+	}
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusCompleted, At: t0.Add(4 * time.Minute)}); r != FloorApplied || o.DriverName() != "Ann" {
+		t.Fatalf("delivered again: %s %q", r, o.DriverName())
+	}
+
+	// cancel after it was delivered: cancelled, out of delivered counts.
+	o = out()
+	o.ApplyFloorUpdate(FloorUpdate{Status: StatusCompleted, At: t0.Add(time.Minute)})
+	if r := o.ApplyNotDelivered(NotDeliveredUpdate{Action: NotDeliveredCancel, At: t0.Add(2 * time.Minute)}); r != FloorApplied {
+		t.Fatalf("cancel: %s", r)
+	}
+	if o.Status() != StatusCancelled || o.DriverName() != "" {
+		t.Fatalf("after cancel: %s %q", o.Status(), o.DriverName())
+	}
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusCompleted, At: t0.Add(3 * time.Minute)}); r != FloorStale || o.Status() != StatusCancelled {
+		t.Fatalf("a cancelled order stays cancelled: %s %s", r, o.Status())
+	}
+
+	// Close batch cancelling a came-back order main has ready.
+	o = out()
+	o.ApplyNotDelivered(NotDeliveredUpdate{Action: NotDeliveredRetry, At: t0.Add(time.Minute)})
+	if r := o.ApplyNotDelivered(NotDeliveredUpdate{Action: NotDeliveredCancel, At: t0.Add(2 * time.Minute), Auto: true}); r != FloorApplied {
+		t.Fatalf("auto cancel: %s", r)
+	}
+	h = o.StatusHistory()
+	if last := h[len(h)-1]; last.From != StatusReady || last.To != StatusCancelled || last.Reason == "" {
+		t.Fatalf("auto cancel history: %+v", last)
+	}
+
+	// Stale: older than the newest applied event, never out, unknown action.
+	o = out()
+	if r := o.ApplyNotDelivered(NotDeliveredUpdate{Action: NotDeliveredRetry, At: t0.Add(-time.Minute)}); r != FloorStale || o.Status() != StatusOnDelivery {
+		t.Fatalf("older event: %s %s", r, o.Status())
+	}
+	if r := o.ApplyNotDelivered(NotDeliveredUpdate{Action: "lost", At: t0.Add(time.Minute)}); r != FloorStale {
+		t.Fatalf("unknown action: %s", r)
+	}
+	accepted, _ := NewOrder(stubInput())
+	accepted.ApplyFloorUpdate(FloorUpdate{Status: StatusAccepted, At: t0})
+	for _, a := range []string{NotDeliveredRetry, NotDeliveredCancel} {
+		if r := accepted.ApplyNotDelivered(NotDeliveredUpdate{Action: a, At: t0.Add(time.Minute)}); r != FloorStale || accepted.Status() != StatusAccepted {
+			t.Fatalf("%s on an accepted order: %s %s", a, r, accepted.Status())
+		}
+	}
+	rejected, _ := NewOrder(stubInput())
+	rejected.Transition(StatusRejected, "system", [16]byte{}, "bad")
+	if r := rejected.ApplyNotDelivered(NotDeliveredUpdate{Action: NotDeliveredCancel}); r != FloorStale || rejected.Status() != StatusRejected {
+		t.Fatalf("rejected: %s %s", r, rejected.Status())
+	}
+}

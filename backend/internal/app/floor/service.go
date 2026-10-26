@@ -51,6 +51,8 @@ type event struct {
 	DriverID string     `json:"driver_id"`
 	ClockIn  time.Time  `json:"clock_in"`
 	ClockOut *time.Time `json:"clock_out"`
+	// order.not_delivered (2.2.1): retry | cancel
+	Action string `json:"action"`
 	// delivery.run (2.0.9)
 	PlanID       string          `json:"plan_id"`
 	SuggestedIDs []string        `json:"suggested_ids"`
@@ -142,6 +144,8 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 	switch ev.Type {
 	case "order.status":
 		return s.applyStatus(ctx, sc, eid, ev)
+	case "order.not_delivered":
+		return s.applyNotDelivered(ctx, sc, eid, ev)
 	case "drivers.roster":
 		drivers := make([]order.Driver, 0, len(ev.Drivers))
 		for _, d := range ev.Drivers {
@@ -187,7 +191,7 @@ func (s *Service) applyStatus(ctx context.Context, sc order.Scope, eid uuid.UUID
 		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 	}
 	var newStatus order.Status
-	out, err := s.repo.ApplyFloorUpdate(ctx, sc, order.ID(oid), eid, func(o *order.Order) string {
+	out, err := s.repo.ApplyFloorUpdate(ctx, sc, order.ID(oid), eid, ev.Type, func(o *order.Order) string {
 		res := o.ApplyFloorUpdate(order.FloorUpdate{
 			Status: status, KitchenNumber: ev.KitchenNumber, EstimatedReadyAt: ev.EstimatedReadyAt,
 			DriverName: ev.DriverName, At: ev.At, Auto: ev.Auto,
@@ -205,14 +209,44 @@ func (s *Service) applyStatus(ctx context.Context, sc order.Scope, eid uuid.UUID
 	if out == order.FloorApplied {
 		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Str("status", string(newStatus)).Msg("floor update applied")
 	}
-	// Keep the agent's own view of the order (even for a skipped / duplicate
-	// event — the store is guarded by `at`) so a replacement Pi can restore it.
+	return out, s.keepAgentStatus(ctx, sc, oid, ev)
+}
+
+// keepAgentStatus stores the agent's own view of the order (even for a
+// skipped / duplicate event — the store is guarded by `at`) so a replacement
+// Pi can restore it.
+func (s *Service) keepAgentStatus(ctx context.Context, sc order.Scope, oid uuid.UUID, ev event) error {
 	if len(ev.AgentStatus) > 0 && string(ev.AgentStatus) != "null" && !ev.At.IsZero() {
-		if err := s.repo.SetAgentStatus(ctx, sc, oid, ev.AgentStatus, ev.BatchID, ev.At); err != nil {
-			return "", err
-		}
+		return s.repo.SetAgentStatus(ctx, sc, oid, ev.AgentStatus, ev.BatchID, ev.At)
 	}
-	return out, nil
+	return nil
+}
+
+// applyNotDelivered: a delivery came back with its driver (2.2.1) — retry →
+// ready with no driver, cancel → cancelled. The only floor event that may move
+// an order backwards (order.ApplyNotDelivered).
+func (s *Service) applyNotDelivered(ctx context.Context, sc order.Scope, eid uuid.UUID, ev event) (string, error) {
+	oid, err := uuid.Parse(ev.OrderID)
+	if err != nil || (ev.Action != order.NotDeliveredRetry && ev.Action != order.NotDeliveredCancel) {
+		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
+	}
+	var newStatus order.Status
+	out, err := s.repo.ApplyFloorUpdate(ctx, sc, order.ID(oid), eid, ev.Type, func(o *order.Order) string {
+		res := o.ApplyNotDelivered(order.NotDeliveredUpdate{Action: ev.Action, At: ev.At, Auto: ev.Auto})
+		newStatus = o.Status()
+		return res
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return s.seen(ctx, sc, eid, &oid, ev.Type, order.FloorNotFound)
+	}
+	if err != nil {
+		return "", err
+	}
+	if out == order.FloorApplied {
+		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Str("action", ev.Action).Str("status", string(newStatus)).
+			Msg("not delivered applied")
+	}
+	return out, s.keepAgentStatus(ctx, sc, oid, ev)
 }
 
 func (s *Service) seen(ctx context.Context, sc order.Scope, eid uuid.UUID, oid *uuid.UUID, typ, result string) (string, error) {

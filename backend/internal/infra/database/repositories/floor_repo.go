@@ -18,7 +18,7 @@ var _ order.FloorRepository = (*OrderRepository)(nil)
 // the whole load → apply → write, so two floor POSTs for one order (an agent
 // retry overlapping the original) apply one after the other instead of the
 // second one writing back a stale status.
-func (r *OrderRepository) ApplyFloorUpdate(ctx context.Context, scope order.Scope, id order.ID, eventID uuid.UUID, apply func(o *order.Order) string) (string, error) {
+func (r *OrderRepository) ApplyFloorUpdate(ctx context.Context, scope order.Scope, id order.ID, eventID uuid.UUID, typ string, apply func(o *order.Order) string) (string, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("begin tx: %w", err)
@@ -47,7 +47,7 @@ func (r *OrderRepository) ApplyFloorUpdate(ctx context.Context, scope order.Scop
 		TenantID:   toPgUUID(uuid.UUID(o.TenantID())),
 		LocationID: toPgUUID(uuid.UUID(o.LocationID())),
 		OrderID:    toPgUUID(oid),
-		Type:       "order.status",
+		Type:       typ,
 		Result:     result,
 	})
 	if err != nil {

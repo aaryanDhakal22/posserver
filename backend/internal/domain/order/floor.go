@@ -159,6 +159,74 @@ func (o *Order) applyFloorCancel(u FloorUpdate) string {
 	return FloorApplied
 }
 
+// Not-delivered actions (agent floor event order.not_delivered, 2.2.1).
+const (
+	NotDeliveredRetry  = "retry"
+	NotDeliveredCancel = "cancel"
+)
+
+// NotDeliveredUpdate is the agent's order.not_delivered: a delivery came back
+// with its driver. Auto marks Close batch cancelling one that came back and
+// never went out again.
+type NotDeliveredUpdate struct {
+	Action string // retry | cancel
+	At     time.Time
+	Auto   bool
+}
+
+// ApplyNotDelivered is the one backwards step main takes from the floor: a
+// delivery the agent had out (or delivered) came back with its driver. retry
+// → ready with no driver (it goes out again later, forward as usual); cancel
+// → cancelled, so it never counts as delivered. retry applies to an order
+// main has on_delivery or completed (or ready with a driver still named);
+// cancel to one main has ready, on_delivery or completed. An event older than
+// the newest applied floor event is stale, as is an unknown action.
+func (o *Order) ApplyNotDelivered(u NotDeliveredUpdate) string {
+	at := u.At.UTC()
+	if at.IsZero() {
+		at = time.Now().UTC()
+	}
+	if o.floorAt != nil && at.Before(*o.floorAt) {
+		return FloorStale
+	}
+	from := o.status
+	var to Status
+	var reason string
+	switch u.Action {
+	case NotDeliveredRetry:
+		switch {
+		case o.status == StatusOnDelivery || o.status == StatusCompleted:
+			to, reason = StatusReady, "not delivered: came back with the driver, to go out again"
+		case o.status == StatusReady && o.driverName != "":
+			to = StatusReady // the driver only
+		default:
+			return FloorStale
+		}
+	case NotDeliveredCancel:
+		if o.status != StatusReady && o.status != StatusOnDelivery && o.status != StatusCompleted {
+			return FloorStale
+		}
+		to, reason = StatusCancelled, "not delivered: came back with the driver, cancelled"
+		if u.Auto {
+			reason = "not delivered: came back and not sent again before the batch was closed"
+		}
+	default:
+		return FloorStale
+	}
+	if to != from {
+		o.statusHistory = append(o.statusHistory, StatusEvent{From: from, To: to, At: at, Actor: "agent", Reason: reason})
+		o.status = to
+	}
+	o.driverName = ""
+	t := at
+	o.floorAt = &t
+	o.updatedAt = time.Now().UTC()
+	o.recordEvent(EventOrderStatusChanged, StatusChangedPayload{
+		From: string(from), To: string(o.status), Actor: "agent", Reason: reason, Snapshot: o.Snapshot(),
+	})
+	return FloorApplied
+}
+
 // DeliveryRun is one run a driver was sent out on (agent floor event
 // delivery.run, 2.0.9): AUTO's suggestion vs what was actually sent, kept for
 // tuning past the Pi's batch retention.
