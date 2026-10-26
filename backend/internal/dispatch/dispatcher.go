@@ -62,7 +62,10 @@ type Handler interface {
 // that handler has already tried it (outbox_dispatches.attempts) — the input
 // to the per-row exponential backoff.
 type PendingEvent struct {
-	Event    order.DomainEvent
+	Event order.DomainEvent
+	// TenantID is the event's store (outbox_events.tenant_id), for the
+	// tenant metric label on the dispatch hooks.
+	TenantID uuid.UUID
 	Attempts int
 }
 
@@ -98,8 +101,8 @@ type Dispatcher struct {
 // the dispatcher knowing about the meters package. Every method is called
 // outside the handler critical path. Pass a zero Hooks to disable.
 type Hooks struct {
-	OnEventDispatched func(handler string, eventType order.EventType)
-	OnEventFailed     func(handler string, eventType order.EventType, transient bool)
+	OnEventDispatched func(ctx context.Context, handler string, eventType order.EventType, tenantID uuid.UUID)
+	OnEventFailed     func(ctx context.Context, handler string, eventType order.EventType, tenantID uuid.UUID, transient bool)
 }
 
 type Option func(*Dispatcher)
@@ -223,7 +226,7 @@ func (d *Dispatcher) dispatchOne(ctx context.Context, h Handler, pe PendingEvent
 			return
 		}
 		if d.hooks.OnEventDispatched != nil {
-			d.hooks.OnEventDispatched(h.Name(), ev.Type)
+			d.hooks.OnEventDispatched(ctx, h.Name(), ev.Type, pe.TenantID)
 		}
 		return
 	}
@@ -249,7 +252,7 @@ func (d *Dispatcher) dispatchOne(ctx context.Context, h Handler, pe PendingEvent
 			Msg("MarkFailed failed; dispatch row will be retried but state is stale")
 	}
 	if d.hooks.OnEventFailed != nil {
-		d.hooks.OnEventFailed(h.Name(), ev.Type, transient)
+		d.hooks.OnEventFailed(ctx, h.Name(), ev.Type, pe.TenantID, transient)
 	}
 }
 

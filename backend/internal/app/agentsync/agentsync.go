@@ -131,11 +131,15 @@ func New(pool *pgxpool.Pool, orders OrderLoader, drivers DriverMirror, broker Br
 	s.pages, _ = m.Int64Counter("agents.offline_pages", metric.WithDescription("Agent-offline pages sent during opening hours"))
 	unacked, _ := m.Int64ObservableGauge("orders.unacked", metric.WithDescription("Orders an agent has not acked for over a minute (should be 0)"))
 	_, _ = m.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
-		n, err := models.New(pool).CountUnackedOrders(ctx, models.CountUnackedOrdersParams{
+		// One series per store (0 when none), so a store's series never goes stale.
+		rows, err := models.New(pool).CountUnackedOrdersByTenant(ctx, models.CountUnackedOrdersByTenantParams{
 			OlderThan: ts(time.Now().Add(-time.Minute)), NewerThan: ts(time.Now().Add(-12 * time.Hour)),
 		})
-		if err == nil {
-			o.ObserveInt64(unacked, n)
+		if err != nil {
+			return nil
+		}
+		for _, r := range rows {
+			o.ObserveInt64(unacked, r.Unacked, observability.WithStore(ctx, fromPg(r.TenantID)))
 		}
 		return nil
 	}, unacked)
@@ -178,7 +182,7 @@ func (s *Service) HandleAck(ctx context.Context, scope sseBroker.Scope, payload 
 	if err != nil {
 		return nil, err
 	}
-	s.acked.Add(ctx, n)
+	s.acked.Add(ctx, n, observability.WithStore(ctx, scope.TenantID))
 	return map[string]any{"acked": n}, nil
 }
 
@@ -240,7 +244,7 @@ func (s *Service) resend(ctx context.Context, scope sseBroker.Scope, id uuid.UUI
 	}
 	n := s.broker.Publish(ctx, scope, sseBroker.Frame{Event: sseBroker.EventOrder, Data: data})
 	if n > 0 {
-		s.redelivered.Add(ctx, 1)
+		s.redelivered.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID))
 		s.logger.Info().Ctx(ctx).Str("order_id", id.String()).Msg("order re-sent to agent (not acked yet)")
 	}
 	return n > 0

@@ -42,7 +42,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v5"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // version + commit are injected at build time via -ldflags. CI passes them
@@ -131,6 +130,9 @@ func main() {
 	defer pool.Close()
 	mainLogger.Info().Ctx(ctx).Msg("Connected to database")
 
+	// Metric store labels (tenant / location slug), cached per store.
+	observability.SetStoreLookup(repositories.StoreSlugs(pool))
+
 	// --- Wiring order matters here:
 	// 1. Build the SSE broker (no waker yet).
 	// 2. Build the SSE handler that adapts the broker to the dispatch.Handler interface.
@@ -166,14 +168,14 @@ func main() {
 	outboxRepo := repositories.NewOutboxRepository(pool, lgr)
 
 	hooks := dispatch.Hooks{
-		OnEventDispatched: func(handler string, ev order.EventType) {
-			meters.OutboxDispatched.Add(ctx, 1, metric.WithAttributes(
+		OnEventDispatched: func(ctx context.Context, handler string, ev order.EventType, tenantID uuid.UUID) {
+			meters.OutboxDispatched.Add(ctx, 1, observability.WithStore(ctx, tenantID,
 				attribute.String("handler", handler),
 				attribute.String("event_type", string(ev)),
 			))
 		},
-		OnEventFailed: func(handler string, ev order.EventType, transient bool) {
-			meters.OutboxFailed.Add(ctx, 1, metric.WithAttributes(
+		OnEventFailed: func(ctx context.Context, handler string, ev order.EventType, tenantID uuid.UUID, transient bool) {
+			meters.OutboxFailed.Add(ctx, 1, observability.WithStore(ctx, tenantID,
 				attribute.String("handler", handler),
 				attribute.String("event_type", string(ev)),
 				attribute.Bool("transient", transient),

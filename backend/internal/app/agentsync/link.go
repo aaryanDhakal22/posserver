@@ -8,10 +8,10 @@ import (
 	"time"
 
 	tenancyApp "quiccpos/main/internal/app/tenancy"
+	"quiccpos/main/internal/observability"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // LinkRequest is what a blank agent sends after a manager types the store
@@ -109,7 +109,7 @@ func (s *Service) Link(ctx context.Context, req LinkRequest) (*LinkResult, error
 	if err != nil {
 		return nil, fmt.Errorf("manager credential: %w", err)
 	}
-	s.links.Add(ctx, 1, metric.WithAttributes(attribute.Bool("replaced", len(revoked) > 0)))
+	s.links.Add(ctx, 1, observability.WithStore(ctx, tenant.ID, attribute.Bool("replaced", len(revoked) > 0)))
 	s.logger.Info().Ctx(ctx).Str("tenant", tenant.Slug).Str("device_id", minted.Device.ID.String()).Str("remote", req.RemoteAddr).
 		Int("revoked_agents", len(revoked)).Msg("agent linked with the manager login")
 	if len(revoked) > 0 {

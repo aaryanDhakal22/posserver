@@ -241,8 +241,8 @@ func TestDispatcher_HooksFire(t *testing.T) {
 
 	var dispatched, failed atomic.Int32
 	hooks := Hooks{
-		OnEventDispatched: func(handler string, _ order.EventType) { dispatched.Add(1) },
-		OnEventFailed:     func(handler string, _ order.EventType, _ bool) { failed.Add(1) },
+		OnEventDispatched: func(_ context.Context, handler string, _ order.EventType, _ uuid.UUID) { dispatched.Add(1) },
+		OnEventFailed:     func(_ context.Context, handler string, _ order.EventType, _ uuid.UUID, _ bool) { failed.Add(1) },
 	}
 	d := New(repo, []Handler{hSucc, hFail}, zerolog.Nop(),
 		WithPollInterval(15*time.Millisecond), WithHooks(hooks))

@@ -15,7 +15,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -73,13 +72,13 @@ func NewRequester(pub CommandPublisher, meters observability.Meters, lg zerolog.
 // reply (matched by correlation id) or a timeout. ErrAgentOffline if no agent
 // is connected to that scope.
 func (r *Requester) Request(ctx context.Context, scope sseBroker.Scope, msgType string, payload any, timeout time.Duration) (Envelope, error) {
-	typeAttr := metric.WithAttributes(attribute.String("type", msgType))
-
 	ctx, span := r.tracer.Start(ctx, "rpc.request",
 		trace.WithSpanKind(trace.SpanKindClient),
 		trace.WithAttributes(attribute.String("rpc.type", msgType)),
 	)
 	defer span.End()
+
+	typeAttr := observability.WithStore(ctx, scope.TenantID, attribute.String("type", msgType))
 
 	r.meters.RPCRequests.Add(ctx, 1, typeAttr)
 	start := time.Now()
@@ -122,7 +121,7 @@ func (r *Requester) Request(ctx context.Context, scope sseBroker.Scope, msgType 
 	select {
 	case reply := <-ch:
 		r.meters.RPCRoundtrip.Record(ctx, msSince(start), typeAttr)
-		r.meters.RPCReplies.Add(ctx, 1, metric.WithAttributes(
+		r.meters.RPCReplies.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID,
 			attribute.String("type", msgType),
 			attribute.String("result", "ok"),
 		))
@@ -182,7 +181,7 @@ func (r *Requester) DispatchInbound(ctx context.Context, scope sseBroker.Scope, 
 	h, ok := r.inbound[env.Type]
 	r.mu.Unlock()
 	if !ok {
-		r.meters.RPCInbound.Add(ctx, 1, metric.WithAttributes(
+		r.meters.RPCInbound.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID,
 			attribute.String("type", env.Type),
 			attribute.String("result", "unknown"),
 		))
@@ -192,13 +191,13 @@ func (r *Requester) DispatchInbound(ctx context.Context, scope sseBroker.Scope, 
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "inbound handler failed")
-		r.meters.RPCInbound.Add(ctx, 1, metric.WithAttributes(
+		r.meters.RPCInbound.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID,
 			attribute.String("type", env.Type),
 			attribute.String("result", "error"),
 		))
 		return Envelope{}, true, err
 	}
-	r.meters.RPCInbound.Add(ctx, 1, metric.WithAttributes(
+	r.meters.RPCInbound.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID,
 		attribute.String("type", env.Type),
 		attribute.String("result", "ok"),
 	))

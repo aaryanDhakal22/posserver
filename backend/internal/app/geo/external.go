@@ -10,13 +10,13 @@ import (
 
 	"quiccpos/main/internal/infra/database/models"
 	sseBroker "quiccpos/main/internal/infra/sse"
+	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // External stops (2.1.0): a delivery main has no order for — a POS check the
@@ -280,7 +280,7 @@ func (s *Service) locateStop(ctx context.Context, scope sseBroker.Scope, id uuid
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return false, err
 	}
-	in := locateIn{}
+	in := locateIn{tenantID: scope.TenantID, external: true}
 	created := st.CreatedAt.Time
 	if l, err := s.q.GetLocationGeo(ctx, models.GetLocationGeoParams{LocationID: pgUUID(scope.LocationID), TenantID: pgUUID(scope.TenantID)}); err == nil {
 		in.radiusM = int(l.DeliveryRadiusM)
@@ -358,7 +358,7 @@ func (s *Service) locateStop(ctx context.Context, scope sseBroker.Scope, id uuid
 	if !saved {
 		return false, nil
 	}
-	s.located.Add(ctx, 1, metric.WithAttributes(attribute.String("result", res.state), attribute.String("kind", "external")))
+	s.located.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID, attribute.String("result", res.state), attribute.String("kind", "external")))
 	s.logger.Info().Ctx(ctx).Str("order_id", id.String()).Str("state", res.state).Str("quality", res.quality).
 		Bool("outside_area", res.outside).Int("candidates", len(res.candidates)).Str("note", res.lastErr).Msg("geo: external stop located")
 	return true, nil

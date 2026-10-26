@@ -473,9 +473,18 @@ SET attempts        = attempts + 1,
     next_attempt_at = $4
 WHERE event_id = $1 AND handler_name = $2;
 
--- name: CountPendingDispatches :one
-SELECT COUNT(*) FROM outbox_dispatches
-WHERE handler_name = $1 AND dispatched_at IS NULL;
+-- name: CountPendingDispatchesByTenant :many
+-- outbox.events.pending per store: one row per tenant (0 when drained), so a
+-- store's series never goes stale while it exists.
+SELECT t.id AS tenant_id, COALESCE(p.n, 0)::bigint AS pending
+FROM tenants t
+LEFT JOIN (
+    SELECT e.tenant_id, COUNT(*) AS n
+    FROM outbox_dispatches d
+    JOIN outbox_events e ON e.id = d.event_id
+    WHERE d.handler_name = $1 AND d.dispatched_at IS NULL
+    GROUP BY e.tenant_id
+) p ON p.tenant_id = t.id;
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Menu module
@@ -759,10 +768,26 @@ WHERE agent_ack_at IS NULL AND status = 'received'
 ORDER BY received_at ASC
 LIMIT sqlc.arg(max_rows);
 
--- name: CountUnackedOrders :one
-SELECT count(*) FROM orders
-WHERE agent_ack_at IS NULL AND status = 'received'
-  AND received_at < sqlc.arg(older_than) AND received_at > sqlc.arg(newer_than);
+-- name: CountUnackedOrdersByTenant :many
+-- orders.unacked per store: one row per tenant (0 when none).
+SELECT t.id AS tenant_id, COALESCE(u.n, 0)::bigint AS unacked
+FROM tenants t
+LEFT JOIN (
+    SELECT tenant_id, count(*) AS n FROM orders
+    WHERE agent_ack_at IS NULL AND status = 'received'
+      AND received_at < sqlc.arg(older_than) AND received_at > sqlc.arg(newer_than)
+    GROUP BY tenant_id
+) u ON u.tenant_id = t.id;
+
+-- name: GetStoreSlugs :one
+-- Metric labels (observability.StoreLabels): tenant + location slug by a
+-- tenant id or a location id (pass uuid.Nil for the other one).
+SELECT t.slug AS tenant_slug, l.slug AS location_slug
+FROM tenants t
+JOIN locations l ON l.tenant_id = t.id
+WHERE t.id = sqlc.arg(tenant_id) OR l.id = sqlc.arg(location_id)
+ORDER BY l.created_at
+LIMIT 1;
 
 -- name: SetOrderAgentStatus :execrows
 UPDATE orders

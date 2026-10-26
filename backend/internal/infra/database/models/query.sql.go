@@ -78,34 +78,85 @@ func (q *Queries) CountItemsForGroup(ctx context.Context, arg CountItemsForGroup
 	return count, err
 }
 
-const countPendingDispatches = `-- name: CountPendingDispatches :one
-SELECT COUNT(*) FROM outbox_dispatches
-WHERE handler_name = $1 AND dispatched_at IS NULL
+const countPendingDispatchesByTenant = `-- name: CountPendingDispatchesByTenant :many
+SELECT t.id AS tenant_id, COALESCE(p.n, 0)::bigint AS pending
+FROM tenants t
+LEFT JOIN (
+    SELECT e.tenant_id, COUNT(*) AS n
+    FROM outbox_dispatches d
+    JOIN outbox_events e ON e.id = d.event_id
+    WHERE d.handler_name = $1 AND d.dispatched_at IS NULL
+    GROUP BY e.tenant_id
+) p ON p.tenant_id = t.id
 `
 
-func (q *Queries) CountPendingDispatches(ctx context.Context, handlerName string) (int64, error) {
-	row := q.db.QueryRow(ctx, countPendingDispatches, handlerName)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+type CountPendingDispatchesByTenantRow struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Pending  int64       `json:"pending"`
 }
 
-const countUnackedOrders = `-- name: CountUnackedOrders :one
-SELECT count(*) FROM orders
-WHERE agent_ack_at IS NULL AND status = 'received'
-  AND received_at < $1 AND received_at > $2
+// outbox.events.pending per store: one row per tenant (0 when drained), so a
+// store's series never goes stale while it exists.
+func (q *Queries) CountPendingDispatchesByTenant(ctx context.Context, handlerName string) ([]CountPendingDispatchesByTenantRow, error) {
+	rows, err := q.db.Query(ctx, countPendingDispatchesByTenant, handlerName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountPendingDispatchesByTenantRow
+	for rows.Next() {
+		var i CountPendingDispatchesByTenantRow
+		if err := rows.Scan(&i.TenantID, &i.Pending); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const countUnackedOrdersByTenant = `-- name: CountUnackedOrdersByTenant :many
+SELECT t.id AS tenant_id, COALESCE(u.n, 0)::bigint AS unacked
+FROM tenants t
+LEFT JOIN (
+    SELECT tenant_id, count(*) AS n FROM orders
+    WHERE agent_ack_at IS NULL AND status = 'received'
+      AND received_at < $1 AND received_at > $2
+    GROUP BY tenant_id
+) u ON u.tenant_id = t.id
 `
 
-type CountUnackedOrdersParams struct {
+type CountUnackedOrdersByTenantParams struct {
 	OlderThan pgtype.Timestamptz `json:"older_than"`
 	NewerThan pgtype.Timestamptz `json:"newer_than"`
 }
 
-func (q *Queries) CountUnackedOrders(ctx context.Context, arg CountUnackedOrdersParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countUnackedOrders, arg.OlderThan, arg.NewerThan)
-	var count int64
-	err := row.Scan(&count)
-	return count, err
+type CountUnackedOrdersByTenantRow struct {
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Unacked  int64       `json:"unacked"`
+}
+
+// orders.unacked per store: one row per tenant (0 when none).
+func (q *Queries) CountUnackedOrdersByTenant(ctx context.Context, arg CountUnackedOrdersByTenantParams) ([]CountUnackedOrdersByTenantRow, error) {
+	rows, err := q.db.Query(ctx, countUnackedOrdersByTenant, arg.OlderThan, arg.NewerThan)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountUnackedOrdersByTenantRow
+	for rows.Next() {
+		var i CountUnackedOrdersByTenantRow
+		if err := rows.Scan(&i.TenantID, &i.Unacked); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const createAppRelease = `-- name: CreateAppRelease :one
@@ -2311,6 +2362,34 @@ func (q *Queries) GetStatusEventsByOrderID(ctx context.Context, orderID pgtype.U
 		return nil, err
 	}
 	return items, nil
+}
+
+const getStoreSlugs = `-- name: GetStoreSlugs :one
+SELECT t.slug AS tenant_slug, l.slug AS location_slug
+FROM tenants t
+JOIN locations l ON l.tenant_id = t.id
+WHERE t.id = $1 OR l.id = $2
+ORDER BY l.created_at
+LIMIT 1
+`
+
+type GetStoreSlugsParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+type GetStoreSlugsRow struct {
+	TenantSlug   string `json:"tenant_slug"`
+	LocationSlug string `json:"location_slug"`
+}
+
+// Metric labels (observability.StoreLabels): tenant + location slug by a
+// tenant id or a location id (pass uuid.Nil for the other one).
+func (q *Queries) GetStoreSlugs(ctx context.Context, arg GetStoreSlugsParams) (GetStoreSlugsRow, error) {
+	row := q.db.QueryRow(ctx, getStoreSlugs, arg.TenantID, arg.LocationID)
+	var i GetStoreSlugsRow
+	err := row.Scan(&i.TenantSlug, &i.LocationSlug)
+	return i, err
 }
 
 const getTenantAuthByUsername = `-- name: GetTenantAuthByUsername :one

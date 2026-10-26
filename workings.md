@@ -351,13 +351,13 @@ state.
 
 ```go
 func (d *Dispatcher) dispatchOne(ctx context.Context, h Handler, pe PendingEvent) {
-    ev := pe.Event // PendingEvent{Event, Attempts} — attempts from outbox_dispatches
+    ev := pe.Event // PendingEvent{Event, TenantID, Attempts} — attempts from outbox_dispatches
     // …span setup elided…
     err := h.Handle(ctx, ev)
     if err == nil {
         d.repo.MarkDispatched(ctx, ev.ID, h.Name())
         if d.hooks.OnEventDispatched != nil {
-            d.hooks.OnEventDispatched(h.Name(), ev.Type)
+            d.hooks.OnEventDispatched(ctx, h.Name(), ev.Type, pe.TenantID)
         }
         return
     }
@@ -377,7 +377,9 @@ func backoffDelay(attempts int, transient bool, randN func(int64) int64) time.Du
 ```
 
 `Hooks.OnEventDispatched` / `OnEventFailed` are how the bootstrap wires the
-dispatcher into the OTEL meters without the dispatcher importing `metric`.
+dispatcher into the OTEL meters without the dispatcher importing `metric`;
+they get the event's tenant id (`outbox_events.tenant_id`) so the outbox
+counters carry the `tenant` / `location` store labels.
 
 ---
 

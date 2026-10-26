@@ -101,8 +101,9 @@ func (h *SSEHandler) StreamOrders(c *echo.Context) error {
 	ch, unsub := h.broker.SubscribeAs(ctx, scope, deviceID)
 	defer unsub()
 
-	h.meters.SSEClientsActive.Add(ctx, 1)
-	defer h.meters.SSEClientsActive.Add(ctx, -1)
+	storeAttrs := observability.WithStore(ctx, scope.TenantID)
+	h.meters.SSEClientsActive.Add(ctx, 1, storeAttrs)
+	defer h.meters.SSEClientsActive.Add(ctx, -1, storeAttrs)
 
 	h.logger.Info().Ctx(ctx).Msg("agent connected to SSE stream")
 

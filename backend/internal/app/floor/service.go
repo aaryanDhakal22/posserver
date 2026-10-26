@@ -21,7 +21,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // MsgFloorEvents is the RPC report type the agent sends.
@@ -122,7 +121,7 @@ func (s *Service) Handle(ctx context.Context, scope sseBroker.Scope, payload jso
 		if err != nil {
 			return nil, err
 		}
-		s.meters.FloorEventsReceived.Add(ctx, 1, metric.WithAttributes(
+		s.meters.FloorEventsReceived.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID,
 			attribute.String("type", ev.Type), attribute.String("result", res)))
 		results = append(results, Result{EventID: ev.EventID, Result: res})
 	}

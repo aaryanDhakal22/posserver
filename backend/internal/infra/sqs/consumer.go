@@ -22,7 +22,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -245,7 +244,7 @@ func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 		// Missing or malformed tenant/location attributes — permanent config
 		// failure on the producer side. Surface in metrics + DLQ via redrive.
 		span.SetStatus(codes.Error, "missing_scope")
-		c.meters.OrdersCastFailed.Add(ctx, 1, metric.WithAttributes(
+		c.meters.OrdersCastFailed.Add(ctx, 1, observability.WithUnrouted(
 			attribute.String("source", string(source)),
 			attribute.String("reason", "missing_scope"),
 		))
@@ -257,7 +256,7 @@ func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 	caster, ok := c.casters[source]
 	if !ok {
 		span.SetStatus(codes.Error, "unknown_source")
-		c.meters.OrdersCastFailed.Add(ctx, 1, metric.WithAttributes(
+		c.meters.OrdersCastFailed.Add(ctx, 1, observability.WithUnrouted(
 			attribute.String("source", string(source)),
 			attribute.String("reason", "unknown_source"),
 		))
@@ -282,7 +281,7 @@ func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "cast_failed")
-		c.meters.OrdersCastFailed.Add(ctx, 1, metric.WithAttributes(
+		c.meters.OrdersCastFailed.Add(ctx, 1, observability.WithUnrouted(
 			attribute.String("source", string(source)),
 			attribute.String("reason", "cast_error"),
 		))
@@ -298,7 +297,8 @@ func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 		attribute.Int("order.item_count", len(agg.Items())),
 	)
 
-	c.meters.OrdersConsumed.Add(ctx, 1, metric.WithAttributes(
+	tenantUUID := uuid.UUID(agg.TenantID())
+	c.meters.OrdersConsumed.Add(ctx, 1, observability.WithStore(ctx, tenantUUID,
 		attribute.String("source", string(agg.Source())),
 		attribute.String("service_type", string(agg.Fulfillment().Type)),
 	))
@@ -307,12 +307,12 @@ func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 		if errors.Is(err, order.ErrDuplicate) {
 			// Already in the DB — safe to delete from the queue.
 			c.deleteMessage(ctx, msg, msgID, agg.ID())
-			c.meters.OrdersPersisted.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "duplicate")))
+			c.meters.OrdersPersisted.Add(ctx, 1, observability.WithStore(ctx, tenantUUID, attribute.String("result", "duplicate")))
 			return
 		}
 		span.RecordError(err)
 		span.SetStatus(codes.Error, "persist_failed")
-		c.meters.OrdersPersistFailed.Add(ctx, 1, metric.WithAttributes(
+		c.meters.OrdersPersistFailed.Add(ctx, 1, observability.WithStore(ctx, tenantUUID,
 			attribute.String("source", string(agg.Source())),
 		))
 		c.logger.Error().Ctx(ctx).Err(err).
@@ -322,7 +322,7 @@ func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 			Msg("failed to persist order, leaving on queue for retry")
 		return
 	}
-	c.meters.OrdersPersisted.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "ok")))
+	c.meters.OrdersPersisted.Add(ctx, 1, observability.WithStore(ctx, tenantUUID, attribute.String("result", "ok")))
 
 	c.deleteMessage(ctx, msg, msgID, agg.ID())
 

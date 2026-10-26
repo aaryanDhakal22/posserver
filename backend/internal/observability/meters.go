@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -14,9 +15,10 @@ const MeterName = "quiccpos/main"
 
 // PendingDispatchSource is satisfied by the outbox repo. The observable
 // gauge callback queries it once per scrape, per registered handler, to
-// publish the current pending-dispatch depth.
+// publish the current pending-dispatch depth per store (every tenant, 0 when
+// drained).
 type PendingDispatchSource interface {
-	CountPending(ctx context.Context, handlerName string) (int, error)
+	CountPendingByTenant(ctx context.Context, handlerName string) (map[uuid.UUID]int, error)
 }
 
 // Meters bundles main's custom metric instruments. Auto instruments come
@@ -286,15 +288,17 @@ func RegisterPendingDispatch(meters Meters, src PendingDispatchSource, handlerNa
 	_, err := m.RegisterCallback(
 		func(ctx context.Context, o metric.Observer) error {
 			for _, name := range handlerNames {
-				n, err := src.CountPending(ctx, name)
+				byTenant, err := src.CountPendingByTenant(ctx, name)
 				if err != nil {
 					// Don't fail the scrape on a transient DB error; just
 					// skip this handler's reading and try again next tick.
 					continue
 				}
-				o.ObserveInt64(meters.OutboxPending, int64(n),
-					metric.WithAttributes(attribute.String("handler", name)),
-				)
+				for tenantID, n := range byTenant {
+					o.ObserveInt64(meters.OutboxPending, int64(n),
+						WithStore(ctx, tenantID, attribute.String("handler", name)),
+					)
+				}
 			}
 			return nil
 		},

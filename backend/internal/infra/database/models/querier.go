@@ -16,8 +16,11 @@ type Querier interface {
 	// Unflag the location's current receipt printer (one per location).
 	ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error
 	CountItemsForGroup(ctx context.Context, arg CountItemsForGroupParams) (int64, error)
-	CountPendingDispatches(ctx context.Context, handlerName string) (int64, error)
-	CountUnackedOrders(ctx context.Context, arg CountUnackedOrdersParams) (int64, error)
+	// outbox.events.pending per store: one row per tenant (0 when drained), so a
+	// store's series never goes stale while it exists.
+	CountPendingDispatchesByTenant(ctx context.Context, handlerName string) ([]CountPendingDispatchesByTenantRow, error)
+	// orders.unacked per store: one row per tenant (0 when none).
+	CountUnackedOrdersByTenant(ctx context.Context, arg CountUnackedOrdersByTenantParams) ([]CountUnackedOrdersByTenantRow, error)
 	// App releases (Quibase APKs) ----------------------------------------------------
 	CreateAppRelease(ctx context.Context, arg CreateAppReleaseParams) (CreateAppReleaseRow, error)
 	// ───────────────────────────────────────────────────────────────────────────
@@ -138,6 +141,9 @@ type Querier interface {
 	GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error)
 	GetPrinterByID(ctx context.Context, id pgtype.UUID) (Printer, error)
 	GetStatusEventsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]StatusEvent, error)
+	// Metric labels (observability.StoreLabels): tenant + location slug by a
+	// tenant id or a location id (pass uuid.Nil for the other one).
+	GetStoreSlugs(ctx context.Context, arg GetStoreSlugsParams) (GetStoreSlugsRow, error)
 	// Login lookup: tenant id + stored password hash for a username.
 	GetTenantAuthByUsername(ctx context.Context, username pgtype.Text) (GetTenantAuthByUsernameRow, error)
 	GetTenantByID(ctx context.Context, id pgtype.UUID) (Tenant, error)
