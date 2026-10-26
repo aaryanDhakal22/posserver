@@ -515,7 +515,7 @@ func (s *Service) RouteItems(ctx context.Context, locationID uuid.UUID, names []
 			id, pid := e.ItemID, *e.PrinterID
 			out[i] = order.ItemRoute{MenuItemID: &id, PrinterID: &pid, Routing: order.RoutingMatched}
 		}
-		s.meters.OrderItemsRouted.Add(ctx, 1, metric.WithAttributes(attribute.String("routing", string(out[i].Routing))))
+		s.meters.OrderItemsRouted.Add(ctx, 1, observability.WithLocation(ctx, locationID, attribute.String("routing", string(out[i].Routing))))
 	}
 	return out, nil
 }

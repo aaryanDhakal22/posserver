@@ -90,6 +90,7 @@ type Service struct {
 
 	redelivered metric.Int64Counter
 	acked       metric.Int64Counter
+	ackLatency  metric.Float64Histogram
 	links       metric.Int64Counter
 	pages       metric.Int64Counter
 
@@ -127,15 +128,20 @@ func New(pool *pgxpool.Pool, orders OrderLoader, drivers DriverMirror, broker Br
 	}
 	s.redelivered, _ = m.Int64Counter("orders.redelivered", metric.WithDescription("Orders re-sent to an agent that had not acked them"))
 	s.acked, _ = m.Int64Counter("orders.agent_acked", metric.WithDescription("Orders acknowledged by an agent"))
+	s.ackLatency, _ = observability.NewHopHistogram(m, "orders.ack.latency", "Order persisted → acked by the agent (order.ack)")
 	s.links, _ = m.Int64Counter("agents.linked", metric.WithDescription("Agents linked with a manager login (Pi set up / replaced)"))
 	s.pages, _ = m.Int64Counter("agents.offline_pages", metric.WithDescription("Agent-offline pages sent during opening hours"))
 	unacked, _ := m.Int64ObservableGauge("orders.unacked", metric.WithDescription("Orders an agent has not acked for over a minute (should be 0)"))
 	_, _ = m.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
-		n, err := models.New(pool).CountUnackedOrders(ctx, models.CountUnackedOrdersParams{
+		// One series per store (0 when none), so a store's series never goes stale.
+		rows, err := models.New(pool).CountUnackedOrdersByTenant(ctx, models.CountUnackedOrdersByTenantParams{
 			OlderThan: ts(time.Now().Add(-time.Minute)), NewerThan: ts(time.Now().Add(-12 * time.Hour)),
 		})
-		if err == nil {
-			o.ObserveInt64(unacked, n)
+		if err != nil {
+			return nil
+		}
+		for _, r := range rows {
+			o.ObserveInt64(unacked, r.Unacked, observability.WithStore(ctx, fromPg(r.TenantID)))
 		}
 		return nil
 	}, unacked)
@@ -172,13 +178,23 @@ func (s *Service) HandleAck(ctx context.Context, scope sseBroker.Scope, payload 
 	if len(ids) == 0 {
 		return map[string]any{"acked": 0}, nil
 	}
-	n, err := models.New(s.pool).MarkOrdersAcked(ctx, models.MarkOrdersAckedParams{
+	received, err := models.New(s.pool).MarkOrdersAcked(ctx, models.MarkOrdersAckedParams{
 		TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID), Ids: ids,
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.acked.Add(ctx, n)
+	n := int64(len(received))
+	store := observability.WithStore(ctx, scope.TenantID)
+	s.acked.Add(ctx, n, store)
+	// Only first acks (agent_ack_at was NULL), so a repeated ack never
+	// re-measures. received_at = when main persisted the order.
+	now := time.Now()
+	for _, r := range received {
+		if r.Valid {
+			observability.RecordLatency(ctx, s.ackLatency, r.Time, now, store)
+		}
+	}
 	return map[string]any{"acked": n}, nil
 }
 
@@ -240,7 +256,7 @@ func (s *Service) resend(ctx context.Context, scope sseBroker.Scope, id uuid.UUI
 	}
 	n := s.broker.Publish(ctx, scope, sseBroker.Frame{Event: sseBroker.EventOrder, Data: data})
 	if n > 0 {
-		s.redelivered.Add(ctx, 1)
+		s.redelivered.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID))
 		s.logger.Info().Ctx(ctx).Str("order_id", id.String()).Msg("order re-sent to agent (not acked yet)")
 	}
 	return n > 0
@@ -299,6 +315,10 @@ type AgentHealth struct {
 	Connected    bool            `json:"connected"`
 	At           time.Time       `json:"at"`
 	Health       json.RawMessage `json:"health"`
+	// Tablets (2.2.0) are the report's paired tablets with their Quibase
+	// version [{device_id, name, app_version, last_seen_at, connected}];
+	// [] from an older agent.
+	Tablets json.RawMessage `json:"tablets"`
 }
 
 // Fleet lists every location's latest health + whether its agent is connected.
@@ -311,9 +331,20 @@ func (s *Service) Fleet(ctx context.Context) ([]AgentHealth, error) {
 	for _, r := range rows {
 		sc := sseBroker.Scope{TenantID: fromPg(r.TenantID), LocationID: fromPg(r.LocationID)}
 		out = append(out, AgentHealth{LocationID: sc.LocationID, TenantID: sc.TenantID, LocationName: r.LocationName,
-			Connected: s.broker.SubscribersFor(sc) > 0, At: r.At.Time, Health: r.Health})
+			Connected: s.broker.SubscribersFor(sc) > 0, At: r.At.Time, Health: r.Health, Tablets: healthTablets(r.Health)})
 	}
 	return out, nil
+}
+
+// healthTablets pulls the tablets array out of an agent.health report.
+func healthTablets(raw []byte) json.RawMessage {
+	var h struct {
+		Tablets json.RawMessage `json:"tablets"`
+	}
+	if json.Unmarshal(raw, &h) != nil || len(h.Tablets) == 0 || h.Tablets[0] != '[' {
+		return json.RawMessage(`[]`)
+	}
+	return h.Tablets
 }
 
 // errNotLinked etc. are mapped to HTTP statuses by the handler.

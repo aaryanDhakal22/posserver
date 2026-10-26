@@ -20,7 +20,6 @@ import (
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -225,7 +224,7 @@ func (b *Broker) Publish(ctx context.Context, scope Scope, frame Frame) int {
 	if subs > 0 {
 		result = "delivered"
 	}
-	b.meters.SSEEventsBroadcast.Add(ctx, 1, metric.WithAttributes(
+	b.meters.SSEEventsBroadcast.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID,
 		attribute.String("event_type", frame.Event),
 		attribute.String("result", result),
 	))

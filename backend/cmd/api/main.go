@@ -42,7 +42,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v5"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // version + commit are injected at build time via -ldflags. CI passes them
@@ -99,6 +98,9 @@ func main() {
 	if err != nil {
 		tmpLogger.Fatal().Err(err).Msg("Failed to create metric instruments")
 	}
+	if err := observability.RegisterInfo(version, commit); err != nil {
+		tmpLogger.Warn().Err(err).Msg("Failed to register main.info gauge")
+	}
 
 	lgr := logger.NewLogger(cfg.LogConfig.Level, cfg.LogConfig.Output, cfg.LogConfig.Style, cfg.OTELConfig.ServiceName)
 	mainLogger := lgr.With().Str("module", "main").Logger()
@@ -130,6 +132,9 @@ func main() {
 	}
 	defer pool.Close()
 	mainLogger.Info().Ctx(ctx).Msg("Connected to database")
+
+	// Metric store labels (tenant / location slug), cached per store.
+	observability.SetStoreLookup(repositories.StoreSlugs(pool))
 
 	// --- Wiring order matters here:
 	// 1. Build the SSE broker (no waker yet).
@@ -166,14 +171,20 @@ func main() {
 	outboxRepo := repositories.NewOutboxRepository(pool, lgr)
 
 	hooks := dispatch.Hooks{
-		OnEventDispatched: func(handler string, ev order.EventType) {
-			meters.OutboxDispatched.Add(ctx, 1, metric.WithAttributes(
+		OnEventDispatched: func(ctx context.Context, handler string, ev order.DomainEvent, tenantID uuid.UUID) {
+			meters.OutboxDispatched.Add(ctx, 1, observability.WithStore(ctx, tenantID,
 				attribute.String("handler", handler),
-				attribute.String("event_type", string(ev)),
+				attribute.String("event_type", string(ev.Type)),
 			))
+			// Only the order frame is a hop: the SSE handler skips every other
+			// event type. OccurredAt = when the order was received + persisted.
+			if handler == handlers.HandlerNameSSE && ev.Type == order.EventOrderReceived {
+				observability.RecordLatency(ctx, meters.OrdersDispatchLatency, ev.OccurredAt, time.Now(),
+					observability.WithStore(ctx, tenantID))
+			}
 		},
-		OnEventFailed: func(handler string, ev order.EventType, transient bool) {
-			meters.OutboxFailed.Add(ctx, 1, metric.WithAttributes(
+		OnEventFailed: func(ctx context.Context, handler string, ev order.EventType, tenantID uuid.UUID, transient bool) {
+			meters.OutboxFailed.Add(ctx, 1, observability.WithStore(ctx, tenantID,
 				attribute.String("handler", handler),
 				attribute.String("event_type", string(ev)),
 				attribute.Bool("transient", transient),
@@ -263,6 +274,8 @@ func main() {
 	requester.RegisterInbound(rpc.MsgGeoLocate, geoService.HandleLocate)
 	requester.RegisterInbound(rpc.MsgGeoForget, geoService.HandleForget)
 	requester.RegisterInbound(rpc.MsgGeoChoose, geoService.HandleChoose)
+	// 2.2.0: the tablet sets the delivery radius through the Pi.
+	requester.RegisterInbound(rpc.MsgLocationRadius, geoService.HandleRadius)
 	floorService.OnDeliveryRun(repositories.NewDeliveryRunStore(pool))
 	mainLogger.Info().Str("geo_providers", geoService.Providers().Name()).Msg("geo worker configured")
 	go geoService.Run(ctx)

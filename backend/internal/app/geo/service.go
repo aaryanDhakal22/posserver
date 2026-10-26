@@ -85,6 +85,13 @@ type Queries interface {
 	ListLiveExternalStops(ctx context.Context, arg models.ListLiveExternalStopsParams) ([]models.ListLiveExternalStopsRow, error)
 	ListExternalStopsByIDs(ctx context.Context, arg models.ListExternalStopsByIDsParams) ([]models.ListExternalStopsByIDsRow, error)
 	RequeueLocationExternalStops(ctx context.Context, arg models.RequeueLocationExternalStopsParams) (int64, error)
+
+	// 2.2.0 location.radius.
+	SetLocationDeliveryRadius(ctx context.Context, arg models.SetLocationDeliveryRadiusParams) (int64, error)
+	ListOpenLocatedOrderGeoForRadius(ctx context.Context, arg models.ListOpenLocatedOrderGeoForRadiusParams) ([]models.ListOpenLocatedOrderGeoForRadiusRow, error)
+	SetOrderGeoOutsideArea(ctx context.Context, arg models.SetOrderGeoOutsideAreaParams) (int64, error)
+	ListLiveExternalStopsForRadius(ctx context.Context, arg models.ListLiveExternalStopsForRadiusParams) ([]models.ListLiveExternalStopsForRadiusRow, error)
+	SetExternalStopOutsideArea(ctx context.Context, arg models.SetExternalStopOutsideAreaParams) (int64, error)
 }
 
 const (
@@ -387,9 +394,12 @@ type located struct {
 
 // locateIn is what one locate works from.
 type locateIn struct {
-	key     string // geo_cache key; "" = none
-	addr    Address
-	hasAddr bool
+	// tenantID + external: metric labels only (store; kind=external for a stop).
+	tenantID uuid.UUID
+	external bool
+	key      string // geo_cache key; "" = none
+	addr     Address
+	hasAddr  bool
 	// fixed: a point already decided (an external stop's pin / choice, or a
 	// re-route after the store moved) — no geocode.
 	fixed        *Point
@@ -411,7 +421,11 @@ func (s *Service) resolve(ctx context.Context, in locateIn, attempts int, create
 		if !ok {
 			return true, nil // caller saves the final result
 		}
-		s.located.Add(ctx, 1, metric.WithAttributes(attribute.String("result", "retry")))
+		attrs := []attribute.KeyValue{attribute.String("result", "retry")}
+		if in.external {
+			attrs = append(attrs, attribute.String("kind", "external"))
+		}
+		s.located.Add(ctx, 1, observability.WithStore(ctx, in.tenantID, attrs...))
 		s.logger.Info().Ctx(ctx).Err(cause).Time("next_try_at", next).Msg("geo: provider failure, will retry")
 		return false, saveRetry(next, cause)
 	}
@@ -515,7 +529,7 @@ func (s *Service) locate(ctx context.Context, scope sseBroker.Scope, id uuid.UUI
 		return false, err
 	}
 	addr, hasAddr := orderAddress(o.FulfillmentAddress)
-	in := locateIn{key: cacheKey(id, addr, hasAddr), hasAddr: hasAddr, radiusM: int(o.DeliveryRadiusM),
+	in := locateIn{tenantID: scope.TenantID, key: cacheKey(id, addr, hasAddr), hasAddr: hasAddr, radiusM: int(o.DeliveryRadiusM),
 		addr: Address{Line1: addr.Line1, City: addr.City, State: addr.State, Zip: addr.PostalCode}}
 	if o.StoreLat.Valid && o.StoreLng.Valid {
 		in.store = &Point{Lat: o.StoreLat.Float64, Lng: o.StoreLng.Float64}
@@ -529,7 +543,7 @@ func (s *Service) locate(ctx context.Context, scope sseBroker.Scope, id uuid.UUI
 	if err := s.saveResult(ctx, id, res); err != nil {
 		return false, err
 	}
-	s.located.Add(ctx, 1, metric.WithAttributes(attribute.String("result", res.state)))
+	s.located.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID, attribute.String("result", res.state)))
 	s.logger.Info().Ctx(ctx).Str("order_id", id.String()).Str("state", res.state).Str("quality", res.quality).
 		Bool("outside_area", res.outside).Int("candidates", len(res.candidates)).Str("note", res.lastErr).Msg("geo: order located")
 	return true, nil
@@ -697,7 +711,9 @@ func (s *Service) push(ctx context.Context, scope sseBroker.Scope, id uuid.UUID)
 func (s *Service) deliver(ctx context.Context, scope sseBroker.Scope, p Push, created time.Time,
 	markPushed func() error, deferFor func(time.Duration) error) error {
 	stale := s.now().Sub(created) > openWindow
-	result := func(r string) { s.pushes.Add(ctx, 1, metric.WithAttributes(attribute.String("result", r))) }
+	result := func(r string) {
+		s.pushes.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID, attribute.String("result", r)))
+	}
 
 	env, err := s.req.Request(ctx, scope, rpc.MsgOrderGeo, p, s.PushTimeout)
 	switch {

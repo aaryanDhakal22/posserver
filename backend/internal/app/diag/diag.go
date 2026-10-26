@@ -174,7 +174,7 @@ func tsPtr(t pgtype.Timestamptz) *time.Time {
 // background when ShouldPage says so.
 func (s *Service) Store(ctx context.Context, scope sseBroker.Scope, r *Report, via, tabletID, tabletName string) (uuid.UUID, bool, error) {
 	attrs := func(result string) metric.MeasurementOption {
-		return metric.WithAttributes(attribute.String("via", via), attribute.String("kind", r.Kind),
+		return observability.WithStore(ctx, scope.TenantID, attribute.String("via", via), attribute.String("kind", r.Kind),
 			attribute.String("outcome", r.Outcome), attribute.String("result", result))
 	}
 	if via != ViaPi && via != ViaDirect {
@@ -258,7 +258,7 @@ func (s *Service) page(ctx context.Context, scope sseBroker.Scope, r *Report, vi
 		s.logger.Warn().Err(err).Str("report_id", r.ID.String()).Msg("diag page failed")
 		return
 	}
-	s.pages.Add(ctx, 1, metric.WithAttributes(attribute.String("kind", r.Kind), attribute.String("outcome", r.Outcome)))
+	s.pages.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID, attribute.String("kind", r.Kind), attribute.String("outcome", r.Outcome)))
 	if err := s.q.MarkDiagReportPaged(ctx, pgUUID(r.ID)); err != nil {
 		s.logger.Warn().Err(err).Msg("diag page: mark paged failed")
 	}

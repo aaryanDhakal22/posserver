@@ -21,7 +21,6 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // MsgFloorEvents is the RPC report type the agent sends.
@@ -122,8 +121,14 @@ func (s *Service) Handle(ctx context.Context, scope sseBroker.Scope, payload jso
 		if err != nil {
 			return nil, err
 		}
-		s.meters.FloorEventsReceived.Add(ctx, 1, metric.WithAttributes(
+		s.meters.FloorEventsReceived.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID,
 			attribute.String("type", ev.Type), attribute.String("result", res)))
+		if res == order.FloorApplied {
+			// Only applied events: a duplicate / stale replay would re-measure
+			// an old event. `type` is bounded — unknown types are never applied.
+			observability.RecordLatency(ctx, s.meters.FloorSyncLatency, ev.At, time.Now(),
+				observability.WithStore(ctx, scope.TenantID, attribute.String("type", ev.Type)))
+		}
 		results = append(results, Result{EventID: ev.EventID, Result: res})
 	}
 	return map[string]any{"results": results}, nil

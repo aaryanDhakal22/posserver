@@ -473,9 +473,18 @@ SET attempts        = attempts + 1,
     next_attempt_at = $4
 WHERE event_id = $1 AND handler_name = $2;
 
--- name: CountPendingDispatches :one
-SELECT COUNT(*) FROM outbox_dispatches
-WHERE handler_name = $1 AND dispatched_at IS NULL;
+-- name: CountPendingDispatchesByTenant :many
+-- outbox.events.pending per store: one row per tenant (0 when drained), so a
+-- store's series never goes stale while it exists.
+SELECT t.id AS tenant_id, COALESCE(p.n, 0)::bigint AS pending
+FROM tenants t
+LEFT JOIN (
+    SELECT e.tenant_id, COUNT(*) AS n
+    FROM outbox_dispatches d
+    JOIN outbox_events e ON e.id = d.event_id
+    WHERE d.handler_name = $1 AND d.dispatched_at IS NULL
+    GROUP BY e.tenant_id
+) p ON p.tenant_id = t.id;
 
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Menu module
@@ -747,9 +756,11 @@ DELETE FROM app_releases WHERE app = $1 AND version_code = $2;
 
 -- Agent reliability + recovery (00009) -------------------------------------------
 
--- name: MarkOrdersAcked :execrows
+-- name: MarkOrdersAcked :many
+-- Returns received_at of each newly acked order (orders.ack.latency).
 UPDATE orders SET agent_ack_at = now()
-WHERE tenant_id = $1 AND location_id = $2 AND id = ANY(sqlc.arg(ids)::uuid[]) AND agent_ack_at IS NULL;
+WHERE tenant_id = $1 AND location_id = $2 AND id = ANY(sqlc.arg(ids)::uuid[]) AND agent_ack_at IS NULL
+RETURNING received_at;
 
 -- name: ListUnackedOrders :many
 -- Orders the agent hasn't confirmed: re-sent until it does.
@@ -759,10 +770,26 @@ WHERE agent_ack_at IS NULL AND status = 'received'
 ORDER BY received_at ASC
 LIMIT sqlc.arg(max_rows);
 
--- name: CountUnackedOrders :one
-SELECT count(*) FROM orders
-WHERE agent_ack_at IS NULL AND status = 'received'
-  AND received_at < sqlc.arg(older_than) AND received_at > sqlc.arg(newer_than);
+-- name: CountUnackedOrdersByTenant :many
+-- orders.unacked per store: one row per tenant (0 when none).
+SELECT t.id AS tenant_id, COALESCE(u.n, 0)::bigint AS unacked
+FROM tenants t
+LEFT JOIN (
+    SELECT tenant_id, count(*) AS n FROM orders
+    WHERE agent_ack_at IS NULL AND status = 'received'
+      AND received_at < sqlc.arg(older_than) AND received_at > sqlc.arg(newer_than)
+    GROUP BY tenant_id
+) u ON u.tenant_id = t.id;
+
+-- name: GetStoreSlugs :one
+-- Metric labels (observability.StoreLabels): tenant + location slug by a
+-- tenant id or a location id (pass uuid.Nil for the other one).
+SELECT t.slug AS tenant_slug, l.slug AS location_slug
+FROM tenants t
+JOIN locations l ON l.tenant_id = t.id
+WHERE t.id = sqlc.arg(tenant_id) OR l.id = sqlc.arg(location_id)
+ORDER BY l.created_at
+LIMIT 1;
 
 -- name: SetOrderAgentStatus :execrows
 UPDATE orders
@@ -1245,3 +1272,32 @@ UPDATE geo_external_stops SET state = 'pending', attempts = 0, next_try_at = now
     confirmed = false, updated_at = now()
 WHERE tenant_id = @tenant_id AND location_id = @location_id
   AND state = 'located' AND lat IS NOT NULL AND expires_at > now();
+
+-- name: SetLocationDeliveryRadius :execrows
+-- 2.2.0 location.radius: the Pi (tablet settings) sets the delivery radius.
+UPDATE locations SET delivery_radius_m = @radius_m
+WHERE id = @location_id AND tenant_id = @tenant_id;
+
+-- name: ListOpenLocatedOrderGeoForRadius :many
+-- The location's open located deliveries with their outside_area flag (a
+-- new radius re-flags them).
+SELECT g.order_id, g.lat, g.lng, g.outside_area FROM order_geo g JOIN orders o ON o.id = g.order_id
+WHERE g.tenant_id = @tenant_id AND g.location_id = @location_id
+  AND g.state = 'located' AND g.lat IS NOT NULL AND g.lng IS NOT NULL
+  AND o.status NOT IN ('completed', 'cancelled', 'rejected')
+  AND o.received_at > @since::timestamptz;
+
+-- name: SetOrderGeoOutsideArea :execrows
+-- A new radius flipped the flag: re-push the row (the worker sends order.geo).
+UPDATE order_geo SET outside_area = @outside_area, pushed_at = NULL, next_try_at = now(), updated_at = now()
+WHERE order_id = @order_id AND state = 'located' AND outside_area <> @outside_area;
+
+-- name: ListLiveExternalStopsForRadius :many
+SELECT order_id, lat, lng, outside_area FROM geo_external_stops
+WHERE tenant_id = @tenant_id AND location_id = @location_id
+  AND state = 'located' AND lat IS NOT NULL AND lng IS NOT NULL AND expires_at > now();
+
+-- name: SetExternalStopOutsideArea :execrows
+UPDATE geo_external_stops SET outside_area = @outside_area, pushed_at = NULL, next_try_at = now(), updated_at = now()
+WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id
+  AND state = 'located' AND outside_area <> @outside_area;

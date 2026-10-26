@@ -13,6 +13,7 @@ import (
 	"quiccpos/main/internal/domain/tenancy"
 	"quiccpos/main/internal/infra/database/models"
 	sseBroker "quiccpos/main/internal/infra/sse"
+	"quiccpos/main/internal/observability"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -245,7 +246,7 @@ func (s *Service) checkOffline(ctx context.Context, now time.Time) {
 			s.offMu.Lock()
 			s.offPaged[l.ID] = true
 			s.offMu.Unlock()
-			s.pages.Add(ctx, 1)
+			s.pages.Add(ctx, 1, observability.WithStore(ctx, l.TenantID))
 			msg := fmt.Sprintf("%s: the Pi (agent) has been offline for %d min during opening hours — orders are not printing. Check its power/network; if it doesn't come back, swap in the spare SD card.",
 				l.Name, int(now.Sub(since).Minutes()))
 			s.page(ctx, "Agent offline", msg, "siren")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -14,9 +15,10 @@ const MeterName = "quiccpos/main"
 
 // PendingDispatchSource is satisfied by the outbox repo. The observable
 // gauge callback queries it once per scrape, per registered handler, to
-// publish the current pending-dispatch depth.
+// publish the current pending-dispatch depth per store (every tenant, 0 when
+// drained).
 type PendingDispatchSource interface {
-	CountPending(ctx context.Context, handlerName string) (int, error)
+	CountPendingByTenant(ctx context.Context, handlerName string) (map[uuid.UUID]int, error)
 }
 
 // Meters bundles main's custom metric instruments. Auto instruments come
@@ -75,6 +77,20 @@ type Meters struct {
 	// PrintersLiveQueries counts /me/printers/live lookups. Attribute:
 	// result (live|cache|offline).
 	PrintersLiveQueries metric.Int64Counter
+
+	// Per-hop latency (seconds, HopBuckets; TENANT-SCOPING.md §2).
+	// OrdersIngestLatency: vendor placed_at → persisted (source; clamped at 0).
+	// SQSMessageAge: SQS SentTimestamp → received by main (no store labels).
+	// OrdersDispatchLatency: persisted → order frame delivered over SSE.
+	// FloorSyncLatency: the agent's floor-event `at` → applied (type).
+	// orders.ack.latency lives in agentsync (it owns the ack instruments).
+	OrdersIngestLatency   metric.Float64Histogram
+	SQSMessageAge         metric.Float64Histogram
+	OrdersDispatchLatency metric.Float64Histogram
+	FloorSyncLatency      metric.Float64Histogram
+
+	// SQSReceiveErrors counts failed ReceiveMessage polls (reason; no store labels).
+	SQSReceiveErrors metric.Int64Counter
 }
 
 func NewMeters() (Meters, error) {
@@ -272,6 +288,28 @@ func NewMeters() (Meters, error) {
 		return Meters{}, fmt.Errorf("printers.live.queries: %w", err)
 	}
 
+	hops := []struct {
+		dst        *metric.Float64Histogram
+		name, desc string
+	}{
+		{&ms.OrdersIngestLatency, "orders.ingest.latency", "Vendor placed_at → order persisted by main (covers the online relay + SQS; clamped at 0)"},
+		{&ms.SQSMessageAge, "sqs.message.age", "SQS SentTimestamp → message received by main (queue wait)"},
+		{&ms.OrdersDispatchLatency, "orders.dispatch.latency", "Order persisted → its order frame delivered over SSE (outbox lag)"},
+		{&ms.FloorSyncLatency, "floor.sync.latency", "Agent floor-event time → applied by main (per type; clamped at 0)"},
+	}
+	for _, h := range hops {
+		if *h.dst, err = NewHopHistogram(m, h.name, h.desc); err != nil {
+			return Meters{}, fmt.Errorf("%s: %w", h.name, err)
+		}
+	}
+
+	if ms.SQSReceiveErrors, err = m.Int64Counter(
+		"sqs.receive.errors",
+		metric.WithDescription("SQS ReceiveMessage failures (per reason)"),
+	); err != nil {
+		return Meters{}, fmt.Errorf("sqs.receive.errors: %w", err)
+	}
+
 	return ms, nil
 }
 
@@ -286,15 +324,17 @@ func RegisterPendingDispatch(meters Meters, src PendingDispatchSource, handlerNa
 	_, err := m.RegisterCallback(
 		func(ctx context.Context, o metric.Observer) error {
 			for _, name := range handlerNames {
-				n, err := src.CountPending(ctx, name)
+				byTenant, err := src.CountPendingByTenant(ctx, name)
 				if err != nil {
 					// Don't fail the scrape on a transient DB error; just
 					// skip this handler's reading and try again next tick.
 					continue
 				}
-				o.ObserveInt64(meters.OutboxPending, int64(n),
-					metric.WithAttributes(attribute.String("handler", name)),
-				)
+				for tenantID, n := range byTenant {
+					o.ObserveInt64(meters.OutboxPending, int64(n),
+						WithStore(ctx, tenantID, attribute.String("handler", name)),
+					)
+				}
 			}
 			return nil
 		},

@@ -14,7 +14,6 @@ import (
 	"github.com/labstack/echo/v5"
 	"github.com/rs/zerolog"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/metric"
 )
 
 // PrinterStatusHandler serves the agent-reported live printer roster to the
@@ -62,7 +61,7 @@ func (h *PrinterStatusHandler) MeGetLive(c *echo.Context) error {
 	case err != nil:
 		queryResult = "cache"
 	}
-	h.meters.PrintersLiveQueries.Add(ctx, 1, metric.WithAttributes(attribute.String("result", queryResult)))
+	h.meters.PrintersLiveQueries.Add(ctx, 1, observability.WithStore(ctx, tid, attribute.String("result", queryResult)))
 
 	rep, age, cached := h.cache.Get(scope)
 	out := map[string]any{

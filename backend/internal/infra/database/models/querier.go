@@ -16,8 +16,11 @@ type Querier interface {
 	// Unflag the location's current receipt printer (one per location).
 	ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error
 	CountItemsForGroup(ctx context.Context, arg CountItemsForGroupParams) (int64, error)
-	CountPendingDispatches(ctx context.Context, handlerName string) (int64, error)
-	CountUnackedOrders(ctx context.Context, arg CountUnackedOrdersParams) (int64, error)
+	// outbox.events.pending per store: one row per tenant (0 when drained), so a
+	// store's series never goes stale while it exists.
+	CountPendingDispatchesByTenant(ctx context.Context, handlerName string) ([]CountPendingDispatchesByTenantRow, error)
+	// orders.unacked per store: one row per tenant (0 when none).
+	CountUnackedOrdersByTenant(ctx context.Context, arg CountUnackedOrdersByTenantParams) ([]CountUnackedOrdersByTenantRow, error)
 	// App releases (Quibase APKs) ----------------------------------------------------
 	CreateAppRelease(ctx context.Context, arg CreateAppReleaseParams) (CreateAppReleaseRow, error)
 	// ───────────────────────────────────────────────────────────────────────────
@@ -138,6 +141,9 @@ type Querier interface {
 	GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error)
 	GetPrinterByID(ctx context.Context, id pgtype.UUID) (Printer, error)
 	GetStatusEventsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]StatusEvent, error)
+	// Metric labels (observability.StoreLabels): tenant + location slug by a
+	// tenant id or a location id (pass uuid.Nil for the other one).
+	GetStoreSlugs(ctx context.Context, arg GetStoreSlugsParams) (GetStoreSlugsRow, error)
 	// Login lookup: tenant id + stored password hash for a username.
 	GetTenantAuthByUsername(ctx context.Context, username pgtype.Text) (GetTenantAuthByUsernameRow, error)
 	GetTenantByID(ctx context.Context, id pgtype.UUID) (Tenant, error)
@@ -183,6 +189,7 @@ type Querier interface {
 	ListItemsByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuItem, error)
 	// The location's other located external stops, for the drive-time table.
 	ListLiveExternalStops(ctx context.Context, arg ListLiveExternalStopsParams) ([]ListLiveExternalStopsRow, error)
+	ListLiveExternalStopsForRadius(ctx context.Context, arg ListLiveExternalStopsForRadiusParams) ([]ListLiveExternalStopsForRadiusRow, error)
 	ListLocationDrivers(ctx context.Context, arg ListLocationDriversParams) ([]Driver, error)
 	ListLocationsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]Location, error)
 	// Startup backfill: stores with an address but no position yet.
@@ -192,6 +199,9 @@ type Querier interface {
 	// The location's other open (not delivered / cancelled) located deliveries,
 	// for the drive-time table. received_at bounds it to the current service.
 	ListOpenLocatedDeliveries(ctx context.Context, arg ListOpenLocatedDeliveriesParams) ([]ListOpenLocatedDeliveriesRow, error)
+	// The location's open located deliveries with their outside_area flag (a
+	// new radius re-flags them).
+	ListOpenLocatedOrderGeoForRadius(ctx context.Context, arg ListOpenLocatedOrderGeoForRadiusParams) ([]ListOpenLocatedOrderGeoForRadiusRow, error)
 	ListOperatorLocations(ctx context.Context, operatorID pgtype.UUID) ([]OperatorLocation, error)
 	ListOperators(ctx context.Context) ([]ListOperatorsRow, error)
 	ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) ([]ModifierOption, error)
@@ -224,7 +234,8 @@ type Querier interface {
 	// spends confirmed (only the push right after geo.pin / geo.choose has it).
 	MarkOrderGeoPushed(ctx context.Context, arg MarkOrderGeoPushedParams) (int64, error)
 	// Agent reliability + recovery (00009) -------------------------------------------
-	MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) (int64, error)
+	// Returns received_at of each newly acked order (orders.ack.latency).
+	MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) ([]pgtype.Timestamptz, error)
 	// The Pi followed a printer to a new IP. Applied only while the printer still
 	// has the IP the Pi saw (a manager edit in between wins); an empty mac keeps
 	// the stored one.
@@ -274,6 +285,7 @@ type Querier interface {
 	SearchOrdersInScope(ctx context.Context, arg SearchOrdersInScopeParams) ([]Order, error)
 	SetCategoryPosition(ctx context.Context, arg SetCategoryPositionParams) error
 	SetDiagReportResolved(ctx context.Context, arg SetDiagReportResolvedParams) (int64, error)
+	SetExternalStopOutsideArea(ctx context.Context, arg SetExternalStopOutsideAreaParams) (int64, error)
 	// A pin or a chosen candidate: re-route from this point and push it again,
 	// confirmed (staff's own pick).
 	SetExternalStopPoint(ctx context.Context, arg SetExternalStopPointParams) (int64, error)
@@ -283,6 +295,8 @@ type Querier interface {
 	SetExternalWorkConfirmed(ctx context.Context, arg SetExternalWorkConfirmedParams) error
 	SetItemPosition(ctx context.Context, arg SetItemPositionParams) error
 	SetItemPrinter(ctx context.Context, arg SetItemPrinterParams) error
+	// 2.2.0 location.radius: the Pi (tablet settings) sets the delivery radius.
+	SetLocationDeliveryRadius(ctx context.Context, arg SetLocationDeliveryRadiusParams) (int64, error)
 	// The store address was geocoded. Never overrides a manual pin.
 	SetLocationGeocoded(ctx context.Context, arg SetLocationGeocodedParams) (int64, error)
 	SetLocationMap(ctx context.Context, arg SetLocationMapParams) (Location, error)
@@ -292,6 +306,8 @@ type Querier interface {
 	SetOperatorPassword(ctx context.Context, arg SetOperatorPasswordParams) error
 	SetOptionPosition(ctx context.Context, arg SetOptionPositionParams) error
 	SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStatusParams) (int64, error)
+	// A new radius flipped the flag: re-push the row (the worker sends order.geo).
+	SetOrderGeoOutsideArea(ctx context.Context, arg SetOrderGeoOutsideAreaParams) (int64, error)
 	SetPrinterMAC(ctx context.Context, arg SetPrinterMACParams) error
 	SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptParams) (Printer, error)
 	// Set/rotate a tenant's store-manager login (username + already-hashed password).

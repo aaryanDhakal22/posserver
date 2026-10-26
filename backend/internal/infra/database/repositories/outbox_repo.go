@@ -57,6 +57,7 @@ func (r *OutboxRepository) PendingEventsForHandler(ctx context.Context, handlerN
 				OccurredAt:    row.OccurredAt.Time,
 				SchemaVersion: int(row.SchemaVersion),
 			},
+			TenantID: uuid.UUID(row.TenantID.Bytes),
 			Attempts: int(row.Attempts),
 		})
 	}
@@ -108,13 +109,18 @@ func (r *OutboxRepository) MarkFailed(ctx context.Context, eventID uuid.UUID, ha
 	return nil
 }
 
-// CountPending returns the per-handler pending depth, used by the
-// outbox.events.pending observable gauge.
-func (r *OutboxRepository) CountPending(ctx context.Context, handlerName string) (int, error) {
-	q := models.New(r.pool)
-	n, err := q.CountPendingDispatches(ctx, handlerName)
+// CountPendingByTenant returns one handler's pending depth per tenant (every
+// tenant, 0 when drained), used by the outbox.events.pending observable gauge.
+func (r *OutboxRepository) CountPendingByTenant(ctx context.Context, handlerName string) (map[uuid.UUID]int, error) {
+	rows, err := models.New(r.pool).CountPendingDispatchesByTenant(ctx, handlerName)
 	if err != nil {
-		return 0, fmt.Errorf("count pending: %w", err)
+		return nil, fmt.Errorf("count pending: %w", err)
 	}
-	return int(n), nil
+	out := make(map[uuid.UUID]int, len(rows))
+	for _, row := range rows {
+		if row.TenantID.Valid {
+			out[uuid.UUID(row.TenantID.Bytes)] = int(row.Pending)
+		}
+	}
+	return out, nil
 }
