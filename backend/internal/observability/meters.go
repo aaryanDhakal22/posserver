@@ -77,6 +77,20 @@ type Meters struct {
 	// PrintersLiveQueries counts /me/printers/live lookups. Attribute:
 	// result (live|cache|offline).
 	PrintersLiveQueries metric.Int64Counter
+
+	// Per-hop latency (seconds, HopBuckets; TENANT-SCOPING.md §2).
+	// OrdersIngestLatency: vendor placed_at → persisted (source; clamped at 0).
+	// SQSMessageAge: SQS SentTimestamp → received by main (no store labels).
+	// OrdersDispatchLatency: persisted → order frame delivered over SSE.
+	// FloorSyncLatency: the agent's floor-event `at` → applied (type).
+	// orders.ack.latency lives in agentsync (it owns the ack instruments).
+	OrdersIngestLatency   metric.Float64Histogram
+	SQSMessageAge         metric.Float64Histogram
+	OrdersDispatchLatency metric.Float64Histogram
+	FloorSyncLatency      metric.Float64Histogram
+
+	// SQSReceiveErrors counts failed ReceiveMessage polls (reason; no store labels).
+	SQSReceiveErrors metric.Int64Counter
 }
 
 func NewMeters() (Meters, error) {
@@ -272,6 +286,28 @@ func NewMeters() (Meters, error) {
 		metric.WithDescription("Live printer-roster lookups (result=live|cache|offline)"),
 	); err != nil {
 		return Meters{}, fmt.Errorf("printers.live.queries: %w", err)
+	}
+
+	hops := []struct {
+		dst        *metric.Float64Histogram
+		name, desc string
+	}{
+		{&ms.OrdersIngestLatency, "orders.ingest.latency", "Vendor placed_at → order persisted by main (covers the online relay + SQS; clamped at 0)"},
+		{&ms.SQSMessageAge, "sqs.message.age", "SQS SentTimestamp → message received by main (queue wait)"},
+		{&ms.OrdersDispatchLatency, "orders.dispatch.latency", "Order persisted → its order frame delivered over SSE (outbox lag)"},
+		{&ms.FloorSyncLatency, "floor.sync.latency", "Agent floor-event time → applied by main (per type; clamped at 0)"},
+	}
+	for _, h := range hops {
+		if *h.dst, err = NewHopHistogram(m, h.name, h.desc); err != nil {
+			return Meters{}, fmt.Errorf("%s: %w", h.name, err)
+		}
+	}
+
+	if ms.SQSReceiveErrors, err = m.Int64Counter(
+		"sqs.receive.errors",
+		metric.WithDescription("SQS ReceiveMessage failures (per reason)"),
+	); err != nil {
+		return Meters{}, fmt.Errorf("sqs.receive.errors: %w", err)
 	}
 
 	return ms, nil

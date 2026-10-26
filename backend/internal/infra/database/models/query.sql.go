@@ -4630,10 +4630,11 @@ func (q *Queries) MarkOrderGeoPushed(ctx context.Context, arg MarkOrderGeoPushed
 	return result.RowsAffected(), nil
 }
 
-const markOrdersAcked = `-- name: MarkOrdersAcked :execrows
+const markOrdersAcked = `-- name: MarkOrdersAcked :many
 
 UPDATE orders SET agent_ack_at = now()
 WHERE tenant_id = $1 AND location_id = $2 AND id = ANY($3::uuid[]) AND agent_ack_at IS NULL
+RETURNING received_at
 `
 
 type MarkOrdersAckedParams struct {
@@ -4643,12 +4644,25 @@ type MarkOrdersAckedParams struct {
 }
 
 // Agent reliability + recovery (00009) -------------------------------------------
-func (q *Queries) MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) (int64, error) {
-	result, err := q.db.Exec(ctx, markOrdersAcked, arg.TenantID, arg.LocationID, arg.Ids)
+// Returns received_at of each newly acked order (orders.ack.latency).
+func (q *Queries) MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) ([]pgtype.Timestamptz, error) {
+	rows, err := q.db.Query(ctx, markOrdersAcked, arg.TenantID, arg.LocationID, arg.Ids)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return result.RowsAffected(), nil
+	defer rows.Close()
+	var items []pgtype.Timestamptz
+	for rows.Next() {
+		var received_at pgtype.Timestamptz
+		if err := rows.Scan(&received_at); err != nil {
+			return nil, err
+		}
+		items = append(items, received_at)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const movePrinterIP = `-- name: MovePrinterIP :one

@@ -230,7 +230,8 @@ type Querier interface {
 	// spends confirmed (only the push right after geo.pin / geo.choose has it).
 	MarkOrderGeoPushed(ctx context.Context, arg MarkOrderGeoPushedParams) (int64, error)
 	// Agent reliability + recovery (00009) -------------------------------------------
-	MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) (int64, error)
+	// Returns received_at of each newly acked order (orders.ack.latency).
+	MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) ([]pgtype.Timestamptz, error)
 	// The Pi followed a printer to a new IP. Applied only while the printer still
 	// has the IP the Pi saw (a manager edit in between wins); an empty mac keeps
 	// the stored one.

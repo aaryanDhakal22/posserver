@@ -98,6 +98,9 @@ func main() {
 	if err != nil {
 		tmpLogger.Fatal().Err(err).Msg("Failed to create metric instruments")
 	}
+	if err := observability.RegisterInfo(version, commit); err != nil {
+		tmpLogger.Warn().Err(err).Msg("Failed to register main.info gauge")
+	}
 
 	lgr := logger.NewLogger(cfg.LogConfig.Level, cfg.LogConfig.Output, cfg.LogConfig.Style, cfg.OTELConfig.ServiceName)
 	mainLogger := lgr.With().Str("module", "main").Logger()
@@ -168,11 +171,17 @@ func main() {
 	outboxRepo := repositories.NewOutboxRepository(pool, lgr)
 
 	hooks := dispatch.Hooks{
-		OnEventDispatched: func(ctx context.Context, handler string, ev order.EventType, tenantID uuid.UUID) {
+		OnEventDispatched: func(ctx context.Context, handler string, ev order.DomainEvent, tenantID uuid.UUID) {
 			meters.OutboxDispatched.Add(ctx, 1, observability.WithStore(ctx, tenantID,
 				attribute.String("handler", handler),
-				attribute.String("event_type", string(ev)),
+				attribute.String("event_type", string(ev.Type)),
 			))
+			// Only the order frame is a hop: the SSE handler skips every other
+			// event type. OccurredAt = when the order was received + persisted.
+			if handler == handlers.HandlerNameSSE && ev.Type == order.EventOrderReceived {
+				observability.RecordLatency(ctx, meters.OrdersDispatchLatency, ev.OccurredAt, time.Now(),
+					observability.WithStore(ctx, tenantID))
+			}
 		},
 		OnEventFailed: func(ctx context.Context, handler string, ev order.EventType, tenantID uuid.UUID, transient bool) {
 			meters.OutboxFailed.Add(ctx, 1, observability.WithStore(ctx, tenantID,

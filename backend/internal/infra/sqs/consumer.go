@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"quiccpos/main/internal/domain/order"
@@ -22,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -99,11 +101,18 @@ func (c *Consumer) Start(ctx context.Context) {
 			MaxNumberOfMessages:   10,
 			WaitTimeSeconds:       20,
 			MessageAttributeNames: []string{"All"},
+			// SentTimestamp → sqs.message.age (the queue wait, without CloudWatch).
+			MessageSystemAttributeNames: []sqstypes.MessageSystemAttributeName{
+				sqstypes.MessageSystemAttributeNameSentTimestamp,
+			},
 		})
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
+			c.meters.SQSReceiveErrors.Add(ctx, 1, metric.WithAttributes(
+				attribute.String("reason", receiveErrorReason(err)),
+			))
 			c.logAWSError("ReceiveMessage failed", err)
 			c.logger.Warn().Dur("retry_in", backoff).Msg("Backing off before next poll")
 			select {
@@ -121,6 +130,11 @@ func (c *Consumer) Start(ctx context.Context) {
 
 		c.logger.Debug().Int("count", len(output.Messages)).Msg("Poll returned messages")
 
+		receivedAt := time.Now()
+		for _, msg := range output.Messages {
+			// Before routing the store is unknown: no store labels.
+			observability.RecordLatency(ctx, c.meters.SQSMessageAge, sentTimestamp(msg), receivedAt)
+		}
 		for _, msg := range output.Messages {
 			c.processMessage(ctx, msg)
 		}
@@ -142,6 +156,60 @@ func (c *Consumer) probe(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+// sentTimestamp is the message's SentTimestamp system attribute (epoch
+// milliseconds); zero when absent or malformed.
+func sentTimestamp(msg sqstypes.Message) time.Time {
+	v, ok := msg.Attributes[string(sqstypes.MessageSystemAttributeNameSentTimestamp)]
+	if !ok {
+		return time.Time{}
+	}
+	ms, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || ms <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(ms)
+}
+
+// receiveErrorReason buckets a ReceiveMessage error into a small fixed set
+// for the sqs.receive.errors `reason` attribute: forbidden, queue_not_found,
+// throttled, server, credentials, network, other.
+func receiveErrorReason(err error) string {
+	var oe *smithy.OperationError
+	if errors.As(err, &oe) {
+		var re *smithyhttp.ResponseError
+		if errors.As(oe.Unwrap(), &re) {
+			switch code := re.HTTPStatusCode(); {
+			case code == 403:
+				return "forbidden"
+			case code == 404:
+				return "queue_not_found"
+			case code == 429:
+				return "throttled"
+			case code >= 500:
+				return "server"
+			}
+		}
+	}
+	var ae smithy.APIError
+	if errors.As(err, &ae) {
+		switch ae.ErrorCode() {
+		case "AWS.SimpleQueueService.NonExistentQueue", "QueueDoesNotExist":
+			return "queue_not_found"
+		case "RequestThrottled", "ThrottlingException", "OverLimit":
+			return "throttled"
+		}
+	}
+	errStr := err.Error()
+	switch {
+	case contains(errStr, "NoCredentialProviders", "no EC2 IMDS role found", "failed to refresh cached credentials",
+		"ExpiredToken", "InvalidClientTokenId", "InvalidAccessKeyId"):
+		return "credentials"
+	case contains(errStr, "context deadline exceeded", "connection refused", "no such host", "connection reset", "i/o timeout"):
+		return "network"
+	}
+	return "other"
 }
 
 // logAWSError inspects the error type and logs actionable remediation hints.
@@ -323,6 +391,9 @@ func (c *Consumer) processMessage(ctx context.Context, msg sqstypes.Message) {
 		return
 	}
 	c.meters.OrdersPersisted.Add(ctx, 1, observability.WithStore(ctx, tenantUUID, attribute.String("result", "ok")))
+	// Only a first persist: a duplicate (redelivery) would re-measure an old order.
+	observability.RecordLatency(ctx, c.meters.OrdersIngestLatency, agg.PlacedAt(), time.Now(),
+		observability.WithStore(ctx, tenantUUID, attribute.String("source", string(agg.Source()))))
 
 	c.deleteMessage(ctx, msg, msgID, agg.ID())
 

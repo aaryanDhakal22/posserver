@@ -90,6 +90,7 @@ type Service struct {
 
 	redelivered metric.Int64Counter
 	acked       metric.Int64Counter
+	ackLatency  metric.Float64Histogram
 	links       metric.Int64Counter
 	pages       metric.Int64Counter
 
@@ -127,6 +128,7 @@ func New(pool *pgxpool.Pool, orders OrderLoader, drivers DriverMirror, broker Br
 	}
 	s.redelivered, _ = m.Int64Counter("orders.redelivered", metric.WithDescription("Orders re-sent to an agent that had not acked them"))
 	s.acked, _ = m.Int64Counter("orders.agent_acked", metric.WithDescription("Orders acknowledged by an agent"))
+	s.ackLatency, _ = observability.NewHopHistogram(m, "orders.ack.latency", "Order persisted → acked by the agent (order.ack)")
 	s.links, _ = m.Int64Counter("agents.linked", metric.WithDescription("Agents linked with a manager login (Pi set up / replaced)"))
 	s.pages, _ = m.Int64Counter("agents.offline_pages", metric.WithDescription("Agent-offline pages sent during opening hours"))
 	unacked, _ := m.Int64ObservableGauge("orders.unacked", metric.WithDescription("Orders an agent has not acked for over a minute (should be 0)"))
@@ -176,13 +178,23 @@ func (s *Service) HandleAck(ctx context.Context, scope sseBroker.Scope, payload 
 	if len(ids) == 0 {
 		return map[string]any{"acked": 0}, nil
 	}
-	n, err := models.New(s.pool).MarkOrdersAcked(ctx, models.MarkOrdersAckedParams{
+	received, err := models.New(s.pool).MarkOrdersAcked(ctx, models.MarkOrdersAckedParams{
 		TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID), Ids: ids,
 	})
 	if err != nil {
 		return nil, err
 	}
-	s.acked.Add(ctx, n, observability.WithStore(ctx, scope.TenantID))
+	n := int64(len(received))
+	store := observability.WithStore(ctx, scope.TenantID)
+	s.acked.Add(ctx, n, store)
+	// Only first acks (agent_ack_at was NULL), so a repeated ack never
+	// re-measures. received_at = when main persisted the order.
+	now := time.Now()
+	for _, r := range received {
+		if r.Valid {
+			observability.RecordLatency(ctx, s.ackLatency, r.Time, now, store)
+		}
+	}
 	return map[string]any{"acked": n}, nil
 }
 

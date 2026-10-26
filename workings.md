@@ -357,7 +357,7 @@ func (d *Dispatcher) dispatchOne(ctx context.Context, h Handler, pe PendingEvent
     if err == nil {
         d.repo.MarkDispatched(ctx, ev.ID, h.Name())
         if d.hooks.OnEventDispatched != nil {
-            d.hooks.OnEventDispatched(ctx, h.Name(), ev.Type, pe.TenantID)
+            d.hooks.OnEventDispatched(ctx, h.Name(), ev, pe.TenantID)
         }
         return
     }
@@ -379,7 +379,9 @@ func backoffDelay(attempts int, transient bool, randN func(int64) int64) time.Du
 `Hooks.OnEventDispatched` / `OnEventFailed` are how the bootstrap wires the
 dispatcher into the OTEL meters without the dispatcher importing `metric`;
 they get the event's tenant id (`outbox_events.tenant_id`) so the outbox
-counters carry the `tenant` / `location` store labels.
+counters carry the `tenant` / `location` store labels. `OnEventDispatched`
+gets the whole event: for `order.received` on `sse-broadcast` the bootstrap
+records `orders.dispatch.latency` (`OccurredAt` → delivered).
 
 ---
 

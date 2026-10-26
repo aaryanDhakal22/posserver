@@ -756,9 +756,11 @@ DELETE FROM app_releases WHERE app = $1 AND version_code = $2;
 
 -- Agent reliability + recovery (00009) -------------------------------------------
 
--- name: MarkOrdersAcked :execrows
+-- name: MarkOrdersAcked :many
+-- Returns received_at of each newly acked order (orders.ack.latency).
 UPDATE orders SET agent_ack_at = now()
-WHERE tenant_id = $1 AND location_id = $2 AND id = ANY(sqlc.arg(ids)::uuid[]) AND agent_ack_at IS NULL;
+WHERE tenant_id = $1 AND location_id = $2 AND id = ANY(sqlc.arg(ids)::uuid[]) AND agent_ack_at IS NULL
+RETURNING received_at;
 
 -- name: ListUnackedOrders :many
 -- Orders the agent hasn't confirmed: re-sent until it does.

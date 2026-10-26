@@ -101,7 +101,9 @@ type Dispatcher struct {
 // the dispatcher knowing about the meters package. Every method is called
 // outside the handler critical path. Pass a zero Hooks to disable.
 type Hooks struct {
-	OnEventDispatched func(ctx context.Context, handler string, eventType order.EventType, tenantID uuid.UUID)
+	// OnEventDispatched gets the whole event (its OccurredAt drives
+	// orders.dispatch.latency).
+	OnEventDispatched func(ctx context.Context, handler string, ev order.DomainEvent, tenantID uuid.UUID)
 	OnEventFailed     func(ctx context.Context, handler string, eventType order.EventType, tenantID uuid.UUID, transient bool)
 }
 
@@ -226,7 +228,7 @@ func (d *Dispatcher) dispatchOne(ctx context.Context, h Handler, pe PendingEvent
 			return
 		}
 		if d.hooks.OnEventDispatched != nil {
-			d.hooks.OnEventDispatched(ctx, h.Name(), ev.Type, pe.TenantID)
+			d.hooks.OnEventDispatched(ctx, h.Name(), ev, pe.TenantID)
 		}
 		return
 	}
