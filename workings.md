@@ -53,7 +53,7 @@ actively prevented vs. deliberately tolerated.
                 └──────────────────────┬────────────────────────┘
                                        ▼
                             ┌───────────────────────┐
-                            │   handlers.SSE        │   load aggregate,
+                            │   handlers.SSE        │   decode snapshot,
                             │   (one of N handlers) │   call broker
                             └───────────┬───────────┘
                                         ▼
@@ -78,18 +78,35 @@ the persist path.
 
 ## Layer 1 — the SSE broker (`internal/infra/sse/broker.go`)
 
-The broker is **stateless live fan-out**. No DB, no goroutines, no durability.
-Its only job is "deliver these bytes to whichever subscribers are connected
-*right now*."
+The broker is **stateless live fan-out**. No DB, no durability. Its only job
+is "deliver this frame to whichever subscribers of *this scope* are connected
+*right now*." Every subscriber belongs to one `Scope = (tenant_id,
+location_id)`; two scopes never share a subscriber set, so cross-tenant
+fan-out is impossible by construction.
 
 ### Shape
 
 ```go
+// One SSE message: event name + pre-marshaled data. Events: "order",
+// "command" (duplex RPC envelope), "store_config".
+type Frame struct {
+    Event string
+    Data  []byte
+}
+
+type Scope struct {
+    TenantID   uuid.UUID
+    LocationID uuid.UUID
+}
+
 type Broker struct {
-    mu      sync.Mutex
-    clients map[chan []byte]struct{}
-    waker   Waker
-    logger  zerolog.Logger
+    mu          sync.Mutex
+    clients     map[Scope]map[chan Frame]struct{}
+    devices     map[chan Frame]uuid.UUID // stream → device that opened it
+    waker       Waker
+    logger      zerolog.Logger
+    meters      observability.Meters
+    onSubscribe []func(scope Scope)      // e.g. geo.WakeLocation
 }
 ```
 
@@ -107,8 +124,10 @@ The bootstrap calls `broker.SetWaker(dispatcher)` once both are constructed.
 ### Subscribe
 
 ```go
-func (b *Broker) Subscribe(ctx context.Context, scope Scope) (chan Frame, func()) {
-    ch := make(chan Frame, 8)
+// Subscribe = SubscribeAs(ctx, scope, uuid.Nil). The SSE handler uses
+// SubscribeAs with the authenticated device id.
+func (b *Broker) SubscribeAs(ctx context.Context, scope Scope, deviceID uuid.UUID) (chan Frame, func()) {
+    ch := make(chan Frame, subscriberBuffer) // 256
 
     b.mu.Lock()
     set, ok := b.clients[scope]
@@ -117,6 +136,7 @@ func (b *Broker) Subscribe(ctx context.Context, scope Scope) (chan Frame, func()
         b.clients[scope] = set
     }
     set[ch] = struct{}{}
+    b.devices[ch] = deviceID
     b.mu.Unlock()
 
     if b.waker != nil {
@@ -128,51 +148,74 @@ func (b *Broker) Subscribe(ctx context.Context, scope Scope) (chan Frame, func()
             b.waker.Wake()
         }
     }
+    for _, fn := range b.onSubscribe {
+        go fn(scope) // e.g. the geo worker re-pushes what this agent hasn't acked
+    }
 
-    return ch, func() { /* delete from b.clients[scope] + close(ch), double-unsub safe */ }
+    return ch, func() {
+        b.mu.Lock()
+        b.removeLocked(scope, ch) // delete + close once; double-unsub safe
+        b.mu.Unlock()
+    }
 }
 ```
 
 Notes:
-- The per-subscriber channel is buffered to **8**. Big enough to absorb a
-  brief consumer hiccup, small enough that a truly stalled subscriber gets
-  noticed (their drops light up `sse_test`-style logs).
+- The per-subscriber channel is buffered to **256** — generous so a reconnect
+  backlog or a burst never overflows it. An overflow still isn't a loss: the
+  dropped order frame stays unacked and is re-sent by the redelivery loop
+  (see "Delivery to the agent" below), just later.
 - `Wake()` (via `WakeScope`) is fired **after** the subscriber is in `clients`,
   so the dispatcher's drain on the next tick will find the channel ready to
   receive. `WakeScope` first resets `next_attempt_at` for the scope's pending
   rows — without it, a backlog that backed off while the agent was away could
   wait up to the 30s transient cap.
-- The unsub closure re-checks `clients[ch]` before `delete` + `close` so
-  double-unsub is a no-op (no `close of closed channel` panic).
+- `removeLocked` re-checks that the channel is still in the scope's set
+  before `delete` + `close`, so double-unsub is a no-op (no `close of closed
+  channel` panic); an emptied scope is removed from `clients`.
+- `DisconnectDevice(id)` closes every stream a device opened. Tenancy's
+  `OnDeviceGone` hook calls it when a device is revoked or deleted (an
+  admin revoke, an agent replaced by `agent/link`), so a revoked agent stops
+  receiving at once; its reconnect then gets 401 and it wipes itself.
+- `OnSubscribe` hooks run in their own goroutines, off the subscribe path.
 
 ### Publish
 
 ```go
-func (b *Broker) Publish(ctx context.Context, data []byte) int {
-    // … OTEL span elided …
+func (b *Broker) Publish(ctx context.Context, scope Scope, frame Frame) int {
+    // … OTEL span "sse.publish" elided …
     delivered := 0
     b.mu.Lock()
-    for ch := range b.clients {
+    set := b.clients[scope]
+    for ch := range set {
         select {
-        case ch <- data:
+        case ch <- frame:
             delivered++
         default:
-            b.logger.Warn().Msg("SSE subscriber channel full; dropping payload for them")
+            b.logger.Warn().Ctx(ctx).Msg("SSE subscriber channel full; dropping payload for them")
         }
     }
     b.mu.Unlock()
+    // sse.events.broadcast{event_type, result: delivered|no_subscribers}
     return delivered
 }
+
+// PublishCommand wraps a duplex RPC envelope as Frame{Event: "command"}.
+func (b *Broker) PublishCommand(ctx context.Context, scope Scope, data []byte) int
 ```
 
 Notes:
-- Takes pre-marshaled bytes — the broker doesn't know about Snapshot,
-  OrderEvent, or anything order-shaped. Pure fan-out primitive.
+- Takes a pre-marshaled frame — the broker doesn't know about Snapshot,
+  OrderEvent, or anything order-shaped. Pure fan-out primitive. The same
+  stream carries `order` frames (dispatcher), `command` frames
+  (`rpc.Requester`) and mid-stream `store_config` frames
+  (`StoreConfigPublisher`).
 - Returns `delivered` — the count is what the SSE handler uses to detect
   "raced to zero subscribers" (race #3 below).
-- Send is **non-blocking** (`select { case ch <- data: default: }`). A
-  stalled agent can never block the publish path. The cost is that one event
-  may not reach that agent; they recover via the agent's backfill endpoint.
+- Send is **non-blocking** (`select { case ch <- frame: default: }`). A
+  stalled agent can never block the publish path. The cost is that one frame
+  may not reach that agent; an order frame is re-sent by redelivery until
+  the agent acks it.
 
 ---
 
@@ -199,25 +242,27 @@ type Handler interface {
 const HandlerNameSSE = "sse-broadcast"
 
 func (h *SSE) Handle(ctx context.Context, ev order.DomainEvent) error {
-    // Today only OrderReceived drives an SSE push. Skipping unknown types
-    // counts as a successful dispatch — the row is marked dispatched.
+    // Only OrderReceived drives an SSE push. Skipping other types (e.g. the
+    // order.status_changed events floor updates record) counts as a
+    // successful dispatch — the row is marked dispatched, nothing echoes
+    // back to the agent.
     if ev.Type != order.EventOrderReceived {
         return nil
     }
 
-    // Fast-path: no subscribers means nothing to do. Returning ErrTransient
-    // leaves the row pending; the next subscriber's Wake() (or the next
-    // tick) will retry.
-    if h.publisher.Subscribers() == 0 {
-        return fmt.Errorf("no SSE subscribers connected: %w", dispatch.ErrTransient)
-    }
-
-    // Fat-payload contract: the snapshot IS the payload. Decode + wrap
-    // with trace context + push. No DB read; no chance the aggregate has
-    // mutated since this event was emitted.
+    // Fat-payload contract: the snapshot IS the payload. Decode it (it also
+    // carries the scope) — no DB read; no chance the aggregate has mutated
+    // since this event was emitted.
     var snap order.Snapshot
     if err := json.Unmarshal(ev.Payload, &snap); err != nil {
         return fmt.Errorf("decode snapshot from outbox payload: %w", err)
+    }
+    scope := sseBroker.Scope{TenantID: …snap.TenantID, LocationID: …snap.LocationID}
+
+    // Fast-path: nobody of this scope connected. ErrTransient leaves the row
+    // pending; the agent's (re)subscribe WakeScope (or a later tick) retries.
+    if h.publisher.SubscribersFor(scope) == 0 {
+        return fmt.Errorf("no SSE subscribers for scope: %w", dispatch.ErrTransient)
     }
 
     wireEv := sseTransport.EventFromSnapshot(ctx, snap, true)
@@ -226,7 +271,7 @@ func (h *SSE) Handle(ctx context.Context, ev order.DomainEvent) error {
         return fmt.Errorf("marshal SSE event: %w", err)
     }
 
-    delivered := h.publisher.Publish(ctx, data)
+    delivered := h.publisher.Publish(ctx, scope, sseBroker.Frame{Event: sseBroker.EventOrder, Data: data})
     if delivered == 0 {
         // Race: subscribers were >0 at the check, then all disconnected
         // before we sent. Retry transiently.
@@ -377,6 +422,8 @@ Two tables. Schema in `backend/sql/schema.sql`:
 CREATE TABLE outbox_events (
     id              uuid        PRIMARY KEY,
     aggregate_id    uuid        NOT NULL,
+    tenant_id       uuid        NOT NULL,   -- scope, so a reconnect can reset
+    location_id     uuid        NOT NULL,   -- just that scope's backoff
     type            text        NOT NULL,
     payload         jsonb       NOT NULL DEFAULT '{}'::jsonb,
     occurred_at     timestamptz NOT NULL,
@@ -444,7 +491,7 @@ the wire." `transport/sse.OrderEvent` embeds it and adds optional
 
 ```sql
 -- name: PendingEventsForHandler :many
-SELECT e.id, e.aggregate_id, e.type, e.payload,
+SELECT e.id, e.aggregate_id, e.tenant_id, e.location_id, e.type, e.payload,
        e.occurred_at, e.schema_version, d.attempts
 FROM outbox_events e
 JOIN outbox_dispatches d ON d.event_id = e.id
@@ -459,6 +506,10 @@ Ordered by `occurred_at ASC` so dispatches preserve causal order within a
 handler. The partial index
 `idx_outbox_dispatches_pending (handler_name, next_attempt_at NULLS FIRST) WHERE dispatched_at IS NULL`
 keeps this query cheap regardless of total outbox volume.
+`ResetDispatchBackoffForScope` (called through `WakeScope` when an agent
+subscribes) sets `next_attempt_at = NULL` on the scope's still-pending rows,
+joined through `outbox_events.tenant_id` / `location_id`
+(`idx_outbox_events_scope`).
 
 ### Atomic emit (`internal/infra/database/repositories/order_repo.go`)
 
@@ -513,13 +564,14 @@ T+2    Service.Create(o)
             └→ INSERT outbox_dispatches(handler="sse-broadcast", dispatched_at=NULL)
             └→ COMMIT
        └→ dispatcher.Wake()    // non-blocking, coalescing
+       └→ OnCreated hooks (geo: insert order_geo for a delivery order, wake the geo worker)
 
 T+3    Dispatcher's `<-d.wake` fires → tick() → runHandler(SSE)
        └→ PendingEventsForHandler("sse-broadcast", 50) → 1 row
        └→ SSE.Handle(ev)
-            └→ Subscribers() == 1 (the connected agent)
-            └→ loader.GetByID(ev.AggregateID) → aggregate
-            └→ broker.PublishOrder(o) → delivered = 1
+            └→ decode Snapshot from ev.Payload → scope
+            └→ SubscribersFor(scope) == 1 (the store's connected agent)
+            └→ broker.Publish(scope, Frame{order, data}) → delivered = 1
        └→ MarkDispatched(eventID, "sse-broadcast")
 
 T+4    HTTP loop in StreamOrders:
@@ -530,7 +582,7 @@ T+4    HTTP loop in StreamOrders:
 ```
 
 If the agent isn't connected at T+3:
-- `Subscribers() == 0` → handler returns `ErrTransient`.
+- `SubscribersFor(scope) == 0` → handler returns `ErrTransient`.
 - Outbox row stays `dispatched_at = NULL`.
 - Each retry backs off (1s, 2s, 4s … capped at 30s, jittered).
 - When the agent connects later, `Subscribe()` calls `WakeScope()` — clears
@@ -555,14 +607,36 @@ T+M    Agent reconnects → SSEHandler.StreamOrders → broker.Subscribe
 
 T+M+ε  Dispatcher tick → PendingEventsForHandler("sse-broadcast", 50)
        └→ Returns up to 50 rows in occurred_at ASC order
-       └→ For each: SSE.Handle → broker.PublishOrder → MarkDispatched
+       └→ For each: SSE.Handle → broker.Publish(scope, order frame) → MarkDispatched
 
 T+…    HTTP loop drains the buffered channel, agent sees orders in order.
+       Agent stores each order and acks it (RPC order.ack → orders.agent_ack_at).
+       ~3 s after the subscribe, the geo worker re-pushes this store's unacked order.geo rows.
 ```
 
 Cap: the dispatcher batch size (default 50). If the backlog exceeds that,
-the dispatcher catches up across multiple ticks. Older missed orders the
-agent didn't get this way come from the agent's own backfill GET endpoint.
+the dispatcher catches up across multiple ticks. Anything still unacked is
+re-sent by the redelivery loop; the agent also pages `GET /api/v1/orders`
+after every reconnect to fill gaps.
+
+---
+
+## Delivery to the agent: acks + redelivery (`internal/app/agentsync`)
+
+"Dispatched" only means "queued on a live stream". The end-to-end signal is
+the agent's **`order.ack`** RPC report (`{order_ids}` → `orders.agent_ack_at`).
+`RunRedeliver` ticks every second and re-publishes, to the scope's connected
+agent, every order still in status `received` and unacked that was received
+more than `ORDER_REDELIVER_AFTER` (default 10 s) ago and within the last
+12 h (≤ 200 per tick), then again every `ORDER_REDELIVER_AFTER` (an
+in-memory last-sent map); nothing is sent while no agent of that scope is
+connected. A redelivered frame is built from the order as it is now in the
+DB (`GetByID` → `Snapshot`), not from the outbox payload. The agent
+treats a redelivery as a no-op and acks again. This is what makes a dropped
+frame (full buffer, a stream that died mid-write, a crash) harmless, and why a
+pytest that plays the agent over SSE sees the same order frame again unless
+it acks. Orders that existed before migration `00009` count as acked.
+`orders.unacked` (gauge: unacked for over a minute) should stay 0.
 
 ---
 
@@ -572,7 +646,7 @@ The interesting ones, with how each is handled.
 
 ### #1 — Subscribe insert vs concurrent Publish
 
-Two goroutines: one calling `Subscribe`, another finishing a `PublishOrder`.
+Two goroutines: one calling `Subscribe`, another finishing a `Publish`.
 
 `sync.Mutex` on `clients` serializes them. Either:
 - Subscribe wins → its channel is in the map before Publish iterates → it
@@ -585,45 +659,48 @@ Either way, no event lost.
 
 ### #2 — Slow subscriber (channel full)
 
-Per-subscriber channel is buffered to 8. If the agent reads slowly:
+Per-subscriber channel is buffered to 256. If the agent reads slowly:
 
 ```go
-for ch := range b.clients {
+for ch := range b.clients[scope] {
     select {
-    case ch <- data:
+    case ch <- frame:
         delivered++
     default:
-        b.logger.Warn().Msg("SSE subscriber channel full; dropping payload for them")
+        b.logger.Warn().Ctx(ctx).Msg("SSE subscriber channel full; dropping payload for them")
     }
 }
 ```
 
-Non-blocking send drops the payload **for that subscriber only**. The
+Non-blocking send drops the frame **for that subscriber only**. The
 publish path keeps moving — one stalled agent can't gum up the others or
 the dispatcher.
 
-Cost: that subscriber misses that event. They recover via the agent's
-backfill.
+Cost: that subscriber misses that frame. An order frame comes back through
+redelivery (it stays unacked); a `command` request times out on main's side
+and the caller retries or reports; a `store_config` comes back on the next
+connect's handshake.
 
 ### #3 — Subscriber count check vs actual delivery
 
 Inside `SSE.Handle`:
 
 ```go
-if h.publisher.Subscribers() == 0 {
-    return ErrTransient   // skip the DB load
+if h.publisher.SubscribersFor(scope) == 0 {
+    return ErrTransient   // skip the marshal + publish
 }
-// … load aggregate …
-delivered, _ := h.publisher.PublishOrder(...)
+// … wrap snapshot as OrderEvent, marshal …
+delivered := h.publisher.Publish(ctx, scope, frame)
 if delivered == 0 {
     return ErrTransient   // raced — everyone disconnected
 }
 ```
 
-The `Subscribers()` check is an optimization (avoid a DB hit when obviously
-no one is listening). Correctness rests on `delivered == 0 → ErrTransient`.
-A subscriber count of 5 at the check moment can still drop to 0 by the time
-PublishOrder runs; the second check catches that and the row stays pending.
+The `SubscribersFor()` check is an optimization (skip the work when
+obviously no one of that scope is listening). Correctness rests on
+`delivered == 0 → ErrTransient`. A subscriber count of 1 at the check moment
+can still drop to 0 by the time Publish runs; the second check catches that
+and the row stays pending.
 
 ### #4 — Concurrent `Wake()` calls
 
@@ -647,18 +724,24 @@ Echo handlers can panic; cleanup paths can fire twice in unusual unwinding
 scenarios. The unsub closure protects:
 
 ```go
-return ch, func() {
-    b.mu.Lock()
-    if _, ok := b.clients[ch]; ok {
-        delete(b.clients, ch)
-        close(ch)
+func (b *Broker) removeLocked(scope Scope, ch chan Frame) {
+    if set, ok := b.clients[scope]; ok {
+        if _, ok := set[ch]; ok {
+            delete(set, ch)
+            delete(b.devices, ch)
+            close(ch)
+        }
+        if len(set) == 0 {
+            delete(b.clients, scope)
+        }
     }
-    b.mu.Unlock()
 }
 ```
 
-The `if _, ok := b.clients[ch]; ok` check makes the second call a no-op,
-preventing the `close of closed channel` panic.
+The `if _, ok := set[ch]; ok` check makes the second call a no-op,
+preventing the `close of closed channel` panic. The same guard covers a
+stream already closed by `DisconnectDevice` (revoked device) whose handler
+then unsubscribes.
 
 ### #6 — Handler runs, MarkDispatched fails (DB hiccup, crash)
 
@@ -667,8 +750,8 @@ The handler delivered to the agent, but the dispatcher couldn't update
 the dispatcher tries again. Handler runs again. Agent receives a duplicate.
 
 This is **at-least-once** semantics. The contract is that handlers must be
-idempotent. The agent satisfies this by deduplicating on aggregate `id` in
-its 24-hour store.
+idempotent. The agent satisfies this by deduplicating on aggregate `id`
+(and redelivery relies on the same property).
 
 ### #7 — Persist commits but `Wake()` never fires (process crash)
 
@@ -686,15 +769,16 @@ connecting later finds the dispatch row already marked dispatched, so it's
 not in the pending batch.
 
 This matches the original system's "broadcast once across the system"
-semantic. Newer subscribers only receive events that were never dispatched
-(emitted while no one was connected). For older history, the agent uses
-its own backfill GET endpoint.
+semantic for the outbox. Newer subscribers only receive events that were
+never dispatched (emitted while no one was connected) — plus, separately,
+every order the agent never acked (redelivery), and whatever its own
+catch-up `GET /api/v1/orders?status=received&from=…` finds.
 
 When/if we want per-subscriber tracking (multi-agent-per-store), we'll
 extend `outbox_dispatches.handler_name` into a composite
 `(handler_name, target_id)` key. Not today.
 
-### #9 — `Subscribers()` and `PublishOrder` don't share a mutex
+### #9 — `SubscribersFor()` and `Publish` don't share a mutex
 
 By design. Holding `b.mu` across the SSE handler's full `Handle` call
 would serialize the broker against DB I/O — every subscriber-count check
@@ -702,12 +786,12 @@ would lock the publish path. Bad.
 
 Instead we let the count race happen and detect it via `delivered`. Costs
 us nothing (`delivered == 0` is the same `ErrTransient` outcome as
-`Subscribers() == 0`); buys us a non-blocking broker.
+`SubscribersFor() == 0`); buys us a non-blocking broker.
 
 ### #10 — Two consumer goroutines persist orders concurrently
 
 Each persist is its own transaction. The unique key on
-`(source, source_event_id)` prevents duplicates at the DB level — second
+`(tenant_id, source, source_event_id)` prevents duplicates at the DB level — second
 write fails with `pgUniqueViolation` and the consumer maps it to
 `order.ErrDuplicate` (ack-and-skip).
 
@@ -740,15 +824,16 @@ batch query reads multiple events in one shot, in `occurred_at` order.
 
 | What | File | Anchor |
 |---|---|---|
-| Broker fan-out + mutex | `backend/internal/infra/sse/broker.go` | `Subscribe`, `PublishOrder`, `mu` |
+| Broker fan-out + mutex | `backend/internal/infra/sse/broker.go` | `SubscribeAs`, `Publish`, `DisconnectDevice`, `mu` |
+| Ack + redelivery | `backend/internal/app/agentsync/agentsync.go` | `HandleAck`, `RunRedeliver`, `resend` |
 | SSE handler / transient mapping | `backend/internal/dispatch/handlers/sse.go` | `Handle` |
 | Dispatcher loop + Wake | `backend/internal/dispatch/dispatcher.go` | `Run`, `Wake`, `tick`, `dispatchOne` |
 | Domain event accumulation | `backend/internal/domain/order/events.go` | `DomainEvent`, `recordEvent`, `PullEvents` |
 | Service waking on persist | `backend/internal/app/order/service.go` | `Create` (last lines) |
 | HTTP endpoint | `backend/internal/transport/handler/sse.go` | `StreamOrders` |
-| Wire shape | `backend/internal/transport/sse/envelope.go` | `OrderEvent`, `BuildEvent` |
+| Wire shape | `backend/internal/transport/sse/envelope.go` | `OrderEvent`, `EventFromSnapshot` |
 | Atomic outbox emit | `backend/internal/infra/database/repositories/order_repo.go` | `Create`, `insertOutboxEvent` |
-| Outbox dispatch state | `backend/internal/infra/database/repositories/outbox_repo.go` | `PendingEventsForHandler`, `MarkDispatched`, `MarkFailed` |
+| Outbox dispatch state | `backend/internal/infra/database/repositories/outbox_repo.go` | `PendingEventsForHandler`, `MarkDispatched`, `MarkFailed`, `ResetBackoffForScope` |
 | Schema | `backend/sql/schema.sql`, `backend/internal/migrate/sql/00001_initial_schema.sql` | `outbox_events`, `outbox_dispatches`, `idx_outbox_dispatches_pending` |
 | Dispatcher tests | `backend/internal/dispatch/dispatcher_test.go` | `TestDispatcher_*` |
 | SSE handler tests | `backend/internal/dispatch/handlers/sse_test.go` | `TestSSE_*` |
