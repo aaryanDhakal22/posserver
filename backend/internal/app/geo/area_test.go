@@ -624,3 +624,31 @@ func TestProvidersGeocodeIn(t *testing.T) {
 		t.Errorf("plain geocoder, in box: %+v %v", r, err)
 	}
 }
+
+// 2026-10-26: "5415 YORK RD, AROMA PIZZA" with SoftTouch's default Towson
+// 21286 came back as York Road the street (approx) in Towson; the house in
+// the store's area must win, marked corrected.
+func TestAreaRetryHouseBeatsApproxStreetInTheWrongTown(t *testing.T) {
+	h := newHarness(t)
+	p := newAreaProvider("fake")
+	h.useGeocoder(p)
+	towsonYork := newCandidate("York Road", "Towson", "MD", "21204", Point{Lat: 39.4014369, Lng: -76.6022391}, QualityApprox)
+	p.full["5415 york rd, towson, md 21286"] = []Candidate{towsonYork}
+	p.area["5415 york rd, md"] = []Candidate{yorkRd}
+	id := onlineDelivery(h, "5415 YORK RD, AROMA PIZZA")
+
+	h.drain()
+	push := onlyPush(t, h, id)
+	if push.State != StateLocated || *push.Lat != yorkRd.Lat || *push.Lng != yorkRd.Lng || !push.Corrected {
+		t.Fatalf("push = %+v (want the house on York Rd in Baltimore, corrected)", push)
+	}
+
+	// No house in the area: the approx street answer stands, not corrected.
+	p.area = map[string][]Candidate{}
+	id2 := onlineDelivery(h, "5415 YORK RD, CORNER STORE")
+	h.drain()
+	push2 := onlyPush(t, h, id2)
+	if push2.State != StateLocated || push2.Quality != QualityApprox || push2.Corrected || *push2.Lat != towsonYork.Lat {
+		t.Fatalf("push = %+v (want the approx street answer kept)", push2)
+	}
+}

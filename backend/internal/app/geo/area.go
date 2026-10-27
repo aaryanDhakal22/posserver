@@ -287,42 +287,74 @@ func (s *Service) geocode(ctx context.Context, prov *Providers, in locateIn) (ge
 		}
 		return geocoded{res: g, cacheKey: in.key}
 	}
+	street := CleanStreet(in.addr.Line1)
+	// A street-level (approx) answer can be the right street in the wrong
+	// town — SoftTouch's default "Towson 21286" put "5415 York Rd" (Baltimore
+	// 21212) on York Rd in Towson. Then the area search gets a say: the
+	// exact house there wins (corrected), else the approx answer stands.
+	houseOverApprox := func(d geocoded) (geocoded, error) {
+		if d.res.Quality != QualityApprox || len(d.check) > 0 {
+			return d, nil
+		}
+		area, err := s.areaGeocode(ctx, prov, in, street)
+		if err != nil || area.res.Quality == "" || !area.house {
+			return d, nil // provider trouble or no house match: keep what we have
+		}
+		s.logger.Info().Ctx(ctx).Msg("geo: an approx street match gave way to the house found in the store's area (corrected)")
+		return area.geocoded, nil
+	}
 	g, err := prov.Geocode(ctx, in.addr, in.store)
 	if err == nil {
-		return decide(in.addr, g), nil
+		return houseOverApprox(decide(in.addr, g))
 	}
 	if !errors.Is(err, ErrNotFound) {
 		return geocoded{}, err
 	}
 
 	// 1. The street part only, same town + zip.
-	street := CleanStreet(in.addr.Line1)
 	if street != "" && normWords(street) != normWords(stripUnit(in.addr.Line1)) {
 		a := in.addr
 		a.Line1 = street
 		g, err := prov.Geocode(ctx, a, in.store)
 		if err == nil {
 			s.logger.Info().Ctx(ctx).Msg("geo: found once the notes after the street were dropped")
-			return decide(a, g), nil
+			return houseOverApprox(decide(a, g))
 		}
 		if !errors.Is(err, ErrNotFound) {
 			return geocoded{}, err
 		}
 	}
 
-	// 2. Street + state only, inside the store's area. Only a line with a
-	// house number: a bare name searched in a 20-mile box is a guess.
+	// 2. Street + state only, inside the store's area.
+	area, err := s.areaGeocode(ctx, prov, in, street)
+	if err != nil {
+		return geocoded{}, err
+	}
+	return area.geocoded, nil
+}
+
+// areaResult is step 2's answer; house = the one place agrees with the
+// input's house number + street name (not a road-only match).
+type areaResult struct {
+	geocoded
+	house bool
+}
+
+// areaGeocode is step 2: street + state only, inside the store's area. Only
+// a line with a house number: a bare name searched in a 20-mile box is a
+// guess. ErrNotFound when it finds nothing (or can't run).
+func (s *Service) areaGeocode(ctx context.Context, prov *Providers, in locateIn, street string) (areaResult, error) {
 	if HouseNumber(street) == "" || in.locationID == uuid.Nil {
-		return geocoded{}, ErrNotFound
+		return areaResult{}, ErrNotFound
 	}
 	box, ok := s.storeArea(ctx, in.locationID, in.store)
 	if !ok {
-		return geocoded{}, ErrNotFound
+		return areaResult{}, ErrNotFound
 	}
 	a := Address{Line1: street, State: in.addr.State}
 	r, err := geocodeIn(ctx, prov.Geocoder, a, box)
 	if err != nil {
-		return geocoded{}, err
+		return areaResult{}, err
 	}
 	one, check := areaPick(a, r.Candidates)
 	switch {
@@ -332,11 +364,11 @@ func (s *Service) geocode(ctx context.Context, prov *Providers, in locateIn) (ge
 			key = AreaCacheKey(in.locationID, in.key)
 		}
 		s.logger.Info().Ctx(ctx).Str("source", r.Source).Msg("geo: found in the store's area without the town + zip (corrected)")
-		return geocoded{res: GeocodeResult{Point: one.Point(), Quality: one.Quality, Source: r.Source, Candidates: []Candidate{*one}},
-			corrected: true, cacheKey: key}, nil
+		return areaResult{geocoded: geocoded{res: GeocodeResult{Point: one.Point(), Quality: one.Quality, Source: r.Source, Candidates: []Candidate{*one}},
+			corrected: true, cacheKey: key}, house: Agrees(a, *one)}, nil
 	case len(check) > 0:
 		s.logger.Info().Ctx(ctx).Int("candidates", len(check)).Msg("geo: several places in the store's area (check)")
-		return geocoded{check: check}, nil
+		return areaResult{geocoded: geocoded{check: check}}, nil
 	}
-	return geocoded{}, ErrNotFound
+	return areaResult{}, ErrNotFound
 }
