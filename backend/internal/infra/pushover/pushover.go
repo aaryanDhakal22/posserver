@@ -54,8 +54,12 @@ func (e *RejectedError) DeviceNotFound() bool {
 type Client struct {
 	token      string
 	recipients []string
-	http       *http.Client
-	endpoint   string
+	// devices scopes the first recipient (the user key) to the admin's
+	// phones (AGENT_SECRET_PUSHOVER_ADMIN_DEVICE): drivers and the store
+	// owner share that account. Empty = every device, as before 2.2.3.
+	devices  []string
+	http     *http.Client
+	endpoint string
 }
 
 // New builds a client for app `token` paging every non-empty recipient key.
@@ -82,17 +86,42 @@ func (c *Client) SetEndpoint(u string) {
 	}
 }
 
+// SetDevices scopes the user key's pages to these devices (see devices).
+func (c *Client) SetDevices(devices []string) { c.devices = devices }
+
 // Enabled reports whether Send would page anyone.
 func (c *Client) Enabled() bool { return c != nil && c.token != "" && len(c.recipients) > 0 }
 
 // Send pages every recipient; the first error is returned (the rest still go).
 func (c *Client) Send(ctx context.Context, title, message, sound string) error {
+	return c.SendAlso(ctx, nil, title, message, sound)
+}
+
+// SendAlso is Send with more devices on the user key (a store owner's
+// phones for a floor page) — only when the user key is scoped at all.
+func (c *Client) SendAlso(ctx context.Context, extra []string, title, message, sound string) error {
 	if !c.Enabled() {
 		return nil
 	}
+	device := ""
+	if len(c.devices) > 0 {
+		seen := map[string]bool{}
+		var ds []string
+		for _, d := range append(append([]string(nil), c.devices...), extra...) {
+			if !seen[d] {
+				seen[d] = true
+				ds = append(ds, d)
+			}
+		}
+		device = strings.Join(ds, ",")
+	}
 	var firstErr error
-	for _, user := range c.recipients {
-		if err := c.post(ctx, user, "", title, message, sound); err != nil && firstErr == nil {
+	for i, user := range c.recipients {
+		d := device
+		if i > 0 {
+			d = "" // the boss key is its own account
+		}
+		if err := c.post(ctx, user, d, title, message, sound); err != nil && firstErr == nil {
 			firstErr = err
 		}
 	}

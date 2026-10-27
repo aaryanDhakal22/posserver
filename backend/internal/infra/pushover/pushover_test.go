@@ -92,3 +92,36 @@ func TestSendDevicesErrors(t *testing.T) {
 		t.Fatalf("want a plain 500 rejection, got %#v", err)
 	}
 }
+
+func TestScopedPagesNameTheAdminAndOwnerDevices(t *testing.T) {
+	srv, forms := fake(t, 200, `{"status":1}`)
+	c := New("app", "user", "boss")
+	c.SetEndpoint(srv.URL)
+	c.SetDevices([]string{"AaryanPhone"})
+	if err := c.SendAlso(context.Background(), []string{"OwnerPhone", "AaryanPhone"}, "Agent offline", "m", "siren"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Send(context.Background(), "Pi replaced", "m", ""); err != nil {
+		t.Fatal(err)
+	}
+	got := forms()
+	if len(got) != 4 {
+		t.Fatalf("posts = %d", len(got))
+	}
+	if got[0].Get("user") != "user" || got[0].Get("device") != "AaryanPhone,OwnerPhone" {
+		t.Fatalf("floor page = %v", got[0])
+	}
+	if got[1].Get("user") != "boss" || got[1].Has("device") {
+		t.Fatalf("boss = %v", got[1])
+	}
+	if got[2].Get("device") != "AaryanPhone" || got[3].Has("device") {
+		t.Fatalf("system page = %v / %v", got[2], got[3])
+	}
+	// Unscoped (no admin devices): an owner list alone doesn't narrow it.
+	u := New("app", "user")
+	u.SetEndpoint(srv.URL)
+	u.SendAlso(context.Background(), []string{"OwnerPhone"}, "t", "m", "")
+	if last := forms()[4]; last.Has("device") {
+		t.Fatalf("unscoped = %v", last)
+	}
+}

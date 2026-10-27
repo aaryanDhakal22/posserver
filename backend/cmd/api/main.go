@@ -34,6 +34,7 @@ import (
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
+	tenancyDomain "quiccpos/main/internal/domain/tenancy"
 
 	sqsconsumer "quiccpos/main/internal/infra/sqs"
 	sseBroker "quiccpos/main/internal/infra/sse"
@@ -236,6 +237,9 @@ func main() {
 	pushoverURL := os.Getenv("PUSHOVER_API_URL")
 	pager := pushover.New(agentSecrets.PushoverAppToken, agentSecrets.PushoverUserKey, agentSecrets.PushoverBossKey)
 	pager.SetEndpoint(pushoverURL)
+	// The admin's phones only (drivers + the store owner share the account).
+	adminDevices := tenancyDomain.SplitDevices(agentSecrets.PushoverAdminDevices)
+	pager.SetDevices(adminDevices)
 	agentSync := agentsync.New(pool, repo, repo, broker, tenancyService, agentSecrets, pager, lgr)
 	if v, err := time.ParseDuration(os.Getenv("ORDER_REDELIVER_AFTER")); err == nil && v > 0 {
 		agentSync.RedeliverAfter = v
@@ -261,6 +265,7 @@ func main() {
 	// The store owner's alert test (Store › Details) sends through it too.
 	ownerPager := pushover.New(agentSecrets.PushoverAppToken, agentSecrets.PushoverUserKey, "")
 	ownerPager.SetEndpoint(pushoverURL)
+	ownerPager.SetDevices(adminDevices)
 	diagService := diagApp.New(pool, ownerPager, tenancyService, lgr)
 	requester.RegisterInbound(diagApp.MsgDiagReport, diagService.HandleRPC)
 	go diagService.RunPrune(ctx)
