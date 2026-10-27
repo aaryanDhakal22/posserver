@@ -331,12 +331,3 @@ tasks:
     cmds:
       - ../scripts/version.sh describe
 
-  version-init:
-    desc: "Create initial v0.1.0 (or override): task version-init -- 0.2.0"
-    cmds:
-      - ../scripts/version.sh init {{.CLI_ARGS}}
-
-  version-bump:
-    desc: "Bump and tag: task version-bump -- patch|minor|major"
-    cmds:
-      - ../scripts/version.sh bump {{.CLI_ARGS}}
