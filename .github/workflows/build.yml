@@ -5,165 +5,240 @@ name: Build and Push to GHCR
 #
 # Image tags at ghcr.io/<owner>/posserver (floating tags move, the rest don't):
 #
-#   push to `staging` branch → staging-latest (floating), staging-<sha7>
-#   push to `master`         → master-<sha7>                (never deployed)
+#   push to `staging` branch → staging-latest (floating), staging-<sha7>, tree-<tree12>
+#   push to `master`         → verify + build only, no image (never deployed)
 #   push a `v*` tag          → <semver>, prod-v<semver>     (the ONLY prod images)
 #   any other branch         → branch-<slug>
 #
-# `prod-latest` is never written by CI: it stays the last v1 image, which the
-# prod box still runs and which is the rollback target after the cutover.
-# Prod deploys always pin an exact tag (`deploy.sh prod-vX.Y.Z`).
-# Nothing here deploys: a host only changes when an operator pulls a tag and
-# recreates the container.
+# A tag whose tree + VERSION the staging image was already built and tested
+# from re-labels that image (tree-<tree12>) instead of rebuilding it; any
+# other tag runs the full verify + build.
+#
+# The binary (SvelteKit app embedded) is compiled on the runner with cached
+# Go and npm, beside the tests; backend/Dockerfile.ci only packages it.
+# Docs-only pushes don't run CI; a newer push to the same branch cancels the
+# older run (never for tags).
+#
+# `prod-latest` is never written by CI: it stays the last v1 image (the v1
+# rollback target). Prod deploys always pin an exact tag (`deploy.sh
+# prod-vX.Y.Z`). Nothing here deploys: a host only changes when an operator
+# pulls a tag and recreates the container.
 # ─────────────────────────────────────────────────────────────────────────
 
 on:
   push:
     branches: ["**"]
     tags: ["v*"]
+    paths-ignore: ["**.md", "docs/**"] # not applied to tag pushes
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/${{ github.repository_owner }}/posserver
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────
-  # 0. Verify — go vet + go test before any image is built.
-  #    Lighter than online's (no full compose stack); the project-level
-  #    pytest suite at tests/ exercises main+online+agent together when
-  #    you run it locally with `task test-e2e`.
+  # Reuse — a tag re-labels the staging image built from the same tree.
+  # ──────────────────────────────────────────────────────────────────────
+  reuse:
+    name: Reuse the tested staging image
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      reused: ${{ steps.retag.outputs.reused }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Re-label tree-<tree> as the release
+        id: retag
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/posserver"
+          v=${GITHUB_REF_NAME#v}
+          [ "$(tr -d '[:space:]' < VERSION)" = "$v" ] || { echo "VERSION != tag: full build"; exit 0; }
+          src="$image:tree-$(git rev-parse --short=12 "HEAD^{tree}")"
+          docker buildx imagetools inspect "$src" >/dev/null 2>&1 || { echo "no image of this tree: full build"; exit 0; }
+          docker buildx imagetools create -t "$image:$v" -t "$image:prod-v$v" "$src"
+          echo "reused=true" >> "$GITHUB_OUTPUT"
+          echo "released $src as $v / prod-v$v"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Verify — go vet + go test.
   # ──────────────────────────────────────────────────────────────────────
   verify:
     name: Verify (go vet + go test)
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
-          cache-dependency-path: backend/go.sum
-
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-test-${{ hashFiles('backend/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-test-${{ hashFiles('backend/go.sum') }}-
+            go-test-
       - name: go vet
         working-directory: ./backend
         run: go vet ./...
-
       - name: go test
         working-directory: ./backend
         run: go test ./...
 
   # ──────────────────────────────────────────────────────────────────────
-  # Staging — every branch push (gated on verify)
+  # Build — the binary on the runner (beside verify), then the image.
   # ──────────────────────────────────────────────────────────────────────
-  build-staging:
-    name: Build branch image
-    needs: verify
-    if: github.ref_type == 'branch'
+  build:
+    name: Build (binary + image)
+    needs: reuse
+    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: backend/frontend/package-lock.json
+      - name: Frontend (SvelteKit)
+        working-directory: ./backend/frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          cp -r build/. ../internal/transport/webapp/build/
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: false
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: go-build-${{ hashFiles('backend/go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-${{ hashFiles('backend/go.sum') }}-
+            go-build-
+      - name: Binary
+        working-directory: ./backend
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          # A branch build stamps VERSION, a tag build the tag: the same value
+          # when they match, which is what lets a tag reuse a staging image.
+          version=$(tr -d '[:space:]' < ../VERSION)
+          [ "$GITHUB_REF_TYPE" = tag ] && version=${GITHUB_REF_NAME#v}
+          mkdir -p "$RUNNER_TEMP/image/data"
+          go build -trimpath -ldflags "-w -s -X main.version=$version -X main.commit=${GITHUB_SHA}" \
+            -o "$RUNNER_TEMP/image/app" ./cmd/api
+
+      - name: Image tags
+        id: out
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/posserver"
+          tree=$(git rev-parse --short=12 "HEAD^{tree}")
+          sha7=${GITHUB_SHA::7}
+          case "$GITHUB_REF" in
+            refs/heads/staging) tags="$image:staging-latest,$image:staging-$sha7,$image:tree-$tree" ;;
+            refs/heads/master)  tags="" ;; # master images were never deployed
+            refs/tags/v*)       tags="" ;; # pushed by release-production once verify is green
+            *)                  slug=$(echo "$GITHUB_REF_NAME" | tr -c 'a-zA-Z0-9._-' '-' | cut -c1-100); tags="$image:branch-$slug" ;;
+          esac
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        if: steps.out.outputs.tags != ''
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Compute staging tags
-        id: meta
-        uses: docker/metadata-action@v5
+      - uses: docker/setup-buildx-action@v3
+        if: steps.out.outputs.tags != ''
+      - name: Package and push
+        if: steps.out.outputs.tags != ''
+        uses: docker/build-push-action@v6
         with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=raw,value=staging-latest,enable=${{ github.ref == 'refs/heads/staging' }}
-            type=sha,prefix=staging-,format=short,enable=${{ github.ref == 'refs/heads/staging' }}
-            type=sha,prefix=master-,format=short,enable=${{ github.ref == 'refs/heads/master' }}
-            type=ref,event=branch,prefix=branch-,enable=${{ github.ref != 'refs/heads/staging' && github.ref != 'refs/heads/master' }}
-
-      - name: Read VERSION
-        id: version
-        run: echo "value=$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push staging image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile.staging
-          target: runtime
+          context: ${{ runner.temp }}/image
+          file: ./backend/Dockerfile.ci
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.version.outputs.value }}
-            COMMIT=${{ github.sha }}
-          cache-from: type=gha,scope=staging
-          cache-to: type=gha,mode=max,scope=staging
+          provenance: false
+          tags: ${{ steps.out.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+      - uses: actions/upload-artifact@v4
+        if: github.ref_type == 'tag'
+        with:
+          name: main-image
+          path: ${{ runner.temp }}/image
+          retention-days: 1
 
   # ──────────────────────────────────────────────────────────────────────
-  # Production — semver tag push only (gated on verify)
+  # Production — a tag that couldn't reuse an image: packaged and pushed
+  # only once verify is green.
   # ──────────────────────────────────────────────────────────────────────
-  build-production:
-    name: Build production image
-    needs: verify
-    if: github.ref_type == 'tag' && startsWith(github.ref, 'refs/tags/v')
+  release-production:
+    name: Push production image
+    needs: [verify, build]
+    if: ${{ !cancelled() && github.ref_type == 'tag' && needs.verify.result == 'success' && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: backend/Dockerfile.ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: main-image
+          path: ${{ runner.temp }}/image
+      - run: mkdir -p "$RUNNER_TEMP/image/data" && chmod +x "$RUNNER_TEMP/image/app"
+      - id: tags
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/posserver"
+          v=${GITHUB_REF_NAME#v}
+          echo "tags=$image:$v,$image:prod-v$v" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Compute production tags
-        id: meta
-        uses: docker/metadata-action@v5
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
         with:
-          images: ${{ env.IMAGE }}
-          tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern=prod-v{{version}}
-
-      - name: Read VERSION
-        id: version
-        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push production image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./backend
-          file: ./backend/Dockerfile.production
-          target: runtime
+          context: ${{ runner.temp }}/image
+          file: ./backend/Dockerfile.ci
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: |
-            VERSION=${{ steps.version.outputs.value }}
-            COMMIT=${{ github.sha }}
-          cache-from: type=gha,scope=production
-          cache-to: type=gha,mode=max,scope=production
+          provenance: false
+          tags: ${{ steps.tags.outputs.tags }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
 
-      # Deploy is operator-driven by design — main/'s blue-green needs an
-      # explicit `task deploy IMAGE=...` on the home-prod box. Don't add
-      # auto-deploy here unless that policy changes.
+  # Deploy is operator-driven by design — main/'s blue-green needs an
+  # explicit `deploy.sh prod-vX.Y.Z` on the prod box. Don't add auto-deploy
+  # here unless that policy changes.
