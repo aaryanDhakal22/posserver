@@ -312,8 +312,8 @@ tasks:
   #
   # Each repo holds a bare semver in ./VERSION (e.g. `0.1.0`); tags are
   # `vX.Y.Z`. CI builds `prod-vX.Y.Z` from any pushed tag matching `v*`.
-  # The bump task auto-commits + tags but does NOT push — `git push --tags`
-  # is the explicit "release" step.
+  # Releasing is not a task here: after the PR merge, the quicc-ops
+  # `deploy/release.sh main` tags origin/master's VERSION and waits for CI.
   # ──────────────────────────────────────────────────────────────────────
 
   version-current:
@@ -337,15 +337,3 @@ tasks:
     desc: "Bump and tag: task version-bump -- patch|minor|major"
     cmds:
       - ../scripts/version.sh bump {{.CLI_ARGS}}
-
-  version-tag:
-    desc: "(Re-)tag the current VERSION without bumping. Pass -f to overwrite."
-    cmds:
-      - ../scripts/version.sh tag {{.CLI_ARGS}}
-
-  release:
-    desc: "Bump (default patch) and push tag — CI builds prod-vX.Y.Z. task release -- minor"
-    cmds:
-      - ../scripts/version.sh bump {{- if .CLI_ARGS }} {{.CLI_ARGS}}{{- else }} patch{{- end }}
-      - git push origin HEAD
-      - git push origin --tags
