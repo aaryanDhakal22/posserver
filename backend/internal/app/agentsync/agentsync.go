@@ -56,9 +56,12 @@ type Secrets struct {
 	PushoverAppToken string `json:"pushover_app_token,omitempty"`
 	PushoverUserKey  string `json:"pushover_user_key,omitempty"`
 	PushoverBossKey  string `json:"pushover_boss_key,omitempty"`
-	OTLPEndpoint     string `json:"otlp_endpoint,omitempty"`
-	OTLPHeaders      string `json:"otlp_headers,omitempty"`
-	TailscaleAuthKey string `json:"tailscale_authkey,omitempty"`
+	// PushoverAdminDevices is the admin's device-name comma list as typed in
+	// Doppler: the agent sends system events (and floor problems) only there.
+	PushoverAdminDevices string `json:"pushover_admin_devices,omitempty"`
+	OTLPEndpoint         string `json:"otlp_endpoint,omitempty"`
+	OTLPHeaders          string `json:"otlp_headers,omitempty"`
+	TailscaleAuthKey     string `json:"tailscale_authkey,omitempty"`
 }
 
 // Broker is the slice of the SSE broker the service uses.

@@ -141,6 +141,26 @@ func (s *Service) Credential(ctx context.Context, tenantID uuid.UUID) (*Manager,
 	return &Manager{Username: user, PasswordHash: hash}, nil
 }
 
+// PushoverSecrets is the Pushover slice of the link secrets, re-read by a
+// linked agent (GET /store/v1/agent/secrets) so a Doppler change reaches the
+// Pi without a re-link. Every field is always present ("" = not set).
+type PushoverSecrets struct {
+	AppToken     string `json:"pushover_app_token"`
+	UserKey      string `json:"pushover_user_key"`
+	BossKey      string `json:"pushover_boss_key"`
+	AdminDevices string `json:"pushover_admin_devices"`
+}
+
+// PushoverSecrets returns main's current Pushover secrets for an agent.
+func (s *Service) PushoverSecrets() PushoverSecrets {
+	return PushoverSecrets{
+		AppToken:     s.secrets.PushoverAppToken,
+		UserKey:      s.secrets.PushoverUserKey,
+		BossKey:      s.secrets.PushoverBossKey,
+		AdminDevices: s.secrets.PushoverAdminDevices,
+	}
+}
+
 // linkGlobalKey/Max cap failed links across all usernames per window.
 const (
 	linkGlobalKey = "*"

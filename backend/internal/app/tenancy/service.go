@@ -338,6 +338,11 @@ func (s *Service) UpdateLocation(ctx context.Context, p tenancy.UpdateLocationPa
 	if _, _, err := tenancy.HoursFromConfig(p.Config); err != nil {
 		return nil, err
 	}
+	// The owner's Pushover devices go live to the agent: refuse a name
+	// Pushover would refuse, store the list trimmed + de-duplicated.
+	if err := tenancy.NormalizeOwnerDevices(p.Config); err != nil {
+		return nil, err
+	}
 	return s.repo.UpdateLocation(ctx, p)
 }
 

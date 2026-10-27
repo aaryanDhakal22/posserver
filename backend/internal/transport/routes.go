@@ -94,6 +94,8 @@ type RouterDeps struct {
 	Diag *diagApp.Service
 	// Geo backs delivery maps: store pin, published map, store geocoding.
 	Geo *geoApp.Service
+	// AlertSender sends the store owner's test alert (main's owner pager).
+	AlertSender handler.AlertSender
 	// AppEnv gates dev-only routes (the geo test-provider override).
 	AppEnv string
 }
@@ -166,6 +168,7 @@ func routeTable(d RouterDeps) []routeDef {
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
 	diagH := handler.NewDiagHandler(d.Diag, d.Logger)
 	agentUpdateH := handler.NewAgentUpdateHandler(d.AgentSync, d.Requester, d.Logger)
+	alertsH := handler.NewAlertsHandler(d.TenancyService, d.AlertSender, d.Logger)
 	geoH := handler.NewGeoHandler(d.TenancyService, d.Geo, cfgPub, d.AppEnv, d.Logger)
 	if d.Geo != nil {
 		adminH.OnLocationSaved(d.Geo.GeocodeStoreAsync)
@@ -259,6 +262,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/agent/link", "none", "Link a blank agent with the store manager login → agent key + secrets (revokes the old agent; throttled)", agentLinkH.Link),
 		def("GET", storePrefix+"/agent/restore", "device", "Open batch for a replacement agent (state + orders + drivers) — agent keys only", agentLinkH.Restore, device, agentOnly),
 		def("GET", storePrefix+"/agent/credential", "device", "Manager login hash for offline web-UI unlock — agent keys only", agentLinkH.Credential, device, agentOnly),
+		def("GET", storePrefix+"/agent/secrets", "device", "Current Pushover secrets {pushover_app_token, pushover_user_key, pushover_boss_key, pushover_admin_devices} (no-store) — agent keys only", agentLinkH.Secrets, device, agentOnly),
 		def("POST", storePrefix+"/agent/backup", "device", "Upload the agent's nightly SQLite copy (newest 2 kept) — agent keys only", agentLinkH.Backup, device, agentOnly),
 		def("POST", storePrefix+"/agent/rpc", "device", "Duplex channel: agent→main replies + reports — agent keys only", agentRPCH.Handle, device, agentOnly),
 		def("GET", storePrefix+"/agent/app/latest", "device", "Newest tablet-app release (?app=quibase; 204 none) — agent keys only", appRelH.Latest, device, agentOnly),
@@ -278,7 +282,8 @@ func routeTable(d RouterDeps) []routeDef {
 
 		// Store — session-scoped self-service (location from the cookie, not the URL).
 		def("GET", storePrefix+"/me/location", "store-session", "This manager's location", storeH.MeGetLocation, storeSession),
-		def("PATCH", storePrefix+"/me/location", "store-session", "Edit this manager's location", storeH.MeUpdateLocation, storeSession),
+		def("PATCH", storePrefix+"/me/location", "store-session", "Edit this manager's location (full replace incl. config; pushes store_config; bad Pushover device name → 400 bad_device)", storeH.MeUpdateLocation, storeSession),
+		def("POST", storePrefix+"/me/alerts/test", "store-session", "Send one test Pushover to the saved owner phones (location config pushover_owner_devices; 1 per 10 s)", alertsH.MeTest, storeSession),
 		def("PUT", storePrefix+"/me/location/pin", "store-session", "Place the store pin by hand {lat, lng} (Store › Details map)", geoH.MeSetPin, storeSession),
 		def("GET", storePrefix+"/me/orders", "store-session", "Recent orders with the agent-synced floor status (?limit)", floorH.MeListOrders, storeSession),
 		def("GET", storePrefix+"/me/delivery-runs", "store-session", "Driver runs sent (AUTO suggestion vs sent), newest first (?limit=50)", floorH.MeDeliveryRuns, storeSession),
