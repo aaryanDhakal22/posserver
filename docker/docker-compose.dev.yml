@@ -65,6 +65,11 @@ services:
     volumes:
       - ../backend:/src
       - ~/.aws:/root/.aws:ro
+      # The dev image fills these only inside BuildKit cache mounts, so without
+      # named volumes every container recreate re-downloads the modules and
+      # cold-compiles air's first build.
+      - go_mod:/go/pkg/mod
+      - go_build:/root/.cache/go-build
     ports:
       # Host bind port is sourced from Doppler (DEV_HOST_PORT) so all modules
       # coexist on one dev box without conflict. Container stays on 1323.
@@ -119,3 +124,5 @@ services:
 volumes:
   postgres_data:
   pgadmin_data:
+  go_mod:
+  go_build:
