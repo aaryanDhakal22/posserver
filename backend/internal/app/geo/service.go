@@ -17,6 +17,7 @@ import (
 	sseBroker "quiccpos/main/internal/infra/sse"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
+	"quiccpos/main/internal/shared/ratelimit"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -92,6 +93,11 @@ type Queries interface {
 	SetOrderGeoOutsideArea(ctx context.Context, arg models.SetOrderGeoOutsideAreaParams) (int64, error)
 	ListLiveExternalStopsForRadius(ctx context.Context, arg models.ListLiveExternalStopsForRadiusParams) ([]models.ListLiveExternalStopsForRadiusRow, error)
 	SetExternalStopOutsideArea(ctx context.Context, arg models.SetExternalStopOutsideAreaParams) (int64, error)
+
+	// 2.2.2 geo.search.
+	SaveOrderGeoSearch(ctx context.Context, arg models.SaveOrderGeoSearchParams) (int64, error)
+	SaveExternalStopSearch(ctx context.Context, arg models.SaveExternalStopSearchParams) (int64, error)
+	UpsertExternalWorkSearch(ctx context.Context, arg models.UpsertExternalWorkSearchParams) error
 }
 
 const (
@@ -139,6 +145,11 @@ type Service struct {
 
 	located metric.Int64Counter
 	pushes  metric.Int64Counter
+
+	// searches limits geo.search per order (SearchGap); spawn runs a search
+	// off the RPC (tests run it inline).
+	searches *ratelimit.Window
+	spawn    func(func())
 }
 
 // New builds the service with the providers chosen by cfg.
@@ -159,6 +170,8 @@ func newService(q Queries, tx func(context.Context, func(Queries) error) error, 
 		inflight:     map[uuid.UUID]bool{},
 		PushTimeout:  5 * time.Second,
 		ConnectDelay: 3 * time.Second,
+		searches:     ratelimit.New(1, SearchGap),
+		spawn:        func(f func()) { go f() },
 	}
 	s.located, _ = m.Int64Counter("geo.orders", metric.WithDescription("Deliveries worked by the geo worker (online orders + external stops), by result (located / check / not_found / retry)"))
 	s.pushes, _ = m.Int64Counter("geo.pushes", metric.WithDescription("order.geo pushes to an agent, by result"))
@@ -390,6 +403,7 @@ type located struct {
 	outside                 bool
 	storeTo, toStore        *int
 	candidates              []Candidate // state check only
+	corrected               bool        // found by the area retry (2.2.2)
 }
 
 // locateIn is what one locate works from.
@@ -397,15 +411,18 @@ type locateIn struct {
 	// tenantID + external: metric labels only (store; kind=external for a stop).
 	tenantID uuid.UUID
 	external bool
-	key      string // geo_cache key; "" = none
-	addr     Address
-	hasAddr  bool
+	// locationID scopes the area retry: its box and its cache entries (2.2.2).
+	locationID uuid.UUID
+	key        string // geo_cache key; "" = none
+	addr       Address
+	hasAddr    bool
 	// fixed: a point already decided (an external stop's pin / choice, or a
 	// re-route after the store moved) — no geocode.
-	fixed        *Point
-	fixedQuality string
-	store        *Point
-	radiusM      int
+	fixed          *Point
+	fixedQuality   string
+	fixedCorrected bool // the fixed point came from the area retry
+	store          *Point
+	radiusM        int
 }
 
 // resolve geocodes (cache first, then the providers with the confidence
@@ -433,17 +450,13 @@ func (s *Service) resolve(ctx context.Context, in locateIn, attempts int, create
 	switch {
 	case in.fixed != nil:
 		pt := *in.fixed
-		res.pt, res.quality = &pt, in.fixedQuality
+		res.pt, res.quality, res.corrected = &pt, in.fixedQuality, in.fixedCorrected
 	default:
-		var cached models.GeoCache
-		err := pgx.ErrNoRows
-		if in.key != "" {
-			cached, err = s.q.GetGeoCache(ctx, in.key)
-		}
+		cached, corrected, err := s.cached(ctx, in)
 		switch {
 		case err == nil:
 			pt := Point{Lat: cached.Lat, Lng: cached.Lng}
-			res.pt, res.quality = &pt, cached.Quality
+			res.pt, res.quality, res.corrected = &pt, cached.Quality, corrected
 			if cached.Pinned {
 				res.quality = QualityPinned
 			}
@@ -452,23 +465,20 @@ func (s *Service) resolve(ctx context.Context, in locateIn, attempts int, create
 		case !in.hasAddr:
 			res.lastErr = "no delivery address"
 		default:
-			g, gerr := prov.Geocode(ctx, in.addr, in.store)
+			g, gerr := s.geocode(ctx, prov, in)
 			switch {
+			case gerr == nil && len(g.check) > 0:
+				res.state = StateCheck
+				res.candidates = g.check
+				return res, true, nil
 			case gerr == nil:
-				cands := g.Candidates
-				if len(cands) == 0 {
-					cands = []Candidate{{Lat: g.Lat, Lng: g.Lng, Quality: g.Quality}}
-				}
-				if !Confident(in.addr, cands) {
-					res.state = StateCheck
-					res.candidates = cands[:min(len(cands), MaxCandidates)]
-					return res, true, nil
-				}
-				res.pt, res.quality = &g.Point, g.Quality
-				if err := s.q.UpsertGeoCacheGeocoded(ctx, models.UpsertGeoCacheGeocodedParams{
-					AddressKey: in.key, Lat: g.Lat, Lng: g.Lng, Quality: g.Quality, Source: g.Source,
-				}); err != nil {
-					return res, false, err
+				res.pt, res.quality, res.corrected = &g.res.Point, g.res.Quality, g.corrected
+				if g.cacheKey != "" {
+					if err := s.q.UpsertGeoCacheGeocoded(ctx, models.UpsertGeoCacheGeocodedParams{
+						AddressKey: g.cacheKey, Lat: g.res.Lat, Lng: g.res.Lng, Quality: g.res.Quality, Source: g.res.Source,
+					}); err != nil {
+						return res, false, err
+					}
 				}
 			case errors.Is(gerr, ErrNotFound):
 				res.lastErr = "no geocoder match"
@@ -529,7 +539,7 @@ func (s *Service) locate(ctx context.Context, scope sseBroker.Scope, id uuid.UUI
 		return false, err
 	}
 	addr, hasAddr := orderAddress(o.FulfillmentAddress)
-	in := locateIn{tenantID: scope.TenantID, key: cacheKey(id, addr, hasAddr), hasAddr: hasAddr, radiusM: int(o.DeliveryRadiusM),
+	in := locateIn{tenantID: scope.TenantID, locationID: scope.LocationID, key: cacheKey(id, addr, hasAddr), hasAddr: hasAddr, radiusM: int(o.DeliveryRadiusM),
 		addr: Address{Line1: addr.Line1, City: addr.City, State: addr.State, Zip: addr.PostalCode}}
 	if o.StoreLat.Valid && o.StoreLng.Valid {
 		in.store = &Point{Lat: o.StoreLat.Float64, Lng: o.StoreLng.Float64}
@@ -563,7 +573,7 @@ func (s *Service) saveResult(ctx context.Context, id uuid.UUID, r located) error
 	p := models.SaveOrderGeoResultParams{
 		OrderID: pgUUID(id), State: r.state, Quality: r.quality, DistanceM: int32(r.route.DistanceM),
 		DurationS: int32(r.route.DurationS), Polyline: r.route.Polyline, OutsideArea: r.outside, LastError: trunc(r.lastErr),
-		Candidates: candidatesJSON(r.candidates),
+		Candidates: candidatesJSON(r.candidates), Corrected: r.corrected && r.state == StateLocated,
 	}
 	if r.pt != nil {
 		p.Lat, p.Lng = pgtype.Float8{Float64: r.pt.Lat, Valid: true}, pgtype.Float8{Float64: r.pt.Lng, Valid: true}
@@ -621,6 +631,13 @@ type Push struct {
 	// other push — a first locate, a cache hit on a pinned address, a re-route
 	// after the store moved, a re-push after the acked one.
 	Confirmed bool `json:"confirmed,omitempty"`
+	// Corrected (2.2.2, located only): the address was found only by the area
+	// retry — its notes dropped and/or its town + zip ignored, searched inside
+	// the store's map box. The tablet tags it "address corrected".
+	Corrected bool `json:"corrected,omitempty"`
+	// Note (2.2.2): a short staff-facing line, today only on the not_found
+	// answer to a geo.search ("no match for that search").
+	Note string `json:"note,omitempty"`
 }
 
 // geoRow is the push-relevant part of an order_geo row or an external stop.
@@ -631,16 +648,19 @@ type geoRow struct {
 	outside                  bool
 	storeToS, toStoreS       pgtype.Int4
 	confirmed                bool // the row's pending pin / choice (located only)
+	corrected                bool // found by the area retry (located only)
+	note                     string
 }
 
 // buildPush fills the payload from a stored result (drive times included).
 func (s *Service) buildPush(ctx context.Context, scope sseBroker.Scope, id uuid.UUID, g geoRow) Push {
 	p := Push{OrderID: id.String(), State: g.state, DistanceM: int(g.distanceM), DurationS: int(g.durationS),
-		Polyline: g.polyline, OutsideArea: g.outside}
+		Polyline: g.polyline, OutsideArea: g.outside, Note: g.note}
 	if g.state == StateLocated && g.lat.Valid && g.lng.Valid {
 		lat, lng := g.lat.Float64, g.lng.Float64
 		p.Lat, p.Lng, p.Quality = &lat, &lng, g.quality
 		p.Confirmed = g.confirmed
+		p.Corrected = g.corrected
 		if g.storeToS.Valid {
 			v := int(g.storeToS.Int32)
 			p.StoreToS = &v
@@ -689,7 +709,7 @@ func (s *Service) push(ctx context.Context, scope sseBroker.Scope, id uuid.UUID)
 	}
 	p := s.buildPush(ctx, scope, id, geoRow{state: g.State, quality: g.Quality, polyline: g.Polyline, lat: g.Lat, lng: g.Lng,
 		distanceM: g.DistanceM, durationS: g.DurationS, outside: g.OutsideArea, storeToS: g.StoreToS, toStoreS: g.ToStoreS,
-		confirmed: g.Confirmed})
+		confirmed: g.Confirmed, corrected: g.Corrected, note: g.Note})
 	switch g.State {
 	case StateCheck:
 		p.Candidates = decodeCandidates(g.Candidates)

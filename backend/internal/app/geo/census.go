@@ -47,6 +47,14 @@ func (c *Census) Geocode(ctx context.Context, a Address, _ *Point) (GeocodeResul
 	return parseCensus(body, a)
 }
 
+// GeocodeIn — see AreaGeocoder. The Census has no bounds: the line goes
+// without town + zip ("street, ST") and geocodeIn keeps the matches inside
+// the box.
+func (c *Census) GeocodeIn(ctx context.Context, a Address, _ BBox) (GeocodeResult, error) {
+	a.City, a.Zip = "", ""
+	return c.Geocode(ctx, a, nil)
+}
+
 func parseCensus(body censusResponse, a Address) (GeocodeResult, error) {
 	in := HouseNumber(a.Line1)
 	if in == "" {

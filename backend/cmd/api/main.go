@@ -274,6 +274,7 @@ func main() {
 	requester.RegisterInbound(rpc.MsgGeoLocate, geoService.HandleLocate)
 	requester.RegisterInbound(rpc.MsgGeoForget, geoService.HandleForget)
 	requester.RegisterInbound(rpc.MsgGeoChoose, geoService.HandleChoose)
+	requester.RegisterInbound(rpc.MsgGeoSearch, geoService.HandleSearch)
 	// 2.2.0: the tablet sets the delivery radius through the Pi.
 	requester.RegisterInbound(rpc.MsgLocationRadius, geoService.HandleRadius)
 	floorService.OnDeliveryRun(repositories.NewDeliveryRunStore(pool))

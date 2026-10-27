@@ -51,6 +51,9 @@ const (
 	MsgGeoLocate = "geo.locate"
 	MsgGeoForget = "geo.forget"
 	MsgGeoChoose = "geo.choose"
+	// geo.search (2.2.2): staff typed an address for an order; main searches
+	// near the store and answers later with order.geo (check / not_found).
+	MsgGeoSearch = "geo.search"
 
 	// Delivery radius from the tablet (2.2.0), agent → main request:
 	// {radius_m} → {radius_m}; a bad radius is a 400.

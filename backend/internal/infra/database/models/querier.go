@@ -273,10 +273,17 @@ type Querier interface {
 	// Both guarded by the updated_at the worker read: a re-locate, pin or
 	// choice that arrived meanwhile wins (the row is due again anyway).
 	SaveExternalStopRetry(ctx context.Context, arg SaveExternalStopRetryParams) (int64, error)
+	// geo.search for an external stop; the candidates go on the work row
+	// (UpsertExternalWorkSearch, same tx).
+	SaveExternalStopSearch(ctx context.Context, arg SaveExternalStopSearchParams) (int64, error)
 	// A final result (located / check / not_found). Clears pushed_at so it is
 	// (re)pushed. candidates is set for check only (NULL otherwise).
 	SaveOrderGeoResult(ctx context.Context, arg SaveOrderGeoResultParams) (pgtype.Timestamptz, error)
 	SaveOrderGeoRetry(ctx context.Context, arg SaveOrderGeoRetryParams) error
+	// A staff address search (geo.search, 2.2.2) answered: state check with the
+	// matches found near the store, or not_found with a note. Replaces whatever
+	// the order had (staff searched because it was wrong) and is pushed again.
+	SaveOrderGeoSearch(ctx context.Context, arg SaveOrderGeoSearchParams) (int64, error)
 	// Filtered/sorted order history for the agent's store-manager web UI. Every
 	// filter is optional: empty text params and NULL time bounds match everything.
 	// `reverse` flips newest-first (default) to oldest-first without a second query.
@@ -350,6 +357,10 @@ type Querier interface {
 	// A (re)locate request: back to pending with no point, a fresh 24 h expiry.
 	UpsertExternalStop(ctx context.Context, arg UpsertExternalStopParams) (int64, error)
 	UpsertExternalWork(ctx context.Context, arg UpsertExternalWorkParams) error
+	// The search's candidates (NULL: none found) for geo.choose. A stop whose
+	// address text is gone gets an empty work row (no address, no cache key),
+	// discarded as usual.
+	UpsertExternalWorkSearch(ctx context.Context, arg UpsertExternalWorkSearchParams) error
 	// A geocode result. A pinned entry is never overwritten by a geocode.
 	UpsertGeoCacheGeocoded(ctx context.Context, arg UpsertGeoCacheGeocodedParams) error
 	UpsertGeoCachePinned(ctx context.Context, arg UpsertGeoCachePinnedParams) error

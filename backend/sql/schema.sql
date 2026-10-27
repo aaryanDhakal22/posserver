@@ -535,7 +535,10 @@ CREATE TABLE order_geo (
     candidates        jsonb,
     confirmed_address jsonb,
     -- 00015: the pending result is staff's own pin / choice (order.geo confirmed).
-    confirmed         boolean          NOT NULL DEFAULT false
+    confirmed         boolean          NOT NULL DEFAULT false,
+    -- 00016: found by the area retry (order.geo corrected) + a staff-facing note.
+    corrected         boolean          NOT NULL DEFAULT false,
+    note              text             NOT NULL DEFAULT ''
 );
 CREATE INDEX idx_order_geo_due ON order_geo (next_try_at) WHERE pushed_at IS NULL;
 CREATE INDEX idx_order_geo_location ON order_geo (location_id, state);
@@ -569,7 +572,10 @@ CREATE TABLE geo_external_stops (
     expires_at   timestamptz      NOT NULL,
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE,
     -- 00015: the pending result is staff's own pin / choice (order.geo confirmed).
-    confirmed    boolean          NOT NULL DEFAULT false
+    confirmed    boolean          NOT NULL DEFAULT false,
+    -- 00016: found by the area retry (order.geo corrected) + a staff-facing note.
+    corrected    boolean          NOT NULL DEFAULT false,
+    note         text             NOT NULL DEFAULT ''
 );
 CREATE INDEX idx_geo_external_stops_due ON geo_external_stops (next_try_at) WHERE pushed_at IS NULL;
 CREATE INDEX idx_geo_external_stops_location ON geo_external_stops (location_id, state);

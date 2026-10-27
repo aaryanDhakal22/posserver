@@ -99,6 +99,26 @@ func (n *Nominatim) Geocode(ctx context.Context, a Address, near *Point) (Geocod
 		const d = 0.25
 		q.Set("viewbox", fmt.Sprintf("%.5f,%.5f,%.5f,%.5f", near.Lng-d, near.Lat+d, near.Lng+d, near.Lat-d))
 	}
+	return n.search(ctx, q, a)
+}
+
+// GeocodeIn — see AreaGeocoder: a free-form search ("street, ST") bounded to
+// the box (viewbox + bounded=1).
+func (n *Nominatim) GeocodeIn(ctx context.Context, a Address, box BBox) (GeocodeResult, error) {
+	a.City, a.Zip = "", ""
+	q := url.Values{}
+	q.Set("format", "jsonv2")
+	q.Set("addressdetails", "1")
+	q.Set("limit", strconv.Itoa(nominatimLimit))
+	q.Set("countrycodes", "us")
+	q.Set("q", a.Line())
+	q.Set("viewbox", fmt.Sprintf("%.5f,%.5f,%.5f,%.5f", box.MinLng, box.MaxLat, box.MaxLng, box.MinLat))
+	q.Set("bounded", "1")
+	return n.search(ctx, q, a)
+}
+
+// search runs one request through the process-wide 1 req/s gate.
+func (n *Nominatim) search(ctx context.Context, q url.Values, a Address) (GeocodeResult, error) {
 	if err := nominatimGate.wait(ctx); err != nil {
 		return GeocodeResult{}, err
 	}

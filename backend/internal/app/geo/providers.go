@@ -92,3 +92,26 @@ func (c Chain) Geocode(ctx context.Context, a Address, near *Point) (GeocodeResu
 	}
 	return GeocodeResult{}, ErrNotFound
 }
+
+// GeocodeIn asks each geocoder in turn for a inside box (see AreaGeocoder),
+// with Geocode's error rule: ErrNotFound only when every one answered "no
+// match".
+func (c Chain) GeocodeIn(ctx context.Context, a Address, box BBox) (GeocodeResult, error) {
+	var failure error
+	for _, g := range c {
+		r, err := geocodeIn(ctx, g, a, box)
+		if err == nil {
+			return r, nil
+		}
+		if !errors.Is(err, ErrNotFound) {
+			failure = errors.Join(failure, err)
+		}
+		if ctx.Err() != nil {
+			return GeocodeResult{}, ctx.Err()
+		}
+	}
+	if failure != nil {
+		return GeocodeResult{}, failure
+	}
+	return GeocodeResult{}, ErrNotFound
+}
