@@ -5,11 +5,12 @@ requires-python = ">=3.11"
 dependencies = [
     "boto3>=1.42.93",
     "pytest>=8.3.5",
+    "pytest-xdist>=3.6",
     "requests>=2.32.3",
 ]
 
 [tool.pytest.ini_options]
 testpaths = ["."]
 markers = [
-    "slow: waits on real timeouts (e.g. ~90s SQS redrive to the DLQ); `task test-quick` skips these",
+    "slow: waits on real timeouts (e.g. the ~15s SQS redrive to the DLQ); `task test-quick` skips these",
 ]

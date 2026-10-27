@@ -282,15 +282,18 @@ tasks:
   # Tests
   # ──────────────────────────────────────────────────────────────────────
 
+  # 4 xdist workers; `--dist loadgroup` keeps each xdist_group on one worker
+  # ("geo": tests that swap main's global geo providers, "dlq": the DLQ walk).
+  # Extra pytest args pass through: task test -- -n 0 -k routing
   test:
     desc: Run the main/ pytest suite (dev stack must be up)
     cmds:
-      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v -n 4 --dist loadgroup {{.CLI_ARGS}}
 
   test-quick:
     desc: Fast subset of main/ tests
     cmds:
-      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v -m "not slow"
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v -n 4 --dist loadgroup -m "not slow" {{.CLI_ARGS}}
 
   test-unit:
     desc: Go unit tests (no Postgres, no Doppler needed)
@@ -312,8 +315,8 @@ tasks:
   #
   # Each repo holds a bare semver in ./VERSION (e.g. `0.1.0`); tags are
   # `vX.Y.Z`. CI builds `prod-vX.Y.Z` from any pushed tag matching `v*`.
-  # The bump task auto-commits + tags but does NOT push — `git push --tags`
-  # is the explicit "release" step.
+  # Releasing is not a task here: after the PR merge, the quicc-ops
+  # `deploy/release.sh main` tags origin/master's VERSION and waits for CI.
   # ──────────────────────────────────────────────────────────────────────
 
   version-current:
@@ -328,24 +331,3 @@ tasks:
     cmds:
       - ../scripts/version.sh describe
 
-  version-init:
-    desc: "Create initial v0.1.0 (or override): task version-init -- 0.2.0"
-    cmds:
-      - ../scripts/version.sh init {{.CLI_ARGS}}
-
-  version-bump:
-    desc: "Bump and tag: task version-bump -- patch|minor|major"
-    cmds:
-      - ../scripts/version.sh bump {{.CLI_ARGS}}
-
-  version-tag:
-    desc: "(Re-)tag the current VERSION without bumping. Pass -f to overwrite."
-    cmds:
-      - ../scripts/version.sh tag {{.CLI_ARGS}}
-
-  release:
-    desc: "Bump (default patch) and push tag — CI builds prod-vX.Y.Z. task release -- minor"
-    cmds:
-      - ../scripts/version.sh bump {{- if .CLI_ARGS }} {{.CLI_ARGS}}{{- else }} patch{{- end }}
-      - git push origin HEAD
-      - git push origin --tags

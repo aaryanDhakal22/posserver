@@ -12,11 +12,15 @@ from __future__ import annotations
 import time
 import uuid
 
+import pytest
 import requests
 
 from conftest import STORE_V1, store_key, wait_order
 from sse import SSEStream
-from test_geo import _delivery, _next_geo, _pin_store, _street, fake_geo  # noqa: F401  (fixture)
+from test_geo import _delivery, _next_geo, _pin_store, _street, fake_geo, stream_key, _rpc  # noqa: F401  (fixture)
+
+# One xdist worker for every test that swaps main's global geo providers.
+pytestmark = pytest.mark.xdist_group("geo")
 
 
 def _radius(key: str, payload) -> requests.Response:
@@ -55,6 +59,23 @@ def test_radius_is_validated(store) -> None:
     assert _my_radius(store) == 80467 != before
 
 
+def _next_geos(s: SSEStream, ids: list[str], *, timeout: float = 30.0) -> dict[str, dict]:
+    """order.geo for each of ids, in whatever order main pushes them (waiting
+    for one at a time would drop the other if it came first); each replied ok."""
+    got: dict[str, dict] = {}
+    deadline = time.time() + timeout
+    while len(got) < len(ids) and time.time() < deadline:
+        cmd = s.wait_event("command", lambda d: d.get("type") == "order.geo" and d["payload"]["order_id"] in ids
+                           and d["payload"]["order_id"] not in got, timeout=max(0.1, deadline - time.time()))
+        if cmd is None:
+            break
+        r = _rpc(stream_key(s), "order.geo.reply", {"ok": True}, msg_id=cmd["id"])
+        assert r.status_code == 204, r.text
+        got[cmd["payload"]["order_id"]] = cmd["payload"]
+    assert set(got) == set(ids), f"order.geo for {set(ids) - set(got)} not pushed within {timeout}s"
+    return got
+
+
 def test_radius_reflags_open_deliveries(admin, store, publish, fake_geo) -> None:  # noqa: F811
     _pin_store(admin, store)
     near, far = _street(), _street()
@@ -66,8 +87,8 @@ def test_radius_reflags_open_deliveries(admin, store, publish, fake_geo) -> None
         publish(o2)
         nid = wait_order(store.key, o1["order_id"])["id"]
         fid = wait_order(store.key, o2["order_id"])["id"]
-        assert _next_geo(s, nid)["outside_area"] is False
-        assert _next_geo(s, fid)["outside_area"] is True
+        g = _next_geos(s, [nid, fid])
+        assert g[nid]["outside_area"] is False and g[fid]["outside_area"] is True
 
         # 15 km: the far one is inside now — pushed again; the near one isn't.
         r = _radius(store.key, {"radius_m": 15000})
@@ -80,5 +101,5 @@ def test_radius_reflags_open_deliveries(admin, store, publish, fake_geo) -> None
 
         # 600 m: both are outside; both are pushed.
         assert _radius(store.key, {"radius_m": 600}).status_code == 200
-        assert _next_geo(s, nid)["outside_area"] is True
-        assert _next_geo(s, fid)["outside_area"] is True
+        g = _next_geos(s, [nid, fid])
+        assert g[nid]["outside_area"] is True and g[fid]["outside_area"] is True

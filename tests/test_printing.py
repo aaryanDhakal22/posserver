@@ -10,7 +10,7 @@ import json
 
 import pytest
 
-from conftest import API_V1, STORE_V1, store_key, wait_order
+from conftest import STORE_V1, wait_order
 from sse import SSEStream
 
 
