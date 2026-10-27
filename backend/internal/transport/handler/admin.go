@@ -453,7 +453,7 @@ func (h *AdminHandler) UpdateLocation(c *echo.Context) error {
 		Config:         req.Config,
 	})
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, errResp(err.Error()))
+		return c.JSON(http.StatusBadRequest, locationErr(err))
 	}
 	h.cfgPub.Publish(c.Request().Context(), l.TenantID, l.ID)
 	if h.geocodeStore != nil {

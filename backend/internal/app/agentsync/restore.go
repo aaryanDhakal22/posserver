@@ -249,17 +249,18 @@ func (s *Service) checkOffline(ctx context.Context, now time.Time) {
 			s.pages.Add(ctx, 1, observability.WithStore(ctx, l.TenantID))
 			msg := fmt.Sprintf("%s: the Pi (agent) has been offline for %d min during opening hours — orders are not printing. Check its power/network; if it doesn't come back, swap in the spare SD card.",
 				l.Name, int(now.Sub(since).Minutes()))
-			s.page(ctx, "Agent offline", msg, "siren")
+			s.page(ctx, "Agent offline", msg, "siren", tenancy.OwnerDevices(l.Config))
 		case connected && paged:
-			s.page(ctx, "Agent back online", l.Name+": the Pi is connected again.", "classical")
+			s.page(ctx, "Agent back online", l.Name+": the Pi is connected again.", "classical", tenancy.OwnerDevices(l.Config))
 		}
 	}
 }
 
-func (s *Service) page(ctx context.Context, title, msg, sound string) {
+// page sends a floor page: the admin's devices plus the store owner's.
+func (s *Service) page(ctx context.Context, title, msg, sound string, owner []string) {
 	s.logger.Warn().Ctx(ctx).Str("title", title).Msg(msg)
 	go func(ctx context.Context) {
-		if err := s.pager.Send(ctx, title, msg, sound); err != nil {
+		if err := s.pager.SendAlso(ctx, owner, title, msg, sound); err != nil {
 			s.logger.Warn().Err(err).Msg("page failed")
 		}
 	}(context.WithoutCancel(ctx))

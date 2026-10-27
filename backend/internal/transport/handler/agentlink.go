@@ -86,6 +86,17 @@ func (h *AgentLinkHandler) Credential(c *echo.Context) error {
 	return c.JSON(http.StatusOK, m)
 }
 
+// Secrets — GET /store/v1/agent/secrets (agent key): main's current Pushover
+// secrets, so a linked agent picks up a change without re-linking. Never
+// logged, never cached.
+func (h *AgentLinkHandler) Secrets(c *echo.Context) error {
+	if _, _, ok := agentScope(c); !ok {
+		return c.JSON(http.StatusUnauthorized, errResp("device required"))
+	}
+	c.Response().Header().Set("Cache-Control", "no-store")
+	return c.JSON(http.StatusOK, h.svc.PushoverSecrets())
+}
+
 // Backup — POST /store/v1/agent/backup (agent key, body = SQLite file).
 func (h *AgentLinkHandler) Backup(c *echo.Context) error {
 	scope, devID, ok := agentScope(c)

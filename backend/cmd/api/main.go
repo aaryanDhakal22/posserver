@@ -34,6 +34,7 @@ import (
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
+	tenancyDomain "quiccpos/main/internal/domain/tenancy"
 
 	sqsconsumer "quiccpos/main/internal/infra/sqs"
 	sseBroker "quiccpos/main/internal/infra/sse"
@@ -226,11 +227,19 @@ func main() {
 		PushoverAppToken: os.Getenv("AGENT_SECRET_PUSHOVER_APP_TOKEN"),
 		PushoverUserKey:  os.Getenv("AGENT_SECRET_PUSHOVER_USER_KEY"),
 		PushoverBossKey:  os.Getenv("AGENT_SECRET_PUSHOVER_BOSS_KEY"),
-		OTLPEndpoint:     os.Getenv("AGENT_SECRET_OTLP_ENDPOINT"),
-		OTLPHeaders:      os.Getenv("AGENT_SECRET_OTLP_HEADERS"),
-		TailscaleAuthKey: os.Getenv("AGENT_SECRET_TAILSCALE_AUTHKEY"),
+		// The admin's Pushover device names (comma list): system events go only there.
+		PushoverAdminDevices: os.Getenv("AGENT_SECRET_PUSHOVER_ADMIN_DEVICE"),
+		OTLPEndpoint:         os.Getenv("AGENT_SECRET_OTLP_ENDPOINT"),
+		OTLPHeaders:          os.Getenv("AGENT_SECRET_OTLP_HEADERS"),
+		TailscaleAuthKey:     os.Getenv("AGENT_SECRET_TAILSCALE_AUTHKEY"),
 	}
+	// PUSHOVER_API_URL points main's Pushover at a test fake (default: the real API).
+	pushoverURL := os.Getenv("PUSHOVER_API_URL")
 	pager := pushover.New(agentSecrets.PushoverAppToken, agentSecrets.PushoverUserKey, agentSecrets.PushoverBossKey)
+	pager.SetEndpoint(pushoverURL)
+	// The admin's phones only (drivers + the store owner share the account).
+	adminDevices := tenancyDomain.SplitDevices(agentSecrets.PushoverAdminDevices)
+	pager.SetDevices(adminDevices)
 	agentSync := agentsync.New(pool, repo, repo, broker, tenancyService, agentSecrets, pager, lgr)
 	if v, err := time.ParseDuration(os.Getenv("ORDER_REDELIVER_AFTER")); err == nil && v > 0 {
 		agentSync.RedeliverAfter = v
@@ -253,7 +262,10 @@ func main() {
 	// Tablet diagnostics: reports arrive via the Pi (RPC diag.report) or
 	// straight from the tablet (report key). Pages go to the OWNER only — a
 	// separate pager without the boss key.
+	// The store owner's alert test (Store › Details) sends through it too.
 	ownerPager := pushover.New(agentSecrets.PushoverAppToken, agentSecrets.PushoverUserKey, "")
+	ownerPager.SetEndpoint(pushoverURL)
+	ownerPager.SetDevices(adminDevices)
 	diagService := diagApp.New(pool, ownerPager, tenancyService, lgr)
 	requester.RegisterInbound(diagApp.MsgDiagReport, diagService.HandleRPC)
 	go diagService.RunPrune(ctx)
@@ -336,6 +348,7 @@ func main() {
 		AgentSync:       agentSync,
 		Diag:            diagService,
 		Geo:             geoService,
+		AlertSender:     ownerPager,
 		AppEnv:          cfg.AppConfig.AppEnv,
 	})
 
