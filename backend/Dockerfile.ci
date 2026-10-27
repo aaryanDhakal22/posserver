@@ -1,0 +1,14 @@
+# main/ image as CI builds it: the binary (with the SvelteKit app embedded) is
+# compiled on the runner with cached Go + npm, and this file only packages it
+# — no compiler in the image build, so nothing is rebuilt without a cache.
+# The build context is the directory CI prepares: ./app and an empty ./data.
+# (Local dev uses backend/Dockerfile, target dev.)
+FROM gcr.io/distroless/base-debian11:nonroot
+
+WORKDIR /app
+COPY app /app/app
+COPY --chown=65532:65532 data /data
+
+EXPOSE 1323
+
+ENTRYPOINT ["/app/app"]
