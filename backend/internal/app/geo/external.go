@@ -280,7 +280,7 @@ func (s *Service) locateStop(ctx context.Context, scope sseBroker.Scope, id uuid
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return false, err
 	}
-	in := locateIn{tenantID: scope.TenantID, external: true}
+	in := locateIn{tenantID: scope.TenantID, locationID: scope.LocationID, external: true}
 	created := st.CreatedAt.Time
 	if l, err := s.q.GetLocationGeo(ctx, models.GetLocationGeoParams{LocationID: pgUUID(scope.LocationID), TenantID: pgUUID(scope.TenantID)}); err == nil {
 		in.radiusM = int(l.DeliveryRadiusM)
@@ -292,7 +292,7 @@ func (s *Service) locateStop(ctx context.Context, scope sseBroker.Scope, id uuid
 	}
 	switch {
 	case st.Lat.Valid && st.Lng.Valid:
-		in.fixed, in.fixedQuality = &Point{Lat: st.Lat.Float64, Lng: st.Lng.Float64}, st.Quality
+		in.fixed, in.fixedQuality, in.fixedCorrected = &Point{Lat: st.Lat.Float64, Lng: st.Lng.Float64}, st.Quality, st.Corrected
 	case work != nil:
 		var a stopAddress
 		_ = json.Unmarshal(work.Address, &a)
@@ -315,7 +315,7 @@ func (s *Service) locateStop(ctx context.Context, scope sseBroker.Scope, id uuid
 	p := models.SaveExternalStopResultParams{
 		OrderID: pgUUID(id), ReadAt: st.UpdatedAt, State: res.state, Quality: res.quality,
 		DistanceM: int32(res.route.DistanceM), DurationS: int32(res.route.DurationS), Polyline: res.route.Polyline,
-		OutsideArea: res.outside, LastError: trunc(res.lastErr),
+		OutsideArea: res.outside, LastError: trunc(res.lastErr), Corrected: res.corrected && res.state == StateLocated,
 	}
 	if res.pt != nil {
 		p.Lat, p.Lng = pgtype.Float8{Float64: res.pt.Lat, Valid: true}, pgtype.Float8{Float64: res.pt.Lng, Valid: true}
@@ -377,7 +377,7 @@ func (s *Service) pushStop(ctx context.Context, scope sseBroker.Scope, id uuid.U
 	}
 	p := s.buildPush(ctx, scope, id, geoRow{state: st.State, quality: st.Quality, polyline: st.Polyline, lat: st.Lat, lng: st.Lng,
 		distanceM: st.DistanceM, durationS: st.DurationS, outside: st.OutsideArea, storeToS: st.StoreToS, toStoreS: st.ToStoreS,
-		confirmed: st.Confirmed})
+		confirmed: st.Confirmed, corrected: st.Corrected, note: st.Note})
 	if st.State == StateCheck || st.State == StateLocated {
 		if w, err := s.q.GetExternalWork(ctx, pgUUID(id)); err == nil {
 			if st.State == StateCheck {

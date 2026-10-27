@@ -1507,7 +1507,7 @@ func (q *Queries) GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagRep
 const getExternalStop = `-- name: GetExternalStop :one
 SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
        polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
-       pushed_at, created_at, updated_at, expires_at, confirmed
+       pushed_at, created_at, updated_at, expires_at, confirmed, corrected, note
 FROM geo_external_stops
 WHERE order_id = $1 AND tenant_id = $2 AND location_id = $3
 `
@@ -1543,6 +1543,8 @@ func (q *Queries) GetExternalStop(ctx context.Context, arg GetExternalStopParams
 		&i.UpdatedAt,
 		&i.ExpiresAt,
 		&i.Confirmed,
+		&i.Corrected,
+		&i.Note,
 	)
 	return i, err
 }
@@ -2021,7 +2023,7 @@ func (q *Queries) GetOrderForGeo(ctx context.Context, arg GetOrderForGeoParams) 
 const getOrderGeo = `-- name: GetOrderGeo :one
 SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
        polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
-       pushed_at, created_at, updated_at, candidates, confirmed_address, confirmed
+       pushed_at, created_at, updated_at, candidates, confirmed_address, confirmed, corrected, note
 FROM order_geo WHERE order_id = $1
 `
 
@@ -2051,6 +2053,8 @@ func (q *Queries) GetOrderGeo(ctx context.Context, orderID pgtype.UUID) (OrderGe
 		&i.Candidates,
 		&i.ConfirmedAddress,
 		&i.Confirmed,
+		&i.Corrected,
+		&i.Note,
 	)
 	return i, err
 }
@@ -5106,9 +5110,10 @@ UPDATE geo_external_stops SET
     state = $1, lat = $2, lng = $3, quality = $4,
     distance_m = $5, duration_s = $6, polyline = $7,
     outside_area = $8, store_to_s = $9, to_store_s = $10,
-    attempts = attempts + 1, next_try_at = now(), last_error = $11,
+    corrected = $11, note = '',
+    attempts = attempts + 1, next_try_at = now(), last_error = $12,
     pushed_at = NULL, updated_at = now()
-WHERE order_id = $12 AND updated_at = $13
+WHERE order_id = $13 AND updated_at = $14
 RETURNING updated_at
 `
 
@@ -5123,6 +5128,7 @@ type SaveExternalStopResultParams struct {
 	OutsideArea bool               `json:"outside_area"`
 	StoreToS    pgtype.Int4        `json:"store_to_s"`
 	ToStoreS    pgtype.Int4        `json:"to_store_s"`
+	Corrected   bool               `json:"corrected"`
 	LastError   string             `json:"last_error"`
 	OrderID     pgtype.UUID        `json:"order_id"`
 	ReadAt      pgtype.Timestamptz `json:"read_at"`
@@ -5141,6 +5147,7 @@ func (q *Queries) SaveExternalStopResult(ctx context.Context, arg SaveExternalSt
 		arg.OutsideArea,
 		arg.StoreToS,
 		arg.ToStoreS,
+		arg.Corrected,
 		arg.LastError,
 		arg.OrderID,
 		arg.ReadAt,
@@ -5178,15 +5185,48 @@ func (q *Queries) SaveExternalStopRetry(ctx context.Context, arg SaveExternalSto
 	return result.RowsAffected(), nil
 }
 
+const saveExternalStopSearch = `-- name: SaveExternalStopSearch :execrows
+UPDATE geo_external_stops SET state = $1, lat = NULL, lng = NULL, quality = '',
+    confirmed = false, corrected = false, note = $2, distance_m = 0, duration_s = 0,
+    polyline = '', outside_area = false, store_to_s = NULL, to_store_s = NULL,
+    next_try_at = now(), last_error = '', pushed_at = NULL, updated_at = now()
+WHERE order_id = $3 AND tenant_id = $4 AND location_id = $5
+`
+
+type SaveExternalStopSearchParams struct {
+	State      string      `json:"state"`
+	Note       string      `json:"note"`
+	OrderID    pgtype.UUID `json:"order_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+// geo.search for an external stop; the candidates go on the work row
+// (UpsertExternalWorkSearch, same tx).
+func (q *Queries) SaveExternalStopSearch(ctx context.Context, arg SaveExternalStopSearchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, saveExternalStopSearch,
+		arg.State,
+		arg.Note,
+		arg.OrderID,
+		arg.TenantID,
+		arg.LocationID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const saveOrderGeoResult = `-- name: SaveOrderGeoResult :one
 UPDATE order_geo SET
     state = $1, lat = $2, lng = $3, quality = $4,
     candidates = $5,
     distance_m = $6, duration_s = $7, polyline = $8,
     outside_area = $9, store_to_s = $10, to_store_s = $11,
-    attempts = attempts + 1, next_try_at = now(), last_error = $12,
+    corrected = $12, note = '',
+    attempts = attempts + 1, next_try_at = now(), last_error = $13,
     pushed_at = NULL, updated_at = now()
-WHERE order_id = $13
+WHERE order_id = $14
 RETURNING updated_at
 `
 
@@ -5202,6 +5242,7 @@ type SaveOrderGeoResultParams struct {
 	OutsideArea bool          `json:"outside_area"`
 	StoreToS    pgtype.Int4   `json:"store_to_s"`
 	ToStoreS    pgtype.Int4   `json:"to_store_s"`
+	Corrected   bool          `json:"corrected"`
 	LastError   string        `json:"last_error"`
 	OrderID     pgtype.UUID   `json:"order_id"`
 }
@@ -5221,6 +5262,7 @@ func (q *Queries) SaveOrderGeoResult(ctx context.Context, arg SaveOrderGeoResult
 		arg.OutsideArea,
 		arg.StoreToS,
 		arg.ToStoreS,
+		arg.Corrected,
 		arg.LastError,
 		arg.OrderID,
 	)
@@ -5244,6 +5286,42 @@ type SaveOrderGeoRetryParams struct {
 func (q *Queries) SaveOrderGeoRetry(ctx context.Context, arg SaveOrderGeoRetryParams) error {
 	_, err := q.db.Exec(ctx, saveOrderGeoRetry, arg.NextTryAt, arg.LastError, arg.OrderID)
 	return err
+}
+
+const saveOrderGeoSearch = `-- name: SaveOrderGeoSearch :execrows
+UPDATE order_geo SET state = $1, lat = NULL, lng = NULL, quality = '',
+    candidates = $2, confirmed_address = NULL, confirmed = false,
+    corrected = false, note = $3, distance_m = 0, duration_s = 0, polyline = '',
+    outside_area = false, store_to_s = NULL, to_store_s = NULL,
+    next_try_at = now(), last_error = '', pushed_at = NULL, updated_at = now()
+WHERE order_id = $4 AND tenant_id = $5 AND location_id = $6
+`
+
+type SaveOrderGeoSearchParams struct {
+	State      string      `json:"state"`
+	Candidates []byte      `json:"candidates"`
+	Note       string      `json:"note"`
+	OrderID    pgtype.UUID `json:"order_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+// A staff address search (geo.search, 2.2.2) answered: state check with the
+// matches found near the store, or not_found with a note. Replaces whatever
+// the order had (staff searched because it was wrong) and is pushed again.
+func (q *Queries) SaveOrderGeoSearch(ctx context.Context, arg SaveOrderGeoSearchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, saveOrderGeoSearch,
+		arg.State,
+		arg.Candidates,
+		arg.Note,
+		arg.OrderID,
+		arg.TenantID,
+		arg.LocationID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const searchOrdersInScope = `-- name: SearchOrdersInScope :many
@@ -5415,7 +5493,8 @@ func (q *Queries) SetExternalStopOutsideArea(ctx context.Context, arg SetExterna
 
 const setExternalStopPoint = `-- name: SetExternalStopPoint :execrows
 UPDATE geo_external_stops SET state = 'pending', lat = $1, lng = $2, quality = $3,
-    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = true, updated_at = now()
+    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = true,
+    corrected = false, note = '', updated_at = now()
 WHERE order_id = $4 AND tenant_id = $5 AND location_id = $6
 `
 
@@ -6462,6 +6541,26 @@ func (q *Queries) UpsertExternalWork(ctx context.Context, arg UpsertExternalWork
 		arg.AddressKey,
 		arg.DiscardAt,
 	)
+	return err
+}
+
+const upsertExternalWorkSearch = `-- name: UpsertExternalWorkSearch :exec
+INSERT INTO geo_external_work (order_id, address, address_key, candidates, discard_at)
+VALUES ($1, '{}'::jsonb, '', $2, $3)
+ON CONFLICT (order_id) DO UPDATE SET candidates = EXCLUDED.candidates, confirmed_address = NULL
+`
+
+type UpsertExternalWorkSearchParams struct {
+	OrderID    pgtype.UUID        `json:"order_id"`
+	Candidates []byte             `json:"candidates"`
+	DiscardAt  pgtype.Timestamptz `json:"discard_at"`
+}
+
+// The search's candidates (NULL: none found) for geo.choose. A stop whose
+// address text is gone gets an empty work row (no address, no cache key),
+// discarded as usual.
+func (q *Queries) UpsertExternalWorkSearch(ctx context.Context, arg UpsertExternalWorkSearchParams) error {
+	_, err := q.db.Exec(ctx, upsertExternalWorkSearch, arg.OrderID, arg.Candidates, arg.DiscardAt)
 	return err
 }
 

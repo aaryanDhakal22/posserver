@@ -166,9 +166,20 @@ func (f *fakeDB) SaveOrderGeoResult(_ context.Context, a models.SaveOrderGeoResu
 	g.State, g.Lat, g.Lng, g.Quality, g.Candidates = a.State, a.Lat, a.Lng, a.Quality, a.Candidates
 	g.DistanceM, g.DurationS, g.Polyline, g.OutsideArea = a.DistanceM, a.DurationS, a.Polyline, a.OutsideArea
 	g.StoreToS, g.ToStoreS, g.LastError = a.StoreToS, a.ToStoreS, a.LastError
+	g.Corrected, g.Note = a.Corrected, ""
 	g.Attempts++
 	g.NextTryAt, g.PushedAt, g.UpdatedAt = ts(f.now()), pgtype.Timestamptz{}, f.stamp()
 	return g.UpdatedAt, nil
+}
+
+func (f *fakeDB) SaveOrderGeoRetry(_ context.Context, a models.SaveOrderGeoRetryParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if g, ok := f.orderGeo[fromPg(a.OrderID)]; ok {
+		g.Attempts++
+		g.NextTryAt, g.LastError, g.UpdatedAt = a.NextTryAt, a.LastError, f.stamp()
+	}
+	return nil
 }
 
 func (f *fakeDB) MarkOrderGeoPushed(_ context.Context, a models.MarkOrderGeoPushedParams) (int64, error) {
@@ -314,6 +325,7 @@ func (f *fakeDB) SaveExternalStopResult(_ context.Context, a models.SaveExternal
 	s.State, s.Lat, s.Lng, s.Quality = a.State, a.Lat, a.Lng, a.Quality
 	s.DistanceM, s.DurationS, s.Polyline, s.OutsideArea = a.DistanceM, a.DurationS, a.Polyline, a.OutsideArea
 	s.StoreToS, s.ToStoreS, s.LastError = a.StoreToS, a.ToStoreS, a.LastError
+	s.Corrected, s.Note = a.Corrected, ""
 	s.Attempts++
 	s.NextTryAt, s.PushedAt, s.UpdatedAt = ts(f.now()), pgtype.Timestamptz{}, f.stamp()
 	if hook := f.afterStopSave; hook != nil {
@@ -368,8 +380,54 @@ func (f *fakeDB) SetExternalStopPoint(_ context.Context, a models.SetExternalSto
 	}
 	s.State, s.Lat, s.Lng, s.Quality = StatePending, a.Lat, a.Lng, a.Quality
 	s.Attempts, s.NextTryAt, s.LastError, s.PushedAt, s.UpdatedAt = 0, ts(f.now()), "", pgtype.Timestamptz{}, f.stamp()
-	s.Confirmed = true
+	s.Confirmed, s.Corrected, s.Note = true, false, ""
 	return 1, nil
+}
+
+// --- 2.2.2 geo.search
+
+func (f *fakeDB) SaveOrderGeoSearch(_ context.Context, a models.SaveOrderGeoSearchParams) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	g, ok := f.orderGeo[fromPg(a.OrderID)]
+	if !ok || g.TenantID != a.TenantID || g.LocationID != a.LocationID {
+		return 0, nil
+	}
+	g.State, g.Lat, g.Lng, g.Quality, g.Candidates = a.State, pgtype.Float8{}, pgtype.Float8{}, "", a.Candidates
+	g.ConfirmedAddress, g.Confirmed, g.Corrected, g.Note = nil, false, false, a.Note
+	g.DistanceM, g.DurationS, g.Polyline, g.OutsideArea, g.StoreToS, g.ToStoreS = 0, 0, "", false, pgtype.Int4{}, pgtype.Int4{}
+	g.NextTryAt, g.LastError, g.PushedAt, g.UpdatedAt = ts(f.now()), "", pgtype.Timestamptz{}, f.stamp()
+	return 1, nil
+}
+
+func (f *fakeDB) SaveExternalStopSearch(_ context.Context, a models.SaveExternalStopSearchParams) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.stops[fromPg(a.OrderID)]
+	if !ok || s.TenantID != a.TenantID || s.LocationID != a.LocationID {
+		return 0, nil
+	}
+	s.State, s.Lat, s.Lng, s.Quality = a.State, pgtype.Float8{}, pgtype.Float8{}, ""
+	s.Confirmed, s.Corrected, s.Note = false, false, a.Note
+	s.DistanceM, s.DurationS, s.Polyline, s.OutsideArea, s.StoreToS, s.ToStoreS = 0, 0, "", false, pgtype.Int4{}, pgtype.Int4{}
+	s.NextTryAt, s.LastError, s.PushedAt, s.UpdatedAt = ts(f.now()), "", pgtype.Timestamptz{}, f.stamp()
+	return 1, nil
+}
+
+func (f *fakeDB) UpsertExternalWorkSearch(_ context.Context, a models.UpsertExternalWorkSearchParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := fromPg(a.OrderID)
+	if _, ok := f.stops[id]; !ok {
+		return fmt.Errorf("fk: no stop")
+	}
+	if w, ok := f.work[id]; ok {
+		w.Candidates, w.ConfirmedAddress = a.Candidates, nil
+		return nil
+	}
+	f.work[id] = &models.GeoExternalWork{OrderID: a.OrderID, Address: []byte(`{}`), Candidates: a.Candidates,
+		CreatedAt: f.stamp(), DiscardAt: a.DiscardAt}
+	return nil
 }
 
 func (f *fakeDB) RequeueLocationExternalStops(_ context.Context, a models.RequeueLocationExternalStopsParams) (int64, error) {
@@ -562,13 +620,14 @@ func (p *fakeProvider) Trip(context.Context, Point, []Point) (TripResult, error)
 }
 
 type harness struct {
-	t     *testing.T
-	svc   *Service
-	db    *fakeDB
-	agent *fakeAgent
-	prov  *fakeProvider
-	scope sseBroker.Scope
-	clock time.Time
+	t      *testing.T
+	svc    *Service
+	db     *fakeDB
+	agent  *fakeAgent
+	prov   *fakeProvider
+	stores *fakeStores
+	scope  sseBroker.Scope
+	clock  time.Time
 }
 
 var testStore = Point{Lat: 39.3982, Lng: -76.5895} // Lombardi's, Towson
@@ -581,10 +640,14 @@ func newHarness(t *testing.T) *harness {
 	h.agent = &fakeAgent{}
 	h.prov = &fakeProvider{known: map[string][]Candidate{}}
 	lat, lng := testStore.Lat, testStore.Lng
-	stores := fakeStores{loc: tenancy.Location{ID: h.scope.LocationID, TenantID: h.scope.TenantID, Lat: &lat, Lng: &lng, DeliveryRadiusM: 8047}}
+	h.stores = &fakeStores{loc: tenancy.Location{ID: h.scope.LocationID, TenantID: h.scope.TenantID, Lat: &lat, Lng: &lng, DeliveryRadiusM: 8047,
+		AddressLine1: "931 Taylor Ave", AddressLine2: "Towson, MD 21286"}}
+	stores := h.stores
 	h.svc = newService(h.db, func(ctx context.Context, fn func(Queries) error) error { return fn(h.db) },
 		stores, h.agent, Config{}, zerolog.Nop())
 	h.svc.now = now
+	h.svc.searches.SetClock(now)
+	h.svc.spawn = func(f func()) { f() }
 	h.svc.prov.Store(&Providers{Geocoder: h.prov, Router: h.prov, name: "fake", routing: true})
 	return h
 }

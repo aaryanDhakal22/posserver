@@ -175,6 +175,8 @@ type GeoExternalStop struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
 	Confirmed   bool               `json:"confirmed"`
+	Corrected   bool               `json:"corrected"`
+	Note        string             `json:"note"`
 }
 
 type GeoExternalWork struct {
@@ -394,6 +396,8 @@ type OrderGeo struct {
 	Candidates       []byte             `json:"candidates"`
 	ConfirmedAddress []byte             `json:"confirmed_address"`
 	Confirmed        bool               `json:"confirmed"`
+	Corrected        bool               `json:"corrected"`
+	Note             string             `json:"note"`
 }
 
 type OutboxDispatch struct {

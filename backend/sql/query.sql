@@ -1038,7 +1038,7 @@ LIMIT @max_rows;
 -- name: GetOrderGeo :one
 SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
        polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
-       pushed_at, created_at, updated_at, candidates, confirmed_address, confirmed
+       pushed_at, created_at, updated_at, candidates, confirmed_address, confirmed, corrected, note
 FROM order_geo WHERE order_id = $1;
 
 -- name: GetOrderForGeo :one
@@ -1057,6 +1057,7 @@ UPDATE order_geo SET
     candidates = sqlc.narg('candidates'),
     distance_m = @distance_m, duration_s = @duration_s, polyline = @polyline,
     outside_area = @outside_area, store_to_s = sqlc.narg('store_to_s'), to_store_s = sqlc.narg('to_store_s'),
+    corrected = @corrected, note = '',
     attempts = attempts + 1, next_try_at = now(), last_error = @last_error,
     pushed_at = NULL, updated_at = now()
 WHERE order_id = @order_id
@@ -1162,7 +1163,7 @@ ON CONFLICT (order_id) DO UPDATE SET
 -- name: GetExternalStop :one
 SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
        polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
-       pushed_at, created_at, updated_at, expires_at, confirmed
+       pushed_at, created_at, updated_at, expires_at, confirmed, corrected, note
 FROM geo_external_stops
 WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id;
 
@@ -1187,6 +1188,7 @@ UPDATE geo_external_stops SET
     state = @state, lat = sqlc.narg('lat'), lng = sqlc.narg('lng'), quality = @quality,
     distance_m = @distance_m, duration_s = @duration_s, polyline = @polyline,
     outside_area = @outside_area, store_to_s = sqlc.narg('store_to_s'), to_store_s = sqlc.narg('to_store_s'),
+    corrected = @corrected, note = '',
     attempts = attempts + 1, next_try_at = now(), last_error = @last_error,
     pushed_at = NULL, updated_at = now()
 WHERE order_id = @order_id AND updated_at = @read_at
@@ -1215,7 +1217,8 @@ WHERE tenant_id = @tenant_id AND location_id = @location_id
 -- A pin or a chosen candidate: re-route from this point and push it again,
 -- confirmed (staff's own pick).
 UPDATE geo_external_stops SET state = 'pending', lat = @lat, lng = @lng, quality = @quality,
-    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = true, updated_at = now()
+    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = true,
+    corrected = false, note = '', updated_at = now()
 WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id;
 
 -- name: SetExternalWorkCandidates :execrows
@@ -1223,6 +1226,34 @@ WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @locatio
 -- work row meanwhile (new address) is not overwritten.
 UPDATE geo_external_work SET candidates = sqlc.narg('candidates')
 WHERE order_id = @order_id AND created_at = @read_at;
+
+-- name: SaveOrderGeoSearch :execrows
+-- A staff address search (geo.search, 2.2.2) answered: state check with the
+-- matches found near the store, or not_found with a note. Replaces whatever
+-- the order had (staff searched because it was wrong) and is pushed again.
+UPDATE order_geo SET state = @state, lat = NULL, lng = NULL, quality = '',
+    candidates = sqlc.narg('candidates'), confirmed_address = NULL, confirmed = false,
+    corrected = false, note = @note, distance_m = 0, duration_s = 0, polyline = '',
+    outside_area = false, store_to_s = NULL, to_store_s = NULL,
+    next_try_at = now(), last_error = '', pushed_at = NULL, updated_at = now()
+WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id;
+
+-- name: SaveExternalStopSearch :execrows
+-- geo.search for an external stop; the candidates go on the work row
+-- (UpsertExternalWorkSearch, same tx).
+UPDATE geo_external_stops SET state = @state, lat = NULL, lng = NULL, quality = '',
+    confirmed = false, corrected = false, note = @note, distance_m = 0, duration_s = 0,
+    polyline = '', outside_area = false, store_to_s = NULL, to_store_s = NULL,
+    next_try_at = now(), last_error = '', pushed_at = NULL, updated_at = now()
+WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id;
+
+-- name: UpsertExternalWorkSearch :exec
+-- The search's candidates (NULL: none found) for geo.choose. A stop whose
+-- address text is gone gets an empty work row (no address, no cache key),
+-- discarded as usual.
+INSERT INTO geo_external_work (order_id, address, address_key, candidates, discard_at)
+VALUES (@order_id, '{}'::jsonb, '', sqlc.narg('candidates'), @discard_at)
+ON CONFLICT (order_id) DO UPDATE SET candidates = EXCLUDED.candidates, confirmed_address = NULL;
 
 -- name: SetExternalWorkConfirmed :exec
 UPDATE geo_external_work SET candidates = NULL, confirmed_address = @confirmed_address
