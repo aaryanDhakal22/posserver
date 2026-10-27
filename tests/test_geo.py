@@ -31,6 +31,10 @@ import requests
 from conftest import ADMIN_V1, IS_DEV, STORE_V1, store_key, wait_order, wait_until
 from sse import SSEStream
 
+# The fake_geo fixture swaps main's geo providers for everyone, so every module
+# using it runs on one xdist worker (also test_geo_locate, test_location_radius).
+pytestmark = pytest.mark.xdist_group("geo")
+
 STORE = (40.6666, -74.1158)  # the test store's pin (Bayonne, Broadway)
 FAKE_HOST = os.getenv("GEO_FAKE_HOST", "host.docker.internal")  # how main (in Docker) reaches this host
 
@@ -60,7 +64,11 @@ class FakeGeo:
         self.known: dict[str, tuple[float, float]] = {}  # lowercased street -> (lat, lng)
         # lowercased street -> several Census matches [(matchedAddress, lat, lng)] (2.1.0 candidates)
         self.multi: dict[str, list[tuple[str, float, float]]] = {}
-        self.census_hits = 0
+        # Per street: other xdist workers' location saves / delivery orders
+        # reach this fake too while it is main's provider, so a test counts
+        # only the lookups for its own street.
+        self.census_by_street: dict[str, int] = {}
+        self.osrm_calls: list[tuple[str, list[tuple[float, float]]]] = []  # (service, [(lat, lng)])
         srv = ThreadingHTTPServer(("0.0.0.0", 0), self._handler())
         srv.daemon_threads = True
         self.srv = srv
@@ -73,6 +81,15 @@ class FakeGeo:
     def add_matches(self, street: str, matches: list[tuple[str, float, float]]) -> None:
         """Census answers `street` with every match (best first)."""
         self.multi[street.lower()] = matches
+
+    def census_for(self, street: str) -> int:
+        return self.census_by_street.get(street.lower(), 0)
+
+    def routed_from(self, lat: float, lng: float) -> bool:
+        """True once main asked for the drive time from (lat, lng) back to the
+        store — the last provider call of locating a delivery; the push follows."""
+        return any(svc == "table" and pts and abs(pts[0][0] - lat) < 1e-6 and abs(pts[0][1] - lng) < 1e-6
+                   for svc, pts in list(self.osrm_calls))
 
     def close(self) -> None:
         self.srv.shutdown()
@@ -96,8 +113,8 @@ class FakeGeo:
                 u = urlsplit(self.path)
                 q = {k: v[0] for k, v in parse_qs(u.query).items()}
                 if u.path == "/census":
-                    fake.census_hits += 1
                     street = q.get("address", "").split(",")[0].strip().lower()
+                    fake.census_by_street[street] = fake.census_by_street.get(street, 0) + 1
                     hit = fake.known.get(street)
                     matches = [{"coordinates": {"x": lng, "y": lat}, "matchedAddress": m}
                                for m, lat, lng in fake.multi.get(street, [])]
@@ -111,6 +128,7 @@ class FakeGeo:
                     parts = u.path.split("/")  # ['', 'osrm', service, 'v1', 'driving', coords]
                     service = parts[2]
                     pts = [tuple(reversed([float(x) for x in c.split(",")])) for c in parts[5].split(";")]
+                    fake.osrm_calls.append((service, pts))
                     if service == "route":
                         a, b = pts[0], pts[1]
                         return self._json(200, {"code": "Ok", "routes": [
@@ -232,7 +250,7 @@ def test_store_pin_and_map_ride_store_config(admin, store) -> None:
     assert mgr.get(f"{STORE_V1}/me/location", timeout=5).json()["geo_source"] == "manual"
 
 
-def test_store_address_is_geocoded_on_save_unless_pinned(fake_geo, store) -> None:
+def test_store_address_is_geocoded_on_save_unless_pinned(fake_geo, store, make_store) -> None:
     street = _street()
     fake_geo.add(street, 40.6701, -74.1102)
     mgr = store.manager_session()
@@ -246,13 +264,22 @@ def test_store_address_is_geocoded_on_save_unless_pinned(fake_geo, store) -> Non
 
     # A hand-placed pin is never moved by a later address save.
     assert mgr.put(f"{STORE_V1}/me/location/pin", json={"lat": 40.66, "lng": -74.11}, timeout=5).status_code == 200
-    hits = fake_geo.census_hits
+    hits = fake_geo.census_for(street)
     assert mgr.patch(f"{STORE_V1}/me/location", json={**body, "address_line1": street, "address_line2": "Bayonne, NJ 07002"},
                      timeout=5).status_code == 200
-    time.sleep(2)
+    # Absence check: once another store saved after it has been geocoded, the
+    # pinned store's save has been worked (or skipped) too.
+    other, other_street = make_store(), _street()
+    fake_geo.add(other_street, 40.6702, -74.1103)
+    omgr = other.manager_session()
+    ocur = omgr.get(f"{STORE_V1}/me/location", timeout=5).json()
+    obody = {k: ocur[k] for k in ("name", "timezone", "daily_reset_hour", "phone", "config")}
+    assert omgr.patch(f"{STORE_V1}/me/location", json={**obody, "address_line1": other_street,
+                                                       "address_line2": "Bayonne, NJ 07002"}, timeout=5).status_code == 200
+    wait_until(lambda: omgr.get(f"{STORE_V1}/me/location", timeout=5).json()["lat"], timeout=15, what="sentinel store geocoded")
     loc = mgr.get(f"{STORE_V1}/me/location", timeout=5).json()
     assert (loc["lat"], loc["lng"], loc["geo_source"]) == (40.66, -74.11, "manual")
-    assert fake_geo.census_hits == hits
+    assert fake_geo.census_for(street) == hits
 
 
 # ---------------------------------------------------------------------------
@@ -355,7 +382,8 @@ def test_unacked_geo_is_repushed_when_the_agent_reconnects(admin, store, publish
     o = _delivery(store, street)
     publish(o)  # no agent connected: the push is held
     oid = wait_order(store.key, o["order_id"])["id"]
-    time.sleep(4)  # located + push attempted (offline) by now
+    # Located + routed (the push to the offline agent follows at once).
+    wait_until(lambda: fake_geo.routed_from(40.6680, -74.1130), timeout=20, what="order located and routed")
     with SSEStream(store.key) as s:
         g = _next_geo(s, oid, timeout=20)
         assert g["state"] == "located" and g["quality"] == "exact"

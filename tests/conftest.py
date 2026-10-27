@@ -18,12 +18,14 @@ with a unique vendor `store_id` and a unique 8-char name prefix, and deletes it
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import secrets
 import time
 import uuid
 from collections.abc import Callable
+from datetime import datetime
 from typing import Any
 
 import boto3
@@ -57,6 +59,14 @@ else:
 # Per-run offset keeps vendor order_ids unique across consecutive runs.
 RUN_OFFSET: int = (int(time.time()) % 100_000) * 10_000
 
+# pytest-xdist worker ("gw0", "gw1", …); "" when running without -n.
+XDIST_WORKER = os.getenv("PYTEST_XDIST_WORKER", "")
+_WORKER_NUM = int(XDIST_WORKER[2:]) if XDIST_WORKER.startswith("gw") else 0
+# Each worker draws order_ids from its own block above the data.py fixtures
+# (1001-1006 + RUN_OFFSET), so ids never collide inside a run — the absence
+# checks look an id up across every tenant.
+_ORDER_IDS = itertools.count(RUN_OFFSET + 1100 + (_WORKER_NUM % 4) * 2000)
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -80,7 +90,7 @@ def wait_until(fn: Callable[[], Any], *, timeout: float = 15.0, interval: float 
 
 
 def unique_order_id() -> int:
-    return RUN_OFFSET + secrets.randbelow(9_000) + 1
+    return next(_ORDER_IDS)
 
 
 def unique_store_id() -> int:
@@ -111,6 +121,10 @@ def admin() -> requests.Session:
 # ---------------------------------------------------------------------------
 
 
+# Tenants this process created and has not deleted yet (the session-end sweep).
+_CREATED_TENANTS: set[str] = set()
+
+
 class Store:
     """A throwaway tenant + location. `name` starts with a unique 8-char prefix
     so main's store_name fallback resolves it unambiguously."""
@@ -127,6 +141,7 @@ class Store:
         r = admin.post(f"{ADMIN_V1}/tenants", json=body, timeout=5)
         assert r.status_code == 201, r.text
         self.tenant_id: str = r.json()["id"]
+        _CREATED_TENANTS.add(self.tenant_id)
         self.location_id: str = r.json()["location"]["id"]
         self._key: dict | None = None
 
@@ -166,7 +181,9 @@ class Store:
 
     def delete(self) -> None:
         try:
-            self.admin.delete(f"{ADMIN_V1}/tenants/{self.tenant_id}", timeout=10)
+            r = self.admin.delete(f"{ADMIN_V1}/tenants/{self.tenant_id}", timeout=10)
+            if r.status_code < 500:
+                _CREATED_TENANTS.discard(self.tenant_id)
         except requests.RequestException:
             pass
 
@@ -196,14 +213,43 @@ def make_store(admin):
 
 @pytest.fixture(scope="session", autouse=True)
 def sweep_test_tenants():
-    """Session-end sweep for test tenants a crashed test may have leaked."""
+    """Session-end sweep of the tenants this process created and a test that
+    died before its teardown left behind. Per process on purpose: under xdist
+    every worker has its own session, and a global sweep would pull stores out
+    from under the workers still running."""
     yield
     if not ADMIN_API_KEY:
         return
     h = {"Authorization": f"Bearer {ADMIN_API_KEY}"}
+    for tid in list(_CREATED_TENANTS):
+        try:
+            requests.delete(f"{ADMIN_V1}/tenants/{tid}", headers=h, timeout=10)
+        except requests.RequestException:
+            pass
+
+
+# Leaked test tenants older than this are removed at the end of a run; younger
+# ones may belong to a run still going (another shell, another agent).
+STALE_TENANT_AGE_S = 3600
+
+
+def pytest_sessionfinish(session, exitstatus) -> None:  # noqa: ARG001
+    """Controller only (or a plain run): remove stale leftovers of earlier,
+    crashed runs. Session fixtures never run on the xdist controller, hence a
+    hook rather than the fixture above."""
+    if hasattr(session.config, "workerinput") or not ADMIN_API_KEY:
+        return
+    h = {"Authorization": f"Bearer {ADMIN_API_KEY}"}
+    cutoff = time.time() - STALE_TENANT_AGE_S
     try:
         for t in requests.get(f"{ADMIN_V1}/tenants", headers=h, timeout=5).json():
-            if t.get("slug", "").startswith("t-") and t.get("name", "").endswith(" Test Pizza"):
+            if not (t.get("slug", "").startswith("t-") and t.get("name", "").endswith(" Test Pizza")):
+                continue
+            try:
+                created = datetime.fromisoformat(t["created_at"]).timestamp()
+            except (KeyError, TypeError, ValueError):
+                continue
+            if created < cutoff:
                 requests.delete(f"{ADMIN_V1}/tenants/{t['id']}", headers=h, timeout=10)
     except (requests.RequestException, ValueError):
         pass

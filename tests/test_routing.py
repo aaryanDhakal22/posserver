@@ -4,7 +4,6 @@ match; anything unroutable is never persisted and redrives to the DLQ. The SQS
 scope attributes are optional for source=online."""
 
 import json
-import time
 
 import pytest
 
@@ -46,11 +45,20 @@ def test_store_id_beats_another_tenants_name(publish, make_store) -> None:
     assert wait_order(a.key, o["order_id"])["tenant_id"] == a.tenant_id
 
 
-def test_unroutable_order_is_not_persisted(admin, publish) -> None:
+def _after_sentinel(publish, store) -> None:
+    """Absence checks: main's consumer works a receive batch in order, so once a
+    routable order published after the target has landed, the target has been
+    seen too."""
+    sentinel = store.order()
+    publish(sentinel)
+    wait_order(store.key, sentinel["order_id"])
+
+
+def test_unroutable_order_is_not_persisted(admin, publish, store) -> None:
     from conftest import unique_order_id, vendor_order
     oid = unique_order_id()
     publish(vendor_order(oid, store_name="zz-nowhere-diner", store_id=unique_store_id()))
-    time.sleep(6)
+    _after_sentinel(publish, store)
     assert admin_find_order(admin, oid) is None
 
 
@@ -65,14 +73,18 @@ def test_scope_attributes_are_optional_for_online(publish, store) -> None:
 def test_non_online_source_without_scope_is_dropped(admin, publish, store) -> None:
     o = store.order()
     publish(o, source="mobile")  # mobile requires scope attrs (and has no caster yet)
-    time.sleep(5)
+    _after_sentinel(publish, store)
     assert admin_find_order(admin, o["order_id"]) is None
 
 
 @pytest.mark.slow
+@pytest.mark.xdist_group("dlq")
 def test_unroutable_order_lands_in_dlq(sqs, publish) -> None:
     """End-to-end redrive: dev ElasticMQ moves dev-ingest → dev-ingest-dlq after
-    3 receives (30s visibility each), so this takes ~90s."""
+    3 receives, one visibility timeout apart: ~15 s with dev-ingest's 5 s
+    (docker/elasticmq.conf); an ElasticMQ still on the old 30 s takes ~90 s,
+    which the 150 s wait still covers. Its own xdist group: the walk below
+    hides every DLQ message it reads for a while."""
     from conftest import unique_order_id, vendor_order
     oid = unique_order_id()
     publish(vendor_order(oid, store_name="zz-dlq-diner", store_id=unique_store_id()))
@@ -96,4 +108,4 @@ def test_unroutable_order_lands_in_dlq(sqs, publish) -> None:
                     continue
         return False
 
-    wait_until(in_dlq, timeout=150, interval=5, what="unroutable order in the DLQ")
+    wait_until(in_dlq, timeout=150, interval=2, what="unroutable order in the DLQ")

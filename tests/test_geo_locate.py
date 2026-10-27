@@ -15,15 +15,17 @@ Same fake providers + agent-playing helpers as test_geo.py. Dev only.
 
 from __future__ import annotations
 
-import time
 import uuid
 from datetime import datetime, timezone
 
 import pytest
 
-from conftest import ADMIN_V1, wait_order
+from conftest import ADMIN_V1, wait_order, wait_until
 from sse import SSEStream
 from test_geo import _delivery, _next_geo, _pin_store, _rpc, _street, fake_geo  # noqa: F401 (fixture)
+
+# One xdist worker for every test that swaps main's global geo providers.
+pytestmark = pytest.mark.xdist_group("geo")
 
 
 def _locate(key: str, order_id: str, street: str, zip_: str = "07002") -> dict:
@@ -201,7 +203,8 @@ def test_geo_locate_result_is_repushed_when_the_agent_reconnects(admin, store, f
     fake_geo.add(street, 40.6680, -74.1130)
     stop = str(uuid.uuid4())
     assert _locate(store.key, stop, street) == {"ok": True}  # no agent connected: the push is held
-    time.sleep(4)
+    # Located + routed (the push to the offline agent follows at once).
+    wait_until(lambda: fake_geo.routed_from(40.6680, -74.1130), timeout=20, what="stop located and routed")
     with SSEStream(store.key) as s:
         g = _next_geo(s, stop, timeout=20)
         assert g["state"] == "located" and g["quality"] == "exact"

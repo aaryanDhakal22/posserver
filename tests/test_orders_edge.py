@@ -1,8 +1,6 @@
 """Edge cases on the ingest + read paths: poison messages must not block the
 consumer, duplicate deliveries are idempotent, bad ids/params are clean 4xx."""
 
-import time
-
 import pytest
 import requests
 
@@ -29,8 +27,12 @@ def test_duplicate_delivery_is_idempotent(publish, store) -> None:
     o = store.order()
     publish(o)
     publish(o)
+    # The consumer works a receive batch in order: once an order published
+    # after the duplicate has landed, the duplicate was processed (ack-skipped).
+    sentinel = store.order()
+    publish(sentinel)
     wait_order(store.key, o["order_id"])
-    time.sleep(2)  # let the consumer process (and ack-skip) the duplicate
+    wait_order(store.key, sentinel["order_id"])
     rows = requests.get(f"{API_V1}/orders", headers=store_key(store.key), params={"num": 50}, timeout=5).json()
     assert [r["source_event_id"] for r in rows].count(str(o["order_id"])) == 1
 

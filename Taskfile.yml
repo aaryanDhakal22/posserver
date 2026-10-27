@@ -282,15 +282,18 @@ tasks:
   # Tests
   # ──────────────────────────────────────────────────────────────────────
 
+  # 4 xdist workers; `--dist loadgroup` keeps each xdist_group on one worker
+  # ("geo": tests that swap main's global geo providers, "dlq": the DLQ walk).
+  # Extra pytest args pass through: task test -- -n 0 -k routing
   test:
     desc: Run the main/ pytest suite (dev stack must be up)
     cmds:
-      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v -n 4 --dist loadgroup {{.CLI_ARGS}}
 
   test-quick:
     desc: Fast subset of main/ tests
     cmds:
-      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v -m "not slow"
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v -n 4 --dist loadgroup -m "not slow" {{.CLI_ARGS}}
 
   test-unit:
     desc: Go unit tests (no Postgres, no Doppler needed)
