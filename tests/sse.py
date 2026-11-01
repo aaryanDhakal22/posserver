@@ -4,6 +4,7 @@ queues parsed frames ({"event", "data"}), so a test can play the agent."""
 from __future__ import annotations
 
 import json
+import socket
 import threading
 import time
 from queue import Empty, Queue
@@ -86,6 +87,15 @@ class SSEStream:
 
     def close(self) -> None:
         self._stop.set()
+        # The reader thread sits in recv() until the next byte, and main only
+        # writes a keepalive every 15 s: closing alone waited for it. Shutting
+        # the socket down wakes the read at once.
+        sock = getattr(getattr(self.resp.raw, "_connection", None), "sock", None)
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
         self.resp.close()
 
     def __enter__(self) -> "SSEStream":

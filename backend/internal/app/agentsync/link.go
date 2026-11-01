@@ -9,6 +9,7 @@ import (
 
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/observability"
+	"quiccpos/main/internal/shared/ratelimit"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -162,7 +163,6 @@ func (s *Service) PushoverSecrets() PushoverSecrets {
 }
 
 // linkGlobalKey/Max cap failed links across all usernames per window.
-const (
-	linkGlobalKey = "*"
-	linkGlobalMax = 30
-)
+const linkGlobalKey = "*"
+
+var linkGlobalMax = ratelimit.GlobalMax(30)

@@ -23,8 +23,9 @@ const (
 	loginFailMax    = 5
 	loginFailWindow = 10 * time.Minute
 	loginGlobalKey  = "*"
-	loginGlobalMax  = 30
 )
+
+var loginGlobalMax = ratelimit.GlobalMax(30)
 
 func newLoginLimiter() *loginLimiter {
 	return &loginLimiter{w: ratelimit.New(loginFailMax, loginFailWindow)}
