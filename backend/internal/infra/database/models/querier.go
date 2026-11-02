@@ -15,6 +15,11 @@ type Querier interface {
 	AttachModifierGroup(ctx context.Context, arg AttachModifierGroupParams) error
 	AuthenticateChannel(ctx context.Context, keyHash pgtype.Text) (Channel, error)
 	BuiltinVendorChannel(ctx context.Context, locationID pgtype.UUID) (Channel, error)
+	ChannelEventExists(ctx context.Context, arg ChannelEventExistsParams) (bool, error)
+	ChannelEventsAfter(ctx context.Context, arg ChannelEventsAfterParams) ([]ChannelEvent, error)
+	// Keyed-channel orders the Pi hasn't accepted N minutes after they were
+	// placed (ASAP, or due within the window), not paged yet.
+	ChannelOrdersToAlert(ctx context.Context, arg ChannelOrdersToAlertParams) ([]ChannelOrdersToAlertRow, error)
 	// Unflag the location's current receipt printer (one per location).
 	ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error
 	ClearStorePause(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error)
@@ -137,6 +142,7 @@ type Querier interface {
 	GetChannel(ctx context.Context, id pgtype.UUID) (Channel, error)
 	GetChannelOrder(ctx context.Context, orderID pgtype.UUID) (ChannelOrder, error)
 	GetChannelOrderByClient(ctx context.Context, arg GetChannelOrderByClientParams) (ChannelOrder, error)
+	GetChannelOrderByToken(ctx context.Context, trackToken pgtype.Text) (ChannelOrder, error)
 	GetDeal(ctx context.Context, arg GetDealParams) (Deal, error)
 	GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagReportRow, error)
 	GetExternalStop(ctx context.Context, arg GetExternalStopParams) (GeoExternalStop, error)
@@ -191,6 +197,7 @@ type Querier interface {
 	// 00012: Pi updates (agent_updates)
 	// ---------------------------------------------------------------------------
 	InsertAgentUpdate(ctx context.Context, arg InsertAgentUpdateParams) error
+	InsertChannelEvent(ctx context.Context, arg InsertChannelEventParams) (int64, error)
 	// ─── Channel orders (main 3.0 step 5) ───────────────────────────────────────
 	InsertChannelOrder(ctx context.Context, arg InsertChannelOrderParams) error
 	InsertDeliveryRun(ctx context.Context, arg InsertDeliveryRunParams) (int64, error)
@@ -209,6 +216,7 @@ type Querier interface {
 	// When this (location, scenario, outcome) last paged the owner (throttle).
 	LastDiagPage(ctx context.Context, arg LastDiagPageParams) (pgtype.Timestamptz, error)
 	LastFloorEventAt(ctx context.Context, arg LastFloorEventAtParams) (pgtype.Timestamptz, error)
+	LatestChannelEvent(ctx context.Context, channelID pgtype.UUID) (int64, error)
 	ListAgentBackups(ctx context.Context, locationID pgtype.UUID) ([]ListAgentBackupsRow, error)
 	ListAgentHealth(ctx context.Context) ([]ListAgentHealthRow, error)
 	ListAgentUpdates(ctx context.Context, arg ListAgentUpdatesParams) ([]AgentUpdate, error)
@@ -280,6 +288,7 @@ type Querier interface {
 	ListTenants(ctx context.Context) ([]Tenant, error)
 	// Orders the agent hasn't confirmed: re-sent until it does.
 	ListUnackedOrders(ctx context.Context, arg ListUnackedOrdersParams) ([]ListUnackedOrdersRow, error)
+	MarkChannelOrderAlerted(ctx context.Context, orderID pgtype.UUID) error
 	MarkDiagReportPaged(ctx context.Context, id pgtype.UUID) error
 	MarkDispatchFailed(ctx context.Context, arg MarkDispatchFailedParams) error
 	MarkDispatchSucceeded(ctx context.Context, arg MarkDispatchSucceededParams) error
@@ -299,6 +308,7 @@ type Querier interface {
 	PendingEventsForHandler(ctx context.Context, arg PendingEventsForHandlerParams) ([]PendingEventsForHandlerRow, error)
 	PruneAgentBackups(ctx context.Context, locationID pgtype.UUID) error
 	PruneAppReleases(ctx context.Context, arg PruneAppReleasesParams) error
+	PruneChannelEvents(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error)
 	PruneDiagReports(ctx context.Context, receivedAt pgtype.Timestamptz) (int64, error)
 	PruneExternalStops(ctx context.Context, now pgtype.Timestamptz) (int64, error)
 	PruneExternalWork(ctx context.Context, now pgtype.Timestamptz) (int64, error)
@@ -399,6 +409,9 @@ type Querier interface {
 	TouchDevice(ctx context.Context, id pgtype.UUID) error
 	TouchOperatorToken(ctx context.Context, id pgtype.UUID) error
 	TouchTabletToken(ctx context.Context, id pgtype.UUID) error
+	// ─── Channel tracking (main 3.0 step 6) ─────────────────────────────────────
+	// An order's channel link, when its channel is a keyed one (not a built-in feed).
+	TrackingLink(ctx context.Context, orderID pgtype.UUID) (TrackingLinkRow, error)
 	UpdateChannel(ctx context.Context, arg UpdateChannelParams) (Channel, error)
 	UpdateDeal(ctx context.Context, arg UpdateDealParams) (Deal, error)
 	// Updates the editable surface of a location in one shot. Pass current values

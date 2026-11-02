@@ -103,6 +103,112 @@ func (q *Queries) BuiltinVendorChannel(ctx context.Context, locationID pgtype.UU
 	return i, err
 }
 
+const channelEventExists = `-- name: ChannelEventExists :one
+SELECT EXISTS (SELECT 1 FROM channel_events WHERE channel_id = $1 AND id = $2)
+`
+
+type ChannelEventExistsParams struct {
+	ChannelID pgtype.UUID `json:"channel_id"`
+	ID        int64       `json:"id"`
+}
+
+func (q *Queries) ChannelEventExists(ctx context.Context, arg ChannelEventExistsParams) (bool, error) {
+	row := q.db.QueryRow(ctx, channelEventExists, arg.ChannelID, arg.ID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const channelEventsAfter = `-- name: ChannelEventsAfter :many
+SELECT id, channel_id, order_id, type, payload, created_at FROM channel_events WHERE channel_id = $1 AND id > $2 ORDER BY id LIMIT $3
+`
+
+type ChannelEventsAfterParams struct {
+	ChannelID pgtype.UUID `json:"channel_id"`
+	ID        int64       `json:"id"`
+	Limit     int32       `json:"limit"`
+}
+
+func (q *Queries) ChannelEventsAfter(ctx context.Context, arg ChannelEventsAfterParams) ([]ChannelEvent, error) {
+	rows, err := q.db.Query(ctx, channelEventsAfter, arg.ChannelID, arg.ID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelEvent
+	for rows.Next() {
+		var i ChannelEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.ChannelID,
+			&i.OrderID,
+			&i.Type,
+			&i.Payload,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const channelOrdersToAlert = `-- name: ChannelOrdersToAlert :many
+SELECT co.order_id, co.channel_id, co.location_id, c.name AS channel_name, o.customer_display_name
+FROM channel_orders co
+JOIN channels c ON c.id = co.channel_id
+JOIN orders o ON o.id = co.order_id
+WHERE NOT c.builtin AND co.alerted_at IS NULL
+  AND co.created_at < $1::timestamptz AND co.created_at > $2::timestamptz
+  AND o.status IN ('received', 'validated')
+  AND (o.promised_at IS NULL OR o.promised_at < $3::timestamptz)
+`
+
+type ChannelOrdersToAlertParams struct {
+	PlacedBefore pgtype.Timestamptz `json:"placed_before"`
+	PlacedAfter  pgtype.Timestamptz `json:"placed_after"`
+	DueBefore    pgtype.Timestamptz `json:"due_before"`
+}
+
+type ChannelOrdersToAlertRow struct {
+	OrderID             pgtype.UUID `json:"order_id"`
+	ChannelID           pgtype.UUID `json:"channel_id"`
+	LocationID          pgtype.UUID `json:"location_id"`
+	ChannelName         string      `json:"channel_name"`
+	CustomerDisplayName string      `json:"customer_display_name"`
+}
+
+// Keyed-channel orders the Pi hasn't accepted N minutes after they were
+// placed (ASAP, or due within the window), not paged yet.
+func (q *Queries) ChannelOrdersToAlert(ctx context.Context, arg ChannelOrdersToAlertParams) ([]ChannelOrdersToAlertRow, error) {
+	rows, err := q.db.Query(ctx, channelOrdersToAlert, arg.PlacedBefore, arg.PlacedAfter, arg.DueBefore)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelOrdersToAlertRow
+	for rows.Next() {
+		var i ChannelOrdersToAlertRow
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.ChannelID,
+			&i.LocationID,
+			&i.ChannelName,
+			&i.CustomerDisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const clearReceiptPrinter = `-- name: ClearReceiptPrinter :exec
 UPDATE printers SET is_receipt = false, updated_at = now()
 WHERE location_id = $1 AND is_receipt
@@ -1978,7 +2084,7 @@ func (q *Queries) GetChannel(ctx context.Context, id pgtype.UUID) (Channel, erro
 }
 
 const getChannelOrder = `-- name: GetChannelOrder :one
-SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at FROM channel_orders WHERE order_id = $1
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at FROM channel_orders WHERE order_id = $1
 `
 
 func (q *Queries) GetChannelOrder(ctx context.Context, orderID pgtype.UUID) (ChannelOrder, error) {
@@ -1992,12 +2098,14 @@ func (q *Queries) GetChannelOrder(ctx context.Context, orderID pgtype.UUID) (Cha
 		&i.ClientOrderID,
 		&i.Payment,
 		&i.CreatedAt,
+		&i.TrackToken,
+		&i.AlertedAt,
 	)
 	return i, err
 }
 
 const getChannelOrderByClient = `-- name: GetChannelOrderByClient :one
-SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at FROM channel_orders WHERE channel_id = $1 AND client_order_id = $2
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at FROM channel_orders WHERE channel_id = $1 AND client_order_id = $2
 `
 
 type GetChannelOrderByClientParams struct {
@@ -2016,6 +2124,29 @@ func (q *Queries) GetChannelOrderByClient(ctx context.Context, arg GetChannelOrd
 		&i.ClientOrderID,
 		&i.Payment,
 		&i.CreatedAt,
+		&i.TrackToken,
+		&i.AlertedAt,
+	)
+	return i, err
+}
+
+const getChannelOrderByToken = `-- name: GetChannelOrderByToken :one
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at FROM channel_orders WHERE track_token = $1
+`
+
+func (q *Queries) GetChannelOrderByToken(ctx context.Context, trackToken pgtype.Text) (ChannelOrder, error) {
+	row := q.db.QueryRow(ctx, getChannelOrderByToken, trackToken)
+	var i ChannelOrder
+	err := row.Scan(
+		&i.OrderID,
+		&i.ChannelID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.ClientOrderID,
+		&i.Payment,
+		&i.CreatedAt,
+		&i.TrackToken,
+		&i.AlertedAt,
 	)
 	return i, err
 }
@@ -3268,10 +3399,33 @@ func (q *Queries) InsertAgentUpdate(ctx context.Context, arg InsertAgentUpdatePa
 	return err
 }
 
+const insertChannelEvent = `-- name: InsertChannelEvent :one
+INSERT INTO channel_events (channel_id, order_id, type, payload) VALUES ($1, $2, $3, $4) RETURNING id
+`
+
+type InsertChannelEventParams struct {
+	ChannelID pgtype.UUID `json:"channel_id"`
+	OrderID   pgtype.UUID `json:"order_id"`
+	Type      string      `json:"type"`
+	Payload   []byte      `json:"payload"`
+}
+
+func (q *Queries) InsertChannelEvent(ctx context.Context, arg InsertChannelEventParams) (int64, error) {
+	row := q.db.QueryRow(ctx, insertChannelEvent,
+		arg.ChannelID,
+		arg.OrderID,
+		arg.Type,
+		arg.Payload,
+	)
+	var id int64
+	err := row.Scan(&id)
+	return id, err
+}
+
 const insertChannelOrder = `-- name: InsertChannelOrder :exec
 
-INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment)
-VALUES ($1, $2, $3, $4, $5, $6)
+INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment, track_token)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 `
 
 type InsertChannelOrderParams struct {
@@ -3281,6 +3435,7 @@ type InsertChannelOrderParams struct {
 	LocationID    pgtype.UUID `json:"location_id"`
 	ClientOrderID string      `json:"client_order_id"`
 	Payment       []byte      `json:"payment"`
+	TrackToken    pgtype.Text `json:"track_token"`
 }
 
 // ─── Channel orders (main 3.0 step 5) ───────────────────────────────────────
@@ -3292,6 +3447,7 @@ func (q *Queries) InsertChannelOrder(ctx context.Context, arg InsertChannelOrder
 		arg.LocationID,
 		arg.ClientOrderID,
 		arg.Payment,
+		arg.TrackToken,
 	)
 	return err
 }
@@ -3635,6 +3791,17 @@ func (q *Queries) LastFloorEventAt(ctx context.Context, arg LastFloorEventAtPara
 	return last_at, err
 }
 
+const latestChannelEvent = `-- name: LatestChannelEvent :one
+SELECT COALESCE(MAX(id), 0)::bigint FROM channel_events WHERE channel_id = $1
+`
+
+func (q *Queries) LatestChannelEvent(ctx context.Context, channelID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, latestChannelEvent, channelID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const listAgentBackups = `-- name: ListAgentBackups :many
 SELECT id, tenant_id, location_id, device_id, size, sha256, created_at FROM agent_backups
 WHERE ($1::uuid IS NULL OR location_id = $1)
@@ -3972,7 +4139,7 @@ func (q *Queries) ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) 
 }
 
 const listChannelOrders = `-- name: ListChannelOrders :many
-SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at FROM channel_orders
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at FROM channel_orders
 WHERE channel_id = $1 AND created_at < $2
 ORDER BY created_at DESC
 LIMIT $3
@@ -4001,6 +4168,8 @@ func (q *Queries) ListChannelOrders(ctx context.Context, arg ListChannelOrdersPa
 			&i.ClientOrderID,
 			&i.Payment,
 			&i.CreatedAt,
+			&i.TrackToken,
+			&i.AlertedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -5893,6 +6062,15 @@ func (q *Queries) ListUnackedOrders(ctx context.Context, arg ListUnackedOrdersPa
 	return items, nil
 }
 
+const markChannelOrderAlerted = `-- name: MarkChannelOrderAlerted :exec
+UPDATE channel_orders SET alerted_at = now() WHERE order_id = $1
+`
+
+func (q *Queries) MarkChannelOrderAlerted(ctx context.Context, orderID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markChannelOrderAlerted, orderID)
+	return err
+}
+
 const markDiagReportPaged = `-- name: MarkDiagReportPaged :exec
 UPDATE diag_reports SET paged_at = now() WHERE id = $1
 `
@@ -6181,6 +6359,18 @@ type PruneAppReleasesParams struct {
 func (q *Queries) PruneAppReleases(ctx context.Context, arg PruneAppReleasesParams) error {
 	_, err := q.db.Exec(ctx, pruneAppReleases, arg.App, arg.Limit)
 	return err
+}
+
+const pruneChannelEvents = `-- name: PruneChannelEvents :execrows
+DELETE FROM channel_events WHERE created_at < $1
+`
+
+func (q *Queries) PruneChannelEvents(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneChannelEvents, createdAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const pruneDiagReports = `-- name: PruneDiagReports :execrows
@@ -7528,6 +7718,34 @@ UPDATE tablet_report_tokens SET last_used_at = now() WHERE id = $1
 func (q *Queries) TouchTabletToken(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, touchTabletToken, id)
 	return err
+}
+
+const trackingLink = `-- name: TrackingLink :one
+
+SELECT co.order_id, co.channel_id, co.client_order_id, co.track_token
+FROM channel_orders co JOIN channels c ON c.id = co.channel_id
+WHERE co.order_id = $1 AND NOT c.builtin
+`
+
+type TrackingLinkRow struct {
+	OrderID       pgtype.UUID `json:"order_id"`
+	ChannelID     pgtype.UUID `json:"channel_id"`
+	ClientOrderID string      `json:"client_order_id"`
+	TrackToken    pgtype.Text `json:"track_token"`
+}
+
+// ─── Channel tracking (main 3.0 step 6) ─────────────────────────────────────
+// An order's channel link, when its channel is a keyed one (not a built-in feed).
+func (q *Queries) TrackingLink(ctx context.Context, orderID pgtype.UUID) (TrackingLinkRow, error) {
+	row := q.db.QueryRow(ctx, trackingLink, orderID)
+	var i TrackingLinkRow
+	err := row.Scan(
+		&i.OrderID,
+		&i.ChannelID,
+		&i.ClientOrderID,
+		&i.TrackToken,
+	)
+	return i, err
 }
 
 const updateChannel = `-- name: UpdateChannel :one

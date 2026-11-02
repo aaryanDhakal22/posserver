@@ -27,12 +27,13 @@ type ChannelOrder struct {
 	ChannelID     *uuid.UUID
 	ClientOrderID string
 	Payment       []byte
+	TrackToken    string
 	CreatedAt     time.Time
 }
 
 func channelOrderOf(r models.ChannelOrder) ChannelOrder {
 	return ChannelOrder{OrderID: idOf(r.OrderID), ChannelID: idPtrOf(r.ChannelID), ClientOrderID: r.ClientOrderID,
-		Payment: r.Payment, CreatedAt: r.CreatedAt.Time}
+		Payment: r.Payment, TrackToken: r.TrackToken.String, CreatedAt: r.CreatedAt.Time}
 }
 
 // ByClient finds a channel's order by its idempotency key (pgx.ErrNoRows = none).

@@ -36,6 +36,7 @@ import (
 	"quiccpos/main/internal/app/printerstatus"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
+	"quiccpos/main/internal/app/tracking"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
 	"quiccpos/main/internal/transport/handler"
@@ -96,6 +97,8 @@ type RouterDeps struct {
 	MenuService *menuApp.Service
 	// OperatorService backs the operator accounts + read-only menu API.
 	OperatorService *operatorApp.Service
+	// Tracking follows channel orders (main 3.0).
+	Tracking *tracking.Service
 	// OrderPort places channel orders (main 3.0).
 	OrderPort *orderport.Service
 	// Pricing backs pricing settings, deals and quotes (main 3.0).
@@ -190,6 +193,7 @@ func routeTable(d RouterDeps) []routeDef {
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
 	pricingH := handler.NewPricingHandler(d.Pricing, d.Logger)
 	orderPortH := handler.NewOrderPortHandler(d.OrderPort, d.Logger)
+	trackingH := handler.NewTrackingHandler(d.Tracking, d.Logger)
 	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
@@ -419,6 +423,10 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", channelPrefix+"/orders", "channel", "Place an order (orders permission; idempotent on client_order_id)", orderPortH.Place, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/orders", "channel", "This channel's orders, newest first (?before=&limit=)", orderPortH.List, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/orders/:id", "channel", "One of this channel's orders", orderPortH.Get, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/orders/:id/status", "channel", "One of this channel's orders: its tracking state (track permission)", trackingH.Status, channelAuth, channelGzip),
+		// No gzip on the stream: the compressor would hold events back.
+		def("GET", channelPrefix+"/events", "channel", "This channel's orders as they change (SSE, Last-Event-ID resumes 24 h)", trackingH.Events, channelAuth),
+		def("GET", "/track/v1/:token", "none", "A customer's tracking link: status, kitchen #, ready-by, driver first name", trackingH.Public),
 		def("POST", channelPrefix+"/quote", "channel", "Price a cart (quote permission)", pricingH.ChannelQuote, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/pricing", "channel", "What this channel prices with (settings, deals, item facts) — for previews", pricingH.ChannelPricing, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/store", "channel", "The store's status: open/paused/closed, order types + ETAs, sold out", statusH.ChannelStore, channelAuth, channelGzip),

@@ -8,6 +8,8 @@ package orderport
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +23,7 @@ import (
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	channelDom "quiccpos/main/internal/domain/channel"
 	"quiccpos/main/internal/domain/menu"
+	"quiccpos/main/internal/domain/notify"
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/domain/payment"
 	"quiccpos/main/internal/domain/pricing"
@@ -89,6 +92,7 @@ type Service struct {
 	orders   Orders
 	links    Links
 	gateways map[string]payment.Gateway
+	notifier notify.Notifier // problems → the owner (nil = log only)
 	logger   zerolog.Logger
 	now      func() time.Time
 }
@@ -280,7 +284,9 @@ func (s *Service) Place(ctx context.Context, ch channelDom.Channel, req Request)
 
 	// Build the order before taking money, so nothing is charged for an
 	// order that can't be built.
-	if _, err := s.build(ctx, ch, req, pctx, q, nil); err != nil {
+	// The customer's tracking link (an unguessable token, GET /track/v1/{token}).
+	token := newTrackToken()
+	if _, err := s.build(ctx, ch, req, pctx, q, nil, token); err != nil {
 		return nil, false, err
 	}
 	res, err := gw.Charge(ctx, payment.Charge{AmountCents: q.TotalCents, Token: req.Payment.Token,
@@ -293,33 +299,51 @@ func (s *Service) Place(ctx context.Context, ch channelDom.Channel, req Request)
 	case err != nil:
 		return nil, false, err
 	}
-	o, err := s.build(ctx, ch, req, pctx, q, &res)
+	o, err := s.build(ctx, ch, req, pctx, q, &res, token)
 	if err != nil {
-		s.refund(ctx, gw, res, q.TotalCents)
+		s.refund(ctx, ch, gw, res, q.TotalCents)
 		return nil, false, err
 	}
 	if err := s.orders.Create(ctx, o); err != nil {
 		if errors.Is(err, order.ErrDuplicate) { // the same key, placed at the same moment
-			s.refund(ctx, gw, res, q.TotalCents)
+			s.refund(ctx, ch, gw, res, q.TotalCents)
 			v, verr := s.byClient(ctx, ch, req.ClientOrderID)
 			if verr != nil {
 				return nil, false, err
 			}
 			return v, false, nil
 		}
-		s.refund(ctx, gw, res, q.TotalCents)
+		s.refund(ctx, ch, gw, res, q.TotalCents)
 		return nil, false, err
 	}
 	s.logger.Info().Ctx(ctx).Str("order_id", uuid.UUID(o.ID()).String()).Str("channel", string(ch.Kind)).Msg("channel order placed")
-	return viewOf(o, req.ClientOrderID), true, nil
+	return viewOf(o, req.ClientOrderID, token), true, nil
 }
 
-func (s *Service) refund(ctx context.Context, gw payment.Gateway, res payment.Result, amount int64) {
+// newTrackToken is 24 random bytes, URL-safe base64 (32 characters).
+func newTrackToken() string {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		panic(err) // crypto/rand never fails on Linux
+	}
+	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// SetNotifier sends problems (a failed refund) to the owner.
+func (s *Service) SetNotifier(n notify.Notifier) { s.notifier = n }
+
+func (s *Service) refund(ctx context.Context, ch channelDom.Channel, gw payment.Gateway, res payment.Result, amount int64) {
 	if res.Ref == "" {
 		return
 	}
-	if err := gw.Refund(context.WithoutCancel(ctx), res.Ref, amount); err != nil {
+	ctx = context.WithoutCancel(ctx)
+	if err := gw.Refund(ctx, res.Ref, amount); err != nil {
 		s.logger.Error().Ctx(ctx).Err(err).Str("gateway", res.Gateway).Msg("REFUND FAILED after a failed save — refund it by hand")
+		if s.notifier != nil {
+			_ = s.notifier.Notify(ctx, notify.Notice{LocationID: ch.LocationID, Kind: notify.KindRefundFailed, Title: "Refund failed",
+				Message: fmt.Sprintf("A %s card charge of $%d.%02d couldn't be refunded after the order failed to save (ref %s). Refund it by hand.",
+					ch.Name, amount/100, amount%100, res.Ref)})
+		}
 	}
 }
 
@@ -343,7 +367,7 @@ func containsTime(ts []time.Time, t time.Time) bool {
 
 // build makes the domain order from the priced cart (res = the payment, nil
 // before charging).
-func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request, pctx *pricing.Context, q pricing.Quote, res *payment.Result) (*order.Order, error) {
+func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request, pctx *pricing.Context, q pricing.Quote, res *payment.Result, token string) (*order.Order, error) {
 	bank, err := s.bank.Bank(ctx, ch.LocationID)
 	if err != nil {
 		return nil, err
@@ -496,7 +520,7 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 	}
 	return order.NewOrder(order.NewOrderInput{
 		RawPayload:    raw,
-		Channel:       &order.ChannelRef{ID: ch.ID, ClientOrderID: req.ClientOrderID, Payment: payRef},
+		Channel:       &order.ChannelRef{ID: ch.ID, ClientOrderID: req.ClientOrderID, Payment: payRef, TrackToken: token},
 		TenantID:      order.TenantID(ch.TenantID),
 		LocationID:    order.LocationID(ch.LocationID),
 		Source:        order.Source(ch.Kind),
@@ -520,7 +544,8 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 type View struct {
 	ID               string     `json:"id"`
 	ClientOrderID    string     `json:"client_order_id"`
-	Status           string     `json:"status"` // received | scheduled | accepted | ready | on_delivery | completed | cancelled
+	TrackToken       string     `json:"track_token"` // the customer's tracking link: GET /track/v1/{track_token}
+	Status           string     `json:"status"`      // received | scheduled | accepted | ready | on_delivery | completed | cancelled
 	Type             string     `json:"type"`
 	PlacedAt         time.Time  `json:"placed_at"`
 	PromisedAt       *time.Time `json:"promised_at"`
@@ -560,21 +585,9 @@ type ViewAmount struct {
 	AmountCents int64  `json:"amount_cents"`
 }
 
-func publicStatus(s order.Status) string {
-	switch s {
-	case order.StatusReceived, order.StatusValidated:
-		return "received"
-	case order.StatusAccepted, order.StatusPreparing:
-		return "accepted"
-	case order.StatusRejected:
-		return "cancelled"
-	}
-	return string(s)
-}
-
-func viewOf(o *order.Order, clientOrderID string) *View {
+func viewOf(o *order.Order, clientOrderID, trackToken string) *View {
 	snap := o.Snapshot()
-	v := &View{ID: snap.ID, ClientOrderID: clientOrderID, Status: publicStatus(o.Status()), Type: string(o.Fulfillment().Type),
+	v := &View{ID: snap.ID, ClientOrderID: clientOrderID, TrackToken: trackToken, Status: o.Status().Public(), Type: string(o.Fulfillment().Type),
 		PlacedAt: o.PlacedAt(), PromisedAt: o.Fulfillment().PromisedAt, KitchenNumber: snap.KitchenNumber, EstimatedReadyAt: snap.EstimatedReadyAt,
 		Lines: []ViewLine{}}
 	v.Customer.Name = o.Customer().DisplayName
@@ -613,7 +626,7 @@ func (s *Service) byClient(ctx context.Context, ch channelDom.Channel, clientOrd
 	if err != nil {
 		return nil, err
 	}
-	return viewOf(o, clientOrderID), nil
+	return viewOf(o, clientOrderID, link.TrackToken), nil
 }
 
 // ErrNotFound: not one of this channel's orders.
@@ -629,7 +642,7 @@ func (s *Service) Get(ctx context.Context, ch channelDom.Channel, orderID uuid.U
 	if err != nil {
 		return nil, ErrNotFound
 	}
-	return viewOf(o, link.ClientOrderID), nil
+	return viewOf(o, link.ClientOrderID, link.TrackToken), nil
 }
 
 // List is the channel's own orders, newest first (before = a page's cursor).
@@ -645,7 +658,7 @@ func (s *Service) List(ctx context.Context, ch channelDom.Channel, before time.T
 		if err != nil {
 			continue // deleted meanwhile
 		}
-		out = append(out, viewOf(o, l.ClientOrderID))
+		out = append(out, viewOf(o, l.ClientOrderID, l.TrackToken))
 	}
 	return out, nil
 }

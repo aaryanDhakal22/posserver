@@ -369,6 +369,154 @@
         }
       }
     },
+    "/channel/v1/orders/{id}/status": {
+      "get": {
+        "operationId": "getOrderStatus",
+        "summary": "One of this channel's orders: where it is",
+        "description": "Needs the track permission. driver is the first name only, while the order is out (or delivered).",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Its tracking state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not this channel's order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderError"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/channel/v1/events": {
+      "get": {
+        "operationId": "getEvents",
+        "summary": "This channel's orders as they change (Server-Sent Events)",
+        "description": "Each change of one of this channel's orders is an event `id: <n>` / `event: order.status` / data = OrderEvent (JSON). A fresh stream starts now; reconnect with the Last-Event-ID header (or ?last_event_id=) to get what you missed, within 24 hours — an id no longer kept gets one `event: reset` (re-read your orders), then the live stream. Keepalive comments every 15 s. Needs the track permission. Not gzipped.",
+        "parameters": [
+          {
+            "name": "Last-Event-ID",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "last_event_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                },
+                "x-event-data": {
+                  "$ref": "#/components/schemas/OrderEvent"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/track/v1/{token}": {
+      "get": {
+        "operationId": "getTrack",
+        "summary": "A customer's tracking link (no key)",
+        "security": [],
+        "description": "The order's track_token makes the link. Status, kitchen number, ready-by and the driver's first name — no customer details, no items. 120 a minute per IP.",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Where the order is",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicTrack"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many requests",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/channel/v1/quote": {
       "post": {
         "operationId": "quote",
@@ -2323,7 +2471,8 @@
           "customer",
           "lines",
           "money",
-          "payment"
+          "payment",
+          "track_token"
         ],
         "properties": {
           "id": {
@@ -2509,6 +2658,318 @@
               }
             },
             "additionalProperties": false
+          },
+          "track_token": {
+            "type": "string",
+            "description": "The customer's tracking link: GET /track/v1/{track_token}"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OrderStatus": {
+        "type": "object",
+        "required": [
+          "order_id",
+          "status",
+          "type",
+          "placed_at",
+          "promised_at",
+          "kitchen_number",
+          "estimated_ready_at",
+          "driver",
+          "steps",
+          "client_order_id"
+        ],
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "received",
+              "scheduled",
+              "accepted",
+              "ready",
+              "on_delivery",
+              "completed",
+              "cancelled"
+            ]
+          },
+          "type": {
+            "enum": [
+              "pickup",
+              "delivery"
+            ]
+          },
+          "placed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "promised_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "kitchen_number": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "estimated_ready_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "driver": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "first_name"
+                ],
+                "properties": {
+                  "first_name": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "status",
+                "at"
+              ],
+              "properties": {
+                "status": {
+                  "enum": [
+                    "received",
+                    "scheduled",
+                    "accepted",
+                    "ready",
+                    "on_delivery",
+                    "completed",
+                    "cancelled"
+                  ]
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "client_order_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PublicTrack": {
+        "type": "object",
+        "required": [
+          "order_id",
+          "status",
+          "type",
+          "placed_at",
+          "promised_at",
+          "kitchen_number",
+          "estimated_ready_at",
+          "driver",
+          "steps",
+          "store"
+        ],
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "status": {
+            "enum": [
+              "received",
+              "scheduled",
+              "accepted",
+              "ready",
+              "on_delivery",
+              "completed",
+              "cancelled"
+            ]
+          },
+          "type": {
+            "enum": [
+              "pickup",
+              "delivery"
+            ]
+          },
+          "placed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "promised_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "kitchen_number": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "estimated_ready_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "driver": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "first_name"
+                ],
+                "properties": {
+                  "first_name": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "status",
+                "at"
+              ],
+              "properties": {
+                "status": {
+                  "enum": [
+                    "received",
+                    "scheduled",
+                    "accepted",
+                    "ready",
+                    "on_delivery",
+                    "completed",
+                    "cancelled"
+                  ]
+                },
+                "at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "store": {
+            "type": "object",
+            "required": [
+              "name",
+              "phone"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "phone": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "OrderEvent": {
+        "type": "object",
+        "required": [
+          "order_id",
+          "client_order_id",
+          "status",
+          "kitchen_number",
+          "estimated_ready_at",
+          "driver",
+          "at"
+        ],
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "client_order_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "received",
+              "scheduled",
+              "accepted",
+              "ready",
+              "on_delivery",
+              "completed",
+              "cancelled"
+            ]
+          },
+          "kitchen_number": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "estimated_ready_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "driver": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "first_name"
+                ],
+                "properties": {
+                  "first_name": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
           }
         },
         "additionalProperties": false

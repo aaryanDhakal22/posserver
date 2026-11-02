@@ -1589,8 +1589,8 @@ DELETE FROM deals WHERE id = $1 AND location_id = $2;
 -- ─── Channel orders (main 3.0 step 5) ───────────────────────────────────────
 
 -- name: InsertChannelOrder :exec
-INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment)
-VALUES ($1, $2, $3, $4, $5, $6);
+INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment, track_token)
+VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg(track_token));
 
 -- name: GetChannelOrderByClient :one
 SELECT * FROM channel_orders WHERE channel_id = $1 AND client_order_id = $2;
@@ -1606,3 +1606,44 @@ LIMIT $3;
 
 -- name: BuiltinVendorChannel :one
 SELECT * FROM channels WHERE location_id = $1 AND builtin AND kind = 'vendor' ORDER BY created_at LIMIT 1;
+
+-- ─── Channel tracking (main 3.0 step 6) ─────────────────────────────────────
+
+-- name: TrackingLink :one
+-- An order's channel link, when its channel is a keyed one (not a built-in feed).
+SELECT co.order_id, co.channel_id, co.client_order_id, co.track_token
+FROM channel_orders co JOIN channels c ON c.id = co.channel_id
+WHERE co.order_id = $1 AND NOT c.builtin;
+
+-- name: InsertChannelEvent :one
+INSERT INTO channel_events (channel_id, order_id, type, payload) VALUES ($1, $2, $3, $4) RETURNING id;
+
+-- name: ChannelEventsAfter :many
+SELECT * FROM channel_events WHERE channel_id = $1 AND id > $2 ORDER BY id LIMIT $3;
+
+-- name: PruneChannelEvents :execrows
+DELETE FROM channel_events WHERE created_at < $1;
+
+-- name: GetChannelOrderByToken :one
+SELECT * FROM channel_orders WHERE track_token = $1;
+
+-- name: ChannelOrdersToAlert :many
+-- Keyed-channel orders the Pi hasn't accepted N minutes after they were
+-- placed (ASAP, or due within the window), not paged yet.
+SELECT co.order_id, co.channel_id, co.location_id, c.name AS channel_name, o.customer_display_name
+FROM channel_orders co
+JOIN channels c ON c.id = co.channel_id
+JOIN orders o ON o.id = co.order_id
+WHERE NOT c.builtin AND co.alerted_at IS NULL
+  AND co.created_at < @placed_before::timestamptz AND co.created_at > @placed_after::timestamptz
+  AND o.status IN ('received', 'validated')
+  AND (o.promised_at IS NULL OR o.promised_at < @due_before::timestamptz);
+
+-- name: MarkChannelOrderAlerted :exec
+UPDATE channel_orders SET alerted_at = now() WHERE order_id = $1;
+
+-- name: ChannelEventExists :one
+SELECT EXISTS (SELECT 1 FROM channel_events WHERE channel_id = $1 AND id = $2);
+
+-- name: LatestChannelEvent :one
+SELECT COALESCE(MAX(id), 0)::bigint FROM channel_events WHERE channel_id = $1;

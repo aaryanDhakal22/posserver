@@ -292,6 +292,7 @@ type ChannelRef struct {
 	ID            uuid.UUID
 	ClientOrderID string
 	Payment       []byte
+	TrackToken    string // the public tracking link's token ("" = none)
 }
 
 var (

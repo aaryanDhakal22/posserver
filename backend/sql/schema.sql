@@ -814,7 +814,22 @@ CREATE TABLE channel_orders (
     location_id     uuid        NOT NULL,
     client_order_id text        NOT NULL DEFAULT '',
     payment         jsonb       NOT NULL DEFAULT '{}'::jsonb,
-    created_at      timestamptz NOT NULL DEFAULT now()
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    track_token     text,
+    alerted_at      timestamptz
 );
 CREATE UNIQUE INDEX idx_channel_orders_client ON channel_orders (channel_id, client_order_id) WHERE client_order_id <> '';
 CREATE INDEX idx_channel_orders_channel ON channel_orders (channel_id, created_at DESC);
+CREATE UNIQUE INDEX idx_channel_orders_track ON channel_orders (track_token) WHERE track_token IS NOT NULL;
+
+-- 00023_channel_tracking (main 3.0): each channel's stream of order changes (24 h).
+CREATE TABLE channel_events (
+    id         bigserial   PRIMARY KEY,
+    channel_id uuid        NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    order_id   uuid        NOT NULL,
+    type       text        NOT NULL,
+    payload    jsonb       NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_channel_events_channel ON channel_events (channel_id, id);
+CREATE INDEX idx_channel_events_created ON channel_events (created_at);

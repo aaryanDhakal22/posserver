@@ -39,6 +39,8 @@ import (
 	pricingApp "quiccpos/main/internal/app/pricing"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
+	"quiccpos/main/internal/app/tracking"
+	"quiccpos/main/internal/domain/notify"
 	"quiccpos/main/internal/domain/payment"
 	tenancyDomain "quiccpos/main/internal/domain/tenancy"
 
@@ -168,7 +170,11 @@ func main() {
 	// transaction.
 	sseHandler := handlers.NewSSE(broker, lgr)
 
-	allHandlers := []dispatch.Handler{sseHandler}
+	// Channel tracking (3.0): a keyed channel's order changes feed its live
+	// stream. Wired to the order service + the owner pager further down.
+	trackingService := tracking.NewService(repositories.NewTrackingRepository(pool), lgr)
+
+	allHandlers := []dispatch.Handler{sseHandler, handlers.NewTracking(trackingService)}
 	handlerNames := make([]string, 0, len(allHandlers))
 	for _, h := range allHandlers {
 		handlerNames = append(handlerNames, h.Name())
@@ -276,6 +282,18 @@ func main() {
 	ownerPager.SetEndpoint(pushoverURL)
 	ownerPager.SetDevices(adminDevices)
 	diagService := diagApp.New(pool, ownerPager, tenancyService, lgr)
+
+	// The notification port (3.0): problems with channel orders → the log and
+	// the store owner's phones (+ the admin's).
+	notifier := notify.Fanout{notify.Log{Logger: lgr}, notify.Pushover{Pager: ownerPager, Devices: func(ctx context.Context, locationID uuid.UUID) ([]string, error) {
+		l, err := tenancyService.GetLocation(ctx, locationID)
+		if err != nil {
+			return nil, err
+		}
+		return tenancyDomain.OwnerDevices(l.Config), nil
+	}}}
+	trackingService.Wire(svc, tenancyService, notifier)
+	go trackingService.RunMaintenance(ctx)
 	requester.RegisterInbound(diagApp.MsgDiagReport, diagService.HandleRPC)
 	go diagService.RunPrune(ctx)
 
@@ -315,6 +333,7 @@ func main() {
 	}
 	orderPortService := orderport.NewService(pricingService, storeStatusService, menuViewService, menuService, svc,
 		repositories.NewChannelOrderRepository(pool), gateways, lgr)
+	orderPortService.SetNotifier(notifier) // a failed refund pages the owner
 	go geoService.BackfillStores(ctx)
 
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
@@ -376,6 +395,7 @@ func main() {
 		StoreStatus:     storeStatusService,
 		Pricing:         pricingService,
 		OrderPort:       orderPortService,
+		Tracking:        trackingService,
 		AgentSync:       agentSync,
 		Diag:            diagService,
 		Geo:             geoService,
