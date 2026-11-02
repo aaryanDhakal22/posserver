@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -130,11 +131,23 @@ func (h *ChannelHandler) AdminUpdate(c *echo.Context) error {
 	var req struct {
 		Name        *string                 `json:"name"`
 		Permissions *channelDom.Permissions `json:"permissions"`
+		// ViewID: absent = unchanged, null = the default view, a uuid = that view.
+		ViewID json.RawMessage `json:"view_id"`
 	}
 	if err := echo.BindBody(c, &req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
 	}
-	ch, err := h.svc.Update(c.Request().Context(), id, req.Name, req.Permissions)
+	ctx := c.Request().Context()
+	if len(req.ViewID) > 0 { // first, so a bad view changes nothing
+		var view *uuid.UUID
+		if err := json.Unmarshal(req.ViewID, &view); err != nil {
+			return c.JSON(http.StatusBadRequest, errResp("view_id must be a uuid or null"))
+		}
+		if _, err := h.svc.SetView(ctx, id, view); err != nil {
+			return h.adminErr(c, err)
+		}
+	}
+	ch, err := h.svc.Update(ctx, id, req.Name, req.Permissions)
 	if err != nil {
 		return h.adminErr(c, err)
 	}
@@ -186,7 +199,8 @@ func (h *ChannelHandler) adminErr(c *echo.Context, err error) error {
 		return c.JSON(http.StatusNotFound, errResp(err.Error()))
 	case errors.Is(err, channelApp.ErrBuiltin):
 		return c.JSON(http.StatusConflict, errResp(err.Error()))
-	case errors.Is(err, channelApp.ErrBadKind), errors.Is(err, channelApp.ErrNameRequired), errors.Is(err, channelApp.ErrBadPayment):
+	case errors.Is(err, channelApp.ErrBadKind), errors.Is(err, channelApp.ErrNameRequired), errors.Is(err, channelApp.ErrBadPayment),
+		errors.Is(err, channelApp.ErrBadView):
 		return c.JSON(http.StatusBadRequest, errResp(err.Error()))
 	}
 	h.logger.Error().Err(err).Msg("channel admin")

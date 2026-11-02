@@ -52,7 +52,7 @@ func (q *Queries) AttachModifierGroup(ctx context.Context, arg AttachModifierGro
 }
 
 const authenticateChannel = `-- name: AuthenticateChannel :one
-SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at FROM channels WHERE key_hash = $1 AND revoked_at IS NULL
+SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id FROM channels WHERE key_hash = $1 AND revoked_at IS NULL
 `
 
 func (q *Queries) AuthenticateChannel(ctx context.Context, keyHash pgtype.Text) (Channel, error) {
@@ -72,6 +72,7 @@ func (q *Queries) AuthenticateChannel(ctx context.Context, keyHash pgtype.Text) 
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ViewID,
 	)
 	return i, err
 }
@@ -237,7 +238,7 @@ const createChannel = `-- name: CreateChannel :one
 
 INSERT INTO channels (tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at
+RETURNING id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id
 `
 
 type CreateChannelParams struct {
@@ -278,6 +279,7 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ViewID,
 	)
 	return i, err
 }
@@ -514,7 +516,7 @@ func (q *Queries) CreateMenuCategory(ctx context.Context, arg CreateMenuCategory
 const createMenuItem = `-- name: CreateMenuItem :one
 INSERT INTO menu_items (tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
 `
 
 type CreateMenuItemParams struct {
@@ -567,6 +569,145 @@ func (q *Queries) CreateMenuItem(ctx context.Context, arg CreateMenuItemParams) 
 		&i.Attributes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KitchenName,
+		&i.Sku,
+	)
+	return i, err
+}
+
+const createMenuSize = `-- name: CreateMenuSize :one
+
+INSERT INTO menu_sizes (tenant_id, location_id, name, short, position)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, tenant_id, location_id, name, short, position, created_at, updated_at
+`
+
+type CreateMenuSizeParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	Name       string      `json:"name"`
+	Short      string      `json:"short"`
+	Position   int32       `json:"position"`
+}
+
+// ─── Menu bank (main 3.0) ─────────────────────────────────────────────────
+func (q *Queries) CreateMenuSize(ctx context.Context, arg CreateMenuSizeParams) (MenuSize, error) {
+	row := q.db.QueryRow(ctx, createMenuSize,
+		arg.TenantID,
+		arg.LocationID,
+		arg.Name,
+		arg.Short,
+		arg.Position,
+	)
+	var i MenuSize
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Name,
+		&i.Short,
+		&i.Position,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createMenuView = `-- name: CreateMenuView :one
+
+INSERT INTO menu_views (tenant_id, location_id, kind, name, rules)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, tenant_id, location_id, kind, name, rules, created_at, updated_at
+`
+
+type CreateMenuViewParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	Kind       string      `json:"kind"`
+	Name       string      `json:"name"`
+	Rules      []byte      `json:"rules"`
+}
+
+// ─── Menu views (main 3.0) ────────────────────────────────────────────────
+func (q *Queries) CreateMenuView(ctx context.Context, arg CreateMenuViewParams) (MenuView, error) {
+	row := q.db.QueryRow(ctx, createMenuView,
+		arg.TenantID,
+		arg.LocationID,
+		arg.Kind,
+		arg.Name,
+		arg.Rules,
+	)
+	var i MenuView
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.Rules,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createMenuViewEntry = `-- name: CreateMenuViewEntry :one
+INSERT INTO menu_view_entries (tenant_id, location_id, view_id, kind, anchor, display_name, description, photo, category,
+    position, hidden, price_override_cents, extra)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING id, tenant_id, location_id, view_id, kind, anchor, display_name, description, photo, category, position, hidden, price_override_cents, extra, created_at, updated_at
+`
+
+type CreateMenuViewEntryParams struct {
+	TenantID           pgtype.UUID `json:"tenant_id"`
+	LocationID         pgtype.UUID `json:"location_id"`
+	ViewID             pgtype.UUID `json:"view_id"`
+	Kind               string      `json:"kind"`
+	Anchor             []byte      `json:"anchor"`
+	DisplayName        string      `json:"display_name"`
+	Description        string      `json:"description"`
+	Photo              string      `json:"photo"`
+	Category           string      `json:"category"`
+	Position           int32       `json:"position"`
+	Hidden             bool        `json:"hidden"`
+	PriceOverrideCents pgtype.Int8 `json:"price_override_cents"`
+	Extra              []byte      `json:"extra"`
+}
+
+func (q *Queries) CreateMenuViewEntry(ctx context.Context, arg CreateMenuViewEntryParams) (MenuViewEntry, error) {
+	row := q.db.QueryRow(ctx, createMenuViewEntry,
+		arg.TenantID,
+		arg.LocationID,
+		arg.ViewID,
+		arg.Kind,
+		arg.Anchor,
+		arg.DisplayName,
+		arg.Description,
+		arg.Photo,
+		arg.Category,
+		arg.Position,
+		arg.Hidden,
+		arg.PriceOverrideCents,
+		arg.Extra,
+	)
+	var i MenuViewEntry
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.ViewID,
+		&i.Kind,
+		&i.Anchor,
+		&i.DisplayName,
+		&i.Description,
+		&i.Photo,
+		&i.Category,
+		&i.Position,
+		&i.Hidden,
+		&i.PriceOverrideCents,
+		&i.Extra,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -574,7 +715,7 @@ func (q *Queries) CreateMenuItem(ctx context.Context, arg CreateMenuItemParams) 
 const createModifierGroup = `-- name: CreateModifierGroup :one
 INSERT INTO modifier_groups (tenant_id, location_id, name, required, min_select, max_select, allow_multiple)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at
+RETURNING id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at, portions
 `
 
 type CreateModifierGroupParams struct {
@@ -609,6 +750,7 @@ func (q *Queries) CreateModifierGroup(ctx context.Context, arg CreateModifierGro
 		&i.AllowMultiple,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Portions,
 	)
 	return i, err
 }
@@ -616,7 +758,7 @@ func (q *Queries) CreateModifierGroup(ctx context.Context, arg CreateModifierGro
 const createModifierOption = `-- name: CreateModifierOption :one
 INSERT INTO modifier_options (tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at
+RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
 `
 
 type CreateModifierOptionParams struct {
@@ -651,6 +793,8 @@ func (q *Queries) CreateModifierOption(ctx context.Context, arg CreateModifierOp
 		&i.Position,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IsDefault,
+		&i.KitchenName,
 	)
 	return i, err
 }
@@ -1094,6 +1238,20 @@ func (q *Queries) DeleteExternalWorkRead(ctx context.Context, arg DeleteExternal
 	return result.RowsAffected(), nil
 }
 
+const deleteItemSizes = `-- name: DeleteItemSizes :exec
+DELETE FROM menu_item_sizes WHERE item_id = $1 AND tenant_id = $2
+`
+
+type DeleteItemSizesParams struct {
+	ItemID   pgtype.UUID `json:"item_id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+}
+
+func (q *Queries) DeleteItemSizes(ctx context.Context, arg DeleteItemSizesParams) error {
+	_, err := q.db.Exec(ctx, deleteItemSizes, arg.ItemID, arg.TenantID)
+	return err
+}
+
 const deleteLocationDrivers = `-- name: DeleteLocationDrivers :exec
 DELETE FROM drivers WHERE tenant_id = $1 AND location_id = $2
 `
@@ -1150,6 +1308,47 @@ func (q *Queries) DeleteMenuItem(ctx context.Context, arg DeleteMenuItemParams) 
 	return err
 }
 
+const deleteMenuSize = `-- name: DeleteMenuSize :execrows
+DELETE FROM menu_sizes WHERE id = $1 AND tenant_id = $2
+`
+
+type DeleteMenuSizeParams struct {
+	ID       pgtype.UUID `json:"id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+}
+
+func (q *Queries) DeleteMenuSize(ctx context.Context, arg DeleteMenuSizeParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteMenuSize, arg.ID, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteMenuView = `-- name: DeleteMenuView :execrows
+DELETE FROM menu_views WHERE id = $1
+`
+
+func (q *Queries) DeleteMenuView(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteMenuView, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteMenuViewEntry = `-- name: DeleteMenuViewEntry :execrows
+DELETE FROM menu_view_entries WHERE id = $1
+`
+
+func (q *Queries) DeleteMenuViewEntry(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteMenuViewEntry, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteModifierGroup = `-- name: DeleteModifierGroup :exec
 DELETE FROM modifier_groups WHERE id = $1 AND tenant_id = $2
 `
@@ -1193,6 +1392,20 @@ DELETE FROM operator_locations WHERE operator_id = $1
 
 func (q *Queries) DeleteOperatorLocations(ctx context.Context, operatorID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteOperatorLocations, operatorID)
+	return err
+}
+
+const deleteOptionPrices = `-- name: DeleteOptionPrices :exec
+DELETE FROM modifier_option_prices WHERE option_id = $1 AND tenant_id = $2
+`
+
+type DeleteOptionPricesParams struct {
+	OptionID pgtype.UUID `json:"option_id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+}
+
+func (q *Queries) DeleteOptionPrices(ctx context.Context, arg DeleteOptionPricesParams) error {
+	_, err := q.db.Exec(ctx, deleteOptionPrices, arg.OptionID, arg.TenantID)
 	return err
 }
 
@@ -1373,6 +1586,31 @@ func (q *Queries) FindDiagReportIDsByPrefix(ctx context.Context, prefix string) 
 	return items, nil
 }
 
+const firstMenuViewOfKind = `-- name: FirstMenuViewOfKind :one
+SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at FROM menu_views WHERE location_id = $1 AND kind = $2 ORDER BY created_at ASC LIMIT 1
+`
+
+type FirstMenuViewOfKindParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Kind       string      `json:"kind"`
+}
+
+func (q *Queries) FirstMenuViewOfKind(ctx context.Context, arg FirstMenuViewOfKindParams) (MenuView, error) {
+	row := q.db.QueryRow(ctx, firstMenuViewOfKind, arg.LocationID, arg.Kind)
+	var i MenuView
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.Rules,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getActiveDeviceByKeyHash = `-- name: GetActiveDeviceByKeyHash :one
 SELECT id, tenant_id, location_id, name, kind, key_hash, key_prefix,
        created_at, last_used_at, revoked_at
@@ -1532,7 +1770,7 @@ func (q *Queries) GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKPara
 }
 
 const getChannel = `-- name: GetChannel :one
-SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at FROM channels WHERE id = $1
+SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id FROM channels WHERE id = $1
 `
 
 func (q *Queries) GetChannel(ctx context.Context, id pgtype.UUID) (Channel, error) {
@@ -1552,6 +1790,7 @@ func (q *Queries) GetChannel(ctx context.Context, id pgtype.UUID) (Channel, erro
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ViewID,
 	)
 	return i, err
 }
@@ -1891,7 +2130,7 @@ func (q *Queries) GetMenuCategoryByID(ctx context.Context, arg GetMenuCategoryBy
 }
 
 const getMenuItemByID = `-- name: GetMenuItemByID :one
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
 FROM menu_items WHERE id = $1 AND tenant_id = $2
 `
 
@@ -1920,12 +2159,119 @@ func (q *Queries) GetMenuItemByID(ctx context.Context, arg GetMenuItemByIDParams
 		&i.Attributes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KitchenName,
+		&i.Sku,
+	)
+	return i, err
+}
+
+const getMenuSize = `-- name: GetMenuSize :one
+SELECT id, tenant_id, location_id, name, short, position, created_at, updated_at FROM menu_sizes WHERE id = $1 AND tenant_id = $2
+`
+
+type GetMenuSizeParams struct {
+	ID       pgtype.UUID `json:"id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+}
+
+func (q *Queries) GetMenuSize(ctx context.Context, arg GetMenuSizeParams) (MenuSize, error) {
+	row := q.db.QueryRow(ctx, getMenuSize, arg.ID, arg.TenantID)
+	var i MenuSize
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Name,
+		&i.Short,
+		&i.Position,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getMenuVersion = `-- name: GetMenuVersion :one
+SELECT version, changed_at FROM menu_versions WHERE location_id = $1
+`
+
+type GetMenuVersionRow struct {
+	Version   int64              `json:"version"`
+	ChangedAt pgtype.Timestamptz `json:"changed_at"`
+}
+
+func (q *Queries) GetMenuVersion(ctx context.Context, locationID pgtype.UUID) (GetMenuVersionRow, error) {
+	row := q.db.QueryRow(ctx, getMenuVersion, locationID)
+	var i GetMenuVersionRow
+	err := row.Scan(&i.Version, &i.ChangedAt)
+	return i, err
+}
+
+const getMenuView = `-- name: GetMenuView :one
+SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at FROM menu_views WHERE id = $1
+`
+
+func (q *Queries) GetMenuView(ctx context.Context, id pgtype.UUID) (MenuView, error) {
+	row := q.db.QueryRow(ctx, getMenuView, id)
+	var i MenuView
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.Rules,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getMenuViewBuild = `-- name: GetMenuViewBuild :one
+SELECT view_id, menu_version, build, built_at FROM menu_view_builds WHERE view_id = $1
+`
+
+func (q *Queries) GetMenuViewBuild(ctx context.Context, viewID pgtype.UUID) (MenuViewBuild, error) {
+	row := q.db.QueryRow(ctx, getMenuViewBuild, viewID)
+	var i MenuViewBuild
+	err := row.Scan(
+		&i.ViewID,
+		&i.MenuVersion,
+		&i.Build,
+		&i.BuiltAt,
+	)
+	return i, err
+}
+
+const getMenuViewEntry = `-- name: GetMenuViewEntry :one
+SELECT id, tenant_id, location_id, view_id, kind, anchor, display_name, description, photo, category, position, hidden, price_override_cents, extra, created_at, updated_at FROM menu_view_entries WHERE id = $1
+`
+
+func (q *Queries) GetMenuViewEntry(ctx context.Context, id pgtype.UUID) (MenuViewEntry, error) {
+	row := q.db.QueryRow(ctx, getMenuViewEntry, id)
+	var i MenuViewEntry
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.ViewID,
+		&i.Kind,
+		&i.Anchor,
+		&i.DisplayName,
+		&i.Description,
+		&i.Photo,
+		&i.Category,
+		&i.Position,
+		&i.Hidden,
+		&i.PriceOverrideCents,
+		&i.Extra,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
 
 const getModifierGroupByID = `-- name: GetModifierGroupByID :one
-SELECT id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at
+SELECT id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at, portions
 FROM modifier_groups WHERE id = $1 AND tenant_id = $2
 `
 
@@ -1948,6 +2294,7 @@ func (q *Queries) GetModifierGroupByID(ctx context.Context, arg GetModifierGroup
 		&i.AllowMultiple,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Portions,
 	)
 	return i, err
 }
@@ -2765,6 +3112,58 @@ func (q *Queries) InsertDriver(ctx context.Context, arg InsertDriverParams) erro
 	return err
 }
 
+const insertItemSize = `-- name: InsertItemSize :exec
+INSERT INTO menu_item_sizes (tenant_id, location_id, item_id, size_id, price_cents, kitchen_name, position)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+type InsertItemSizeParams struct {
+	TenantID    pgtype.UUID `json:"tenant_id"`
+	LocationID  pgtype.UUID `json:"location_id"`
+	ItemID      pgtype.UUID `json:"item_id"`
+	SizeID      pgtype.UUID `json:"size_id"`
+	PriceCents  int64       `json:"price_cents"`
+	KitchenName string      `json:"kitchen_name"`
+	Position    int32       `json:"position"`
+}
+
+func (q *Queries) InsertItemSize(ctx context.Context, arg InsertItemSizeParams) error {
+	_, err := q.db.Exec(ctx, insertItemSize,
+		arg.TenantID,
+		arg.LocationID,
+		arg.ItemID,
+		arg.SizeID,
+		arg.PriceCents,
+		arg.KitchenName,
+		arg.Position,
+	)
+	return err
+}
+
+const insertOptionPrice = `-- name: InsertOptionPrice :exec
+INSERT INTO modifier_option_prices (tenant_id, location_id, option_id, size_id, price_cents)
+VALUES ($1, $2, $3, $4, $5)
+`
+
+type InsertOptionPriceParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	OptionID   pgtype.UUID `json:"option_id"`
+	SizeID     pgtype.UUID `json:"size_id"`
+	PriceCents int64       `json:"price_cents"`
+}
+
+func (q *Queries) InsertOptionPrice(ctx context.Context, arg InsertOptionPriceParams) error {
+	_, err := q.db.Exec(ctx, insertOptionPrice,
+		arg.TenantID,
+		arg.LocationID,
+		arg.OptionID,
+		arg.SizeID,
+		arg.PriceCents,
+	)
+	return err
+}
+
 const insertOrderGeo = `-- name: InsertOrderGeo :execrows
 INSERT INTO order_geo (order_id, tenant_id, location_id)
 VALUES ($1, $2, $3)
@@ -3266,7 +3665,7 @@ func (q *Queries) ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) 
 }
 
 const listChannels = `-- name: ListChannels :many
-SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at FROM channels ORDER BY created_at ASC
+SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id FROM channels ORDER BY created_at ASC
 `
 
 func (q *Queries) ListChannels(ctx context.Context) ([]Channel, error) {
@@ -3292,6 +3691,7 @@ func (q *Queries) ListChannels(ctx context.Context) ([]Channel, error) {
 			&i.LastUsedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ViewID,
 		); err != nil {
 			return nil, err
 		}
@@ -3304,7 +3704,7 @@ func (q *Queries) ListChannels(ctx context.Context) ([]Channel, error) {
 }
 
 const listChannelsByLocation = `-- name: ListChannelsByLocation :many
-SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at FROM channels WHERE location_id = $1 ORDER BY created_at ASC
+SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id FROM channels WHERE location_id = $1 ORDER BY created_at ASC
 `
 
 func (q *Queries) ListChannelsByLocation(ctx context.Context, locationID pgtype.UUID) ([]Channel, error) {
@@ -3330,6 +3730,7 @@ func (q *Queries) ListChannelsByLocation(ctx context.Context, locationID pgtype.
 			&i.LastUsedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.ViewID,
 		); err != nil {
 			return nil, err
 		}
@@ -3797,8 +4198,40 @@ func (q *Queries) ListItemModifierGroupsByLocation(ctx context.Context, location
 	return items, nil
 }
 
+const listItemSizesByLocation = `-- name: ListItemSizesByLocation :many
+SELECT tenant_id, location_id, item_id, size_id, price_cents, kitchen_name, position FROM menu_item_sizes WHERE location_id = $1 ORDER BY item_id, position ASC
+`
+
+func (q *Queries) ListItemSizesByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuItemSize, error) {
+	rows, err := q.db.Query(ctx, listItemSizesByLocation, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MenuItemSize
+	for rows.Next() {
+		var i MenuItemSize
+		if err := rows.Scan(
+			&i.TenantID,
+			&i.LocationID,
+			&i.ItemID,
+			&i.SizeID,
+			&i.PriceCents,
+			&i.KitchenName,
+			&i.Position,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listItemsByCategory = `-- name: ListItemsByCategory :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
 FROM menu_items WHERE category_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -3828,6 +4261,8 @@ func (q *Queries) ListItemsByCategory(ctx context.Context, categoryID pgtype.UUI
 			&i.Attributes,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.KitchenName,
+			&i.Sku,
 		); err != nil {
 			return nil, err
 		}
@@ -3840,7 +4275,7 @@ func (q *Queries) ListItemsByCategory(ctx context.Context, categoryID pgtype.UUI
 }
 
 const listItemsByLocation = `-- name: ListItemsByLocation :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
 FROM menu_items WHERE location_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -3870,6 +4305,8 @@ func (q *Queries) ListItemsByLocation(ctx context.Context, locationID pgtype.UUI
 			&i.Attributes,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.KitchenName,
+			&i.Sku,
 		); err != nil {
 			return nil, err
 		}
@@ -4090,6 +4527,113 @@ func (q *Queries) ListLocationsNeedingGeocode(ctx context.Context) ([]ListLocati
 	return items, nil
 }
 
+const listMenuSizes = `-- name: ListMenuSizes :many
+SELECT id, tenant_id, location_id, name, short, position, created_at, updated_at FROM menu_sizes WHERE location_id = $1 ORDER BY position ASC, created_at ASC
+`
+
+func (q *Queries) ListMenuSizes(ctx context.Context, locationID pgtype.UUID) ([]MenuSize, error) {
+	rows, err := q.db.Query(ctx, listMenuSizes, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MenuSize
+	for rows.Next() {
+		var i MenuSize
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Name,
+			&i.Short,
+			&i.Position,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMenuViewEntries = `-- name: ListMenuViewEntries :many
+SELECT id, tenant_id, location_id, view_id, kind, anchor, display_name, description, photo, category, position, hidden, price_override_cents, extra, created_at, updated_at FROM menu_view_entries WHERE view_id = $1 ORDER BY position ASC, created_at ASC
+`
+
+func (q *Queries) ListMenuViewEntries(ctx context.Context, viewID pgtype.UUID) ([]MenuViewEntry, error) {
+	rows, err := q.db.Query(ctx, listMenuViewEntries, viewID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MenuViewEntry
+	for rows.Next() {
+		var i MenuViewEntry
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.ViewID,
+			&i.Kind,
+			&i.Anchor,
+			&i.DisplayName,
+			&i.Description,
+			&i.Photo,
+			&i.Category,
+			&i.Position,
+			&i.Hidden,
+			&i.PriceOverrideCents,
+			&i.Extra,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMenuViews = `-- name: ListMenuViews :many
+SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at FROM menu_views WHERE location_id = $1 ORDER BY created_at ASC
+`
+
+func (q *Queries) ListMenuViews(ctx context.Context, locationID pgtype.UUID) ([]MenuView, error) {
+	rows, err := q.db.Query(ctx, listMenuViews, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MenuView
+	for rows.Next() {
+		var i MenuView
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Kind,
+			&i.Name,
+			&i.Rules,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listMenusByLocation = `-- name: ListMenusByLocation :many
 SELECT id, tenant_id, location_id, name, description, available, position, created_at, updated_at
 FROM menus WHERE location_id = $1 ORDER BY position ASC, created_at ASC
@@ -4126,7 +4670,7 @@ func (q *Queries) ListMenusByLocation(ctx context.Context, locationID pgtype.UUI
 }
 
 const listModifierGroupsByLocation = `-- name: ListModifierGroupsByLocation :many
-SELECT id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at
+SELECT id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at, portions
 FROM modifier_groups WHERE location_id = $1 ORDER BY name ASC
 `
 
@@ -4150,6 +4694,7 @@ func (q *Queries) ListModifierGroupsByLocation(ctx context.Context, locationID p
 			&i.AllowMultiple,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Portions,
 		); err != nil {
 			return nil, err
 		}
@@ -4324,8 +4869,38 @@ func (q *Queries) ListOperators(ctx context.Context) ([]ListOperatorsRow, error)
 	return items, nil
 }
 
+const listOptionPricesByLocation = `-- name: ListOptionPricesByLocation :many
+SELECT tenant_id, location_id, option_id, size_id, price_cents FROM modifier_option_prices WHERE location_id = $1
+`
+
+func (q *Queries) ListOptionPricesByLocation(ctx context.Context, locationID pgtype.UUID) ([]ModifierOptionPrice, error) {
+	rows, err := q.db.Query(ctx, listOptionPricesByLocation, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ModifierOptionPrice
+	for rows.Next() {
+		var i ModifierOptionPrice
+		if err := rows.Scan(
+			&i.TenantID,
+			&i.LocationID,
+			&i.OptionID,
+			&i.SizeID,
+			&i.PriceCents,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOptionsByGroup = `-- name: ListOptionsByGroup :many
-SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at
+SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
 FROM modifier_options WHERE group_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -4349,6 +4924,8 @@ func (q *Queries) ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) (
 			&i.Position,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.IsDefault,
+			&i.KitchenName,
 		); err != nil {
 			return nil, err
 		}
@@ -4361,7 +4938,7 @@ func (q *Queries) ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) (
 }
 
 const listOptionsByLocation = `-- name: ListOptionsByLocation :many
-SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at
+SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
 FROM modifier_options WHERE location_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -4385,6 +4962,8 @@ func (q *Queries) ListOptionsByLocation(ctx context.Context, locationID pgtype.U
 			&i.Position,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.IsDefault,
+			&i.KitchenName,
 		); err != nil {
 			return nil, err
 		}
@@ -5228,7 +5807,7 @@ func (q *Queries) RevokeAllOperatorTokens(ctx context.Context, operatorID pgtype
 const revokeChannel = `-- name: RevokeChannel :one
 UPDATE channels SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
 WHERE id = $1 AND NOT builtin
-RETURNING id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at
+RETURNING id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id
 `
 
 func (q *Queries) RevokeChannel(ctx context.Context, id pgtype.UUID) (Channel, error) {
@@ -5248,6 +5827,7 @@ func (q *Queries) RevokeChannel(ctx context.Context, id pgtype.UUID) (Channel, e
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ViewID,
 	)
 	return i, err
 }
@@ -5429,6 +6009,23 @@ func (q *Queries) SaveExternalStopSearch(ctx context.Context, arg SaveExternalSt
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const saveMenuViewBuild = `-- name: SaveMenuViewBuild :exec
+INSERT INTO menu_view_builds (view_id, menu_version, build, built_at)
+VALUES ($1, $2, $3, now())
+ON CONFLICT (view_id) DO UPDATE SET menu_version = EXCLUDED.menu_version, build = EXCLUDED.build, built_at = now()
+`
+
+type SaveMenuViewBuildParams struct {
+	ViewID      pgtype.UUID `json:"view_id"`
+	MenuVersion int64       `json:"menu_version"`
+	Build       []byte      `json:"build"`
+}
+
+func (q *Queries) SaveMenuViewBuild(ctx context.Context, arg SaveMenuViewBuildParams) error {
+	_, err := q.db.Exec(ctx, saveMenuViewBuild, arg.ViewID, arg.MenuVersion, arg.Build)
+	return err
 }
 
 const saveOrderGeoResult = `-- name: SaveOrderGeoResult :one
@@ -5663,7 +6260,7 @@ func (q *Queries) SetCategoryPosition(ctx context.Context, arg SetCategoryPositi
 const setChannelKey = `-- name: SetChannelKey :one
 UPDATE channels SET key_hash = $2, key_prefix = $3, revoked_at = NULL, updated_at = now()
 WHERE id = $1 AND NOT builtin
-RETURNING id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at
+RETURNING id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id
 `
 
 type SetChannelKeyParams struct {
@@ -5689,6 +6286,39 @@ func (q *Queries) SetChannelKey(ctx context.Context, arg SetChannelKeyParams) (C
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ViewID,
+	)
+	return i, err
+}
+
+const setChannelView = `-- name: SetChannelView :one
+UPDATE channels SET view_id = $2, updated_at = now() WHERE id = $1
+RETURNING id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id
+`
+
+type SetChannelViewParams struct {
+	ID     pgtype.UUID `json:"id"`
+	ViewID pgtype.UUID `json:"view_id"`
+}
+
+func (q *Queries) SetChannelView(ctx context.Context, arg SetChannelViewParams) (Channel, error) {
+	row := q.db.QueryRow(ctx, setChannelView, arg.ID, arg.ViewID)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.Permissions,
+		&i.Builtin,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ViewID,
 	)
 	return i, err
 }
@@ -5805,6 +6435,48 @@ type SetExternalWorkConfirmedParams struct {
 func (q *Queries) SetExternalWorkConfirmed(ctx context.Context, arg SetExternalWorkConfirmedParams) error {
 	_, err := q.db.Exec(ctx, setExternalWorkConfirmed, arg.ConfirmedAddress, arg.OrderID)
 	return err
+}
+
+const setGroupPortions = `-- name: SetGroupPortions :execrows
+UPDATE modifier_groups SET portions = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2
+`
+
+type SetGroupPortionsParams struct {
+	ID       pgtype.UUID `json:"id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Portions bool        `json:"portions"`
+}
+
+func (q *Queries) SetGroupPortions(ctx context.Context, arg SetGroupPortionsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setGroupPortions, arg.ID, arg.TenantID, arg.Portions)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setItemBank = `-- name: SetItemBank :execrows
+UPDATE menu_items SET kitchen_name = $3, sku = $4, updated_at = now() WHERE id = $1 AND tenant_id = $2
+`
+
+type SetItemBankParams struct {
+	ID          pgtype.UUID `json:"id"`
+	TenantID    pgtype.UUID `json:"tenant_id"`
+	KitchenName string      `json:"kitchen_name"`
+	Sku         string      `json:"sku"`
+}
+
+func (q *Queries) SetItemBank(ctx context.Context, arg SetItemBankParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setItemBank,
+		arg.ID,
+		arg.TenantID,
+		arg.KitchenName,
+		arg.Sku,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setItemPosition = `-- name: SetItemPosition :exec
@@ -5985,6 +6657,21 @@ func (q *Queries) SetMenuPosition(ctx context.Context, arg SetMenuPositionParams
 	return err
 }
 
+const setMenuSizePosition = `-- name: SetMenuSizePosition :exec
+UPDATE menu_sizes SET position = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2
+`
+
+type SetMenuSizePositionParams struct {
+	ID       pgtype.UUID `json:"id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Position int32       `json:"position"`
+}
+
+func (q *Queries) SetMenuSizePosition(ctx context.Context, arg SetMenuSizePositionParams) error {
+	_, err := q.db.Exec(ctx, setMenuSizePosition, arg.ID, arg.TenantID, arg.Position)
+	return err
+}
+
 const setOperatorPassword = `-- name: SetOperatorPassword :exec
 UPDATE operators SET password_hash = $2, updated_at = now() WHERE id = $1
 `
@@ -5997,6 +6684,33 @@ type SetOperatorPasswordParams struct {
 func (q *Queries) SetOperatorPassword(ctx context.Context, arg SetOperatorPasswordParams) error {
 	_, err := q.db.Exec(ctx, setOperatorPassword, arg.ID, arg.PasswordHash)
 	return err
+}
+
+const setOptionBank = `-- name: SetOptionBank :execrows
+UPDATE modifier_options SET is_default = $3, kitchen_name = $4, updated_at = now()
+WHERE id = $1 AND tenant_id = $2 AND group_id = $5
+`
+
+type SetOptionBankParams struct {
+	ID          pgtype.UUID `json:"id"`
+	TenantID    pgtype.UUID `json:"tenant_id"`
+	IsDefault   bool        `json:"is_default"`
+	KitchenName string      `json:"kitchen_name"`
+	GroupID     pgtype.UUID `json:"group_id"`
+}
+
+func (q *Queries) SetOptionBank(ctx context.Context, arg SetOptionBankParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setOptionBank,
+		arg.ID,
+		arg.TenantID,
+		arg.IsDefault,
+		arg.KitchenName,
+		arg.GroupID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setOptionPosition = `-- name: SetOptionPosition :exec
@@ -6213,7 +6927,7 @@ func (q *Queries) TouchTabletToken(ctx context.Context, id pgtype.UUID) error {
 const updateChannel = `-- name: UpdateChannel :one
 UPDATE channels SET name = $2, permissions = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at
+RETURNING id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id
 `
 
 type UpdateChannelParams struct {
@@ -6239,6 +6953,7 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 		&i.LastUsedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.ViewID,
 	)
 	return i, err
 }
@@ -6389,7 +7104,7 @@ func (q *Queries) UpdateMenuCategory(ctx context.Context, arg UpdateMenuCategory
 const updateMenuItem = `-- name: UpdateMenuItem :one
 UPDATE menu_items SET name = $3, description = $4, price_cents = $5, tax_rate_bps = $6, in_stock = $7, out_until = $8, tags = $9, attributes = $10, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
 `
 
 type UpdateMenuItemParams struct {
@@ -6436,6 +7151,125 @@ func (q *Queries) UpdateMenuItem(ctx context.Context, arg UpdateMenuItemParams) 
 		&i.Attributes,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.KitchenName,
+		&i.Sku,
+	)
+	return i, err
+}
+
+const updateMenuSize = `-- name: UpdateMenuSize :one
+UPDATE menu_sizes SET name = $3, short = $4, updated_at = now()
+WHERE id = $1 AND tenant_id = $2
+RETURNING id, tenant_id, location_id, name, short, position, created_at, updated_at
+`
+
+type UpdateMenuSizeParams struct {
+	ID       pgtype.UUID `json:"id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+	Name     string      `json:"name"`
+	Short    string      `json:"short"`
+}
+
+func (q *Queries) UpdateMenuSize(ctx context.Context, arg UpdateMenuSizeParams) (MenuSize, error) {
+	row := q.db.QueryRow(ctx, updateMenuSize,
+		arg.ID,
+		arg.TenantID,
+		arg.Name,
+		arg.Short,
+	)
+	var i MenuSize
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Name,
+		&i.Short,
+		&i.Position,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateMenuView = `-- name: UpdateMenuView :one
+UPDATE menu_views SET name = $2, rules = $3, updated_at = now()
+WHERE id = $1
+RETURNING id, tenant_id, location_id, kind, name, rules, created_at, updated_at
+`
+
+type UpdateMenuViewParams struct {
+	ID    pgtype.UUID `json:"id"`
+	Name  string      `json:"name"`
+	Rules []byte      `json:"rules"`
+}
+
+func (q *Queries) UpdateMenuView(ctx context.Context, arg UpdateMenuViewParams) (MenuView, error) {
+	row := q.db.QueryRow(ctx, updateMenuView, arg.ID, arg.Name, arg.Rules)
+	var i MenuView
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.Rules,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateMenuViewEntry = `-- name: UpdateMenuViewEntry :one
+UPDATE menu_view_entries SET anchor = $2, display_name = $3, description = $4, photo = $5, category = $6, position = $7,
+    hidden = $8, price_override_cents = $9, extra = $10, updated_at = now()
+WHERE id = $1
+RETURNING id, tenant_id, location_id, view_id, kind, anchor, display_name, description, photo, category, position, hidden, price_override_cents, extra, created_at, updated_at
+`
+
+type UpdateMenuViewEntryParams struct {
+	ID                 pgtype.UUID `json:"id"`
+	Anchor             []byte      `json:"anchor"`
+	DisplayName        string      `json:"display_name"`
+	Description        string      `json:"description"`
+	Photo              string      `json:"photo"`
+	Category           string      `json:"category"`
+	Position           int32       `json:"position"`
+	Hidden             bool        `json:"hidden"`
+	PriceOverrideCents pgtype.Int8 `json:"price_override_cents"`
+	Extra              []byte      `json:"extra"`
+}
+
+func (q *Queries) UpdateMenuViewEntry(ctx context.Context, arg UpdateMenuViewEntryParams) (MenuViewEntry, error) {
+	row := q.db.QueryRow(ctx, updateMenuViewEntry,
+		arg.ID,
+		arg.Anchor,
+		arg.DisplayName,
+		arg.Description,
+		arg.Photo,
+		arg.Category,
+		arg.Position,
+		arg.Hidden,
+		arg.PriceOverrideCents,
+		arg.Extra,
+	)
+	var i MenuViewEntry
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.ViewID,
+		&i.Kind,
+		&i.Anchor,
+		&i.DisplayName,
+		&i.Description,
+		&i.Photo,
+		&i.Category,
+		&i.Position,
+		&i.Hidden,
+		&i.PriceOverrideCents,
+		&i.Extra,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -6443,7 +7277,7 @@ func (q *Queries) UpdateMenuItem(ctx context.Context, arg UpdateMenuItemParams) 
 const updateModifierGroup = `-- name: UpdateModifierGroup :one
 UPDATE modifier_groups SET name = $3, required = $4, min_select = $5, max_select = $6, allow_multiple = $7, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at
+RETURNING id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at, portions
 `
 
 type UpdateModifierGroupParams struct {
@@ -6478,6 +7312,7 @@ func (q *Queries) UpdateModifierGroup(ctx context.Context, arg UpdateModifierGro
 		&i.AllowMultiple,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Portions,
 	)
 	return i, err
 }
@@ -6485,7 +7320,7 @@ func (q *Queries) UpdateModifierGroup(ctx context.Context, arg UpdateModifierGro
 const updateModifierOption = `-- name: UpdateModifierOption :one
 UPDATE modifier_options SET name = $3, price_delta_cents = $4, in_stock = $5, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at
+RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
 `
 
 type UpdateModifierOptionParams struct {
@@ -6516,6 +7351,8 @@ func (q *Queries) UpdateModifierOption(ctx context.Context, arg UpdateModifierOp
 		&i.Position,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.IsDefault,
+		&i.KitchenName,
 	)
 	return i, err
 }

@@ -28,6 +28,7 @@ import (
 	diagApp "quiccpos/main/internal/app/diag"
 	geoApp "quiccpos/main/internal/app/geo"
 	menuApp "quiccpos/main/internal/app/menu"
+	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
 	"quiccpos/main/internal/app/printerstatus"
@@ -91,6 +92,8 @@ type RouterDeps struct {
 	MenuService *menuApp.Service
 	// OperatorService backs the operator accounts + read-only menu API.
 	OperatorService *operatorApp.Service
+	// MenuViewService backs the menu bank + views (main 3.0).
+	MenuViewService *menuviewApp.Service
 	// ChannelService backs sales channels and the /channel/v1 key (main 3.0).
 	ChannelService *channelApp.Service
 	// AgentSync backs agent link / restore / backups / fleet health.
@@ -170,6 +173,7 @@ func routeTable(d RouterDeps) []routeDef {
 	floorH := handler.NewFloorHandler(d.Service, d.FloorService, d.Logger)
 	operatorH := handler.NewOperatorHandler(d.OperatorService, d.MenuService, d.Meters, d.Logger)
 	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
+	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
 	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
@@ -347,6 +351,27 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/me/menu/modifier-groups/:id/options/reorder", "store-session", "Reorder options", menuH.MeReorderOptions, storeSession),
 		def("PATCH", storePrefix+"/me/menu/modifier-groups/:id/options/:optId", "store-session", "Edit an option", menuH.MeUpdateOption, storeSession),
 		def("DELETE", storePrefix+"/me/menu/modifier-groups/:id/options/:optId", "store-session", "Delete an option", menuH.MeDeleteOption, storeSession),
+		// The menu bank + views (main 3.0).
+		def("GET", storePrefix+"/me/menu/bank", "store-session", "The whole menu bank (sizes, items with sizes + groups, options with prices)", viewH.MeBank, storeSession),
+		def("GET", storePrefix+"/me/menu/sizes", "store-session", "List the store's sizes", viewH.MeListSizes, storeSession),
+		def("POST", storePrefix+"/me/menu/sizes", "store-session", "Add a size {name, short}", viewH.MeCreateSize, storeSession),
+		def("POST", storePrefix+"/me/menu/sizes/reorder", "store-session", "Reorder sizes {ids}", viewH.MeReorderSizes, storeSession),
+		def("PATCH", storePrefix+"/me/menu/sizes/:id", "store-session", "Rename a size", viewH.MeUpdateSize, storeSession),
+		def("DELETE", storePrefix+"/me/menu/sizes/:id", "store-session", "Delete a size (its item/option prices go with it)", viewH.MeDeleteSize, storeSession),
+		def("PUT", storePrefix+"/me/menu/items/:id/bank", "store-session", "Set an item's kitchen name, SKU and sizes", viewH.MeSetItemBank, storeSession),
+		def("PUT", storePrefix+"/me/menu/modifier-groups/:id/bank", "store-session", "Set a group's halves flag and its options' defaults, kitchen names, size prices", viewH.MeSetGroupBank, storeSession),
+		def("GET", storePrefix+"/me/menu/views", "store-session", "List the menu views (defaults created on first use)", viewH.MeListViews, storeSession),
+		def("POST", storePrefix+"/me/menu/views", "store-session", "Add a view {kind, name, rules}", viewH.MeCreateView, storeSession),
+		def("GET", storePrefix+"/me/menu/views/:id", "store-session", "One view", viewH.MeGetView, storeSession),
+		def("PATCH", storePrefix+"/me/menu/views/:id", "store-session", "Rename a view / set its rules", viewH.MeUpdateView, storeSession),
+		def("DELETE", storePrefix+"/me/menu/views/:id", "store-session", "Delete a view", viewH.MeDeleteView, storeSession),
+		def("GET", storePrefix+"/me/menu/views/:id/build", "store-session", "A view as its channels see it + needs attention", viewH.MeBuildView, storeSession),
+		def("GET", storePrefix+"/me/menu/views/:id/entries", "store-session", "A view's entries", viewH.MeListEntries, storeSession),
+		def("POST", storePrefix+"/me/menu/views/:id/entries", "store-session", "Add an entry (item, merge, augment, map)", viewH.MeCreateEntry, storeSession),
+		def("PUT", storePrefix+"/me/menu/entries/:id", "store-session", "Replace an entry", viewH.MeUpdateEntry, storeSession),
+		def("DELETE", storePrefix+"/me/menu/entries/:id", "store-session", "Delete an entry", viewH.MeDeleteEntry, storeSession),
+		def("GET", storePrefix+"/me/menu/vendor", "store-session", "The vendor view (Brygid): mappings + names nothing routes", viewH.MeVendor, storeSession),
+		def("POST", storePrefix+"/me/menu/vendor/maps", "store-session", "Map a vendor item name to a bank item {vendor_name, item_id}", viewH.MeVendorMap, storeSession),
 
 		// Operators (call-center order-takers) — read-only menu via bearer token.
 		def("POST", storePrefix+"/operator/login", "none", "Operator login → read-only bearer token", operatorH.Login),
@@ -356,6 +381,8 @@ func routeTable(d RouterDeps) []routeDef {
 		// /channel/v1 — the ports every sales channel talks to (main 3.0).
 		def("GET", channelPrefix+"/openapi.json", "none", "The channel API's OpenAPI document", channelH.Spec),
 		def("GET", channelPrefix+"/me", "channel", "The channel behind the key and its store", channelH.Me, channelAuth),
+		def("GET", channelPrefix+"/menu", "channel", "The channel's menu (ETag = menu version)", viewH.ChannelMenu, channelAuth),
+		def("GET", channelPrefix+"/menu/version", "channel", "The menu version (?since=N → changed)", viewH.ChannelMenuVersion, channelAuth),
 
 		def("GET", storeUIPath, "none", "Redirect → /app/store", redirectTo("/app/store")),
 		def("GET", storeUIPath+"/", "none", "Redirect → /app/store", redirectTo("/app/store")),

@@ -32,6 +32,7 @@ import (
 	authAppSvc "quiccpos/main/internal/app/auth"
 	channelApp "quiccpos/main/internal/app/channel"
 	menuApp "quiccpos/main/internal/app/menu"
+	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
@@ -219,6 +220,9 @@ func main() {
 
 	menuRepo := repositories.NewMenuRepository(pool, lgr)
 	menuService := menuApp.NewService(menuRepo, tenancyService, meters, lgr)
+	// The menu bank's views (3.0); the vendor view's name mappings feed kitchen routing.
+	menuViewService := menuviewApp.NewService(repositories.NewMenuBankRepository(pool), menuService, lgr)
+	menuService.SetVendorMapper(menuViewService)
 
 	// Agent reliability + headless recovery: order acks + re-sends, the
 	// agent's state/health reports, link with the manager login, restore,
@@ -298,6 +302,7 @@ func main() {
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
 	operatorService := operatorApp.NewService(operatorRepo, tenancyService, lgr)
 	channelService := channelApp.NewService(repositories.NewChannelRepository(pool), tenancyService, lgr)
+	channelService.SetViews(menuViewService)
 
 	sqsClient, err := sqsconsumer.NewSQSClient(ctx, cfg, lgr)
 	if err != nil {
@@ -348,6 +353,7 @@ func main() {
 		FloorService:    floorService,
 		OperatorService: operatorService,
 		ChannelService:  channelService,
+		MenuViewService: menuViewService,
 		AgentSync:       agentSync,
 		Diag:            diagService,
 		Geo:             geoService,

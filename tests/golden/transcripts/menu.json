@@ -11,7 +11,7 @@
   "cookies": [],
   "body": "[]\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "menu add",
@@ -25,7 +25,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Dinner\",\"description\":\"\",\"available\":true,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "menu add 2",
@@ -39,7 +39,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#4>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Lunch\",\"description\":\"\",\"available\":true,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "menu add empty name",
@@ -53,7 +53,7 @@
   "cookies": [],
   "body": "{\"error\":\"name is required\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "menu edit",
@@ -67,7 +67,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#4>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Lunch Specials\",\"description\":\"\",\"available\":false,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "menus reorder",
@@ -79,7 +79,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "menus reorder bad",
@@ -93,7 +93,7 @@
   "cookies": [],
   "body": "{\"error\":\"ids must be uuids\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "menus",
@@ -107,7 +107,7 @@
   "cookies": [],
   "body": "[{\"id\":\"<uuid#4>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Lunch Specials\",\"description\":\"\",\"available\":false,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Dinner\",\"description\":\"\",\"available\":true,\"position\":1,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "category add",
@@ -121,7 +121,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#5>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"menu_id\":\"<uuid#1>\",\"name\":\"Mains\",\"description\":\"\",\"available\":true,\"position\":0,\"default_printer_id\":null,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "category add 2",
@@ -135,7 +135,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#6>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"menu_id\":\"<uuid#1>\",\"name\":\"Sides\",\"description\":\"\",\"available\":true,\"position\":0,\"default_printer_id\":null,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "category add unknown menu",
@@ -149,7 +149,7 @@
   "cookies": [],
   "body": "{\"error\":\"not found\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "category edit",
@@ -163,7 +163,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#6>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"menu_id\":\"<uuid#1>\",\"name\":\"Sides \\u0026 Extras\",\"description\":\"\",\"available\":false,\"position\":0,\"default_printer_id\":\"<uuid#8>\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "categories reorder",
@@ -175,7 +175,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "categories",
@@ -189,7 +189,7 @@
   "cookies": [],
   "body": "[{\"id\":\"<uuid#6>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"menu_id\":\"<uuid#1>\",\"name\":\"Sides \\u0026 Extras\",\"description\":\"\",\"available\":false,\"position\":0,\"default_printer_id\":\"<uuid#8>\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#5>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"menu_id\":\"<uuid#1>\",\"name\":\"Mains\",\"description\":\"\",\"available\":true,\"position\":1,\"default_printer_id\":null,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "item add",
@@ -203,7 +203,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#9>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"category_id\":\"<uuid#5>\",\"name\":\"Burger\",\"description\":\"\",\"price_cents\":500,\"tax_rate_bps\":0,\"in_stock\":true,\"out_until\":null,\"tags\":[],\"printer_id\":null,\"position\":0,\"attributes\":{},\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "item add 2",
@@ -217,7 +217,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#10>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"category_id\":\"<uuid#6>\",\"name\":\"Fries\",\"description\":\"\",\"price_cents\":300,\"tax_rate_bps\":0,\"in_stock\":true,\"out_until\":null,\"tags\":[],\"printer_id\":null,\"position\":0,\"attributes\":{},\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "item add bad price",
@@ -231,7 +231,7 @@
   "cookies": [],
   "body": "{\"error\":\"price cannot be negative\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "item edit",
@@ -245,7 +245,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#9>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"category_id\":\"<uuid#5>\",\"name\":\"Deluxe Burger\",\"description\":\"with cheese\",\"price_cents\":1299,\"tax_rate_bps\":600,\"in_stock\":true,\"out_until\":null,\"tags\":[\"Popular\"],\"printer_id\":null,\"position\":0,\"attributes\":{},\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "item edit out of scope",
@@ -259,7 +259,7 @@
   "cookies": [],
   "body": "{\"error\":\"not found\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "item printer",
@@ -271,7 +271,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "item printer clear",
@@ -283,7 +283,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "item printer foreign",
@@ -297,7 +297,7 @@
   "cookies": [],
   "body": "{\"error\":\"printer does not belong to this location\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "items reorder",
@@ -309,7 +309,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "items",
@@ -323,7 +323,7 @@
   "cookies": [],
   "body": "[{\"id\":\"<uuid#9>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"category_id\":\"<uuid#5>\",\"name\":\"Deluxe Burger\",\"description\":\"with cheese\",\"price_cents\":1299,\"tax_rate_bps\":600,\"in_stock\":true,\"out_until\":null,\"tags\":[\"Popular\"],\"printer_id\":\"<uuid#11>\",\"position\":0,\"attributes\":{},\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "group add",
@@ -337,7 +337,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#12>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Add-ons\",\"required\":false,\"min_select\":0,\"max_select\":2,\"allow_multiple\":false,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "group add bad",
@@ -351,7 +351,7 @@
   "cookies": [],
   "body": "{\"error\":\"min select cannot exceed max select\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "group edit",
@@ -365,7 +365,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#12>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Toppings\",\"required\":false,\"min_select\":0,\"max_select\":3,\"allow_multiple\":true,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "option add",
@@ -379,7 +379,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#13>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"group_id\":\"<uuid#12>\",\"name\":\"Bacon\",\"price_delta_cents\":150,\"in_stock\":true,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "option add 2",
@@ -393,7 +393,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#14>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"group_id\":\"<uuid#12>\",\"name\":\"Onions\",\"price_delta_cents\":0,\"in_stock\":true,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "option edit",
@@ -407,7 +407,7 @@
   "cookies": [],
   "body": "{\"id\":\"<uuid#14>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"group_id\":\"<uuid#12>\",\"name\":\"Grilled Onions\",\"price_delta_cents\":50,\"in_stock\":false,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "options reorder",
@@ -419,7 +419,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "options",
@@ -433,7 +433,7 @@
   "cookies": [],
   "body": "[{\"id\":\"<uuid#14>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"group_id\":\"<uuid#12>\",\"name\":\"Grilled Onions\",\"price_delta_cents\":50,\"in_stock\":false,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#13>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"group_id\":\"<uuid#12>\",\"name\":\"Bacon\",\"price_delta_cents\":150,\"in_stock\":true,\"position\":1,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "groups",
@@ -447,7 +447,7 @@
   "cookies": [],
   "body": "[{\"id\":\"<uuid#12>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Toppings\",\"required\":false,\"min_select\":0,\"max_select\":3,\"allow_multiple\":true,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "item link group",
@@ -459,7 +459,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "item link group again",
@@ -471,7 +471,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "item groups",
@@ -485,7 +485,7 @@
   "cookies": [],
   "body": "[{\"group\":{\"id\":\"<uuid#12>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Toppings\",\"required\":false,\"min_select\":0,\"max_select\":3,\"allow_multiple\":true,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},\"attach_position\":1}]\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "operator login wrong",
@@ -599,7 +599,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "option delete",
@@ -611,7 +611,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "group delete",
@@ -623,7 +623,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "item delete",
@@ -635,7 +635,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "category delete",
@@ -647,7 +647,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "menu delete",
@@ -659,7 +659,7 @@
   "cookies": [],
   "body": "",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "menu delete again",
@@ -673,7 +673,7 @@
   "cookies": [],
   "body": "{\"error\":\"not found\"}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "csv dry run",
@@ -690,7 +690,7 @@
   "cookies": [],
   "body": "{\"dry_run\":true,\"replace\":false,\"rows\":4,\"menus_deleted\":0,\"menus\":1,\"categories\":2,\"category_printers\":1,\"items\":4,\"items_updated\":0,\"item_printers\":1,\"prints_on\":[{\"printer\":\"Pizza\",\"items\":2},{\"printer\":\"Sub\",\"items\":1}],\"items_no_printer\":1,\"changes\":[\"+ menu \\\"Main\\\"\",\"+ category \\\"Pizza\\\" (printer Pizza)\",\"  + \\\"Cheese Pizza\\\" $10.00\",\"  + \\\"Pepperoni Pizza\\\" $12.00\",\"  + \\\"Garlic Knots\\\" $4.00\",\"  ~ \\\"Garlic Knots\\\" printer → Sub\",\"+ category \\\"Subs\\\"\",\"  + \\\"Philly Cheese Steak\\\" $9.50\"]}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "csv import",
@@ -707,7 +707,7 @@
   "cookies": [],
   "body": "{\"dry_run\":false,\"replace\":false,\"rows\":4,\"menus_deleted\":0,\"menus\":1,\"categories\":2,\"category_printers\":1,\"items\":4,\"items_updated\":0,\"item_printers\":1,\"prints_on\":[{\"printer\":\"Pizza\",\"items\":2},{\"printer\":\"Sub\",\"items\":1}],\"items_no_printer\":1,\"changes\":[\"+ menu \\\"Main\\\"\",\"+ category \\\"Pizza\\\" (printer Pizza)\",\"  + \\\"Cheese Pizza\\\" $10.00\",\"  + \\\"Pepperoni Pizza\\\" $12.00\",\"  + \\\"Garlic Knots\\\" $4.00\",\"  ~ \\\"Garlic Knots\\\" printer → Sub\",\"+ category \\\"Subs\\\"\",\"  + \\\"Philly Cheese Steak\\\" $9.50\"]}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "csv import again",
@@ -724,7 +724,7 @@
   "cookies": [],
   "body": "{\"dry_run\":false,\"replace\":false,\"rows\":4,\"menus_deleted\":0,\"menus\":0,\"categories\":0,\"category_printers\":0,\"items\":0,\"items_updated\":0,\"item_printers\":0,\"prints_on\":[{\"printer\":\"Pizza\",\"items\":2},{\"printer\":\"Sub\",\"items\":1}],\"items_no_printer\":1,\"changes\":[]}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "csv bad header",
@@ -738,7 +738,7 @@
   "cookies": [],
   "body": "{\"dry_run\":false,\"replace\":false,\"rows\":1,\"menus_deleted\":0,\"menus\":0,\"categories\":1,\"category_printers\":0,\"items\":1,\"items_updated\":0,\"item_printers\":0,\"prints_on\":[],\"items_no_printer\":1,\"changes\":[\"+ category \\\"A\\\"\",\"  + \\\"B\\\" $0.00\"]}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "csv export",
@@ -753,7 +753,7 @@
   "cookies": [],
   "body": "menu,category,item,price,printer,description\nDinner,Mains,Deluxe Burger,12.99,Pizza,with cheese\nMain,Pizza,Cheese Pizza,10.00,Pizza,\nMain,Pizza,Pepperoni Pizza,12.00,Pizza,\nMain,Pizza,Garlic Knots,4.00,Sub,\nMain,Subs,Philly Cheese Steak,9.50,,\nMain,A,B,0.00,,\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "csv replace",
@@ -770,7 +770,7 @@
   "cookies": [],
   "body": "{\"dry_run\":false,\"replace\":true,\"rows\":6,\"menus_deleted\":2,\"menus\":2,\"categories\":4,\"category_printers\":2,\"items\":6,\"items_updated\":0,\"item_printers\":1,\"prints_on\":[{\"printer\":\"Pizza\",\"items\":3},{\"printer\":\"Sub\",\"items\":1}],\"items_no_printer\":2,\"changes\":[\"- menu \\\"Dinner\\\" (and everything in it)\",\"- menu \\\"Main\\\" (and everything in it)\",\"+ menu \\\"Dinner\\\"\",\"+ category \\\"Mains\\\" (printer Pizza)\",\"  + \\\"Deluxe Burger\\\" $12.99\",\"+ menu \\\"Main\\\"\",\"+ category \\\"Pizza\\\" (printer Pizza)\",\"  + \\\"Cheese Pizza\\\" $10.00\",\"  + \\\"Pepperoni Pizza\\\" $12.00\",\"  + \\\"Garlic Knots\\\" $4.00\",\"  ~ \\\"Garlic Knots\\\" printer → Sub\",\"+ category \\\"Subs\\\"\",\"  + \\\"Philly Cheese Steak\\\" $9.50\",\"+ category \\\"A\\\"\",\"  + \\\"B\\\" $0.00\"]}\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "menus after csv",
@@ -784,7 +784,7 @@
   "cookies": [],
   "body": "[{\"id\":\"<uuid#17>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Dinner\",\"description\":\"\",\"available\":true,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#18>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Main\",\"description\":\"\",\"available\":true,\"position\":1,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  },
  {
   "label": "unmatched",
@@ -800,6 +800,6 @@
   "cookies": [],
   "body": "[]\n",
   "mask": [],
-  "compare": "exact"
+  "compare": "additive"
  }
 ]

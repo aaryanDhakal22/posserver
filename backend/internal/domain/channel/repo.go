@@ -24,6 +24,7 @@ type Repository interface {
 	List(ctx context.Context, locationID *uuid.UUID) ([]Channel, error)
 	Update(ctx context.Context, id uuid.UUID, name string, p Permissions) (*Channel, error)
 	SetKey(ctx context.Context, id uuid.UUID, keyHash, keyPrefix string) (*Channel, error)
+	SetView(ctx context.Context, id uuid.UUID, viewID *uuid.UUID) (*Channel, error)
 	Revoke(ctx context.Context, id uuid.UUID) (*Channel, error)
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
 	Authenticate(ctx context.Context, keyHash string) (*Channel, error)

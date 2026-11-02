@@ -75,6 +75,7 @@ type Channel struct {
 	LastUsedAt  pgtype.Timestamptz `json:"last_used_at"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ViewID      pgtype.UUID        `json:"view_id"`
 }
 
 type DeliveryRun struct {
@@ -295,6 +296,72 @@ type MenuItem struct {
 	Attributes  []byte             `json:"attributes"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	KitchenName string             `json:"kitchen_name"`
+	Sku         string             `json:"sku"`
+}
+
+type MenuItemSize struct {
+	TenantID    pgtype.UUID `json:"tenant_id"`
+	LocationID  pgtype.UUID `json:"location_id"`
+	ItemID      pgtype.UUID `json:"item_id"`
+	SizeID      pgtype.UUID `json:"size_id"`
+	PriceCents  int64       `json:"price_cents"`
+	KitchenName string      `json:"kitchen_name"`
+	Position    int32       `json:"position"`
+}
+
+type MenuSize struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Name       string             `json:"name"`
+	Short      string             `json:"short"`
+	Position   int32              `json:"position"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type MenuVersion struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	Version    int64              `json:"version"`
+	ChangedAt  pgtype.Timestamptz `json:"changed_at"`
+}
+
+type MenuView struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Kind       string             `json:"kind"`
+	Name       string             `json:"name"`
+	Rules      []byte             `json:"rules"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type MenuViewBuild struct {
+	ViewID      pgtype.UUID        `json:"view_id"`
+	MenuVersion int64              `json:"menu_version"`
+	Build       []byte             `json:"build"`
+	BuiltAt     pgtype.Timestamptz `json:"built_at"`
+}
+
+type MenuViewEntry struct {
+	ID                 pgtype.UUID        `json:"id"`
+	TenantID           pgtype.UUID        `json:"tenant_id"`
+	LocationID         pgtype.UUID        `json:"location_id"`
+	ViewID             pgtype.UUID        `json:"view_id"`
+	Kind               string             `json:"kind"`
+	Anchor             []byte             `json:"anchor"`
+	DisplayName        string             `json:"display_name"`
+	Description        string             `json:"description"`
+	Photo              string             `json:"photo"`
+	Category           string             `json:"category"`
+	Position           int32              `json:"position"`
+	Hidden             bool               `json:"hidden"`
+	PriceOverrideCents pgtype.Int8        `json:"price_override_cents"`
+	Extra              []byte             `json:"extra"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 type ModifierGroup struct {
@@ -308,6 +375,7 @@ type ModifierGroup struct {
 	AllowMultiple bool               `json:"allow_multiple"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	Portions      bool               `json:"portions"`
 }
 
 type ModifierOption struct {
@@ -321,6 +389,16 @@ type ModifierOption struct {
 	Position        int32              `json:"position"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	IsDefault       bool               `json:"is_default"`
+	KitchenName     string             `json:"kitchen_name"`
+}
+
+type ModifierOptionPrice struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	OptionID   pgtype.UUID `json:"option_id"`
+	SizeID     pgtype.UUID `json:"size_id"`
+	PriceCents int64       `json:"price_cents"`
 }
 
 type Operator struct {

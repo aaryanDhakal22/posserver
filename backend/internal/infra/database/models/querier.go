@@ -38,6 +38,11 @@ type Querier interface {
 	CreateMenu(ctx context.Context, arg CreateMenuParams) (Menu, error)
 	CreateMenuCategory(ctx context.Context, arg CreateMenuCategoryParams) (MenuCategory, error)
 	CreateMenuItem(ctx context.Context, arg CreateMenuItemParams) (MenuItem, error)
+	// ─── Menu bank (main 3.0) ─────────────────────────────────────────────────
+	CreateMenuSize(ctx context.Context, arg CreateMenuSizeParams) (MenuSize, error)
+	// ─── Menu views (main 3.0) ────────────────────────────────────────────────
+	CreateMenuView(ctx context.Context, arg CreateMenuViewParams) (MenuView, error)
+	CreateMenuViewEntry(ctx context.Context, arg CreateMenuViewEntryParams) (MenuViewEntry, error)
 	CreateModifierGroup(ctx context.Context, arg CreateModifierGroupParams) (ModifierGroup, error)
 	CreateModifierOption(ctx context.Context, arg CreateModifierOptionParams) (ModifierOption, error)
 	// ═══════════════════════════════════════════════════════════════════════════
@@ -74,14 +79,19 @@ type Querier interface {
 	// The worker's own located / given-up work row only (created_at as read): a
 	// geo.locate that replaced it meanwhile keeps its new address.
 	DeleteExternalWorkRead(ctx context.Context, arg DeleteExternalWorkReadParams) (int64, error)
+	DeleteItemSizes(ctx context.Context, arg DeleteItemSizesParams) error
 	DeleteLocationDrivers(ctx context.Context, arg DeleteLocationDriversParams) error
 	DeleteMenu(ctx context.Context, arg DeleteMenuParams) error
 	DeleteMenuCategory(ctx context.Context, arg DeleteMenuCategoryParams) error
 	DeleteMenuItem(ctx context.Context, arg DeleteMenuItemParams) error
+	DeleteMenuSize(ctx context.Context, arg DeleteMenuSizeParams) (int64, error)
+	DeleteMenuView(ctx context.Context, id pgtype.UUID) (int64, error)
+	DeleteMenuViewEntry(ctx context.Context, id pgtype.UUID) (int64, error)
 	DeleteModifierGroup(ctx context.Context, arg DeleteModifierGroupParams) error
 	DeleteModifierOption(ctx context.Context, arg DeleteModifierOptionParams) error
 	DeleteOperator(ctx context.Context, id pgtype.UUID) error
 	DeleteOperatorLocations(ctx context.Context, operatorID pgtype.UUID) error
+	DeleteOptionPrices(ctx context.Context, arg DeleteOptionPricesParams) error
 	// Delete a single order. line_items / payments / status_events cascade via FK.
 	DeleteOrderByID(ctx context.Context, id pgtype.UUID) error
 	// Remove the outbox rows for one order (aggregate_id = order id). outbox_events
@@ -104,6 +114,7 @@ type Querier interface {
 	EnqueueMissingOrderGeo(ctx context.Context, since pgtype.Timestamptz) (int64, error)
 	// The page links carry only the first 8 hex chars of a report id.
 	FindDiagReportIDsByPrefix(ctx context.Context, prefix string) ([]pgtype.UUID, error)
+	FirstMenuViewOfKind(ctx context.Context, arg FirstMenuViewOfKindParams) (MenuView, error)
 	GetActiveDeviceByKeyHash(ctx context.Context, keyHash string) (Device, error)
 	GetActiveOperatorTokenByHash(ctx context.Context, tokenHash string) (GetActiveOperatorTokenByHashRow, error)
 	GetActiveTabletTokenByHash(ctx context.Context, tokenHash string) (GetActiveTabletTokenByHashRow, error)
@@ -127,6 +138,11 @@ type Querier interface {
 	GetMenuByID(ctx context.Context, arg GetMenuByIDParams) (Menu, error)
 	GetMenuCategoryByID(ctx context.Context, arg GetMenuCategoryByIDParams) (MenuCategory, error)
 	GetMenuItemByID(ctx context.Context, arg GetMenuItemByIDParams) (MenuItem, error)
+	GetMenuSize(ctx context.Context, arg GetMenuSizeParams) (MenuSize, error)
+	GetMenuVersion(ctx context.Context, locationID pgtype.UUID) (GetMenuVersionRow, error)
+	GetMenuView(ctx context.Context, id pgtype.UUID) (MenuView, error)
+	GetMenuViewBuild(ctx context.Context, viewID pgtype.UUID) (MenuViewBuild, error)
+	GetMenuViewEntry(ctx context.Context, id pgtype.UUID) (MenuViewEntry, error)
 	GetModifierGroupByID(ctx context.Context, arg GetModifierGroupByIDParams) (ModifierGroup, error)
 	GetOperatorAuthByUsername(ctx context.Context, username string) (GetOperatorAuthByUsernameRow, error)
 	GetOperatorByID(ctx context.Context, id pgtype.UUID) (GetOperatorByIDRow, error)
@@ -162,6 +178,8 @@ type Querier interface {
 	InsertDeliveryRun(ctx context.Context, arg InsertDeliveryRunParams) (int64, error)
 	InsertDiagReport(ctx context.Context, arg InsertDiagReportParams) (int64, error)
 	InsertDriver(ctx context.Context, arg InsertDriverParams) error
+	InsertItemSize(ctx context.Context, arg InsertItemSizeParams) error
+	InsertOptionPrice(ctx context.Context, arg InsertOptionPriceParams) error
 	InsertOrderGeo(ctx context.Context, arg InsertOrderGeoParams) (int64, error)
 	InsertOutboxDispatch(ctx context.Context, arg InsertOutboxDispatchParams) error
 	// ───────────────────────────────────────────────────────────────────────────
@@ -192,6 +210,7 @@ type Querier interface {
 	ListExternalStopsByIDs(ctx context.Context, arg ListExternalStopsByIDsParams) ([]ListExternalStopsByIDsRow, error)
 	ListGroupsForItem(ctx context.Context, arg ListGroupsForItemParams) ([]ListGroupsForItemRow, error)
 	ListItemModifierGroupsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListItemModifierGroupsByLocationRow, error)
+	ListItemSizesByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuItemSize, error)
 	ListItemsByCategory(ctx context.Context, categoryID pgtype.UUID) ([]MenuItem, error)
 	ListItemsByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuItem, error)
 	// The location's other located external stops, for the drive-time table.
@@ -201,6 +220,9 @@ type Querier interface {
 	ListLocationsByTenant(ctx context.Context, tenantID pgtype.UUID) ([]Location, error)
 	// Startup backfill: stores with an address but no position yet.
 	ListLocationsNeedingGeocode(ctx context.Context) ([]ListLocationsNeedingGeocodeRow, error)
+	ListMenuSizes(ctx context.Context, locationID pgtype.UUID) ([]MenuSize, error)
+	ListMenuViewEntries(ctx context.Context, viewID pgtype.UUID) ([]MenuViewEntry, error)
+	ListMenuViews(ctx context.Context, locationID pgtype.UUID) ([]MenuView, error)
 	ListMenusByLocation(ctx context.Context, locationID pgtype.UUID) ([]Menu, error)
 	ListModifierGroupsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ModifierGroup, error)
 	// The location's other open (not delivered / cancelled) located deliveries,
@@ -211,6 +233,7 @@ type Querier interface {
 	ListOpenLocatedOrderGeoForRadius(ctx context.Context, arg ListOpenLocatedOrderGeoForRadiusParams) ([]ListOpenLocatedOrderGeoForRadiusRow, error)
 	ListOperatorLocations(ctx context.Context, operatorID pgtype.UUID) ([]OperatorLocation, error)
 	ListOperators(ctx context.Context) ([]ListOperatorsRow, error)
+	ListOptionPricesByLocation(ctx context.Context, locationID pgtype.UUID) ([]ModifierOptionPrice, error)
 	ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) ([]ModifierOption, error)
 	ListOptionsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ModifierOption, error)
 	ListOrderGeoByIDs(ctx context.Context, arg ListOrderGeoByIDsParams) ([]ListOrderGeoByIDsRow, error)
@@ -284,6 +307,7 @@ type Querier interface {
 	// geo.search for an external stop; the candidates go on the work row
 	// (UpsertExternalWorkSearch, same tx).
 	SaveExternalStopSearch(ctx context.Context, arg SaveExternalStopSearchParams) (int64, error)
+	SaveMenuViewBuild(ctx context.Context, arg SaveMenuViewBuildParams) error
 	// A final result (located / check / not_found). Clears pushed_at so it is
 	// (re)pushed. candidates is set for check only (NULL otherwise).
 	SaveOrderGeoResult(ctx context.Context, arg SaveOrderGeoResultParams) (pgtype.Timestamptz, error)
@@ -300,6 +324,7 @@ type Querier interface {
 	SearchOrdersInScope(ctx context.Context, arg SearchOrdersInScopeParams) ([]Order, error)
 	SetCategoryPosition(ctx context.Context, arg SetCategoryPositionParams) error
 	SetChannelKey(ctx context.Context, arg SetChannelKeyParams) (Channel, error)
+	SetChannelView(ctx context.Context, arg SetChannelViewParams) (Channel, error)
 	SetDiagReportResolved(ctx context.Context, arg SetDiagReportResolvedParams) (int64, error)
 	SetExternalStopOutsideArea(ctx context.Context, arg SetExternalStopOutsideAreaParams) (int64, error)
 	// A pin or a chosen candidate: re-route from this point and push it again,
@@ -309,6 +334,8 @@ type Querier interface {
 	// work row meanwhile (new address) is not overwritten.
 	SetExternalWorkCandidates(ctx context.Context, arg SetExternalWorkCandidatesParams) (int64, error)
 	SetExternalWorkConfirmed(ctx context.Context, arg SetExternalWorkConfirmedParams) error
+	SetGroupPortions(ctx context.Context, arg SetGroupPortionsParams) (int64, error)
+	SetItemBank(ctx context.Context, arg SetItemBankParams) (int64, error)
 	SetItemPosition(ctx context.Context, arg SetItemPositionParams) error
 	SetItemPrinter(ctx context.Context, arg SetItemPrinterParams) error
 	// 2.2.0 location.radius: the Pi (tablet settings) sets the delivery radius.
@@ -319,7 +346,9 @@ type Querier interface {
 	// A manager / admin placed the store pin by hand: geocodes never move it.
 	SetLocationPin(ctx context.Context, arg SetLocationPinParams) (Location, error)
 	SetMenuPosition(ctx context.Context, arg SetMenuPositionParams) error
+	SetMenuSizePosition(ctx context.Context, arg SetMenuSizePositionParams) error
 	SetOperatorPassword(ctx context.Context, arg SetOperatorPasswordParams) error
+	SetOptionBank(ctx context.Context, arg SetOptionBankParams) (int64, error)
 	SetOptionPosition(ctx context.Context, arg SetOptionPositionParams) error
 	SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStatusParams) (int64, error)
 	// A new radius flipped the flag: re-push the row (the worker sends order.geo).
@@ -345,6 +374,9 @@ type Querier interface {
 	UpdateMenu(ctx context.Context, arg UpdateMenuParams) (Menu, error)
 	UpdateMenuCategory(ctx context.Context, arg UpdateMenuCategoryParams) (MenuCategory, error)
 	UpdateMenuItem(ctx context.Context, arg UpdateMenuItemParams) (MenuItem, error)
+	UpdateMenuSize(ctx context.Context, arg UpdateMenuSizeParams) (MenuSize, error)
+	UpdateMenuView(ctx context.Context, arg UpdateMenuViewParams) (MenuView, error)
+	UpdateMenuViewEntry(ctx context.Context, arg UpdateMenuViewEntryParams) (MenuViewEntry, error)
 	UpdateModifierGroup(ctx context.Context, arg UpdateModifierGroupParams) (ModifierGroup, error)
 	UpdateModifierOption(ctx context.Context, arg UpdateModifierOptionParams) (ModifierOption, error)
 	UpdateOperatorProfile(ctx context.Context, arg UpdateOperatorProfileParams) (UpdateOperatorProfileRow, error)

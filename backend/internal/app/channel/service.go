@@ -32,6 +32,7 @@ var (
 	ErrNameRequired = errors.New("name is required")
 	ErrBadPayment   = errors.New("payments must be card and/or cash")
 	ErrUnknownPlace = errors.New("location not found")
+	ErrBadView      = errors.New("view must be one of this store's views of the channel's kind")
 )
 
 // LocationReader resolves a location's tenant (the tenancy service).
@@ -39,10 +40,39 @@ type LocationReader interface {
 	GetLocation(ctx context.Context, id uuid.UUID) (*tenancy.Location, error)
 }
 
+// ViewReader looks up a menu view's location and kind (the menu views service).
+type ViewReader interface {
+	ViewKind(ctx context.Context, locationID, viewID uuid.UUID) (string, error)
+}
+
 type Service struct {
 	repo   channelDom.Repository
 	locs   LocationReader
+	views  ViewReader
 	logger zerolog.Logger
+}
+
+// SetViews plugs in the menu views (set once at startup).
+func (s *Service) SetViews(v ViewReader) { s.views = v }
+
+// SetView points a channel at one of its store's views of its kind (nil =
+// the default view of its kind).
+func (s *Service) SetView(ctx context.Context, id uuid.UUID, viewID *uuid.UUID) (*channelDom.Channel, error) {
+	cur, err := s.Get(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if viewID != nil {
+		if s.views == nil {
+			return nil, ErrBadView
+		}
+		kind, err := s.views.ViewKind(ctx, cur.LocationID, *viewID)
+		if err != nil || kind != string(cur.Kind) {
+			return nil, ErrBadView
+		}
+	}
+	c, err := s.repo.SetView(ctx, id, viewID)
+	return c, notFound(err)
 }
 
 func NewService(repo channelDom.Repository, locs LocationReader, lg zerolog.Logger) *Service {

@@ -58,6 +58,33 @@ func TestRouteItems(t *testing.T) {
 	check(3, order.RoutingUnmatched, nil, nil)
 }
 
+type fakeVendor map[string]uuid.UUID
+
+func (f fakeVendor) VendorMaps(context.Context, uuid.UUID) (map[string]uuid.UUID, error) {
+	return f, nil
+}
+
+// A vendor-view mapping routes a name nothing matches, and wins over a name
+// match; a mapping to an item that's gone changes nothing.
+func TestRouteItemsVendorMaps(t *testing.T) {
+	p1, p2 := uuid.New(), uuid.New()
+	wings, pizza := uuid.New(), uuid.New()
+	repo := routingRepo{entries: []menuDom.RouteEntry{
+		{ItemID: wings, Name: "Wings 8pc", PrinterID: &p1},
+		{ItemID: pizza, Name: "Cheese Pizza", PrinterID: &p2},
+	}}
+	meters, _ := observability.NewMeters()
+	svc := NewService(repo, nil, meters, zerolog.Nop())
+	svc.SetVendorMapper(fakeVendor{"jumbo party wings": wings, "cheese pizza": wings, "ghost": uuid.New()})
+	got, err := svc.RouteItems(context.Background(), uuid.New(), []string{"Jumbo  Party Wings", "Cheese Pizza", "Ghost"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if *got[0].MenuItemID != wings || *got[0].PrinterID != p1 || *got[1].MenuItemID != wings || got[2].Routing != order.RoutingUnmatched {
+		t.Errorf("routes: %+v", got)
+	}
+}
+
 type unmatchedRepo struct {
 	routingRepo
 	recent []menuDom.ItemNameCount

@@ -10,6 +10,8 @@
     type ModifierGroup,
     type ModifierOption,
     type ItemGroupLink,
+    type MenuSize,
+    type BankItem,
     printerLabel
   } from '$lib/api';
   import { confirmDialog } from '$lib/confirm.svelte';
@@ -29,6 +31,8 @@
     live,
     piState = 'unknown',
     inheritedPrinter = '',
+    sizes = [],
+    bank,
     onclose,
     onsaved,
     ondeleted
@@ -39,6 +43,9 @@
     live: LivePrinters | null;
     piState?: PiLink;
     inheritedPrinter?: string;
+    /** The store's sizes and this item's bank data (main 3.0). */
+    sizes?: MenuSize[];
+    bank?: BankItem;
     onclose: () => void;
     onsaved: (catID: string) => void;
     ondeleted: (catID: string) => void;
@@ -65,6 +72,28 @@
   let tagsStr = $state((it0.tags || []).join(', '));
   let printerId = $state<string | null>(it0.printer_id);
   let priceErr = $state('');
+  // Bank data: kitchen name, SKU, sizes (saved with the item).
+  const b0 = untrack(() => ({
+    kitchen: bank?.kitchen_name ?? '',
+    sku: bank?.sku ?? '',
+    sizes: (bank?.sizes ?? []).map((x) => ({ size_id: x.size_id, price: centsInput(x.price_cents) }))
+  }));
+  let kitchenName = $state(b0.kitchen);
+  let sku = $state(b0.sku);
+  let sizeRows = $state(b0.sizes.map((x) => ({ ...x })));
+  let addSizeId = $state('');
+  const bankDirty = $derived(
+    kitchenName !== b0.kitchen || sku !== b0.sku || JSON.stringify(sizeRows) !== JSON.stringify(b0.sizes)
+  );
+  const sizeName = (id: string) => sizes.find((x) => x.id === id)?.name ?? '?';
+  function addSize() {
+    if (!addSizeId) return;
+    sizeRows = [...sizeRows, { size_id: addSizeId, price: priceStr }];
+    // Keep the rows in the store's size order.
+    const at = (id: string) => sizes.findIndex((x) => x.id === id);
+    sizeRows.sort((a, b) => at(a.size_id) - at(b.size_id));
+    addSizeId = '';
+  }
   let saving = $state(false);
 
   let attached = $state<ItemGroupLink[]>([]);
@@ -82,7 +111,8 @@
       inStock !== it0.in_stock ||
       (!inStock && outUntil !== toLocalInput(it0.out_until)) ||
       tagsStr !== (it0.tags || []).join(', ') ||
-      printerId !== it0.printer_id
+      printerId !== it0.printer_id ||
+      bankDirty
   );
   async function beforeClose(): Promise<boolean> {
     if (!dirty || saving) return !saving;
@@ -123,8 +153,20 @@
       toast.error('“Out of stock until” isn’t a valid date/time. Not saved.');
       return;
     }
+    const sizeCents = sizeRows.map((r) => ({ size_id: r.size_id, price_cents: toCents(r.price) }));
+    const badSize = sizeCents.findIndex((r) => r.price_cents === null || r.price_cents < 0);
+    if (badSize >= 0) {
+      priceErr = `${sizeName(sizeRows[badSize].size_id)}: “${sizeRows[badSize].price}” isn't a valid price.`;
+      return;
+    }
     saving = true;
     try {
+      if (bankDirty) {
+        await storeApi(`/me/menu/items/${it0.id}/bank`, {
+          method: 'PUT',
+          body: JSON.stringify({ kitchen_name: kitchenName, sku, sizes: sizeCents })
+        });
+      }
       await storeApi(`/me/menu/items/${it0.id}`, {
         method: 'PATCH',
         body: JSON.stringify({
@@ -216,7 +258,44 @@
         <input id="ie-tax" class="field mono text-right" inputmode="decimal" bind:value={taxPct} />
       </div>
     </div>
+    <div>
+      <span class="lbl" id="ie-sizes">Sizes</span>
+      {#if sizeRows.length}
+        <ul class="flex flex-col gap-1.5" aria-labelledby="ie-sizes">
+          {#each sizeRows as r, i (r.size_id)}
+            <li class="flex items-center gap-2">
+              <span class="flex-1 min-w-0 truncate">{sizeName(r.size_id)}</span>
+              <input class="field mono text-right !w-28" inputmode="decimal" bind:value={r.price} aria-label="Price for {sizeName(r.size_id)} ($)" />
+              <Button size="xs" variant="ghost" icon="x" aria-label="Remove {sizeName(r.size_id)}" onclick={() => sizeRows.splice(i, 1)} />
+            </li>
+          {/each}
+        </ul>
+        <p class="help">With sizes, the size prices are what customers pay; the price above is only used without one.</p>
+      {/if}
+      {#if sizes.filter((x) => !sizeRows.some((r) => r.size_id === x.id)).length}
+        <div class="flex gap-2 mt-1.5">
+          <label for="ie-addsize" class="sr-only">Add a size</label>
+          <select id="ie-addsize" class="field flex-1" bind:value={addSizeId}>
+            <option value="">Add a size…</option>
+            {#each sizes.filter((x) => !sizeRows.some((r) => r.size_id === x.id)) as x (x.id)}<option value={x.id}>{x.name}</option>{/each}
+          </select>
+          <Button icon="plus" disabled={!addSizeId} onclick={addSize}>Add</Button>
+        </div>
+      {:else if !sizes.length}
+        <p class="help !mt-0">Sold in one size. Add the store's sizes on the Sizes tab to price this by size.</p>
+      {/if}
+    </div>
     {#if priceErr}<p class="field-error !-mt-2" role="alert">{priceErr}</p>{/if}
+    <div class="grid grid-cols-2 gap-3">
+      <div>
+        <label class="lbl" for="ie-kitchen">Kitchen name</label>
+        <input id="ie-kitchen" class="field" bind:value={kitchenName} placeholder="Same as name" />
+      </div>
+      <div>
+        <label class="lbl" for="ie-sku">SKU / POS code</label>
+        <input id="ie-sku" class="field mono" bind:value={sku} />
+      </div>
+    </div>
     <div>
       <label class="lbl" for="ie-printer">Kitchen printer</label>
       <select id="ie-printer" class="field" bind:value={printerId}>

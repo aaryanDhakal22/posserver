@@ -13,6 +13,10 @@
     type Printer,
     type LivePrinters,
     type UnmatchedName,
+    type Bank,
+    type BankItem,
+    type MenuSize,
+    sizesLine,
     printerLabel
   } from '$lib/api';
   import { confirmDialog } from '$lib/confirm.svelte';
@@ -32,6 +36,8 @@
   import ModifiersTab from '$lib/components/menu/ModifiersTab.svelte';
   import CategoriesTab from '$lib/components/menu/CategoriesTab.svelte';
   import ImportDialog from '$lib/components/menu/ImportDialog.svelte';
+  import SizesTab from '$lib/components/menu/SizesTab.svelte';
+  import ViewsTab from '$lib/components/menu/ViewsTab.svelte';
   import { loadPiStatus, type PiLink } from '$lib/store/pi';
 
   // Menu editor: items grouped by category (inline price + stock, side panel
@@ -53,6 +59,29 @@
   let showUnmatched = $state(false);
   let editing = $state<Item | null>(null);
   let importOpen = $state(false);
+  // The bank (main 3.0): the store's sizes + each item's sizes / kitchen name.
+  let bank = $state<Bank | null>(null);
+  const sizes = $derived<MenuSize[]>(bank?.sizes ?? []);
+  const bankItems = $derived(
+    new Map<string, BankItem>((bank?.menus ?? []).flatMap((m) => m.categories.flatMap((c) => c.items.map((it) => [it.id, it] as const))))
+  );
+  async function loadBank() {
+    bank = await storeApi<Bank>('/me/menu/bank').catch(() => bank);
+  }
+  // Brygid names nothing routes: pick the item they are (the vendor view).
+  let mapPick = $state<Record<string, string>>({});
+  async function mapName(name: string) {
+    const id = mapPick[name];
+    if (!id) return;
+    try {
+      await storeApi('/me/menu/vendor/maps', { method: 'POST', body: JSON.stringify({ vendor_name: name, item_id: id }) });
+      delete mapPick[name];
+      toast.success(`“${name}” now prints as ${bankItems.get(id)?.name ?? 'that item'}`);
+      await loadUnmatched();
+    } catch (e) {
+      toast.error(e);
+    }
+  }
 
   // filters
   let q = $state('');
@@ -98,7 +127,7 @@
 
   onMount(async () => {
     try {
-      await Promise.all([loadPrinters(), loadMenus()]);
+      await Promise.all([loadPrinters(), loadMenus(), loadBank()]);
       ({ live, pi: piState } = await loadPiStatus());
       await loadUnmatched();
     } catch (e) {
@@ -115,7 +144,7 @@
   }
   async function onImported() {
     activeMenu = null;
-    await Promise.all([loadMenus(), loadPrinters()]).catch((e) => toast.error(e));
+    await Promise.all([loadMenus(), loadPrinters(), loadBank()]).catch((e) => toast.error(e));
     await loadUnmatched();
   }
 
@@ -155,11 +184,13 @@
     noPrinterOnly = true;
   }
 
-  /** "10 Small $6.99 · 12 Medium $9.99" from attributes.sizes when present, else tags/description. */
+  /** "10 Small $6.99 · 12 Medium $9.99" from the bank's sizes, else attributes.sizes (CSV), else tags/description. */
   function subtitle(it: Item): string {
-    const sizes = (it.attributes as Record<string, unknown> | undefined)?.sizes;
-    if (Array.isArray(sizes) && sizes.length) {
-      return sizes
+    const banked = sizesLine(bankItems.get(it.id)?.sizes, sizes);
+    if (banked) return banked;
+    const attrSizes = (it.attributes as Record<string, unknown> | undefined)?.sizes;
+    if (Array.isArray(attrSizes) && attrSizes.length) {
+      return attrSizes
         .map((s) => {
           if (typeof s === 'string') return s;
           const o = s as Record<string, unknown>;
@@ -312,7 +343,7 @@
   // --- item panel -----------------------------------------------------------
   async function onItemSaved(catID: string) {
     editing = null;
-    await loadItems(catID).catch((e) => toast.error(e));
+    await Promise.all([loadItems(catID), loadBank()]).catch((e) => toast.error(e));
     toast.success('Item saved');
   }
   async function onItemDeleted(catID: string) {
@@ -325,7 +356,9 @@
   const TABS = [
     { id: 'items', label: 'Items' },
     { id: 'modifiers', label: 'Modifier groups' },
-    { id: 'categories', label: 'Categories' }
+    { id: 'categories', label: 'Categories' },
+    { id: 'sizes', label: 'Sizes' },
+    { id: 'views', label: 'Views' }
   ];
 </script>
 
@@ -364,7 +397,11 @@
   {#if loading}
     <div class="card p-5"><Skeleton lines={8} /></div>
   {:else if tab === 'modifiers'}
-    <ModifiersTab />
+    <ModifiersTab {sizes} />
+  {:else if tab === 'sizes'}
+    <SizesTab {sizes} onreload={loadBank} />
+  {:else if tab === 'views'}
+    <ViewsTab {bank} onbankchange={loadUnmatched} />
   {:else if tab === 'categories'}
     <CategoriesTab
       {menus}
@@ -409,16 +446,26 @@
         {#if showUnmatched}
           <div class="px-3.5 pb-3 text-text2">
             <p class="m-0 mb-2 text-[13px]">
-              <b>Not on the menu</b> = no menu item with that name (it prints on every station) · <b>No printer</b> = the item and its category have
-              no printer. Rename the menu item to the vendor's name, or set a printer.
+              <b>Not on the menu</b> = Brygid's name matches none of your items (it prints on every station): pick which item it is ·
+              <b>No printer</b> = the item and its category have no printer: set one.
             </p>
-            <div class="flex flex-wrap gap-1.5">
-              {#each unmatched as u (u.name)}
-                <Badge tone={u.routing === 'unmatched' ? 'warn' : 'mute'} title="{u.orders} order{u.orders === 1 ? '' : 's'}, last {fmtTime(u.last_seen)}">
-                  {u.name} · {u.routing === 'unmatched' ? 'not on the menu' : 'no printer'} · {u.orders}×
-                </Badge>
+            <ul class="flex flex-col gap-1.5">
+              {#each unmatched as u, i (u.name)}
+                <li class="flex flex-wrap items-center gap-2">
+                  <Badge tone={u.routing === 'unmatched' ? 'warn' : 'mute'} title="{u.orders} order{u.orders === 1 ? '' : 's'}, last {fmtTime(u.last_seen)}">
+                    {u.name} · {u.routing === 'unmatched' ? 'not on the menu' : 'no printer'} · {u.orders}×
+                  </Badge>
+                  {#if u.routing === 'unmatched' && bankItems.size}
+                    <label for="um-{i}" class="sr-only">Your item for {u.name}</label>
+                    <select id="um-{i}" class="field !w-auto max-w-[260px] !py-1" bind:value={mapPick[u.name]}>
+                      <option value="">Which item is it?</option>
+                      {#each [...bankItems.values()] as b (b.id)}<option value={b.id}>{b.name}</option>{/each}
+                    </select>
+                    <Button size="sm" variant="primary" disabled={!mapPick[u.name]} onclick={() => mapName(u.name)}>Match</Button>
+                  {/if}
+                </li>
               {/each}
-            </div>
+            </ul>
           </div>
         {/if}
       </div>
@@ -595,6 +642,8 @@
       {live}
       {piState}
       inheritedPrinter={editCat?.default_printer_id ? printerName(editCat.default_printer_id) : ''}
+      {sizes}
+      bank={bankItems.get(editing.id)}
       onclose={() => (editing = null)}
       onsaved={onItemSaved}
       ondeleted={onItemDeleted}

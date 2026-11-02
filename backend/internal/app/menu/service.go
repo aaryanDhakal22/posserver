@@ -36,7 +36,19 @@ type Service struct {
 	tracer  trace.Tracer
 	// listPrinters resolves a location's printers (tenancy's; swapped in tests).
 	listPrinters func(ctx context.Context, locationID uuid.UUID) ([]tenancyDom.Printer, error)
+	// vendor maps vendor item names to bank items (the vendor view, 3.0); nil = none.
+	vendor VendorMapper
 }
+
+// VendorMapper is a location's vendor name → menu item mappings, keyed by the
+// normalized vendor name (menuviewApp.Service.VendorMaps).
+type VendorMapper interface {
+	VendorMaps(ctx context.Context, locationID uuid.UUID) (map[string]uuid.UUID, error)
+}
+
+// SetVendorMapper plugs in the vendor view's mappings (set once at startup;
+// the views service depends on this one, so it can't be a constructor arg).
+func (s *Service) SetVendorMapper(m VendorMapper) { s.vendor = m }
 
 func NewService(repo menuDom.Repository, tenancy *tenancyApp.Service, meters observability.Meters, lg zerolog.Logger) *Service {
 	s := &Service{
@@ -532,6 +544,25 @@ func (s *Service) routingTable(ctx context.Context, locationID uuid.UUID) (map[s
 		k := normalizeItemName(e.Name)
 		if _, seen := byName[k]; !seen { // rows are best-first
 			byName[k] = e
+		}
+	}
+	if s.vendor == nil {
+		return byName, nil
+	}
+	// A vendor-view mapping wins over the name match: the manager chose it.
+	maps, err := s.vendor.VendorMaps(ctx, locationID)
+	if err != nil {
+		return nil, err
+	}
+	if len(maps) > 0 {
+		byID := make(map[uuid.UUID]menuDom.RouteEntry, len(entries))
+		for _, e := range entries {
+			byID[e.ItemID] = e
+		}
+		for name, itemID := range maps {
+			if e, ok := byID[itemID]; ok {
+				byName[name] = e
+			}
 		}
 	}
 	return byName, nil

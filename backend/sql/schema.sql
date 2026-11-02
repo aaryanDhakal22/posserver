@@ -253,6 +253,8 @@ CREATE TABLE menu_items (
     attributes    jsonb       NOT NULL DEFAULT '{}'::jsonb,
     created_at    timestamptz NOT NULL DEFAULT now(),
     updated_at    timestamptz NOT NULL DEFAULT now(),
+    kitchen_name  text        NOT NULL DEFAULT '',
+    sku           text        NOT NULL DEFAULT '',
     FOREIGN KEY (category_id, tenant_id) REFERENCES menu_categories(id, tenant_id) ON DELETE CASCADE,
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id)       ON DELETE CASCADE,
     FOREIGN KEY (printer_id)             REFERENCES printers(id)                   ON DELETE SET NULL,
@@ -271,6 +273,7 @@ CREATE TABLE modifier_groups (
     allow_multiple boolean     NOT NULL DEFAULT false,
     created_at     timestamptz NOT NULL DEFAULT now(),
     updated_at     timestamptz NOT NULL DEFAULT now(),
+    portions       boolean     NOT NULL DEFAULT false,
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE,
     UNIQUE (id, tenant_id)
 );
@@ -287,6 +290,8 @@ CREATE TABLE modifier_options (
     position          integer     NOT NULL DEFAULT 0,
     created_at        timestamptz NOT NULL DEFAULT now(),
     updated_at        timestamptz NOT NULL DEFAULT now(),
+    is_default        boolean     NOT NULL DEFAULT false,
+    kitchen_name      text        NOT NULL DEFAULT '',
     FOREIGN KEY (group_id, tenant_id) REFERENCES modifier_groups(id, tenant_id) ON DELETE CASCADE,
     UNIQUE (id, tenant_id)
 );
@@ -616,6 +621,109 @@ CREATE TABLE delivery_runs (
 );
 CREATE INDEX idx_delivery_runs_location ON delivery_runs (location_id, at DESC);
 
+-- 00018_menu_bank_views (main 3.0): the bank's sizes + per-size prices, the
+--   views of the bank per channel kind, their compiled builds, the per-location
+--   menu version (bumped by triggers in the migration, not mirrored here).
+CREATE TABLE menu_sizes (
+    id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   uuid        NOT NULL,
+    location_id uuid        NOT NULL,
+    name        text        NOT NULL,
+    short       text        NOT NULL DEFAULT '',
+    position    integer     NOT NULL DEFAULT 0,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE,
+    UNIQUE (id, tenant_id)
+);
+CREATE UNIQUE INDEX idx_menu_sizes_name ON menu_sizes (location_id, lower(name));
+
+-- An item's sizes and their prices (an item with none keeps price_cents).
+CREATE TABLE menu_item_sizes (
+    tenant_id    uuid    NOT NULL,
+    location_id  uuid    NOT NULL,
+    item_id      uuid    NOT NULL,
+    size_id      uuid    NOT NULL,
+    price_cents  bigint  NOT NULL CHECK (price_cents >= 0),
+    kitchen_name text    NOT NULL DEFAULT '',
+    position     integer NOT NULL DEFAULT 0,
+    FOREIGN KEY (item_id, tenant_id) REFERENCES menu_items(id, tenant_id) ON DELETE CASCADE,
+    FOREIGN KEY (size_id, tenant_id) REFERENCES menu_sizes(id, tenant_id) ON DELETE CASCADE,
+    PRIMARY KEY (item_id, size_id)
+);
+CREATE INDEX idx_menu_item_sizes_size ON menu_item_sizes (size_id);
+
+-- A modifier option's price by the item's size (a topping costs more on a 16").
+CREATE TABLE modifier_option_prices (
+    tenant_id   uuid   NOT NULL,
+    location_id uuid   NOT NULL,
+    option_id   uuid   NOT NULL,
+    size_id     uuid   NOT NULL,
+    price_cents bigint NOT NULL CHECK (price_cents >= 0),
+    FOREIGN KEY (option_id, tenant_id) REFERENCES modifier_options(id, tenant_id) ON DELETE CASCADE,
+    FOREIGN KEY (size_id, tenant_id) REFERENCES menu_sizes(id, tenant_id) ON DELETE CASCADE,
+    PRIMARY KEY (option_id, size_id)
+);
+CREATE INDEX idx_modifier_option_prices_size ON modifier_option_prices (size_id);
+
+
+-- A view of the bank for one kind of channel: web, operator (call center),
+-- counter, vendor (a vendor's names mapped to the bank, e.g. Brygid).
+-- rules: {markup_bps, round, hidden_categories, …}.
+CREATE TABLE menu_views (
+    id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   uuid        NOT NULL,
+    location_id uuid        NOT NULL,
+    kind        text        NOT NULL CHECK (kind IN ('web', 'operator', 'counter', 'vendor')),
+    name        text        NOT NULL,
+    rules       jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE,
+    UNIQUE (id, tenant_id)
+);
+CREATE INDEX idx_menu_views_location ON menu_views (location_id);
+
+-- One change a view makes to the bank, always anchored to bank ids:
+--   item     rename / describe / photo / hide / move / reprice one bank item
+--   merge    one view item that is a choice between several bank items
+--   augment  an extra view item made of bank items (a combo, a bundle)
+--   map      (vendor) a vendor's item name [+ size] → a bank item [+ size]
+CREATE TABLE menu_view_entries (
+    id                   uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id            uuid        NOT NULL,
+    location_id          uuid        NOT NULL,
+    view_id              uuid        NOT NULL,
+    kind                 text        NOT NULL CHECK (kind IN ('item', 'merge', 'augment', 'map')),
+    anchor               jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    display_name         text        NOT NULL DEFAULT '',
+    description          text        NOT NULL DEFAULT '',
+    photo                text        NOT NULL DEFAULT '',
+    category             text        NOT NULL DEFAULT '',
+    position             integer     NOT NULL DEFAULT 0,
+    hidden               boolean     NOT NULL DEFAULT false,
+    price_override_cents bigint,
+    extra                jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    created_at           timestamptz NOT NULL DEFAULT now(),
+    updated_at           timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (view_id, tenant_id) REFERENCES menu_views(id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_menu_view_entries_view ON menu_view_entries (view_id);
+
+-- A view compiled against the bank at one menu version (the cache channels read).
+CREATE TABLE menu_view_builds (
+    view_id      uuid        PRIMARY KEY REFERENCES menu_views(id) ON DELETE CASCADE,
+    menu_version bigint      NOT NULL,
+    build        jsonb       NOT NULL,
+    built_at     timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE menu_versions (
+    location_id uuid        PRIMARY KEY REFERENCES locations(id) ON DELETE CASCADE,
+    version     bigint      NOT NULL DEFAULT 1,
+    changed_at  timestamptz NOT NULL DEFAULT now()
+);
+
 -- 00017_channels (main 3.0): sales channels of a location (web, operator,
 --   counter, vendor), each with its own bearer key for /channel/v1.
 CREATE TABLE channels (
@@ -632,6 +740,7 @@ CREATE TABLE channels (
     last_used_at timestamptz,
     created_at   timestamptz NOT NULL DEFAULT now(),
     updated_at   timestamptz NOT NULL DEFAULT now(),
+    view_id      uuid        REFERENCES menu_views(id) ON DELETE SET NULL,
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
 );
 CREATE INDEX idx_channels_location ON channels (location_id);

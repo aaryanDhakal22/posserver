@@ -78,10 +78,13 @@ type Channel struct {
 	KeyPrefix   string      `json:"key_prefix"`
 	Permissions Permissions `json:"permissions"`
 	Builtin     bool        `json:"builtin"`
-	RevokedAt   *time.Time  `json:"revoked_at"`
-	LastUsedAt  *time.Time  `json:"last_used_at"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
+	// ViewID is the menu view this channel reads (nil = its store's default
+	// view of its kind).
+	ViewID     *uuid.UUID `json:"view_id"`
+	RevokedAt  *time.Time `json:"revoked_at"`
+	LastUsedAt *time.Time `json:"last_used_at"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
 }
 
 // Active reports whether the channel's key works.

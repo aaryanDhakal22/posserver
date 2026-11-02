@@ -87,6 +87,18 @@ func (r *ChannelRepository) Update(ctx context.Context, id uuid.UUID, name strin
 	return channelOf(row)
 }
 
+func (r *ChannelRepository) SetView(ctx context.Context, id uuid.UUID, viewID *uuid.UUID) (*channel.Channel, error) {
+	v := pgtype.UUID{}
+	if viewID != nil {
+		v = pgID(*viewID)
+	}
+	row, err := models.New(r.pool).SetChannelView(ctx, models.SetChannelViewParams{ID: pgID(id), ViewID: v})
+	if err != nil {
+		return nil, err
+	}
+	return channelOf(row)
+}
+
 func (r *ChannelRepository) SetKey(ctx context.Context, id uuid.UUID, keyHash, keyPrefix string) (*channel.Channel, error) {
 	row, err := models.New(r.pool).SetChannelKey(ctx, models.SetChannelKeyParams{
 		ID: pgID(id), KeyHash: pgtype.Text{String: keyHash, Valid: true}, KeyPrefix: keyPrefix})
@@ -125,7 +137,7 @@ func channelOf(row models.Channel) (*channel.Channel, error) {
 	c := &channel.Channel{
 		ID: idOf(row.ID), TenantID: idOf(row.TenantID), LocationID: idOf(row.LocationID),
 		Kind: channel.Kind(row.Kind), Name: row.Name, KeyPrefix: row.KeyPrefix, Builtin: row.Builtin,
-		RevokedAt: tsPtr(row.RevokedAt), LastUsedAt: tsPtr(row.LastUsedAt),
+		ViewID: idPtrOf(row.ViewID), RevokedAt: tsPtr(row.RevokedAt), LastUsedAt: tsPtr(row.LastUsedAt),
 		CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time,
 	}
 	if err := json.Unmarshal(row.Permissions, &c.Permissions); err != nil {

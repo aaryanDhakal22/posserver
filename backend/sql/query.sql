@@ -545,24 +545,24 @@ DELETE FROM menu_categories WHERE id = $1 AND tenant_id = $2;
 -- name: CreateMenuItem :one
 INSERT INTO menu_items (tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at;
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku;
 
 -- name: GetMenuItemByID :one
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
 FROM menu_items WHERE id = $1 AND tenant_id = $2;
 
 -- name: ListItemsByCategory :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
 FROM menu_items WHERE category_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: ListItemsByLocation :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
 FROM menu_items WHERE location_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: UpdateMenuItem :one
 UPDATE menu_items SET name = $3, description = $4, price_cents = $5, tax_rate_bps = $6, in_stock = $7, out_until = $8, tags = $9, attributes = $10, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at;
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku;
 
 -- name: ListRecentItemNames :many
 -- Top-level item names ordered at a location since a time, with counts — the
@@ -599,20 +599,20 @@ DELETE FROM menu_items WHERE id = $1 AND tenant_id = $2;
 -- name: CreateModifierGroup :one
 INSERT INTO modifier_groups (tenant_id, location_id, name, required, min_select, max_select, allow_multiple)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at;
+RETURNING id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at, portions;
 
 -- name: GetModifierGroupByID :one
-SELECT id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at
+SELECT id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at, portions
 FROM modifier_groups WHERE id = $1 AND tenant_id = $2;
 
 -- name: ListModifierGroupsByLocation :many
-SELECT id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at
+SELECT id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at, portions
 FROM modifier_groups WHERE location_id = $1 ORDER BY name ASC;
 
 -- name: UpdateModifierGroup :one
 UPDATE modifier_groups SET name = $3, required = $4, min_select = $5, max_select = $6, allow_multiple = $7, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at;
+RETURNING id, tenant_id, location_id, name, required, min_select, max_select, allow_multiple, created_at, updated_at, portions;
 
 -- name: DeleteModifierGroup :exec
 DELETE FROM modifier_groups WHERE id = $1 AND tenant_id = $2;
@@ -623,20 +623,20 @@ DELETE FROM item_modifier_groups WHERE group_id = $1 AND tenant_id = $2;
 -- name: CreateModifierOption :one
 INSERT INTO modifier_options (tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at;
+RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name;
 
 -- name: ListOptionsByGroup :many
-SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at
+SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
 FROM modifier_options WHERE group_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: ListOptionsByLocation :many
-SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at
+SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
 FROM modifier_options WHERE location_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: UpdateModifierOption :one
 UPDATE modifier_options SET name = $3, price_delta_cents = $4, in_stock = $5, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at;
+RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name;
 
 -- name: SetOptionPosition :exec
 UPDATE modifier_options SET position = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
@@ -1373,3 +1373,117 @@ SELECT * FROM channels WHERE key_hash = $1 AND revoked_at IS NULL;
 -- name: TouchChannel :exec
 UPDATE channels SET last_used_at = now()
 WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute');
+
+-- ─── Menu bank (main 3.0) ─────────────────────────────────────────────────
+
+-- name: CreateMenuSize :one
+INSERT INTO menu_sizes (tenant_id, location_id, name, short, position)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING *;
+
+-- name: ListMenuSizes :many
+SELECT * FROM menu_sizes WHERE location_id = $1 ORDER BY position ASC, created_at ASC;
+
+-- name: GetMenuSize :one
+SELECT * FROM menu_sizes WHERE id = $1 AND tenant_id = $2;
+
+-- name: UpdateMenuSize :one
+UPDATE menu_sizes SET name = $3, short = $4, updated_at = now()
+WHERE id = $1 AND tenant_id = $2
+RETURNING *;
+
+-- name: SetMenuSizePosition :exec
+UPDATE menu_sizes SET position = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
+
+-- name: DeleteMenuSize :execrows
+DELETE FROM menu_sizes WHERE id = $1 AND tenant_id = $2;
+
+-- name: SetItemBank :execrows
+UPDATE menu_items SET kitchen_name = $3, sku = $4, updated_at = now() WHERE id = $1 AND tenant_id = $2;
+
+-- name: DeleteItemSizes :exec
+DELETE FROM menu_item_sizes WHERE item_id = $1 AND tenant_id = $2;
+
+-- name: InsertItemSize :exec
+INSERT INTO menu_item_sizes (tenant_id, location_id, item_id, size_id, price_cents, kitchen_name, position)
+VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: ListItemSizesByLocation :many
+SELECT * FROM menu_item_sizes WHERE location_id = $1 ORDER BY item_id, position ASC;
+
+-- name: SetGroupPortions :execrows
+UPDATE modifier_groups SET portions = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
+
+-- name: SetOptionBank :execrows
+UPDATE modifier_options SET is_default = $3, kitchen_name = $4, updated_at = now()
+WHERE id = $1 AND tenant_id = $2 AND group_id = $5;
+
+-- name: DeleteOptionPrices :exec
+DELETE FROM modifier_option_prices WHERE option_id = $1 AND tenant_id = $2;
+
+-- name: InsertOptionPrice :exec
+INSERT INTO modifier_option_prices (tenant_id, location_id, option_id, size_id, price_cents)
+VALUES ($1, $2, $3, $4, $5);
+
+-- name: ListOptionPricesByLocation :many
+SELECT * FROM modifier_option_prices WHERE location_id = $1;
+
+-- name: GetMenuVersion :one
+SELECT version, changed_at FROM menu_versions WHERE location_id = $1;
+
+-- ─── Menu views (main 3.0) ────────────────────────────────────────────────
+
+-- name: CreateMenuView :one
+INSERT INTO menu_views (tenant_id, location_id, kind, name, rules)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING *;
+
+-- name: GetMenuView :one
+SELECT * FROM menu_views WHERE id = $1;
+
+-- name: ListMenuViews :many
+SELECT * FROM menu_views WHERE location_id = $1 ORDER BY created_at ASC;
+
+-- name: FirstMenuViewOfKind :one
+SELECT * FROM menu_views WHERE location_id = $1 AND kind = $2 ORDER BY created_at ASC LIMIT 1;
+
+-- name: UpdateMenuView :one
+UPDATE menu_views SET name = $2, rules = $3, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: DeleteMenuView :execrows
+DELETE FROM menu_views WHERE id = $1;
+
+-- name: CreateMenuViewEntry :one
+INSERT INTO menu_view_entries (tenant_id, location_id, view_id, kind, anchor, display_name, description, photo, category,
+    position, hidden, price_override_cents, extra)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+RETURNING *;
+
+-- name: GetMenuViewEntry :one
+SELECT * FROM menu_view_entries WHERE id = $1;
+
+-- name: ListMenuViewEntries :many
+SELECT * FROM menu_view_entries WHERE view_id = $1 ORDER BY position ASC, created_at ASC;
+
+-- name: UpdateMenuViewEntry :one
+UPDATE menu_view_entries SET anchor = $2, display_name = $3, description = $4, photo = $5, category = $6, position = $7,
+    hidden = $8, price_override_cents = $9, extra = $10, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: DeleteMenuViewEntry :execrows
+DELETE FROM menu_view_entries WHERE id = $1;
+
+-- name: GetMenuViewBuild :one
+SELECT * FROM menu_view_builds WHERE view_id = $1;
+
+-- name: SaveMenuViewBuild :exec
+INSERT INTO menu_view_builds (view_id, menu_version, build, built_at)
+VALUES ($1, $2, $3, now())
+ON CONFLICT (view_id) DO UPDATE SET menu_version = EXCLUDED.menu_version, build = EXCLUDED.build, built_at = now();
+
+-- name: SetChannelView :one
+UPDATE channels SET view_id = $2, updated_at = now() WHERE id = $1
+RETURNING *;

@@ -5,16 +5,127 @@
     "version": "1.0.0",
     "description": "main's ports for every sales channel (main 3.0). A channel — the web storefront, the call center, a counter POS terminal, a vendor feed — is an adapter: it holds no business rules and asks main for the menu, prices, store status, orders and tracking. Each channel belongs to one store and authenticates with its own bearer key (qch_…, issued in main's admin UI). Every error is {error, code}; branch on code."
   },
-  "servers": [{ "url": "/" }],
-  "security": [{ "channelKey": [] }],
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "security": [
+    {
+      "channelKey": []
+    }
+  ],
   "paths": {
     "/channel/v1/me": {
       "get": {
         "operationId": "getMe",
         "summary": "Who am I: the channel behind this key and its store",
         "responses": {
-          "200": { "description": "The channel and its store", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Me" } } } },
-          "401": { "$ref": "#/components/responses/Unauthorized" }
+          "200": {
+            "description": "The channel and its store",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/channel/v1/menu": {
+      "get": {
+        "operationId": "getMenu",
+        "summary": "The channel's menu: its view of the store's menu bank",
+        "description": "Every item is anchored to bank item ids (anchor.item_ids) — an order names those. Prices are final for this channel (the view's rule and overrides applied), in cents. The ETag is the menu version; send it back as If-None-Match to get a 304 while nothing changed. Needs the menu permission.",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The menu",
+            "headers": {
+              "ETag": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "\"v<version>\""
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Menu"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not changed since the ETag sent"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/channel/v1/menu/version": {
+      "get": {
+        "operationId": "getMenuVersion",
+        "summary": "The menu's version — poll this, refetch the menu when it moves",
+        "parameters": [
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "A version you hold; the answer says whether the menu changed after it"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MenuVersion"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "since is not a version number",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
         }
       }
     },
@@ -24,71 +135,549 @@
         "summary": "This document",
         "security": [],
         "responses": {
-          "200": { "description": "The OpenAPI document", "content": { "application/json": { "schema": { "type": "object" } } } }
+          "200": {
+            "description": "The OpenAPI document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
         }
       }
     }
   },
   "components": {
     "securitySchemes": {
-      "channelKey": { "type": "http", "scheme": "bearer", "description": "The channel's key: Authorization: Bearer qch_…" }
+      "channelKey": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "The channel's key: Authorization: Bearer qch_…"
+      }
     },
     "responses": {
       "Unauthorized": {
         "description": "Missing, unknown or revoked channel key",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "This channel's permissions don't allow it",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
       }
     },
     "schemas": {
       "Error": {
         "type": "object",
-        "required": ["error", "code"],
+        "required": [
+          "error",
+          "code"
+        ],
         "properties": {
-          "error": { "type": "string", "description": "For people" },
-          "code": { "type": "string", "description": "Stable, for programs (unauthorized, forbidden, not_found, bad_request, …)" }
+          "error": {
+            "type": "string",
+            "description": "For people"
+          },
+          "code": {
+            "type": "string",
+            "description": "Stable, for programs (unauthorized, forbidden, not_found, bad_request, …)"
+          }
         },
         "additionalProperties": false
       },
       "Permissions": {
         "type": "object",
-        "required": ["menu", "quote", "orders", "track", "payments"],
+        "required": [
+          "menu",
+          "quote",
+          "orders",
+          "track",
+          "payments"
+        ],
         "properties": {
-          "menu": { "type": "boolean", "description": "May read the menu" },
-          "quote": { "type": "boolean", "description": "May price a cart" },
-          "orders": { "type": "boolean", "description": "May place orders" },
-          "track": { "type": "boolean", "description": "May follow its orders" },
-          "payments": { "type": "array", "items": { "enum": ["card", "cash"] }, "description": "Payment methods an order through this channel may use" }
+          "menu": {
+            "type": "boolean",
+            "description": "May read the menu"
+          },
+          "quote": {
+            "type": "boolean",
+            "description": "May price a cart"
+          },
+          "orders": {
+            "type": "boolean",
+            "description": "May place orders"
+          },
+          "track": {
+            "type": "boolean",
+            "description": "May follow its orders"
+          },
+          "payments": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "card",
+                "cash"
+              ]
+            },
+            "description": "Payment methods an order through this channel may use"
+          }
         },
         "additionalProperties": false
       },
       "Channel": {
         "type": "object",
-        "required": ["id", "kind", "name", "permissions"],
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "permissions"
+        ],
         "properties": {
-          "id": { "type": "string", "format": "uuid" },
-          "kind": { "enum": ["web", "operator", "counter", "vendor"] },
-          "name": { "type": "string" },
-          "permissions": { "$ref": "#/components/schemas/Permissions" }
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "enum": [
+              "web",
+              "operator",
+              "counter",
+              "vendor"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/Permissions"
+          }
         },
         "additionalProperties": false
       },
       "Store": {
         "type": "object",
-        "required": ["tenant_id", "location_id", "name", "timezone"],
+        "required": [
+          "tenant_id",
+          "location_id",
+          "name",
+          "timezone"
+        ],
         "properties": {
-          "tenant_id": { "type": "string", "format": "uuid" },
-          "location_id": { "type": "string", "format": "uuid" },
-          "name": { "type": "string" },
-          "timezone": { "type": "string", "description": "IANA zone, e.g. America/New_York" }
+          "tenant_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "location_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "timezone": {
+            "type": "string",
+            "description": "IANA zone, e.g. America/New_York"
+          }
         },
         "additionalProperties": false
       },
       "Me": {
         "type": "object",
-        "required": ["channel", "store"],
+        "required": [
+          "channel",
+          "store"
+        ],
         "properties": {
-          "channel": { "$ref": "#/components/schemas/Channel" },
-          "store": { "$ref": "#/components/schemas/Store" }
+          "channel": {
+            "$ref": "#/components/schemas/Channel"
+          },
+          "store": {
+            "$ref": "#/components/schemas/Store"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MenuVersion": {
+        "type": "object",
+        "required": [
+          "version",
+          "changed_at"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "changed": {
+            "type": "boolean",
+            "description": "Only with ?since="
+          }
+        },
+        "additionalProperties": false
+      },
+      "MenuSize": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "short"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string",
+            "description": "e.g. 12 Medium"
+          },
+          "short": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "ItemSize": {
+        "type": "object",
+        "required": [
+          "size_id",
+          "name",
+          "price_cents"
+        ],
+        "properties": {
+          "size_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "US cents"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Anchor": {
+        "type": "object",
+        "required": [
+          "item_ids"
+        ],
+        "properties": {
+          "item_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "minItems": 1,
+            "description": "The bank items this is"
+          },
+          "size_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OptionPrice": {
+        "type": "object",
+        "required": [
+          "size_id",
+          "price_cents"
+        ],
+        "properties": {
+          "size_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "US cents"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MenuOption": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "price_cents",
+          "prices",
+          "is_default",
+          "sold_out"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Price when the item has no size (or no size price)"
+          },
+          "prices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OptionPrice"
+            },
+            "description": "Price on an item of each size"
+          },
+          "is_default": {
+            "type": "boolean",
+            "description": "Comes on the item unless removed"
+          },
+          "sold_out": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MenuGroup": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "required",
+          "min_select",
+          "max_select",
+          "allow_multiple",
+          "portions",
+          "options"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "min_select": {
+            "type": "integer"
+          },
+          "max_select": {
+            "type": "integer"
+          },
+          "allow_multiple": {
+            "type": "boolean"
+          },
+          "portions": {
+            "type": "boolean",
+            "description": "Options may go on a half (left / right) or the whole"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuOption"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "MenuChoice": {
+        "type": "object",
+        "required": [
+          "item_id",
+          "name",
+          "price_cents",
+          "sizes",
+          "sold_out"
+        ],
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "US cents"
+          },
+          "sizes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ItemSize"
+            }
+          },
+          "sold_out": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MenuItem": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "photo",
+          "anchor",
+          "price_cents",
+          "sizes",
+          "sold_out",
+          "modifier_groups"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "The view item's id (a bank item id, or a view entry's for a merged / added item)"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "photo": {
+            "type": "string"
+          },
+          "anchor": {
+            "$ref": "#/components/schemas/Anchor"
+          },
+          "price_cents": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Price when it has no sizes"
+          },
+          "sizes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ItemSize"
+            }
+          },
+          "sold_out": {
+            "type": "boolean"
+          },
+          "modifier_groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuGroup"
+            }
+          },
+          "choices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuChoice"
+            },
+            "description": "A merged item: pick one"
+          }
+        },
+        "additionalProperties": false
+      },
+      "MenuCategory": {
+        "type": "object",
+        "required": [
+          "key",
+          "name",
+          "position",
+          "items"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "position": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuItem"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "Menu": {
+        "type": "object",
+        "required": [
+          "view",
+          "version",
+          "currency",
+          "sizes",
+          "categories"
+        ],
+        "properties": {
+          "view": {
+            "type": "object",
+            "required": [
+              "id",
+              "kind",
+              "name"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "kind": {
+                "enum": [
+                  "web",
+                  "operator",
+                  "counter",
+                  "vendor"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "version": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string",
+            "description": "ISO 4217, USD"
+          },
+          "sizes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuSize"
+            }
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuCategory"
+            }
+          }
         },
         "additionalProperties": false
       }

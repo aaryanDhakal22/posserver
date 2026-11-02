@@ -16,6 +16,10 @@ scenario against the same main gives the same transcript:
 Bodies are compared as the raw bytes main sent, after normalisation (JSON key
 order and spacing included); only steps that filter a shared list re-encode.
 
+A step's compare mode: exact (default; what the Pi, hub, Quibase, online and
+call-center operators read), additive (main's own web UI: old fields
+unchanged, new fields allowed), superset (the route table).
+
   GOLDEN_RECORD=1  write golden/transcripts/<chapter>.json (the reference)
   (default)        compare against it and fail with a readable diff
 """
@@ -60,7 +64,7 @@ class Rec:
     # -- steps -------------------------------------------------------------
     def call(self, label: str, method: str, path: str, *, session: requests.Session | None = None,
              headers: dict | None = None, json_body: Any = None, data: Any = None, params: dict | None = None,
-             filt: Callable[[Any], Any] | None = None, mask: tuple[str, ...] = (), compare: str = "exact",
+             filt: Callable[[Any], Any] | None = None, mask: tuple[str, ...] = (), compare: str = "",
              stream: bool = False, redirects: bool = True, timeout: float = 10) -> requests.Response:
         """One HTTP request → one step. filt re-shapes a JSON body (keep only
         this chapter's rows of a shared list); mask blanks volatile keys."""
@@ -70,7 +74,7 @@ class Rec:
         return self.record(label, method, path, r, params=params, filt=filt, mask=mask, compare=compare, stream=stream)
 
     def record(self, label: str, method: str, path: str, r: requests.Response, *, params: dict | None = None,
-               filt: Callable[[Any], Any] | None = None, mask: tuple[str, ...] = (), compare: str = "exact",
+               filt: Callable[[Any], Any] | None = None, mask: tuple[str, ...] = (), compare: str = "",
                stream: bool = False) -> requests.Response:
         """A response made elsewhere (a call that had to run on a thread
         while the test played the agent) → one step."""
@@ -82,7 +86,7 @@ class Rec:
             "status": r.status_code,
             "headers": {k.lower(): v for k, v in r.headers.items() if k.lower() in _KEEP_HEADERS},
             "cookies": _cookie_shapes(r),
-            "body": body, "mask": list(mask), "compare": compare,
+            "body": body, "mask": list(mask), "compare": compare or compare_mode(path),
         })
         return r
 
@@ -135,6 +139,14 @@ class Rec:
             raise AssertionError(f"golden {self.chapter}: {len(problems)} difference(s)\n\n" + "\n\n".join(problems[:15]))
 
 
+def compare_mode(path: str) -> str:
+    """additive for what only main's web UI reads (/admin/v1, /store/v1 but
+    the operator, agent, store-config and tablet routes); exact otherwise."""
+    if path.startswith(("/store/v1/operator/", "/store/v1/agent", "/store/v1/store-config", "/store/v1/tablet/")):
+        return "exact"
+    return "additive" if path.startswith(("/admin/v1/", "/store/v1/")) else "exact"
+
+
 def compare(want: list[dict], got: list[dict]) -> list[str]:
     problems: list[str] = []
     gl = {(i, s["label"]): s for i, s in enumerate(got)}
@@ -152,10 +164,49 @@ def compare(want: list[dict], got: list[dict]) -> list[str]:
             missing = set(json.loads(w["body"])) - set(json.loads(g["body"]))
             if missing:
                 problems.append(f"{where}: missing {sorted(missing)}")
+        elif w.get("compare") == "additive" and w["body"] != g["body"]:
+            # Read only by main's own web UI (it ships with main): every field
+            # the reference had must be there unchanged; new fields are fine.
+            try:
+                lost = _lost(_loads(w["body"]), _loads(g["body"]), "")
+            except ValueError:
+                lost = ["(not JSON) body changed"]
+            if lost:
+                problems.append(f"{where}: fields changed or gone\n  " + "\n  ".join(lost[:20]))
         elif w["body"] != g["body"]:
             diff = difflib.unified_diff(_pretty(w["body"]), _pretty(g["body"]), "reference", "now", lineterm="", n=2)
             problems.append(f"{where}: body\n" + "\n".join(list(diff)[:40]))
     return problems
+
+
+_BARE = re.compile(r'(?<=[:\[,])(<[^<>"]+>)(?=[,}\]])')
+
+
+def _loads(body: str) -> Any:
+    """JSON with bare placeholders (<store_id> stood for a number) quoted."""
+    return json.loads(_BARE.sub(r'"\1"', body))
+
+
+def _lost(want: Any, got: Any, at: str) -> list[str]:
+    """What of want is missing or different in got (extra keys in got are fine)."""
+    if isinstance(want, dict):
+        if not isinstance(got, dict):
+            return [f"{at or '/'}: was an object"]
+        out: list[str] = []
+        for k, v in want.items():
+            if k not in got:
+                out.append(f"{at}/{k}: gone")
+            else:
+                out.extend(_lost(v, got[k], f"{at}/{k}"))
+        return out
+    if isinstance(want, list):
+        if not isinstance(got, list) or len(want) != len(got):
+            return [f"{at or '/'}: list of {len(want)} became {len(got) if isinstance(got, list) else type(got).__name__}"]
+        out = []
+        for i, (a, b) in enumerate(zip(want, got)):
+            out.extend(_lost(a, b, f"{at}/{i}"))
+        return out
+    return [] if want == got else [f"{at or '/'}: {json.dumps(want)} → {json.dumps(got)}"]
 
 
 def _dump(v: Any) -> str:
