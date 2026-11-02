@@ -21,6 +21,7 @@
   import Skeleton from '$lib/ui/Skeleton.svelte';
   import { orderBucket } from '$lib/ui/StatusBadge.svelte';
   import OrdersTable from '$lib/components/store/OrdersTable.svelte';
+  import StoreStatusCard from '$lib/components/store/StoreStatusCard.svelte';
   import { loadPiStatus, PI_NOT_LINKED, type PiLink } from '$lib/store/pi';
 
   // Store overview: today's floor at a glance. The floor (status, kitchen #,
@@ -59,6 +60,8 @@
   title="Overview"
   subtitle={floor?.last_sync_at ? `Synced from the restaurant tablet ${timeAgo(floor.last_sync_at)} · refreshes every 15 s` : "The restaurant tablet hasn't synced yet"}
 />
+
+<StoreStatusCard />
 
 <div class="grid gap-3.5" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))">
   <StatTile {loading} label="Orders today" value={today.length} sub={today.length ? `${dollars(sales)} in sales` : 'none yet'} href="{base}/store/orders" />

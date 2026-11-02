@@ -659,3 +659,45 @@ export function durationSince(t: string | null | undefined): string {
   if (h < 48) return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
   return `${Math.floor(h / 24)} days`;
 }
+
+// --- store status (main 3.0) ------------------------------------------------
+export interface HoursRange { open: string; close: string; }
+export interface OrderingSettings {
+  pickup_enabled: boolean; delivery_enabled: boolean;
+  pickup_eta_minutes: number; delivery_eta_minutes: number; schedule_days: number;
+  paused_at: string | null; paused_until: string | null; pause_note: string;
+}
+export interface HoursException { id: string; date: string; closed: boolean; hours: HoursRange[]; note: string; }
+/** GET /me/status — what every channel sees. */
+export interface StoreStatus {
+  store: { name: string; timezone: string; phone: string; address_line1: string; address_line2: string };
+  state: 'open' | 'paused' | 'closed';
+  accepting: boolean; open_now: boolean; hours_set: boolean;
+  pause: { since: string; until: string | null; note: string } | null;
+  next_open_at: string | null; closes_at: string | null;
+  today: { date: string; closed: boolean; hours: HoursRange[]; note: string };
+  order_types: { pickup: { enabled: boolean; eta_minutes: number }; delivery: { enabled: boolean; eta_minutes: number; radius_m?: number } };
+  scheduling: { days_ahead: number; slot_minutes: number };
+  sold_out: { item_id: string; name: string; until: string | null }[];
+  menu_version: number;
+}
+export const PAUSE_PRESETS = [
+  { value: '15m', label: '15 min' },
+  { value: '30m', label: '30 min' },
+  { value: '60m', label: '1 hour' },
+  { value: 'today', label: 'Rest of today' },
+  { value: 'indefinite', label: 'Until I resume' }
+];
+/** "7:30 PM" today, else "Tue 7:30 PM", in the store's zone. */
+export function storeTime(iso: string | null | undefined, tz: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const opts: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit', timeZone: tz || undefined };
+  const sameDay = new Date().toLocaleDateString('en-US', { timeZone: tz || undefined }) === d.toLocaleDateString('en-US', { timeZone: tz || undefined });
+  if (!sameDay) opts.weekday = 'short';
+  try {
+    return d.toLocaleTimeString('en-US', opts);
+  } catch {
+    return d.toLocaleTimeString();
+  }
+}

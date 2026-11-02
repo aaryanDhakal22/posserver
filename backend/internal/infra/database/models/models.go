@@ -562,6 +562,32 @@ type StatusEvent struct {
 	Reason     string             `json:"reason"`
 }
 
+type StoreHoursException struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Day        pgtype.Date        `json:"day"`
+	Closed     bool               `json:"closed"`
+	Hours      []byte             `json:"hours"`
+	Note       string             `json:"note"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type StoreOrdering struct {
+	LocationID         pgtype.UUID        `json:"location_id"`
+	TenantID           pgtype.UUID        `json:"tenant_id"`
+	PickupEnabled      bool               `json:"pickup_enabled"`
+	DeliveryEnabled    bool               `json:"delivery_enabled"`
+	PickupEtaMinutes   int32              `json:"pickup_eta_minutes"`
+	DeliveryEtaMinutes int32              `json:"delivery_eta_minutes"`
+	ScheduleDays       int32              `json:"schedule_days"`
+	PausedAt           pgtype.Timestamptz `json:"paused_at"`
+	PausedUntil        pgtype.Timestamptz `json:"paused_until"`
+	PauseNote          string             `json:"pause_note"`
+	RestockedAt        pgtype.Timestamptz `json:"restocked_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
 type TabletReportToken struct {
 	ID         pgtype.UUID        `json:"id"`
 	TenantID   pgtype.UUID        `json:"tenant_id"`

@@ -129,6 +129,171 @@
         }
       }
     },
+    "/channel/v1/store": {
+      "get": {
+        "operationId": "getStore",
+        "summary": "The store's status: open, paused or closed, order types and ready-time estimates, today's hours, sold-out items",
+        "description": "accepting = ASAP orders are taken now. When it is false, next_open_at says when they are again (null = unknown: paused until the store unpauses, or open with every order type off). Brygid-style vendor orders are not affected by a pause.",
+        "responses": {
+          "200": {
+            "description": "The status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          }
+        }
+      }
+    },
+    "/channel/v1/store/times": {
+      "get": {
+        "operationId": "getStoreTimes",
+        "summary": "Times an order can be promised for on a date",
+        "description": "Every 15 minutes: the kitchen needs the type's ETA after the later of opening, now and the pause's end, and the time must fall before closing. Empty while paused until further notice. The date is the store's local date, today up to scheduling.days_ahead.",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "pickup",
+                "delivery"
+              ]
+            }
+          },
+          {
+            "name": "date",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The times",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StoreTimes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad type or a date outside the window",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "409": {
+            "description": "That order type is off (type_off) or the store takes ASAP orders only (asap_only)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channel/v1/store/delivery-check": {
+      "post": {
+        "operationId": "checkDelivery",
+        "summary": "Does the store deliver to this address?",
+        "description": "Straight-line distance from the store vs its delivery radius (the rule the store's tablet uses). result: inside (deliverable), outside, check (several places match — show candidates and check the picked one), not_found, no_store_location, delivery_off. The address is not stored or logged. 30 checks a minute per channel.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "line1"
+                ],
+                "properties": {
+                  "line1": {
+                    "type": "string"
+                  },
+                  "city": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "zip": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeliveryCheck"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "No street line, or neither zip nor city",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "429": {
+            "description": "Too many checks (Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "The address lookup is down; try again (try_again)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/channel/v1/openapi.json": {
       "get": {
         "operationId": "getSpec",
@@ -676,6 +841,350 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/MenuCategory"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "HoursRange": {
+        "type": "object",
+        "required": [
+          "open",
+          "close"
+        ],
+        "properties": {
+          "open": {
+            "type": "string",
+            "description": "HH:MM"
+          },
+          "close": {
+            "type": "string",
+            "description": "HH:MM; at or before open = past midnight"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OrderType": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "eta_minutes"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "eta_minutes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "radius_m": {
+            "type": "integer",
+            "description": "Delivery radius, delivery only"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StoreStatus": {
+        "type": "object",
+        "required": [
+          "store",
+          "state",
+          "accepting",
+          "open_now",
+          "hours_set",
+          "pause",
+          "next_open_at",
+          "closes_at",
+          "today",
+          "order_types",
+          "scheduling",
+          "sold_out",
+          "menu_version"
+        ],
+        "properties": {
+          "store": {
+            "type": "object",
+            "required": [
+              "name",
+              "timezone",
+              "phone",
+              "address_line1",
+              "address_line2"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "phone": {
+                "type": "string"
+              },
+              "address_line1": {
+                "type": "string"
+              },
+              "address_line2": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "state": {
+            "enum": [
+              "open",
+              "paused",
+              "closed"
+            ]
+          },
+          "accepting": {
+            "type": "boolean",
+            "description": "ASAP orders are taken now"
+          },
+          "open_now": {
+            "type": "boolean",
+            "description": "Inside the opening hours (pause aside)"
+          },
+          "hours_set": {
+            "type": "boolean",
+            "description": "false = no hours set: always open"
+          },
+          "pause": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "since",
+                  "until",
+                  "note"
+                ],
+                "properties": {
+                  "since": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "until": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "format": "date-time"
+                  },
+                  "note": {
+                    "type": "string",
+                    "description": "For customers; may be empty"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "next_open_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "closes_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "today": {
+            "type": "object",
+            "required": [
+              "date",
+              "closed",
+              "hours",
+              "note"
+            ],
+            "properties": {
+              "date": {
+                "type": "string",
+                "format": "date"
+              },
+              "closed": {
+                "type": "boolean"
+              },
+              "hours": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/HoursRange"
+                }
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "order_types": {
+            "type": "object",
+            "required": [
+              "pickup",
+              "delivery"
+            ],
+            "properties": {
+              "pickup": {
+                "$ref": "#/components/schemas/OrderType"
+              },
+              "delivery": {
+                "$ref": "#/components/schemas/OrderType"
+              }
+            },
+            "additionalProperties": false
+          },
+          "scheduling": {
+            "type": "object",
+            "required": [
+              "days_ahead",
+              "slot_minutes"
+            ],
+            "properties": {
+              "days_ahead": {
+                "type": "integer",
+                "description": "0 = ASAP orders only"
+              },
+              "slot_minutes": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          },
+          "sold_out": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "item_id",
+                "name",
+                "until"
+              ],
+              "properties": {
+                "item_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "until": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "menu_version": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false
+      },
+      "StoreTimes": {
+        "type": "object",
+        "required": [
+          "type",
+          "date",
+          "slot_minutes",
+          "times"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "pickup",
+              "delivery"
+            ]
+          },
+          "date": {
+            "type": "string",
+            "format": "date"
+          },
+          "slot_minutes": {
+            "type": "integer"
+          },
+          "times": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "DeliveryCheck": {
+        "type": "object",
+        "required": [
+          "deliverable",
+          "result",
+          "distance_m",
+          "radius_m",
+          "candidates"
+        ],
+        "properties": {
+          "deliverable": {
+            "type": "boolean"
+          },
+          "result": {
+            "enum": [
+              "inside",
+              "outside",
+              "check",
+              "not_found",
+              "no_store_location",
+              "delivery_off"
+            ]
+          },
+          "distance_m": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "radius_m": {
+            "type": "integer"
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "label",
+                "line1",
+                "city",
+                "state",
+                "postal_code"
+              ],
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "line1": {
+                  "type": "string"
+                },
+                "city": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string"
+                },
+                "postal_code": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
             }
           }
         },

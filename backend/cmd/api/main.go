@@ -35,6 +35,7 @@ import (
 	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
+	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	tenancyDomain "quiccpos/main/internal/domain/tenancy"
 
@@ -297,6 +298,11 @@ func main() {
 	floorService.OnDeliveryRun(repositories.NewDeliveryRunStore(pool))
 	mainLogger.Info().Str("geo_providers", geoService.Providers().Name()).Msg("geo worker configured")
 	go geoService.Run(ctx)
+
+	// Store status (3.0): ordering settings, pause, hours exceptions, the
+	// delivery check, and 86'd items back at each location's reset hour.
+	storeStatusService := storestatusApp.NewService(repositories.NewStoreStatusRepository(pool), tenancyService, geoService, lgr)
+	go storeStatusService.RunRestock(ctx)
 	go geoService.BackfillStores(ctx)
 
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
@@ -354,6 +360,7 @@ func main() {
 		OperatorService: operatorService,
 		ChannelService:  channelService,
 		MenuViewService: menuViewService,
+		StoreStatus:     storeStatusService,
 		AgentSync:       agentSync,
 		Diag:            diagService,
 		Geo:             geoService,

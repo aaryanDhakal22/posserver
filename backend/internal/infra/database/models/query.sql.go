@@ -88,6 +88,32 @@ func (q *Queries) ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUI
 	return err
 }
 
+const clearStorePause = `-- name: ClearStorePause :one
+UPDATE store_ordering SET paused_at = NULL, paused_until = NULL, pause_note = '', updated_at = now()
+WHERE location_id = $1
+RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at
+`
+
+func (q *Queries) ClearStorePause(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error) {
+	row := q.db.QueryRow(ctx, clearStorePause, locationID)
+	var i StoreOrdering
+	err := row.Scan(
+		&i.LocationID,
+		&i.TenantID,
+		&i.PickupEnabled,
+		&i.DeliveryEnabled,
+		&i.PickupEtaMinutes,
+		&i.DeliveryEtaMinutes,
+		&i.ScheduleDays,
+		&i.PausedAt,
+		&i.PausedUntil,
+		&i.PauseNote,
+		&i.RestockedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const countItemsForGroup = `-- name: CountItemsForGroup :one
 SELECT count(*) FROM item_modifier_groups WHERE group_id = $1 AND tenant_id = $2
 `
@@ -1449,6 +1475,23 @@ func (q *Queries) DeletePrintersByLocation(ctx context.Context, locationID pgtyp
 	return err
 }
 
+const deleteStoreHoursException = `-- name: DeleteStoreHoursException :execrows
+DELETE FROM store_hours_exceptions WHERE id = $1 AND location_id = $2
+`
+
+type DeleteStoreHoursExceptionParams struct {
+	ID         pgtype.UUID `json:"id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+func (q *Queries) DeleteStoreHoursException(ctx context.Context, arg DeleteStoreHoursExceptionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteStoreHoursException, arg.ID, arg.LocationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteTenant = `-- name: DeleteTenant :exec
 DELETE FROM tenants WHERE id = $1
 `
@@ -1555,6 +1598,39 @@ ON CONFLICT (order_id) DO NOTHING
 // no order_geo row yet.
 func (q *Queries) EnqueueMissingOrderGeo(ctx context.Context, since pgtype.Timestamptz) (int64, error) {
 	result, err := q.db.Exec(ctx, enqueueMissingOrderGeo, since)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const ensureStoreOrdering = `-- name: EnsureStoreOrdering :exec
+
+INSERT INTO store_ordering (location_id, tenant_id, restocked_at) VALUES ($1, $2, now())
+ON CONFLICT (location_id) DO NOTHING
+`
+
+type EnsureStoreOrderingParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+}
+
+// ─── Store status (main 3.0 step 3) ─────────────────────────────────────────
+// restocked_at starts at now: 86'd items come back at the next reset hour,
+// never right when the row is first made.
+func (q *Queries) EnsureStoreOrdering(ctx context.Context, arg EnsureStoreOrderingParams) error {
+	_, err := q.db.Exec(ctx, ensureStoreOrdering, arg.LocationID, arg.TenantID)
+	return err
+}
+
+const expireOutUntil = `-- name: ExpireOutUntil :execrows
+UPDATE menu_items SET in_stock = true, out_until = NULL, updated_at = now()
+WHERE NOT in_stock AND out_until IS NOT NULL AND out_until <= now()
+`
+
+// An item 86'd until a time comes back at that time (any location).
+func (q *Queries) ExpireOutUntil(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, expireOutUntil)
 	if err != nil {
 		return 0, err
 	}
@@ -2824,6 +2900,30 @@ func (q *Queries) GetStatusEventsByOrderID(ctx context.Context, orderID pgtype.U
 		return nil, err
 	}
 	return items, nil
+}
+
+const getStoreOrdering = `-- name: GetStoreOrdering :one
+SELECT location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at FROM store_ordering WHERE location_id = $1
+`
+
+func (q *Queries) GetStoreOrdering(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error) {
+	row := q.db.QueryRow(ctx, getStoreOrdering, locationID)
+	var i StoreOrdering
+	err := row.Scan(
+		&i.LocationID,
+		&i.TenantID,
+		&i.PickupEnabled,
+		&i.DeliveryEnabled,
+		&i.PickupEtaMinutes,
+		&i.DeliveryEtaMinutes,
+		&i.ScheduleDays,
+		&i.PausedAt,
+		&i.PausedUntil,
+		&i.PauseNote,
+		&i.RestockedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getStoreSlugs = `-- name: GetStoreSlugs :one
@@ -5234,6 +5334,114 @@ func (q *Queries) ListRoutingByLocation(ctx context.Context, locationID pgtype.U
 	return items, nil
 }
 
+const listSoldOutItems = `-- name: ListSoldOutItems :many
+SELECT id, name, out_until FROM menu_items
+WHERE location_id = $1 AND NOT in_stock
+ORDER BY name
+`
+
+type ListSoldOutItemsRow struct {
+	ID       pgtype.UUID        `json:"id"`
+	Name     string             `json:"name"`
+	OutUntil pgtype.Timestamptz `json:"out_until"`
+}
+
+func (q *Queries) ListSoldOutItems(ctx context.Context, locationID pgtype.UUID) ([]ListSoldOutItemsRow, error) {
+	rows, err := q.db.Query(ctx, listSoldOutItems, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSoldOutItemsRow
+	for rows.Next() {
+		var i ListSoldOutItemsRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.OutUntil); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStoreHoursExceptions = `-- name: ListStoreHoursExceptions :many
+SELECT id, tenant_id, location_id, day, closed, hours, note, created_at FROM store_hours_exceptions WHERE location_id = $1 AND day >= $2 ORDER BY day
+`
+
+type ListStoreHoursExceptionsParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Day        pgtype.Date `json:"day"`
+}
+
+func (q *Queries) ListStoreHoursExceptions(ctx context.Context, arg ListStoreHoursExceptionsParams) ([]StoreHoursException, error) {
+	rows, err := q.db.Query(ctx, listStoreHoursExceptions, arg.LocationID, arg.Day)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []StoreHoursException
+	for rows.Next() {
+		var i StoreHoursException
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Day,
+			&i.Closed,
+			&i.Hours,
+			&i.Note,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStoreOrderingForRestock = `-- name: ListStoreOrderingForRestock :many
+SELECT o.location_id, o.restocked_at, l.timezone, l.daily_reset_hour
+FROM store_ordering o JOIN locations l ON l.id = o.location_id
+`
+
+type ListStoreOrderingForRestockRow struct {
+	LocationID     pgtype.UUID        `json:"location_id"`
+	RestockedAt    pgtype.Timestamptz `json:"restocked_at"`
+	Timezone       string             `json:"timezone"`
+	DailyResetHour int16              `json:"daily_reset_hour"`
+}
+
+// Every ordering row with what the restock loop needs to find its reset time.
+func (q *Queries) ListStoreOrderingForRestock(ctx context.Context) ([]ListStoreOrderingForRestockRow, error) {
+	rows, err := q.db.Query(ctx, listStoreOrderingForRestock)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStoreOrderingForRestockRow
+	for rows.Next() {
+		var i ListStoreOrderingForRestockRow
+		if err := rows.Scan(
+			&i.LocationID,
+			&i.RestockedAt,
+			&i.Timezone,
+			&i.DailyResetHour,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listTabletTokens = `-- name: ListTabletTokens :many
 SELECT k.id, k.tenant_id, k.location_id, k.tablet_id, k.tablet_name, k.key_prefix,
        k.created_at, k.last_used_at, k.revoked_at, l.name AS location_name
@@ -5793,6 +6001,34 @@ WHERE order_id = $1
 func (q *Queries) ResetOrderGeoForPin(ctx context.Context, orderID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, resetOrderGeoForPin, orderID)
 	return err
+}
+
+const restockItems = `-- name: RestockItems :execrows
+UPDATE menu_items SET in_stock = true, out_until = NULL, updated_at = now()
+WHERE location_id = $1 AND NOT in_stock AND (out_until IS NULL OR out_until <= now())
+`
+
+// The daily restock: every 86'd item of the location without a later
+// out_until comes back.
+func (q *Queries) RestockItems(ctx context.Context, locationID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, restockItems, locationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const restockOptions = `-- name: RestockOptions :execrows
+UPDATE modifier_options SET in_stock = true, updated_at = now()
+WHERE location_id = $1 AND NOT in_stock
+`
+
+func (q *Queries) RestockOptions(ctx context.Context, locationID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, restockOptions, locationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const revokeAllOperatorTokens = `-- name: RevokeAllOperatorTokens :exec
@@ -6822,6 +7058,58 @@ func (q *Queries) SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptPa
 	return i, err
 }
 
+const setStorePause = `-- name: SetStorePause :one
+UPDATE store_ordering SET paused_at = $2, paused_until = $3, pause_note = $4, updated_at = now()
+WHERE location_id = $1
+RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at
+`
+
+type SetStorePauseParams struct {
+	LocationID  pgtype.UUID        `json:"location_id"`
+	PausedAt    pgtype.Timestamptz `json:"paused_at"`
+	PausedUntil pgtype.Timestamptz `json:"paused_until"`
+	PauseNote   string             `json:"pause_note"`
+}
+
+func (q *Queries) SetStorePause(ctx context.Context, arg SetStorePauseParams) (StoreOrdering, error) {
+	row := q.db.QueryRow(ctx, setStorePause,
+		arg.LocationID,
+		arg.PausedAt,
+		arg.PausedUntil,
+		arg.PauseNote,
+	)
+	var i StoreOrdering
+	err := row.Scan(
+		&i.LocationID,
+		&i.TenantID,
+		&i.PickupEnabled,
+		&i.DeliveryEnabled,
+		&i.PickupEtaMinutes,
+		&i.DeliveryEtaMinutes,
+		&i.ScheduleDays,
+		&i.PausedAt,
+		&i.PausedUntil,
+		&i.PauseNote,
+		&i.RestockedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setStoreRestocked = `-- name: SetStoreRestocked :exec
+UPDATE store_ordering SET restocked_at = $2 WHERE location_id = $1
+`
+
+type SetStoreRestockedParams struct {
+	LocationID  pgtype.UUID        `json:"location_id"`
+	RestockedAt pgtype.Timestamptz `json:"restocked_at"`
+}
+
+func (q *Queries) SetStoreRestocked(ctx context.Context, arg SetStoreRestockedParams) error {
+	_, err := q.db.Exec(ctx, setStoreRestocked, arg.LocationID, arg.RestockedAt)
+	return err
+}
+
 const setTenantCredentials = `-- name: SetTenantCredentials :exec
 UPDATE tenants SET username = $2, password_hash = $3 WHERE id = $1
 `
@@ -7448,6 +7736,49 @@ func (q *Queries) UpdatePrinter(ctx context.Context, arg UpdatePrinterParams) (P
 	return i, err
 }
 
+const updateStoreOrdering = `-- name: UpdateStoreOrdering :one
+UPDATE store_ordering SET pickup_enabled = $2, delivery_enabled = $3, pickup_eta_minutes = $4,
+       delivery_eta_minutes = $5, schedule_days = $6, updated_at = now()
+WHERE location_id = $1
+RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at
+`
+
+type UpdateStoreOrderingParams struct {
+	LocationID         pgtype.UUID `json:"location_id"`
+	PickupEnabled      bool        `json:"pickup_enabled"`
+	DeliveryEnabled    bool        `json:"delivery_enabled"`
+	PickupEtaMinutes   int32       `json:"pickup_eta_minutes"`
+	DeliveryEtaMinutes int32       `json:"delivery_eta_minutes"`
+	ScheduleDays       int32       `json:"schedule_days"`
+}
+
+func (q *Queries) UpdateStoreOrdering(ctx context.Context, arg UpdateStoreOrderingParams) (StoreOrdering, error) {
+	row := q.db.QueryRow(ctx, updateStoreOrdering,
+		arg.LocationID,
+		arg.PickupEnabled,
+		arg.DeliveryEnabled,
+		arg.PickupEtaMinutes,
+		arg.DeliveryEtaMinutes,
+		arg.ScheduleDays,
+	)
+	var i StoreOrdering
+	err := row.Scan(
+		&i.LocationID,
+		&i.TenantID,
+		&i.PickupEnabled,
+		&i.DeliveryEnabled,
+		&i.PickupEtaMinutes,
+		&i.DeliveryEtaMinutes,
+		&i.ScheduleDays,
+		&i.PausedAt,
+		&i.PausedUntil,
+		&i.PauseNote,
+		&i.RestockedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateTenantConfig = `-- name: UpdateTenantConfig :one
 UPDATE tenants SET config = $2 WHERE id = $1
 RETURNING id, slug, name, config, username, password_hash, created_at, store_id
@@ -7737,6 +8068,45 @@ type UpsertGeoCachePinnedParams struct {
 func (q *Queries) UpsertGeoCachePinned(ctx context.Context, arg UpsertGeoCachePinnedParams) error {
 	_, err := q.db.Exec(ctx, upsertGeoCachePinned, arg.AddressKey, arg.Lat, arg.Lng)
 	return err
+}
+
+const upsertStoreHoursException = `-- name: UpsertStoreHoursException :one
+INSERT INTO store_hours_exceptions (tenant_id, location_id, day, closed, hours, note)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (location_id, day) DO UPDATE SET closed = EXCLUDED.closed, hours = EXCLUDED.hours, note = EXCLUDED.note
+RETURNING id, tenant_id, location_id, day, closed, hours, note, created_at
+`
+
+type UpsertStoreHoursExceptionParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	Day        pgtype.Date `json:"day"`
+	Closed     bool        `json:"closed"`
+	Hours      []byte      `json:"hours"`
+	Note       string      `json:"note"`
+}
+
+func (q *Queries) UpsertStoreHoursException(ctx context.Context, arg UpsertStoreHoursExceptionParams) (StoreHoursException, error) {
+	row := q.db.QueryRow(ctx, upsertStoreHoursException,
+		arg.TenantID,
+		arg.LocationID,
+		arg.Day,
+		arg.Closed,
+		arg.Hours,
+		arg.Note,
+	)
+	var i StoreHoursException
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Day,
+		&i.Closed,
+		&i.Hours,
+		&i.Note,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const wakeLocationExternalStops = `-- name: WakeLocationExternalStops :execrows

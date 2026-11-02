@@ -31,9 +31,9 @@
     </button>
   </div>
   <p class="help !mt-0">
-    If the Pi goes offline for 2 minutes while you're open, the owner gets a Pushover. A close time earlier than the open time
-    runs past midnight.
-    {#if !anyHours(hours)}<b class="text-warn">No hours set — the offline alert is off.</b>{/if}
+    The website, call center and counter take orders inside these hours, and if the Pi goes offline for 2 minutes while you're
+    open, the owner gets a Pushover. A close time earlier than the open time runs past midnight.
+    {#if !anyHours(hours)}<b class="text-warn">No hours set — channels take orders around the clock and the offline alert is off.</b>{/if}
   </p>
   <div class="flex flex-col gap-2" role="group" aria-labelledby="{idPrefix}-lbl">
     {#each DAYS as [d, , long]}

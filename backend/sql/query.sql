@@ -1487,3 +1487,70 @@ ON CONFLICT (view_id) DO UPDATE SET menu_version = EXCLUDED.menu_version, build 
 -- name: SetChannelView :one
 UPDATE channels SET view_id = $2, updated_at = now() WHERE id = $1
 RETURNING *;
+
+-- ─── Store status (main 3.0 step 3) ─────────────────────────────────────────
+
+-- name: EnsureStoreOrdering :exec
+-- restocked_at starts at now: 86'd items come back at the next reset hour,
+-- never right when the row is first made.
+INSERT INTO store_ordering (location_id, tenant_id, restocked_at) VALUES ($1, $2, now())
+ON CONFLICT (location_id) DO NOTHING;
+
+-- name: GetStoreOrdering :one
+SELECT * FROM store_ordering WHERE location_id = $1;
+
+-- name: UpdateStoreOrdering :one
+UPDATE store_ordering SET pickup_enabled = $2, delivery_enabled = $3, pickup_eta_minutes = $4,
+       delivery_eta_minutes = $5, schedule_days = $6, updated_at = now()
+WHERE location_id = $1
+RETURNING *;
+
+-- name: SetStorePause :one
+UPDATE store_ordering SET paused_at = $2, paused_until = $3, pause_note = $4, updated_at = now()
+WHERE location_id = $1
+RETURNING *;
+
+-- name: ClearStorePause :one
+UPDATE store_ordering SET paused_at = NULL, paused_until = NULL, pause_note = '', updated_at = now()
+WHERE location_id = $1
+RETURNING *;
+
+-- name: ListStoreOrderingForRestock :many
+-- Every ordering row with what the restock loop needs to find its reset time.
+SELECT o.location_id, o.restocked_at, l.timezone, l.daily_reset_hour
+FROM store_ordering o JOIN locations l ON l.id = o.location_id;
+
+-- name: SetStoreRestocked :exec
+UPDATE store_ordering SET restocked_at = $2 WHERE location_id = $1;
+
+-- name: RestockItems :execrows
+-- The daily restock: every 86'd item of the location without a later
+-- out_until comes back.
+UPDATE menu_items SET in_stock = true, out_until = NULL, updated_at = now()
+WHERE location_id = $1 AND NOT in_stock AND (out_until IS NULL OR out_until <= now());
+
+-- name: RestockOptions :execrows
+UPDATE modifier_options SET in_stock = true, updated_at = now()
+WHERE location_id = $1 AND NOT in_stock;
+
+-- name: ExpireOutUntil :execrows
+-- An item 86'd until a time comes back at that time (any location).
+UPDATE menu_items SET in_stock = true, out_until = NULL, updated_at = now()
+WHERE NOT in_stock AND out_until IS NOT NULL AND out_until <= now();
+
+-- name: ListSoldOutItems :many
+SELECT id, name, out_until FROM menu_items
+WHERE location_id = $1 AND NOT in_stock
+ORDER BY name;
+
+-- name: ListStoreHoursExceptions :many
+SELECT * FROM store_hours_exceptions WHERE location_id = $1 AND day >= $2 ORDER BY day;
+
+-- name: UpsertStoreHoursException :one
+INSERT INTO store_hours_exceptions (tenant_id, location_id, day, closed, hours, note)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (location_id, day) DO UPDATE SET closed = EXCLUDED.closed, hours = EXCLUDED.hours, note = EXCLUDED.note
+RETURNING *;
+
+-- name: DeleteStoreHoursException :execrows
+DELETE FROM store_hours_exceptions WHERE id = $1 AND location_id = $2;

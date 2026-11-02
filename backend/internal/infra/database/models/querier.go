@@ -16,6 +16,7 @@ type Querier interface {
 	AuthenticateChannel(ctx context.Context, keyHash pgtype.Text) (Channel, error)
 	// Unflag the location's current receipt printer (one per location).
 	ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error
+	ClearStorePause(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error)
 	CountItemsForGroup(ctx context.Context, arg CountItemsForGroupParams) (int64, error)
 	// outbox.events.pending per store: one row per tenant (0 when drained), so a
 	// store's series never goes stale while it exists.
@@ -100,6 +101,7 @@ type Querier interface {
 	DeletePrinter(ctx context.Context, id pgtype.UUID) error
 	// Used by the store-config editor's replace-all reconciliation.
 	DeletePrintersByLocation(ctx context.Context, locationID pgtype.UUID) error
+	DeleteStoreHoursException(ctx context.Context, arg DeleteStoreHoursExceptionParams) (int64, error)
 	DeleteTenant(ctx context.Context, id pgtype.UUID) error
 	DeleteTenantDevices(ctx context.Context, tenantID pgtype.UUID) error
 	DeleteTenantLocations(ctx context.Context, tenantID pgtype.UUID) error
@@ -112,6 +114,12 @@ type Querier interface {
 	// Safety net for the after-ingest enqueue: recent delivery orders that have
 	// no order_geo row yet.
 	EnqueueMissingOrderGeo(ctx context.Context, since pgtype.Timestamptz) (int64, error)
+	// ─── Store status (main 3.0 step 3) ─────────────────────────────────────────
+	// restocked_at starts at now: 86'd items come back at the next reset hour,
+	// never right when the row is first made.
+	EnsureStoreOrdering(ctx context.Context, arg EnsureStoreOrderingParams) error
+	// An item 86'd until a time comes back at that time (any location).
+	ExpireOutUntil(ctx context.Context) (int64, error)
 	// The page links carry only the first 8 hex chars of a report id.
 	FindDiagReportIDsByPrefix(ctx context.Context, prefix string) ([]pgtype.UUID, error)
 	FirstMenuViewOfKind(ctx context.Context, arg FirstMenuViewOfKindParams) (MenuView, error)
@@ -162,6 +170,7 @@ type Querier interface {
 	GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error)
 	GetPrinterByID(ctx context.Context, id pgtype.UUID) (Printer, error)
 	GetStatusEventsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]StatusEvent, error)
+	GetStoreOrdering(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error)
 	// Metric labels (observability.StoreLabels): tenant + location slug by a
 	// tenant id or a location id (pass uuid.Nil for the other one).
 	GetStoreSlugs(ctx context.Context, arg GetStoreSlugsParams) (GetStoreSlugsRow, error)
@@ -250,6 +259,10 @@ type Querier interface {
 	// best candidate first — available menus/categories first, then menu,
 	// category and item position. The router keeps the first row per name.
 	ListRoutingByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListRoutingByLocationRow, error)
+	ListSoldOutItems(ctx context.Context, locationID pgtype.UUID) ([]ListSoldOutItemsRow, error)
+	ListStoreHoursExceptions(ctx context.Context, arg ListStoreHoursExceptionsParams) ([]StoreHoursException, error)
+	// Every ordering row with what the restock loop needs to find its reset time.
+	ListStoreOrderingForRestock(ctx context.Context) ([]ListStoreOrderingForRestockRow, error)
 	ListTabletTokens(ctx context.Context, locationID pgtype.UUID) ([]ListTabletTokensRow, error)
 	ListTenants(ctx context.Context) ([]Tenant, error)
 	// Orders the agent hasn't confirmed: re-sent until it does.
@@ -289,6 +302,10 @@ type Querier interface {
 	// already saved; re-work the order and push it with the confirmed address.
 	ResetOrderGeoForChoice(ctx context.Context, arg ResetOrderGeoForChoiceParams) error
 	ResetOrderGeoForPin(ctx context.Context, orderID pgtype.UUID) error
+	// The daily restock: every 86'd item of the location without a later
+	// out_until comes back.
+	RestockItems(ctx context.Context, locationID pgtype.UUID) (int64, error)
+	RestockOptions(ctx context.Context, locationID pgtype.UUID) (int64, error)
 	RevokeAllOperatorTokens(ctx context.Context, operatorID pgtype.UUID) error
 	RevokeChannel(ctx context.Context, id pgtype.UUID) (Channel, error)
 	RevokeDevice(ctx context.Context, id pgtype.UUID) error
@@ -355,6 +372,8 @@ type Querier interface {
 	SetOrderGeoOutsideArea(ctx context.Context, arg SetOrderGeoOutsideAreaParams) (int64, error)
 	SetPrinterMAC(ctx context.Context, arg SetPrinterMACParams) error
 	SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptParams) (Printer, error)
+	SetStorePause(ctx context.Context, arg SetStorePauseParams) (StoreOrdering, error)
+	SetStoreRestocked(ctx context.Context, arg SetStoreRestockedParams) error
 	// Set/rotate a tenant's store-manager login (username + already-hashed password).
 	SetTenantCredentials(ctx context.Context, arg SetTenantCredentialsParams) error
 	// Set/clear (NULL) a tenant's vendor store_id. Unique when present.
@@ -383,6 +402,7 @@ type Querier interface {
 	// Applies an agent floor update (status + mirrored floor fields).
 	UpdateOrderFloor(ctx context.Context, arg UpdateOrderFloorParams) error
 	UpdatePrinter(ctx context.Context, arg UpdatePrinterParams) (Printer, error)
+	UpdateStoreOrdering(ctx context.Context, arg UpdateStoreOrderingParams) (StoreOrdering, error)
 	UpdateTenantConfig(ctx context.Context, arg UpdateTenantConfigParams) (Tenant, error)
 	UpsertAgentHealth(ctx context.Context, arg UpsertAgentHealthParams) error
 	UpsertAgentState(ctx context.Context, arg UpsertAgentStateParams) error
@@ -407,6 +427,7 @@ type Querier interface {
 	// A geocode result. A pinned entry is never overwritten by a geocode.
 	UpsertGeoCacheGeocoded(ctx context.Context, arg UpsertGeoCacheGeocodedParams) error
 	UpsertGeoCachePinned(ctx context.Context, arg UpsertGeoCachePinnedParams) error
+	UpsertStoreHoursException(ctx context.Context, arg UpsertStoreHoursExceptionParams) (StoreHoursException, error)
 	WakeLocationExternalStops(ctx context.Context, arg WakeLocationExternalStopsParams) (int64, error)
 	// The location's agent (re)connected: push everything it has not acked now.
 	WakeLocationOrderGeo(ctx context.Context, arg WakeLocationOrderGeoParams) (int64, error)

@@ -32,6 +32,7 @@ import (
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
 	"quiccpos/main/internal/app/printerstatus"
+	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
@@ -92,6 +93,8 @@ type RouterDeps struct {
 	MenuService *menuApp.Service
 	// OperatorService backs the operator accounts + read-only menu API.
 	OperatorService *operatorApp.Service
+	// StoreStatus backs a store's ordering status (main 3.0).
+	StoreStatus *storestatusApp.Service
 	// MenuViewService backs the menu bank + views (main 3.0).
 	MenuViewService *menuviewApp.Service
 	// ChannelService backs sales channels and the /channel/v1 key (main 3.0).
@@ -174,6 +177,7 @@ func routeTable(d RouterDeps) []routeDef {
 	operatorH := handler.NewOperatorHandler(d.OperatorService, d.MenuService, d.Meters, d.Logger)
 	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
 	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
+	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
 	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
@@ -234,6 +238,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", adminPrefix+"/geo", "admin", "Active geocoding/routing providers", geoH.AdminStatus, admin),
 		def("POST", adminPrefix+"/geo/test-providers", "admin", "DEV ONLY: point the geo providers at a test fake {census_url, nominatim_url, osrm_url}", geoH.DevSetProviders, admin),
 		def("DELETE", adminPrefix+"/geo/test-providers", "admin", "DEV ONLY: restore the env geo providers", geoH.DevResetProviders, admin),
+		def("POST", adminPrefix+"/store-status/restock", "admin", "DEV ONLY: bring a location's 86'd items back now {location_id}", statusH.DevRestock, admin),
 		def("POST", adminPrefix+"/devices", "admin", "Mint an agent device (cleartext key once)", adminH.MintAgentDevice, admin),
 		def("GET", adminPrefix+"/devices", "admin", "List all devices", adminH.ListDevices, admin),
 		def("POST", adminPrefix+"/devices/:id/revoke", "admin", "Revoke a device (tombstone)", adminH.RevokeDevice, admin),
@@ -351,6 +356,14 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/me/menu/modifier-groups/:id/options/reorder", "store-session", "Reorder options", menuH.MeReorderOptions, storeSession),
 		def("PATCH", storePrefix+"/me/menu/modifier-groups/:id/options/:optId", "store-session", "Edit an option", menuH.MeUpdateOption, storeSession),
 		def("DELETE", storePrefix+"/me/menu/modifier-groups/:id/options/:optId", "store-session", "Delete an option", menuH.MeDeleteOption, storeSession),
+		// Store status (main 3.0).
+		def("GET", storePrefix+"/me/status", "store-session", "The store status channels see (open/paused/closed, types, sold out)", statusH.MeStatus, storeSession),
+		def("GET", storePrefix+"/me/ordering", "store-session", "Ordering settings (types, ETAs, scheduling, pause) + hours exceptions", statusH.MeOrdering, storeSession),
+		def("PUT", storePrefix+"/me/ordering", "store-session", "Set order types, ETAs and scheduling days", statusH.MeUpdateOrdering, storeSession),
+		def("POST", storePrefix+"/me/pause", "store-session", "Pause orders {preset: 15m|30m|60m|today|indefinite, note}", statusH.MePause, storeSession),
+		def("DELETE", storePrefix+"/me/pause", "store-session", "Take orders again", statusH.MeResume, storeSession),
+		def("POST", storePrefix+"/me/hours-exceptions", "store-session", "Set a date closed or its own hours {date, closed, hours, note}", statusH.MeSetException, storeSession),
+		def("DELETE", storePrefix+"/me/hours-exceptions/:id", "store-session", "Remove a date exception", statusH.MeDeleteException, storeSession),
 		// The menu bank + views (main 3.0).
 		def("GET", storePrefix+"/me/menu/bank", "store-session", "The whole menu bank (sizes, items with sizes + groups, options with prices)", viewH.MeBank, storeSession),
 		def("GET", storePrefix+"/me/menu/sizes", "store-session", "List the store's sizes", viewH.MeListSizes, storeSession),
@@ -382,6 +395,9 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", channelPrefix+"/openapi.json", "none", "The channel API's OpenAPI document", channelH.Spec),
 		def("GET", channelPrefix+"/me", "channel", "The channel behind the key and its store", channelH.Me, channelAuth),
 		def("GET", channelPrefix+"/menu", "channel", "The channel's menu (ETag = menu version)", viewH.ChannelMenu, channelAuth),
+		def("GET", channelPrefix+"/store", "channel", "The store's status: open/paused/closed, order types + ETAs, sold out", statusH.ChannelStore, channelAuth),
+		def("GET", channelPrefix+"/store/times", "channel", "Times an order can be promised for (?type=pickup|delivery&date=YYYY-MM-DD)", statusH.ChannelTimes, channelAuth),
+		def("POST", channelPrefix+"/store/delivery-check", "channel", "Does the store deliver to this address {line1, city, state, zip}", statusH.ChannelDeliveryCheck, channelAuth),
 		def("GET", channelPrefix+"/menu/version", "channel", "The menu version (?since=N → changed)", viewH.ChannelMenuVersion, channelAuth),
 
 		def("GET", storeUIPath, "none", "Redirect → /app/store", redirectTo("/app/store")),
