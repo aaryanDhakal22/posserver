@@ -14,12 +14,20 @@ import (
 // Build is a view compiled against the bank at one menu version: what a
 // channel of the view's kind shows (web / operator / counter) or how a
 // vendor's names map to the bank (vendor).
+// BuildFormat is the shape of a Build; a cached build of another format is
+// compiled again (2: modifier groups listed once, items refer to them).
+const BuildFormat = 2
+
 type Build struct {
-	View           BuildView        `json:"view"`
-	Version        int64            `json:"version"`
-	Currency       string           `json:"currency"`
-	Sizes          []BuildSize      `json:"sizes"`
-	Categories     []BuildCategory  `json:"categories"`
+	Format     int             `json:"build_format"`
+	View       BuildView       `json:"view"`
+	Version    int64           `json:"version"`
+	Currency   string          `json:"currency"`
+	Sizes      []BuildSize     `json:"sizes"`
+	Categories []BuildCategory `json:"categories"`
+	// ModifierGroups are the groups the shown items use, each once, in the
+	// order first used (items refer to them by id).
+	ModifierGroups []BuildGroup     `json:"modifier_groups"`
 	Maps           []BuildMap       `json:"maps,omitempty"`
 	NeedsAttention []NeedsAttention `json:"needs_attention"`
 }
@@ -47,17 +55,19 @@ type BuildCategory struct {
 // item the view shows as is (or changed by an item entry), the entry's id for
 // a merge or an augment; Anchor says which bank items it is.
 type BuildItem struct {
-	ID             string          `json:"id"`
-	Name           string          `json:"name"`
-	Description    string          `json:"description"`
-	Photo          string          `json:"photo"`
-	Anchor         Anchor          `json:"anchor"`
-	PriceCents     int64           `json:"price_cents"`
-	Sizes          []BuildItemSize `json:"sizes"`
-	SoldOut        bool            `json:"sold_out"`
-	ModifierGroups []BuildGroup    `json:"modifier_groups"`
-	Choices        []BuildChoice   `json:"choices,omitempty"`
-	position       int
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Photo       string          `json:"photo"`
+	Anchor      Anchor          `json:"anchor"`
+	PriceCents  int64           `json:"price_cents"`
+	Sizes       []BuildItemSize `json:"sizes"`
+	SoldOut     bool            `json:"sold_out"`
+	// ModifierGroupIDs are the item's groups, in order (Build.ModifierGroups
+	// holds each group once).
+	ModifierGroupIDs []uuid.UUID   `json:"modifier_group_ids"`
+	Choices          []BuildChoice `json:"choices,omitempty"`
+	position         int
 }
 
 type BuildItemSize struct {
@@ -125,11 +135,13 @@ type UnmatchedName struct {
 // vendor names recent orders carried that nothing matched.
 func Compile(bank *menu.Bank, v View, entries []Entry, unmatched []UnmatchedName) Build {
 	b := Build{
+		Format:         BuildFormat,
 		View:           BuildView{ID: v.ID, Kind: v.Kind, Name: v.Name},
 		Version:        bank.Version,
 		Currency:       "USD",
 		Sizes:          []BuildSize{},
 		Categories:     []BuildCategory{},
+		ModifierGroups: []BuildGroup{},
 		NeedsAttention: []NeedsAttention{},
 	}
 	for _, s := range bank.Sizes {
@@ -139,7 +151,8 @@ func Compile(bank *menu.Bank, v View, entries []Entry, unmatched []UnmatchedName
 		compileVendor(&b, bank, entries, unmatched)
 		return b
 	}
-	c := compiler{bank: bank, rules: v.Rules, build: &b, cats: map[string]*BuildCategory{}, catPos: map[uuid.UUID]int{}}
+	c := compiler{bank: bank, rules: v.Rules, build: &b, cats: map[string]*BuildCategory{}, catPos: map[uuid.UUID]int{},
+		groupSeen: map[uuid.UUID]bool{}, sellable: map[uuid.UUID]bool{}, viewHidden: map[uuid.UUID]bool{}, bankCats: map[string]bankCat{}}
 	c.run(entries)
 	return b
 }
@@ -152,7 +165,19 @@ type compiler struct {
 	order []string
 	// catPos is each shown bank category's place; a merge / augment that
 	// lands in one keeps it (absent = hidden or in a hidden menu).
-	catPos map[uuid.UUID]int
+	catPos    map[uuid.UUID]int
+	groupSeen map[uuid.UUID]bool
+	// sellable: the item's menu and category are on. viewHidden: the view
+	// hides it (its category by rule, or an item entry).
+	sellable, viewHidden map[uuid.UUID]bool
+	// bankCats: the shown bank categories by lowercased name, so an entry
+	// "moved" into one of them joins it instead of making a twin.
+	bankCats map[string]bankCat
+}
+
+type bankCat struct {
+	key, name string
+	pos       int
 }
 
 func (c *compiler) category(key, name string, pos int) *BuildCategory {
@@ -162,6 +187,16 @@ func (c *compiler) category(key, name string, pos int) *BuildCategory {
 	c.cats[key] = &BuildCategory{Key: key, Name: name, Position: pos, Items: []BuildItem{}}
 	c.order = append(c.order, key)
 	return c.cats[key]
+}
+
+// named is the category an entry moves its item into: the shown bank
+// category of that name, else a view category of its own at pos.
+func (c *compiler) named(name string, pos int) *BuildCategory {
+	name = strings.TrimSpace(name)
+	if b, ok := c.bankCats[strings.ToLower(name)]; ok {
+		return c.category(b.key, b.name, b.pos)
+	}
+	return c.category("c:"+name, name, pos)
 }
 
 func (c *compiler) attention(n NeedsAttention) {
@@ -196,8 +231,28 @@ func (c *compiler) run(entries []Entry) {
 		}
 	}
 
-	// Bank items, menu by menu, category by category.
+	// What can be sold, what the view hides, and the shown categories.
 	pos := 0
+	for _, m := range c.bank.Menus {
+		for _, cat := range m.Categories {
+			pos++
+			on := m.Available && cat.Available
+			for _, it := range cat.Items {
+				c.sellable[it.ID] = on
+				if e := byItem[it.ID]; hiddenCat[cat.ID] || e != nil && e.Hidden {
+					c.viewHidden[it.ID] = true
+				}
+			}
+			if k := strings.ToLower(strings.TrimSpace(cat.Name)); on && !hiddenCat[cat.ID] && k != "" {
+				if _, dup := c.bankCats[k]; !dup {
+					c.bankCats[k] = bankCat{key: cat.ID.String(), name: cat.Name, pos: pos}
+				}
+			}
+		}
+	}
+
+	// Bank items, menu by menu, category by category.
+	pos = 0
 	for _, m := range c.bank.Menus {
 		if !m.Available {
 			continue
@@ -219,7 +274,7 @@ func (c *compiler) run(entries []Entry) {
 				bi := c.item(it, e)
 				target := c.category(cat.ID.String(), cat.Name, pos)
 				if e != nil && strings.TrimSpace(e.Category) != "" {
-					target = c.category("c:"+strings.TrimSpace(e.Category), strings.TrimSpace(e.Category), pos)
+					target = c.named(e.Category, pos)
 				}
 				target.Items = append(target.Items, bi)
 			}
@@ -253,7 +308,7 @@ func (c *compiler) item(it menu.BankItem, e *Entry) BuildItem {
 	bi := BuildItem{
 		ID: it.ID.String(), Name: it.Name, Description: it.Description, Anchor: Anchor{ItemIDs: []uuid.UUID{it.ID}},
 		PriceCents: c.price(it.PriceCents), Sizes: c.sizes(it.Sizes, nil), SoldOut: !it.InStock,
-		ModifierGroups: c.groups(it.GroupIDs), position: it.Position,
+		ModifierGroupIDs: c.groups(it.GroupIDs), position: it.Position,
 	}
 	if e != nil {
 		if strings.TrimSpace(e.DisplayName) != "" {
@@ -285,7 +340,7 @@ func (c *compiler) merge(e *Entry) {
 	var first *menu.BankItem
 	var firstCat *menu.BankCategory
 	bi := BuildItem{ID: e.ID.String(), Name: strings.TrimSpace(e.DisplayName), Description: e.Description, Photo: e.Photo,
-		Anchor: Anchor{ItemIDs: e.Anchor.ItemIDs}, Sizes: []BuildItemSize{}, ModifierGroups: []BuildGroup{}, position: e.Position}
+		Anchor: Anchor{ItemIDs: e.Anchor.ItemIDs}, Sizes: []BuildItemSize{}, ModifierGroupIDs: []uuid.UUID{}, position: e.Position}
 	allOut := true
 	for _, id := range e.Anchor.ItemIDs {
 		it, cat, ok := c.bank.Item(id)
@@ -293,6 +348,9 @@ func (c *compiler) merge(e *Entry) {
 			c.attention(NeedsAttention{Code: "anchor_gone", EntryID: e.ID.String(), ItemID: id.String(), Name: e.DisplayName,
 				Message: "a bank item in this merge is gone"})
 			continue
+		}
+		if !c.sellable[id] || c.viewHidden[id] {
+			continue // its menu / category is off, or the view hides it
 		}
 		if first == nil {
 			first, firstCat = it, cat
@@ -318,7 +376,7 @@ func (c *compiler) merge(e *Entry) {
 		bi.PriceCents = *e.PriceOverrideCents
 	}
 	bi.Sizes = c.sizes(first.Sizes, nil)
-	bi.ModifierGroups = c.groups(first.GroupIDs)
+	bi.ModifierGroupIDs = c.groups(first.GroupIDs)
 	bi.SoldOut = allOut
 	c.place(bi, e, firstCat)
 }
@@ -338,6 +396,9 @@ func (c *compiler) augment(e *Entry) {
 				Message: "a bank item in this added item is gone"})
 			return
 		}
+		if !c.sellable[id] {
+			return // a deal with an item whose menu / category is off can't be sold
+		}
 		if firstCat == nil {
 			firstCat = cat
 		}
@@ -347,7 +408,7 @@ func (c *compiler) augment(e *Entry) {
 	}
 	bi := BuildItem{ID: e.ID.String(), Name: strings.TrimSpace(e.DisplayName), Description: e.Description, Photo: e.Photo,
 		Anchor: Anchor{ItemIDs: e.Anchor.ItemIDs}, PriceCents: *e.PriceOverrideCents, Sizes: []BuildItemSize{},
-		SoldOut: soldOut, ModifierGroups: []BuildGroup{}, position: e.Position}
+		SoldOut: soldOut, ModifierGroupIDs: []uuid.UUID{}, position: e.Position}
 	c.place(bi, e, firstCat)
 }
 
@@ -360,7 +421,7 @@ func (c *compiler) place(bi BuildItem, e *Entry, bankCat *menu.BankCategory) {
 	}
 	var target *BuildCategory
 	if name := strings.TrimSpace(e.Category); name != "" {
-		target = c.category("c:"+name, name, 1<<30)
+		target = c.named(name, 1<<30)
 	} else if bankCat == nil {
 		return
 	} else if pos, shown := c.catPos[bankCat.ID]; shown {
@@ -387,24 +448,31 @@ func (c *compiler) sizes(in []menu.ItemSize, override map[string]int64) []BuildI
 	return out
 }
 
-func (c *compiler) groups(ids []uuid.UUID) []BuildGroup {
-	out := []BuildGroup{}
+// groups returns the item's group ids (those the bank still has) and adds
+// each group to the build the first time an item uses it.
+func (c *compiler) groups(ids []uuid.UUID) []uuid.UUID {
+	out := []uuid.UUID{}
 	for _, id := range ids {
 		g, ok := c.bank.Groups[id]
 		if !ok {
 			continue
 		}
+		out = append(out, id)
+		if c.groupSeen[id] {
+			continue
+		}
+		c.groupSeen[id] = true
 		bg := BuildGroup{ID: g.ID, Name: g.Name, Required: g.Required, MinSelect: g.MinSelect, MaxSelect: g.MaxSelect,
 			AllowMultiple: g.AllowMultiple, Portions: g.Portions, Options: []BuildOption{}}
 		for _, o := range g.Options {
 			prices := []menu.OptionPrice{}
 			for _, p := range o.Prices {
-				prices = append(prices, menu.OptionPrice{SizeID: p.SizeID, PriceCents: c.price(p.PriceCents)})
+				prices = append(prices, menu.OptionPrice{SizeID: p.SizeID, PriceCents: c.optionPrice(p.PriceCents)})
 			}
-			bg.Options = append(bg.Options, BuildOption{ID: o.ID, Name: o.Name, PriceCents: c.price(o.PriceDeltaCents),
+			bg.Options = append(bg.Options, BuildOption{ID: o.ID, Name: o.Name, PriceCents: c.optionPrice(o.PriceDeltaCents),
 				Prices: prices, IsDefault: o.IsDefault, SoldOut: !o.InStock})
 		}
-		out = append(out, bg)
+		c.build.ModifierGroups = append(c.build.ModifierGroups, bg)
 	}
 	return out
 }
@@ -412,6 +480,12 @@ func (c *compiler) groups(ids []uuid.UUID) []BuildGroup {
 // price applies the view's price rule to a bank price.
 func (c *compiler) price(cents int64) int64 {
 	return ApplyRule(cents, c.rules.MarkupBps, c.rules.Round)
+}
+
+// optionPrice is a modifier option's price: the markup, never the .99
+// rounding (a $1.50 topping must not become $1.99).
+func (c *compiler) optionPrice(cents int64) int64 {
+	return ApplyRule(cents, c.rules.MarkupBps, RoundNone)
 }
 
 // ApplyRule raises a bank price by markupBps (rounding up to a whole cent),

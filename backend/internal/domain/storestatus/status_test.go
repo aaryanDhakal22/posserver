@@ -178,3 +178,67 @@ func TestLastReset(t *testing.T) {
 		t.Errorf("after the hour: %v", r)
 	}
 }
+
+// Daylight-saving days keep their wall-clock hours (2026-11-01 falls back,
+// 2026-03-08 springs forward in New York).
+func TestDaylightSavingDays(t *testing.T) {
+	r := []tenancy.HoursRange{{Open: "11:00", Close: "22:00"}}
+	sc := Schedule{Loc: ny, Weekly: tenancy.OpeningHours{"sun": r}}
+	for _, day := range []time.Time{time.Date(2026, 11, 1, 0, 0, 0, 0, ny), time.Date(2026, 3, 8, 0, 0, 0, 0, ny)} {
+		p := sc.Periods(day)
+		if len(p) != 1 || p[0].Start.Hour() != 11 || p[0].End.Hour() != 22 {
+			t.Errorf("%s: %+v", day.Format(time.DateOnly), p)
+		}
+		y, m, d := day.Date()
+		if !sc.OpenAt(time.Date(y, m, d, 11, 30, 0, 0, ny)) || sc.OpenAt(time.Date(y, m, d, 10, 30, 0, 0, ny)) ||
+			sc.OpenAt(time.Date(y, m, d, 22, 30, 0, 0, ny)) {
+			t.Errorf("%s: open/closed at the wrong hours", day.Format(time.DateOnly))
+		}
+	}
+	// An overnight stretch across the fall-back night still ends at 02:00 wall clock.
+	sat := Schedule{Loc: ny, Weekly: tenancy.OpeningHours{"sat": {{Open: "17:00", Close: "02:00"}}}}
+	p := sat.Periods(time.Date(2026, 10, 31, 0, 0, 0, 0, ny))
+	if len(p) != 1 || !p[0].End.Equal(time.Date(2026, 11, 1, 2, 0, 0, 0, ny)) {
+		t.Errorf("overnight across DST: %+v", p)
+	}
+}
+
+// Every day switched off = no hours (always open), not closed for good.
+func TestAllDaysOffIsNoHours(t *testing.T) {
+	off := tenancy.OpeningHours{}
+	for _, d := range tenancy.Weekdays {
+		off[d] = []tenancy.HoursRange{}
+	}
+	s := Compute(at(0, 3, 0), Schedule{Loc: ny, Weekly: off}, settings(), 0)
+	if s.State != StateOpen || s.HoursSet || s.Today.Closed {
+		t.Errorf("all days off: %+v", s)
+	}
+}
+
+// Without weekly hours, a special day's own hours still apply.
+func TestExceptionHoursWithoutWeeklyHours(t *testing.T) {
+	sc := Schedule{Loc: ny, Exceptions: map[string]Exception{
+		"2026-11-02": {Date: "2026-11-02", Hours: []tenancy.HoursRange{{Open: "12:00", Close: "16:00"}}}}}
+	if s := Compute(at(0, 20, 0), sc, settings(), 0); s.State != StateClosed || !s.NextOpenAt.Equal(at(1, 0, 0)) {
+		t.Errorf("after the special hours: %+v next %v", s, s.NextOpenAt)
+	}
+	if s := Compute(at(0, 13, 0), sc, settings(), 0); s.State != StateOpen {
+		t.Errorf("inside the special hours: %+v", s)
+	}
+	if s := Compute(at(1, 3, 0), sc, settings(), 0); s.State != StateOpen {
+		t.Errorf("the next (normal) day: %+v", s)
+	}
+}
+
+// "Rest of today" after midnight inside last night's shift ends with that
+// shift, not after tonight's.
+func TestPauseTodayAfterMidnight(t *testing.T) {
+	late := []tenancy.HoursRange{{Open: "17:00", Close: "02:00"}}
+	sc := Schedule{Loc: ny, Weekly: tenancy.OpeningHours{"mon": late, "tue": late}}
+	if u, _ := sc.PauseUntil(at(1, 0, 30), "today"); !u.Equal(at(1, 2, 0)) {
+		t.Errorf("00:30 in Monday's shift: %v", u)
+	}
+	if u, _ := sc.PauseUntil(at(1, 18, 0), "today"); !u.Equal(at(2, 2, 0)) {
+		t.Errorf("18:00 Tuesday: %v", u)
+	}
+}

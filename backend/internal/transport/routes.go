@@ -46,6 +46,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v5"
+	echomw "github.com/labstack/echo/v5/middleware"
 	"github.com/rs/zerolog"
 )
 
@@ -161,6 +162,9 @@ func routeTable(d RouterDeps) []routeDef {
 	storeSession := appMiddleware.StoreSessionAuth(d.SessionSigner)
 	operatorAuth := appMiddleware.OperatorAuth(d.OperatorService, d.Meters)
 	channelAuth := appMiddleware.ChannelAuth(d.ChannelService)
+	// The channel API alone is gzipped (a menu is large); legacy routes are
+	// left byte-for-byte as deployed clients know them.
+	channelGzip := echomw.GzipWithConfig(echomw.GzipConfig{MinLength: 1024})
 	// The tablet report key guards exactly one route (diag-reports) and is
 	// never combined with `device` — it must not reach orders or anything else.
 	reportKey := appMiddleware.ReportKeyAuth(d.Diag)
@@ -392,13 +396,13 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", storePrefix+"/operator/menu", "operator", "Full menu for an allowed location (POS read)", operatorH.Menu, operatorAuth),
 
 		// /channel/v1 — the ports every sales channel talks to (main 3.0).
-		def("GET", channelPrefix+"/openapi.json", "none", "The channel API's OpenAPI document", channelH.Spec),
-		def("GET", channelPrefix+"/me", "channel", "The channel behind the key and its store", channelH.Me, channelAuth),
-		def("GET", channelPrefix+"/menu", "channel", "The channel's menu (ETag = menu version)", viewH.ChannelMenu, channelAuth),
-		def("GET", channelPrefix+"/store", "channel", "The store's status: open/paused/closed, order types + ETAs, sold out", statusH.ChannelStore, channelAuth),
-		def("GET", channelPrefix+"/store/times", "channel", "Times an order can be promised for (?type=pickup|delivery&date=YYYY-MM-DD)", statusH.ChannelTimes, channelAuth),
-		def("POST", channelPrefix+"/store/delivery-check", "channel", "Does the store deliver to this address {line1, city, state, zip}", statusH.ChannelDeliveryCheck, channelAuth),
-		def("GET", channelPrefix+"/menu/version", "channel", "The menu version (?since=N → changed)", viewH.ChannelMenuVersion, channelAuth),
+		def("GET", channelPrefix+"/openapi.json", "none", "The channel API's OpenAPI document", channelH.Spec, channelGzip),
+		def("GET", channelPrefix+"/me", "channel", "The channel behind the key and its store", channelH.Me, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/menu", "channel", "The channel's menu (ETag = menu version)", viewH.ChannelMenu, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/store", "channel", "The store's status: open/paused/closed, order types + ETAs, sold out", statusH.ChannelStore, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/store/times", "channel", "Times an order can be promised for (?type=pickup|delivery&date=YYYY-MM-DD)", statusH.ChannelTimes, channelAuth, channelGzip),
+		def("POST", channelPrefix+"/store/delivery-check", "channel", "Does the store deliver to this address {line1, city, state, zip}", statusH.ChannelDeliveryCheck, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/menu/version", "channel", "The menu version (?since=N → changed)", viewH.ChannelMenuVersion, channelAuth, channelGzip),
 
 		def("GET", storeUIPath, "none", "Redirect → /app/store", redirectTo("/app/store")),
 		def("GET", storeUIPath+"/", "none", "Redirect → /app/store", redirectTo("/app/store")),

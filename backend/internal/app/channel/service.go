@@ -55,23 +55,40 @@ type Service struct {
 // SetViews plugs in the menu views (set once at startup).
 func (s *Service) SetViews(v ViewReader) { s.views = v }
 
-// SetView points a channel at one of its store's views of its kind (nil =
-// the default view of its kind).
-func (s *Service) SetView(ctx context.Context, id uuid.UUID, viewID *uuid.UUID) (*channelDom.Channel, error) {
+// Edit renames / re-permissions a channel and (setView) points it at a view,
+// checking everything before it writes anything.
+func (s *Service) Edit(ctx context.Context, id uuid.UUID, name *string, perms *channelDom.Permissions, setView bool, viewID *uuid.UUID) (*channelDom.Channel, error) {
 	cur, err := s.Get(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	if viewID != nil {
+	n, p := cur.Name, cur.Permissions
+	if name != nil {
+		if n = strings.TrimSpace(*name); n == "" {
+			return nil, ErrNameRequired
+		}
+	}
+	if perms != nil {
+		if err := validPermissions(*perms); err != nil {
+			return nil, err
+		}
+		p = *perms
+	}
+	if setView && viewID != nil {
 		if s.views == nil {
 			return nil, ErrBadView
 		}
-		kind, err := s.views.ViewKind(ctx, cur.LocationID, *viewID)
-		if err != nil || kind != string(cur.Kind) {
+		if kind, err := s.views.ViewKind(ctx, cur.LocationID, *viewID); err != nil || kind != string(cur.Kind) {
 			return nil, ErrBadView
 		}
 	}
-	c, err := s.repo.SetView(ctx, id, viewID)
+	c, err := s.repo.Update(ctx, id, n, p)
+	if err != nil {
+		return nil, notFound(err)
+	}
+	if setView {
+		c, err = s.repo.SetView(ctx, id, viewID)
+	}
 	return c, notFound(err)
 }
 
@@ -120,28 +137,6 @@ func (s *Service) List(ctx context.Context, locationID *uuid.UUID) ([]channelDom
 
 func (s *Service) Get(ctx context.Context, id uuid.UUID) (*channelDom.Channel, error) {
 	c, err := s.repo.Get(ctx, id)
-	return c, notFound(err)
-}
-
-// Update renames a channel and/or replaces its permissions (nil = keep).
-func (s *Service) Update(ctx context.Context, id uuid.UUID, name *string, perms *channelDom.Permissions) (*channelDom.Channel, error) {
-	cur, err := s.Get(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	n, p := cur.Name, cur.Permissions
-	if name != nil {
-		if n = strings.TrimSpace(*name); n == "" {
-			return nil, ErrNameRequired
-		}
-	}
-	if perms != nil {
-		if err := validPermissions(*perms); err != nil {
-			return nil, err
-		}
-		p = *perms
-	}
-	c, err := s.repo.Update(ctx, id, n, p)
 	return c, notFound(err)
 }
 

@@ -552,7 +552,9 @@ func (s *Service) routingTable(ctx context.Context, locationID uuid.UUID) (map[s
 	// A vendor-view mapping wins over the name match: the manager chose it.
 	maps, err := s.vendor.VendorMaps(ctx, locationID)
 	if err != nil {
-		return nil, err
+		// Never block ingest on the mappings: route by name as before.
+		s.logger.Warn().Ctx(ctx).Err(err).Str("location_id", locationID.String()).Msg("vendor mappings unavailable, routing by name")
+		return byName, nil
 	}
 	if len(maps) > 0 {
 		byID := make(map[uuid.UUID]menuDom.RouteEntry, len(entries))

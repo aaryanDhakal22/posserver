@@ -159,7 +159,7 @@ def test_default_views_and_rules(mgr) -> None:
     built = _ok(mgr.get(f"{MENU}/views/{web['id']}/build", timeout=5))
     its = _items(built)
     assert "Soda" not in its and [s["price_cents"] for s in its["Cheese Pizza"]["sizes"]] == [1499, 1999]
-    assert its["Cheese Pizza"]["modifier_groups"][0]["portions"] is True
+    assert built["modifier_groups"][0]["portions"] is True and its["Cheese Pizza"]["modifier_group_ids"] == [b["group"]["id"]]
     # The call center still reads the bank as is.
     assert "Soda" in _items(_ok(mgr.get(f"{MENU}/views/{views['operator']['id']}/build", timeout=5)))
 
@@ -228,7 +228,9 @@ def test_channel_menu(admin, store, mgr) -> None:
     pizza = _items(menu)["Cheese Pizza"]
     assert pizza["anchor"]["item_ids"] == [b["items"]["Cheese Pizza"]["id"]]
     assert [s["price_cents"] for s in pizza["sizes"]] == [1199, 1599]
-    assert pizza["modifier_groups"][0]["options"][0]["prices"][1]["price_cents"] == 225
+    groups = {g["id"]: g for g in menu["modifier_groups"]}
+    assert pizza["modifier_group_ids"] == [b["group"]["id"]] and len(groups) == 1
+    assert groups[b["group"]["id"]]["options"][0]["prices"][1]["price_cents"] == 225
 
     etag = r.headers["ETag"]
     assert etag == f'"v{menu["version"]}"'

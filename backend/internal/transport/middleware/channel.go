@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 
 	channelApp "quiccpos/main/internal/app/channel"
@@ -29,8 +30,11 @@ func ChannelAuth(svc *channelApp.Service) echo.MiddlewareFunc {
 				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "missing channel key", "code": "unauthorized"})
 			}
 			ch, err := svc.Authenticate(c.Request().Context(), key)
-			if err != nil {
+			if errors.Is(err, channelApp.ErrInvalidKey) {
 				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "invalid or revoked channel key", "code": "unauthorized"})
+			}
+			if err != nil { // the lookup failed (database), not the key
+				return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "channel lookup is unavailable, try again", "code": "try_again"})
 			}
 			trace.SpanFromContext(c.Request().Context()).SetAttributes(
 				attribute.String("auth.kind", "channel"),

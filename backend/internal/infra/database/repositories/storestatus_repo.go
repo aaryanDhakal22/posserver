@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -48,6 +49,10 @@ func settingsOf(row models.StoreOrdering) storestatus.Settings {
 func (r *StoreStatusRepository) Settings(ctx context.Context, tenantID, locationID uuid.UUID) (storestatus.Settings, error) {
 	q := models.New(r.pool)
 	if err := q.EnsureStoreOrdering(ctx, models.EnsureStoreOrderingParams{LocationID: pgID(locationID), TenantID: pgID(tenantID)}); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+			return storestatus.Settings{}, pgx.ErrNoRows // the location is gone (a stale session)
+		}
 		return storestatus.Settings{}, err
 	}
 	row, err := q.GetStoreOrdering(ctx, pgID(locationID))

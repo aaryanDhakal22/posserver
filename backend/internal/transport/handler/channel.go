@@ -137,17 +137,14 @@ func (h *ChannelHandler) AdminUpdate(c *echo.Context) error {
 	if err := echo.BindBody(c, &req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
 	}
-	ctx := c.Request().Context()
-	if len(req.ViewID) > 0 { // first, so a bad view changes nothing
-		var view *uuid.UUID
+	var view *uuid.UUID
+	if len(req.ViewID) > 0 {
 		if err := json.Unmarshal(req.ViewID, &view); err != nil {
 			return c.JSON(http.StatusBadRequest, errResp("view_id must be a uuid or null"))
 		}
-		if _, err := h.svc.SetView(ctx, id, view); err != nil {
-			return h.adminErr(c, err)
-		}
 	}
-	ch, err := h.svc.Update(ctx, id, req.Name, req.Permissions)
+	// Everything is checked before anything is written.
+	ch, err := h.svc.Edit(c.Request().Context(), id, req.Name, req.Permissions, len(req.ViewID) > 0, view)
 	if err != nil {
 		return h.adminErr(c, err)
 	}

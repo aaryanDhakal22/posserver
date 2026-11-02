@@ -76,7 +76,10 @@ func TestCompileBankAsIs(t *testing.T) {
 	if pizza.ID != id(20).String() || len(pizza.Sizes) != 2 || pizza.Sizes[1].PriceCents != 1599 || pizza.Sizes[1].Name != "16 X-Large" {
 		t.Errorf("pizza: %+v", pizza)
 	}
-	g := pizza.ModifierGroups[0]
+	if len(b.ModifierGroups) != 1 || len(pizza.ModifierGroupIDs) != 1 || pizza.ModifierGroupIDs[0] != b.ModifierGroups[0].ID {
+		t.Fatalf("groups: build %+v item %v", b.ModifierGroups, pizza.ModifierGroupIDs)
+	}
+	g := b.ModifierGroups[0]
 	if !g.Portions || g.Options[0].Prices[1].PriceCents != 225 || !g.Options[1].IsDefault {
 		t.Errorf("toppings: %+v", g)
 	}
@@ -121,8 +124,8 @@ func TestCompileRuleAndEntries(t *testing.T) {
 	if p.Sizes[0].PriceCents != 1499 || p.Sizes[1].PriceCents != 1999 {
 		t.Errorf("rule + size override: %+v", p.Sizes)
 	}
-	if p.ModifierGroups[0].Options[0].Prices[0].PriceCents != 199 || p.ModifierGroups[0].Options[1].PriceCents != 0 {
-		t.Errorf("option prices follow the rule ($0 stays $0): %+v", p.ModifierGroups[0].Options)
+	if g := b.ModifierGroups[0]; g.Options[0].Prices[0].PriceCents != 180 || g.Options[1].PriceCents != 0 || p.ModifierGroupIDs[0] != g.ID {
+		t.Errorf("option prices take the markup but not the .99 rounding ($0 stays $0): %+v", g.Options)
 	}
 	c := byName["Cheesecake"]
 	if c.ID != id(52).String() || len(c.Choices) != 2 || c.Choices[0].Name != "Strawberry" || c.Choices[1].Name != "Cheesecake Oreo" ||
@@ -162,6 +165,73 @@ func TestCompileMergeKeepsCategoryPlace(t *testing.T) {
 		if c.Name == "Desserts" {
 			t.Error("a merge in a hidden category shown")
 		}
+	}
+}
+
+// A group several items use is in the build once; a group only a hidden
+// item uses isn't in it at all.
+func TestCompileGroupsOnce(t *testing.T) {
+	bank := testBank()
+	wings := &bank.Menus[0].Categories[0].Items[1]
+	wings.GroupIDs = []uuid.UUID{id(201)}
+	b := Compile(bank, View{Kind: KindWeb}, nil, nil)
+	if len(b.ModifierGroups) != 1 {
+		t.Errorf("groups: %d", len(b.ModifierGroups))
+	}
+	hidden := []Entry{{ID: id(81), Kind: EntryItem, Anchor: Anchor{ItemIDs: []uuid.UUID{id(20)}}, Hidden: true},
+		{ID: id(82), Kind: EntryItem, Anchor: Anchor{ItemIDs: []uuid.UUID{id(21)}}, Hidden: true}}
+	if b = Compile(bank, View{Kind: KindWeb}, hidden, nil); len(b.ModifierGroups) != 0 {
+		t.Errorf("groups of hidden items: %+v", b.ModifierGroups)
+	}
+}
+
+// Merges and deals follow what can be sold and what the view hides: a
+// choice whose category is off or hidden by the view isn't offered; a deal
+// with an item whose category is off isn't sold; an entry moved into a bank
+// category's name joins that category.
+func TestCompileMergeDealAvailability(t *testing.T) {
+	bank := testBank()
+	bank.Menus[0].Categories[1].Available = false // Desserts off
+	entries := []Entry{
+		{ID: id(90), Kind: EntryMerge, Anchor: Anchor{ItemIDs: []uuid.UUID{id(30), id(31)}}, DisplayName: "Cheesecake", Category: "Sweets"},
+		{ID: id(91), Kind: EntryAugment, Anchor: Anchor{ItemIDs: []uuid.UUID{id(20), id(30)}}, DisplayName: "Pizza + Cake", PriceOverrideCents: ptr(1999)},
+		{ID: id(92), Kind: EntryMerge, Anchor: Anchor{ItemIDs: []uuid.UUID{id(21), id(40)}}, DisplayName: "Wings or Soda"},
+		{ID: id(93), Kind: EntryItem, Anchor: Anchor{ItemIDs: []uuid.UUID{id(21)}}, Category: "  drinks "},
+	}
+	v := View{Kind: KindWeb, Rules: Rules{HiddenCategories: []uuid.UUID{id(12)}}} // Drinks hidden by the view
+	b := Compile(bank, v, entries, nil)
+	items := map[string]BuildItem{}
+	var cats []string
+	for _, c := range b.Categories {
+		cats = append(cats, c.Name)
+		for _, it := range c.Items {
+			items[it.Name] = it
+		}
+	}
+	if _, ok := items["Cheesecake"]; ok {
+		t.Error("a merge of items whose category is off is shown")
+	}
+	if _, ok := items["Pizza + Cake"]; ok {
+		t.Error("a deal with an item whose category is off is sold")
+	}
+	if w := items["Wings or Soda"]; len(w.Choices) != 1 || w.Choices[0].ItemID != id(21) {
+		t.Errorf("a choice the view hides is offered: %+v", w.Choices)
+	}
+	// Drinks is hidden by the view, so "drinks" is a view category of its own;
+	// with Drinks shown it joins the bank one.
+	v.Rules.HiddenCategories = nil
+	b = Compile(bank, v, entries[3:], nil)
+	n := 0
+	for _, c := range b.Categories {
+		if strings.EqualFold(c.Name, "drinks") {
+			n++
+			if len(c.Items) != 2 || c.Key != id(12).String() {
+				t.Errorf("moved into Drinks: %+v", c)
+			}
+		}
+	}
+	if n != 1 || strings.Join(cats, ",") == "" {
+		t.Errorf("categories named Drinks: %d", n)
 	}
 }
 

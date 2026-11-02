@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -378,15 +377,6 @@ func (h *MenuViewHandler) MeVendorMap(c *echo.Context) error {
 
 // --- /channel/v1/menu -----------------------------------------------------------
 
-// channelMenu is a build as a channel sees it: no needs-attention list, no maps.
-type channelMenu struct {
-	View       menuview.BuildView       `json:"view"`
-	Version    int64                    `json:"version"`
-	Currency   string                   `json:"currency"`
-	Sizes      []menuview.BuildSize     `json:"sizes"`
-	Categories []menuview.BuildCategory `json:"categories"`
-}
-
 // channelView is the view a channel reads: its own when set, else its
 // store's default view of its kind.
 func (h *MenuViewHandler) channelView(c *echo.Context, ch *channelDom.Channel) (*menuview.View, error) {
@@ -421,7 +411,7 @@ func (h *MenuViewHandler) ChannelMenu(c *echo.Context) error {
 	if err != nil {
 		return h.chErr(c, err)
 	}
-	raw, ver, err := h.svc.Build(c.Request().Context(), v)
+	raw, ver, err := h.svc.ChannelBuild(c.Request().Context(), v)
 	if err != nil {
 		return h.chErr(c, err)
 	}
@@ -431,11 +421,7 @@ func (h *MenuViewHandler) ChannelMenu(c *echo.Context) error {
 	if c.Request().Header.Get("If-None-Match") == etag {
 		return c.NoContent(http.StatusNotModified)
 	}
-	var m channelMenu
-	if err := json.Unmarshal(raw, &m); err != nil {
-		return h.chErr(c, err)
-	}
-	return c.JSON(http.StatusOK, m)
+	return c.Blob(http.StatusOK, "application/json", raw)
 }
 
 // GET /channel/v1/menu/version?since=N — the menu's version, and whether it

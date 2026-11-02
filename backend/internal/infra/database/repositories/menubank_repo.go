@@ -35,6 +35,13 @@ func NewMenuBankRepository(pool *pgxpool.Pool) *MenuBankRepository {
 func (r *MenuBankRepository) LoadBank(ctx context.Context, locationID uuid.UUID) (*menu.Bank, error) {
 	q := models.New(r.pool)
 	lid := pgID(locationID)
+	// The version first: a write landing while the rows below are read makes
+	// the bank newer than its version (the next read rebuilds), never older
+	// (a stale build cached under the new version).
+	ver, err := r.Version(ctx, locationID)
+	if err != nil {
+		return nil, err
+	}
 	menus, err := q.ListMenusByLocation(ctx, lid)
 	if err != nil {
 		return nil, fmt.Errorf("menus: %w", err)
@@ -71,11 +78,6 @@ func (r *MenuBankRepository) LoadBank(ctx context.Context, locationID uuid.UUID)
 	if err != nil {
 		return nil, fmt.Errorf("option prices: %w", err)
 	}
-	ver, err := r.Version(ctx, locationID)
-	if err != nil {
-		return nil, err
-	}
-
 	b := &menu.Bank{LocationID: locationID, Version: ver.Version, Sizes: []menu.Size{}, Menus: []menu.BankMenu{},
 		Groups: map[uuid.UUID]menu.BankGroup{}}
 	for _, s := range sizes {
@@ -303,6 +305,34 @@ func (r *MenuBankRepository) CreateView(ctx context.Context, tenantID, locationI
 	}
 	row, err := models.New(r.pool).CreateMenuView(ctx, models.CreateMenuViewParams{TenantID: pgID(tenantID), LocationID: pgID(locationID),
 		Kind: string(kind), Name: name, Rules: raw})
+	if err != nil {
+		return nil, err
+	}
+	return viewOf(row)
+}
+
+// EnsureDefaultView returns the location's first view of a kind, creating
+// it (name, rules) when there is none. Serialized per location + kind, so
+// two first uses at once can't make two defaults.
+func (r *MenuBankRepository) EnsureDefaultView(ctx context.Context, tenantID, locationID uuid.UUID, kind menuview.Kind, name string, rules menuview.Rules) (*menuview.View, error) {
+	raw, err := json.Marshal(rules)
+	if err != nil {
+		return nil, err
+	}
+	var row models.MenuView
+	err = pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", "menu_view|"+locationID.String()+"|"+string(kind)); err != nil {
+			return err
+		}
+		q := models.New(tx)
+		var err error
+		row, err = q.FirstMenuViewOfKind(ctx, models.FirstMenuViewOfKindParams{LocationID: pgID(locationID), Kind: string(kind)})
+		if errors.Is(err, pgx.ErrNoRows) {
+			row, err = q.CreateMenuView(ctx, models.CreateMenuViewParams{TenantID: pgID(tenantID), LocationID: pgID(locationID),
+				Kind: string(kind), Name: name, Rules: raw})
+		}
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}

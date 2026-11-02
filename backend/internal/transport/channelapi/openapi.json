@@ -33,6 +33,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         }
       }
@@ -79,6 +82,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         }
       }
@@ -125,6 +131,9 @@
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         }
       }
@@ -147,6 +156,9 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         }
       }
@@ -211,6 +223,9 @@
                 }
               }
             }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         }
       }
@@ -219,7 +234,7 @@
       "post": {
         "operationId": "checkDelivery",
         "summary": "Does the store deliver to this address?",
-        "description": "Straight-line distance from the store vs its delivery radius (the rule the store's tablet uses). result: inside (deliverable), outside, check (several places match — show candidates and check the picked one), not_found, no_store_location, delivery_off. The address is not stored or logged. 30 checks a minute per channel.",
+        "description": "Straight-line distance from the store vs its delivery radius (the rule the store's tablet uses). result: inside (deliverable), outside, check (several places match — show candidates and check the picked one), not_found, no_store_location, delivery_off. The address is not stored or logged. Needs the quote permission. 30 checks a minute per channel.",
         "requestBody": {
           "required": true,
           "content": {
@@ -290,6 +305,9 @@
                 }
               }
             }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }
@@ -335,6 +353,16 @@
       },
       "Forbidden": {
         "description": "This channel's permissions don't allow it",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "main can't check the key right now (try_again)",
         "content": {
           "application/json": {
             "schema": {
@@ -712,7 +740,7 @@
           "price_cents",
           "sizes",
           "sold_out",
-          "modifier_groups"
+          "modifier_group_ids"
         ],
         "properties": {
           "id": {
@@ -745,11 +773,13 @@
           "sold_out": {
             "type": "boolean"
           },
-          "modifier_groups": {
+          "modifier_group_ids": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/MenuGroup"
-            }
+              "type": "string",
+              "format": "uuid"
+            },
+            "description": "The item's modifier groups, in order (each is in the menu's modifier_groups)"
           },
           "choices": {
             "type": "array",
@@ -795,7 +825,8 @@
           "version",
           "currency",
           "sizes",
-          "categories"
+          "categories",
+          "modifier_groups"
         ],
         "properties": {
           "view": {
@@ -842,6 +873,13 @@
             "items": {
               "$ref": "#/components/schemas/MenuCategory"
             }
+          },
+          "modifier_groups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MenuGroup"
+            },
+            "description": "Every modifier group the menu's items use, once"
           }
         },
         "additionalProperties": false

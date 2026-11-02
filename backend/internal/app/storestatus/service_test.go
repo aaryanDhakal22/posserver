@@ -24,7 +24,9 @@ func (f *fakeRepo) EnsureAll(_ context.Context, l []tenancy.Location) error {
 	f.ensured = len(l)
 	return nil
 }
-func (f *fakeRepo) RestockRows(context.Context) ([]repositories.RestockRow, error) { return f.rows, nil }
+func (f *fakeRepo) RestockRows(context.Context) ([]repositories.RestockRow, error) {
+	return f.rows, nil
+}
 func (f *fakeRepo) Restock(_ context.Context, id uuid.UUID, _ time.Time) (int64, error) {
 	f.restocked = append(f.restocked, id)
 	return 1, nil

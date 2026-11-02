@@ -132,7 +132,15 @@ type Period struct {
 }
 
 // HoursSet reports whether the store has any hours (else it is always open).
-func (s Schedule) HoursSet() bool { return len(s.Weekly) > 0 }
+// (Every day switched off saves as seven empty days: no hours, not closed for good.)
+func (s Schedule) HoursSet() bool {
+	for _, r := range s.Weekly {
+		if len(r) > 0 {
+			return true
+		}
+	}
+	return false
+}
 
 func (s Schedule) zone() *time.Location {
 	if s.Loc == nil {
@@ -159,24 +167,23 @@ func (s Schedule) DayHours(day time.Time) ([]tenancy.HoursRange, *Exception) {
 }
 
 // Periods are the open stretches that start on a local date (a close at or
-// before the open runs past midnight). Without hours set: the whole day.
+// before the open runs past midnight). Times are wall-clock times, so a
+// daylight-saving day keeps its hours. Without weekly hours a date is open
+// all day unless its exception says otherwise.
 func (s Schedule) Periods(day time.Time) []Period {
 	loc := s.zone()
 	d := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, loc)
-	if !s.HoursSet() {
-		if e, ok := s.Exceptions[d.Format(time.DateOnly)]; ok && e.Closed {
-			return nil
-		}
+	ranges, exc := s.DayHours(d)
+	if !s.HoursSet() && exc == nil {
 		return []Period{{Start: d, End: d.AddDate(0, 0, 1)}}
 	}
-	ranges, _ := s.DayHours(d)
 	out := make([]Period, 0, len(ranges))
 	for _, r := range ranges {
 		o, c := hhmm(r.Open), hhmm(r.Close)
-		start := d.Add(time.Duration(o) * time.Minute)
-		end := d.Add(time.Duration(c) * time.Minute)
+		start := time.Date(d.Year(), d.Month(), d.Day(), o/60, o%60, 0, 0, loc)
+		end := time.Date(d.Year(), d.Month(), d.Day(), c/60, c%60, 0, 0, loc)
 		if c <= o {
-			end = end.AddDate(0, 0, 1)
+			end = time.Date(d.Year(), d.Month(), d.Day()+1, c/60, c%60, 0, 0, loc)
 		}
 		out = append(out, Period{Start: start, End: end})
 	}
@@ -259,7 +266,13 @@ func (s Schedule) PauseUntil(now time.Time, preset string) (*time.Time, error) {
 		return nil, nil
 	case "today":
 		local := now.In(s.zone())
-		end := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, s.zone()).AddDate(0, 0, 1)
+		midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, s.zone())
+		// After midnight inside last night's stretch, "today" is that shift:
+		// it ends when the stretch does, not after tonight's service.
+		if cur, ok := s.Current(now); ok && cur.Start.Before(midnight) && s.HoursSet() {
+			return s.ClosesAt(now), nil
+		}
+		end := midnight.AddDate(0, 0, 1)
 		for _, p := range s.Periods(local) { // a period past midnight stretches "today"
 			if p.End.After(end) {
 				end = p.End

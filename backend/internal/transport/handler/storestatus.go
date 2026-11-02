@@ -13,6 +13,7 @@ import (
 	appMiddleware "quiccpos/main/internal/transport/middleware"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v5"
 	"github.com/rs/zerolog"
 )
@@ -37,7 +38,7 @@ func NewStoreStatusHandler(svc *storestatusApp.Service, appEnv string, logger ze
 
 func (h *StoreStatusHandler) sErr(c *echo.Context, err error) error {
 	switch {
-	case errors.Is(err, storestatusApp.ErrNotFound):
+	case errors.Is(err, storestatusApp.ErrNotFound), errors.Is(err, pgx.ErrNoRows):
 		return c.JSON(http.StatusNotFound, errCode(err.Error(), "not_found"))
 	case errors.Is(err, storestatus.ErrTypeOff):
 		return c.JSON(http.StatusConflict, errCode(err.Error(), "type_off"))
@@ -200,6 +201,9 @@ func (h *StoreStatusHandler) ChannelDeliveryCheck(c *echo.Context) error {
 	ch, ok := appMiddleware.ChannelFromContext(c.Request().Context())
 	if !ok {
 		return c.JSON(http.StatusUnauthorized, errCode("missing channel key", "unauthorized"))
+	}
+	if !ch.Permissions.Quote {
+		return c.JSON(http.StatusForbidden, errCode("this channel may not check delivery addresses", "forbidden"))
 	}
 	var req struct {
 		Line1 string `json:"line1"`

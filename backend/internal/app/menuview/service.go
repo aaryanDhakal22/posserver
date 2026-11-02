@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	menuApp "quiccpos/main/internal/app/menu"
@@ -55,6 +56,7 @@ type Repo interface {
 	CreateView(ctx context.Context, tenantID, locationID uuid.UUID, kind menuview.Kind, name string, rules menuview.Rules) (*menuview.View, error)
 	GetView(ctx context.Context, id uuid.UUID) (*menuview.View, error)
 	FirstViewOfKind(ctx context.Context, locationID uuid.UUID, kind menuview.Kind) (*menuview.View, error)
+	EnsureDefaultView(ctx context.Context, tenantID, locationID uuid.UUID, kind menuview.Kind, name string, rules menuview.Rules) (*menuview.View, error)
 	ListViews(ctx context.Context, locationID uuid.UUID) ([]menuview.View, error)
 	UpdateView(ctx context.Context, id uuid.UUID, name string, rules menuview.Rules) (*menuview.View, error)
 	DeleteView(ctx context.Context, id uuid.UUID) (bool, error)
@@ -77,10 +79,13 @@ type Service struct {
 	repo      Repo
 	unmatched Unmatched
 	logger    zerolog.Logger
+	// mem holds each view's latest build (by menu version) in this process.
+	mu  sync.Mutex
+	mem map[uuid.UUID]built
 }
 
 func NewService(repo Repo, unmatched Unmatched, lg zerolog.Logger) *Service {
-	return &Service{repo: repo, unmatched: unmatched, logger: lg.With().Str("module", "menuview-service").Logger()}
+	return &Service{repo: repo, unmatched: unmatched, logger: lg.With().Str("module", "menuview-service").Logger(), mem: map[uuid.UUID]built{}}
 }
 
 // --- the bank --------------------------------------------------------------------
@@ -239,14 +244,7 @@ func (s *Service) Views(ctx context.Context, tenantID, locationID uuid.UUID) ([]
 
 // DefaultView is a location's first view of a kind, created when missing.
 func (s *Service) DefaultView(ctx context.Context, tenantID, locationID uuid.UUID, kind menuview.Kind) (*menuview.View, error) {
-	v, err := s.repo.FirstViewOfKind(ctx, locationID, kind)
-	if err == nil {
-		return v, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return nil, err
-	}
-	return s.repo.CreateView(ctx, tenantID, locationID, kind, DefaultNames[kind], menuview.Rules{Round: menuview.RoundNone, HiddenCategories: []uuid.UUID{}})
+	return s.repo.EnsureDefaultView(ctx, tenantID, locationID, kind, DefaultNames[kind], menuview.Rules{Round: menuview.RoundNone, HiddenCategories: []uuid.UUID{}})
 }
 
 // View returns one of a location's views.
@@ -449,30 +447,106 @@ func (s *Service) validEntry(ctx context.Context, v *menuview.View, e *menuview.
 // unmatchedWindow is how far back a vendor view looks for unmatched names.
 const unmatchedWindow = 30 * 24 * time.Hour
 
-// Build returns a view's build at the current menu version: the cached one
-// when it is current, else freshly compiled (and cached).
+// built is one view's build at one menu version: the whole build (the
+// manager's view, with maps + needs attention) and the channel's copy.
+type built struct {
+	version       int64
+	full, channel []byte
+}
+
+// ChannelMenu is a build as a channel sees it: no needs-attention list, no maps.
+type ChannelMenu struct {
+	View           menuview.BuildView       `json:"view"`
+	Version        int64                    `json:"version"`
+	Currency       string                   `json:"currency"`
+	Sizes          []menuview.BuildSize     `json:"sizes"`
+	Categories     []menuview.BuildCategory `json:"categories"`
+	ModifierGroups []menuview.BuildGroup    `json:"modifier_groups"`
+}
+
+// Build returns a view's whole build at the current menu version.
 func (s *Service) Build(ctx context.Context, v *menuview.View) (json.RawMessage, int64, error) {
+	b, err := s.build(ctx, v)
+	return b.full, b.version, err
+}
+
+// ChannelBuild returns a view's build as a channel sees it.
+func (s *Service) ChannelBuild(ctx context.Context, v *menuview.View) ([]byte, int64, error) {
+	b, err := s.build(ctx, v)
+	return b.channel, b.version, err
+}
+
+// build serves a view at the current menu version: from memory, else the
+// build cached in the database (when it has the current format), else
+// compiled now and cached in both. Vendor views are always compiled (they
+// read the recent unmatched names, which no menu version tracks).
+func (s *Service) build(ctx context.Context, v *menuview.View) (built, error) {
 	ver, err := s.repo.Version(ctx, v.LocationID)
 	if err != nil {
-		return nil, 0, err
+		return built{}, err
 	}
-	if raw, at, ok, err := s.repo.CachedBuild(ctx, v.ID); err != nil {
-		return nil, 0, err
-	} else if ok && at == ver.Version && v.Kind != menuview.KindVendor {
-		return raw, at, nil
+	cacheable := v.Kind != menuview.KindVendor
+	if cacheable {
+		s.mu.Lock()
+		m, ok := s.mem[v.ID]
+		s.mu.Unlock()
+		if ok && m.version == ver.Version {
+			return m, nil
+		}
+		raw, at, ok, err := s.repo.CachedBuild(ctx, v.ID)
+		if err != nil {
+			return built{}, err
+		}
+		if ok && at == ver.Version && formatOf(raw) == menuview.BuildFormat {
+			return s.remember(v.ID, at, raw)
+		}
 	}
 	b, err := s.Compile(ctx, v)
 	if err != nil {
-		return nil, 0, err
+		return built{}, err
 	}
 	raw, err := json.Marshal(b)
 	if err != nil {
-		return nil, 0, err
+		return built{}, err
+	}
+	if !cacheable {
+		return channelOf(b.Version, raw)
 	}
 	if err := s.repo.SaveBuild(ctx, v.ID, b.Version, raw); err != nil {
 		s.logger.Warn().Err(err).Str("view_id", v.ID.String()).Msg("cache view build")
 	}
-	return raw, b.Version, nil
+	return s.remember(v.ID, b.Version, raw)
+}
+
+func (s *Service) remember(viewID uuid.UUID, version int64, raw []byte) (built, error) {
+	b, err := channelOf(version, raw)
+	if err != nil {
+		return built{}, err
+	}
+	s.mu.Lock()
+	s.mem[viewID] = b
+	s.mu.Unlock()
+	return b, nil
+}
+
+func channelOf(version int64, raw []byte) (built, error) {
+	var m ChannelMenu
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return built{}, err
+	}
+	ch, err := json.Marshal(m)
+	if err != nil {
+		return built{}, err
+	}
+	return built{version: version, full: raw, channel: ch}, nil
+}
+
+func formatOf(raw []byte) int {
+	var f struct {
+		Format int `json:"build_format"`
+	}
+	_ = json.Unmarshal(raw, &f)
+	return f.Format
 }
 
 // Compile compiles a view now (vendor views also read the recent unmatched
