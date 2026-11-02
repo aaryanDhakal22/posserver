@@ -1,0 +1,1021 @@
+[
+ {
+  "label": "sse first frame",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "store_config",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "frame sample_coupon_order",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_coupon_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2972,\"tax_cents\":181,\"tip_cents\":302,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":3505},\"customer\":{\"display_name\":\"ERIK DAVIS\",\"email\":\"ERIK_TAILS11@YAHOO.COM\",\"phone\":\"4432077156\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#4>\",\"position\":0,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"12 Medium\",\"quantity\":1,\"unit_price_cents\":999,\"line_total_cents\":1149,\"children\":[{\"id\":\"<uuid#5>\",\"position\":0,\"name\":\"Add Pineapple\",\"quantity\":1,\"unit_price_cents\":150,\"line_total_cents\":150,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#6>\",\"position\":1,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"14 Large\",\"quantity\":1,\"unit_price_cents\":1199,\"line_total_cents\":1374,\"children\":[{\"id\":\"<uuid#7>\",\"position\":0,\"name\":\"Add Double Cheese\",\"quantity\":1,\"unit_price_cents\":175,\"line_total_cents\":175,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#8>\",\"position\":2,\"sku\":\"0\",\"name\":\"Brownies\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":449,\"line_total_cents\":449,\"menu_item_id\":\"<uuid#9>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":3505,\"last4\":\"303\",\"auth_code\":\"052482\"}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":35.05,\"auth_code\":\"052482\",\"transaction_id\":\"\",\"type\":\"JCB\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"},\"_traceparent\":\"<traceparent>\"}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-source sample_coupon_order",
+  "method": "GET",
+  "path": "/api/v1/orders/by-source/online/<order_id:sample_coupon_order>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_coupon_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2972,\"tax_cents\":181,\"tip_cents\":302,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":3505},\"customer\":{\"display_name\":\"ERIK DAVIS\",\"email\":\"ERIK_TAILS11@YAHOO.COM\",\"phone\":\"4432077156\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#4>\",\"position\":0,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"12 Medium\",\"quantity\":1,\"unit_price_cents\":999,\"line_total_cents\":1149,\"children\":[{\"id\":\"<uuid#5>\",\"position\":0,\"name\":\"Add Pineapple\",\"quantity\":1,\"unit_price_cents\":150,\"line_total_cents\":150,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#6>\",\"position\":1,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"14 Large\",\"quantity\":1,\"unit_price_cents\":1199,\"line_total_cents\":1374,\"children\":[{\"id\":\"<uuid#7>\",\"position\":0,\"name\":\"Add Double Cheese\",\"quantity\":1,\"unit_price_cents\":175,\"line_total_cents\":175,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#8>\",\"position\":2,\"sku\":\"0\",\"name\":\"Brownies\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":449,\"line_total_cents\":449,\"menu_item_id\":\"<uuid#9>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":3505,\"last4\":\"303\",\"auth_code\":\"052482\"}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":35.05,\"auth_code\":\"052482\",\"transaction_id\":\"\",\"type\":\"JCB\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-id sample_coupon_order",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#1>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_coupon_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2972,\"tax_cents\":181,\"tip_cents\":302,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":3505},\"customer\":{\"display_name\":\"ERIK DAVIS\",\"email\":\"ERIK_TAILS11@YAHOO.COM\",\"phone\":\"4432077156\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#4>\",\"position\":0,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"12 Medium\",\"quantity\":1,\"unit_price_cents\":999,\"line_total_cents\":1149,\"children\":[{\"id\":\"<uuid#5>\",\"position\":0,\"name\":\"Add Pineapple\",\"quantity\":1,\"unit_price_cents\":150,\"line_total_cents\":150,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#6>\",\"position\":1,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"14 Large\",\"quantity\":1,\"unit_price_cents\":1199,\"line_total_cents\":1374,\"children\":[{\"id\":\"<uuid#7>\",\"position\":0,\"name\":\"Add Double Cheese\",\"quantity\":1,\"unit_price_cents\":175,\"line_total_cents\":175,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#8>\",\"position\":2,\"sku\":\"0\",\"name\":\"Brownies\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":449,\"line_total_cents\":449,\"menu_item_id\":\"<uuid#9>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":3505,\"last4\":\"303\",\"auth_code\":\"052482\"}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":35.05,\"auth_code\":\"052482\",\"transaction_id\":\"\",\"type\":\"JCB\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "frame sample_delayed_order",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#11>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_delayed_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":599,\"tax_cents\":39,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":688},\"customer\":{\"display_name\":\"AARYAN DHAKAL\",\"email\":\"AARYAN.DHAKAL22@GMAIL.COM\",\"phone\":\"6674030865\"},\"fulfillment\":{\"type\":\"pickup\",\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#12>\",\"position\":0,\"sku\":\"0\",\"name\":\"Mozzarella Sticks\",\"size\":\"6 Piece\",\"quantity\":1,\"unit_price_cents\":599,\"line_total_cents\":599,\"menu_item_id\":\"<uuid#13>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":688}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":6.88,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"},\"_traceparent\":\"<traceparent>\"}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-source sample_delayed_order",
+  "method": "GET",
+  "path": "/api/v1/orders/by-source/online/<order_id:sample_delayed_order>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#11>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_delayed_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":599,\"tax_cents\":39,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":688},\"customer\":{\"display_name\":\"AARYAN DHAKAL\",\"email\":\"AARYAN.DHAKAL22@GMAIL.COM\",\"phone\":\"6674030865\"},\"fulfillment\":{\"type\":\"pickup\",\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#12>\",\"position\":0,\"sku\":\"0\",\"name\":\"Mozzarella Sticks\",\"size\":\"6 Piece\",\"quantity\":1,\"unit_price_cents\":599,\"line_total_cents\":599,\"menu_item_id\":\"<uuid#13>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":688}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":6.88,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-id sample_delayed_order",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#11>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#11>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_delayed_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":599,\"tax_cents\":39,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":688},\"customer\":{\"display_name\":\"AARYAN DHAKAL\",\"email\":\"AARYAN.DHAKAL22@GMAIL.COM\",\"phone\":\"6674030865\"},\"fulfillment\":{\"type\":\"pickup\",\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#12>\",\"position\":0,\"sku\":\"0\",\"name\":\"Mozzarella Sticks\",\"size\":\"6 Piece\",\"quantity\":1,\"unit_price_cents\":599,\"line_total_cents\":599,\"menu_item_id\":\"<uuid#13>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":688}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":6.88,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "frame sample_real_order",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#15>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_real_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":125,\"tax_cents\":11,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":186},\"customer\":{\"display_name\":\"BEN MANSURIQ\",\"email\":\"BENJAMIN.MANSURI@BRYGID.COM\",\"phone\":\"6046487389\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#16>\",\"position\":0,\"sku\":\"0\",\"name\":\"12 oz Soda\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":125,\"line_total_cents\":125,\"children\":[{\"id\":\"<uuid#17>\",\"position\":0,\"name\":\"Coke\",\"quantity\":1,\"unit_price_cents\":0,\"line_total_cents\":0,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#18>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":186}],\"notes\":\"test\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":1.86,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"},\"_traceparent\":\"<traceparent>\"}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-source sample_real_order",
+  "method": "GET",
+  "path": "/api/v1/orders/by-source/online/<order_id:sample_real_order>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#15>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_real_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":125,\"tax_cents\":11,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":186},\"customer\":{\"display_name\":\"BEN MANSURIQ\",\"email\":\"BENJAMIN.MANSURI@BRYGID.COM\",\"phone\":\"6046487389\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#16>\",\"position\":0,\"sku\":\"0\",\"name\":\"12 oz Soda\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":125,\"line_total_cents\":125,\"children\":[{\"id\":\"<uuid#17>\",\"position\":0,\"name\":\"Coke\",\"quantity\":1,\"unit_price_cents\":0,\"line_total_cents\":0,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#18>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":186}],\"notes\":\"test\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":1.86,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-id sample_real_order",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#15>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#15>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_real_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":125,\"tax_cents\":11,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":186},\"customer\":{\"display_name\":\"BEN MANSURIQ\",\"email\":\"BENJAMIN.MANSURI@BRYGID.COM\",\"phone\":\"6046487389\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#16>\",\"position\":0,\"sku\":\"0\",\"name\":\"12 oz Soda\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":125,\"line_total_cents\":125,\"children\":[{\"id\":\"<uuid#17>\",\"position\":0,\"name\":\"Coke\",\"quantity\":1,\"unit_price_cents\":0,\"line_total_cents\":0,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#18>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":186}],\"notes\":\"test\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":1.86,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "frame basic_pickup_order",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#19>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:basic_pickup_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#20>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"_traceparent\":\"<traceparent>\"}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-source basic_pickup_order",
+  "method": "GET",
+  "path": "/api/v1/orders/by-source/online/<order_id:basic_pickup_order>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#19>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:basic_pickup_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#20>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-id basic_pickup_order",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#19>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#19>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:basic_pickup_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#20>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "frame delivery_with_address",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#22>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:delivery_with_address>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"}},\"items\":[{\"id\":\"<uuid#23>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#24>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Ring the doorbell\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"_traceparent\":\"<traceparent>\"}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-source delivery_with_address",
+  "method": "GET",
+  "path": "/api/v1/orders/by-source/online/<order_id:delivery_with_address>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#22>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:delivery_with_address>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"}},\"items\":[{\"id\":\"<uuid#23>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#24>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Ring the doorbell\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-id delivery_with_address",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#22>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#22>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:delivery_with_address>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"}},\"items\":[{\"id\":\"<uuid#23>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#24>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Ring the doorbell\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "frame tax_exempt_corporate_order",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#26>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:tax_exempt_corporate_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":12000,\"tax_cents\":0,\"tip_cents\":0,\"total_cents\":12000},\"customer\":{\"display_name\":\"Emily Watson\",\"email\":\"emily@techcorp.com\",\"phone\":\"5553332222\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#27>\",\"position\":0,\"sku\":\"PZ300\",\"name\":\"Veggie Pizza\",\"size\":\"Large\",\"quantity\":5,\"unit_price_cents\":2400,\"line_total_cents\":12000,\"menu_item_id\":\"<uuid#28>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":12000}],\"notes\":\"Company lunch order\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":true,\"payments\":[{\"amount\":120,\"auth_code\":\"\",\"transaction_id\":\"INV-9001\",\"type\":\"invoice\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-002\"},\"_traceparent\":\"<traceparent>\"}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-source tax_exempt_corporate_order",
+  "method": "GET",
+  "path": "/api/v1/orders/by-source/online/<order_id:tax_exempt_corporate_order>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#26>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:tax_exempt_corporate_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":12000,\"tax_cents\":0,\"tip_cents\":0,\"total_cents\":12000},\"customer\":{\"display_name\":\"Emily Watson\",\"email\":\"emily@techcorp.com\",\"phone\":\"5553332222\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#27>\",\"position\":0,\"sku\":\"PZ300\",\"name\":\"Veggie Pizza\",\"size\":\"Large\",\"quantity\":5,\"unit_price_cents\":2400,\"line_total_cents\":12000,\"menu_item_id\":\"<uuid#28>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":12000}],\"notes\":\"Company lunch order\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":true,\"payments\":[{\"amount\":120,\"auth_code\":\"\",\"transaction_id\":\"INV-9001\",\"type\":\"invoice\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-002\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-id tax_exempt_corporate_order",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#26>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#26>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:tax_exempt_corporate_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":12000,\"tax_cents\":0,\"tip_cents\":0,\"total_cents\":12000},\"customer\":{\"display_name\":\"Emily Watson\",\"email\":\"emily@techcorp.com\",\"phone\":\"5553332222\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#27>\",\"position\":0,\"sku\":\"PZ300\",\"name\":\"Veggie Pizza\",\"size\":\"Large\",\"quantity\":5,\"unit_price_cents\":2400,\"line_total_cents\":12000,\"menu_item_id\":\"<uuid#28>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":12000}],\"notes\":\"Company lunch order\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":true,\"payments\":[{\"amount\":120,\"auth_code\":\"\",\"transaction_id\":\"INV-9001\",\"type\":\"invoice\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-002\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "frame third_party_delivery_order",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#29>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:third_party_delivery_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1500,\"tax_cents\":125,\"tip_cents\":0,\"total_cents\":1625},\"customer\":{\"display_name\":\"Mike Brown\",\"email\":\"mike@example.com\",\"phone\":\"5556667777\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"45 Market St\",\"city\":\"San Francisco\",\"state\":\"CA\",\"postal_code\":\"94103\",\"country\":\"US\"}},\"items\":[{\"id\":\"<uuid#30>\",\"position\":0,\"sku\":\"PZ101\",\"name\":\"Cheese Pizza\",\"size\":\"Small\",\"quantity\":1,\"unit_price_cents\":1500,\"line_total_cents\":1500,\"routing\":\"unmatched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":1625}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"delivery_provider\":{\"delivery_id\":\"DD-7890\",\"pickup_date\":\"<time>\",\"provider_name\":\"DoorDash\",\"status\":\"assigned\",\"tracking_url\":\"https://doordash.com/track/DD-7890\"},\"is_tax_exempt\":false,\"payments\":[{\"amount\":16.25,\"auth_code\":\"\",\"transaction_id\":\"DDPAY123\",\"type\":\"third_party\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"_traceparent\":\"<traceparent>\"}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-source third_party_delivery_order",
+  "method": "GET",
+  "path": "/api/v1/orders/by-source/online/<order_id:third_party_delivery_order>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#29>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:third_party_delivery_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1500,\"tax_cents\":125,\"tip_cents\":0,\"total_cents\":1625},\"customer\":{\"display_name\":\"Mike Brown\",\"email\":\"mike@example.com\",\"phone\":\"5556667777\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"45 Market St\",\"city\":\"San Francisco\",\"state\":\"CA\",\"postal_code\":\"94103\",\"country\":\"US\"}},\"items\":[{\"id\":\"<uuid#30>\",\"position\":0,\"sku\":\"PZ101\",\"name\":\"Cheese Pizza\",\"size\":\"Small\",\"quantity\":1,\"unit_price_cents\":1500,\"line_total_cents\":1500,\"routing\":\"unmatched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":1625}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"delivery_provider\":{\"delivery_id\":\"DD-7890\",\"pickup_date\":\"<time>\",\"provider_name\":\"DoorDash\",\"status\":\"assigned\",\"tracking_url\":\"https://doordash.com/track/DD-7890\"},\"is_tax_exempt\":false,\"payments\":[{\"amount\":16.25,\"auth_code\":\"\",\"transaction_id\":\"DDPAY123\",\"type\":\"third_party\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-id third_party_delivery_order",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#29>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#29>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:third_party_delivery_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1500,\"tax_cents\":125,\"tip_cents\":0,\"total_cents\":1625},\"customer\":{\"display_name\":\"Mike Brown\",\"email\":\"mike@example.com\",\"phone\":\"5556667777\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"45 Market St\",\"city\":\"San Francisco\",\"state\":\"CA\",\"postal_code\":\"94103\",\"country\":\"US\"}},\"items\":[{\"id\":\"<uuid#30>\",\"position\":0,\"sku\":\"PZ101\",\"name\":\"Cheese Pizza\",\"size\":\"Small\",\"quantity\":1,\"unit_price_cents\":1500,\"line_total_cents\":1500,\"routing\":\"unmatched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":1625}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"delivery_provider\":{\"delivery_id\":\"DD-7890\",\"pickup_date\":\"<time>\",\"provider_name\":\"DoorDash\",\"status\":\"assigned\",\"tracking_url\":\"https://doordash.com/track/DD-7890\"},\"is_tax_exempt\":false,\"payments\":[{\"amount\":16.25,\"auth_code\":\"\",\"transaction_id\":\"DDPAY123\",\"type\":\"third_party\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "frame coupon_and_partial_payment",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#31>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:coupon_and_partial_payment>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2100,\"tax_cents\":150,\"tip_cents\":300,\"discounts\":[{\"type\":\"promo\",\"code\":\"SAVE5\",\"label\":\"$5 Off\",\"amount_cents\":500}],\"total_cents\":2050},\"customer\":{\"display_name\":\"Alex Kim\",\"email\":\"alex@example.com\",\"phone\":\"5558889999\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#32>\",\"position\":0,\"sku\":\"PZ400\",\"name\":\"BBQ Chicken Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1800,\"line_total_cents\":1800,\"menu_item_id\":\"<uuid#33>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1500,\"last4\":\"1111\",\"auth_code\":\"AUTH555\"},{\"method\":\"cash\",\"amount_cents\":550}],\"notes\":\"Customer will pay rest on pickup\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":5.5,\"is_tax_exempt\":false,\"payments\":[{\"amount\":15,\"auth_code\":\"AUTH555\",\"transaction_id\":\"TXN555\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"_traceparent\":\"<traceparent>\"}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-source coupon_and_partial_payment",
+  "method": "GET",
+  "path": "/api/v1/orders/by-source/online/<order_id:coupon_and_partial_payment>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#31>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:coupon_and_partial_payment>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2100,\"tax_cents\":150,\"tip_cents\":300,\"discounts\":[{\"type\":\"promo\",\"code\":\"SAVE5\",\"label\":\"$5 Off\",\"amount_cents\":500}],\"total_cents\":2050},\"customer\":{\"display_name\":\"Alex Kim\",\"email\":\"alex@example.com\",\"phone\":\"5558889999\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#32>\",\"position\":0,\"sku\":\"PZ400\",\"name\":\"BBQ Chicken Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1800,\"line_total_cents\":1800,\"menu_item_id\":\"<uuid#33>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1500,\"last4\":\"1111\",\"auth_code\":\"AUTH555\"},{\"method\":\"cash\",\"amount_cents\":550}],\"notes\":\"Customer will pay rest on pickup\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":5.5,\"is_tax_exempt\":false,\"payments\":[{\"amount\":15,\"auth_code\":\"AUTH555\",\"transaction_id\":\"TXN555\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-id coupon_and_partial_payment",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#31>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#31>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:coupon_and_partial_payment>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2100,\"tax_cents\":150,\"tip_cents\":300,\"discounts\":[{\"type\":\"promo\",\"code\":\"SAVE5\",\"label\":\"$5 Off\",\"amount_cents\":500}],\"total_cents\":2050},\"customer\":{\"display_name\":\"Alex Kim\",\"email\":\"alex@example.com\",\"phone\":\"5558889999\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#32>\",\"position\":0,\"sku\":\"PZ400\",\"name\":\"BBQ Chicken Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1800,\"line_total_cents\":1800,\"menu_item_id\":\"<uuid#33>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1500,\"last4\":\"1111\",\"auth_code\":\"AUTH555\"},{\"method\":\"cash\",\"amount_cents\":550}],\"notes\":\"Customer will pay rest on pickup\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":5.5,\"is_tax_exempt\":false,\"payments\":[{\"amount\":15,\"auth_code\":\"AUTH555\",\"transaction_id\":\"TXN555\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "frame future_scheduled_delivery",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#34>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:future_scheduled_delivery>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"},\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#35>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#36>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Scheduled for later\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"_traceparent\":\"<traceparent>\"}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-source future_scheduled_delivery",
+  "method": "GET",
+  "path": "/api/v1/orders/by-source/online/<order_id:future_scheduled_delivery>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#34>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:future_scheduled_delivery>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"},\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#35>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#36>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Scheduled for later\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-id future_scheduled_delivery",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#34>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#34>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:future_scheduled_delivery>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"},\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#35>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#36>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Scheduled for later\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "frame v1 envelope",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#37>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:v1>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#38>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"_traceparent\":\"<traceparent>\"}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "frame by name",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#39>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:by-name>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#40>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":0,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"_traceparent\":\"<traceparent>\"}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "duplicate makes no new order",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "true",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "ack",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"order.ack.reply\",\"id\":\"<uuid#41>\",\"payload\":{\"acked\":9}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "ack bad",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"order.ack.reply\",\"id\":\"<uuid#42>\",\"payload\":{\"acked\":0}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "unacked order re-sent",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#19>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:basic_pickup_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#20>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "ack last",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"order.ack.reply\",\"id\":\"<uuid#43>\",\"payload\":{\"acked\":1}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "floor accepted",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"floor.events.reply\",\"id\":\"<uuid#44>\",\"payload\":{\"results\":[{\"event_id\":\"<uuid#45>\",\"result\":\"applied\"}]}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "floor duplicate",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"floor.events.reply\",\"id\":\"<uuid#46>\",\"payload\":{\"results\":[{\"event_id\":\"<uuid#45>\",\"result\":\"duplicate\"}]}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "floor ready + stale + invalid",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"floor.events.reply\",\"id\":\"<uuid#47>\",\"payload\":{\"results\":[{\"event_id\":\"<uuid#48>\",\"result\":\"applied\"},{\"event_id\":\"<uuid#49>\",\"result\":\"stale\"},{\"event_id\":\"<uuid#50>\",\"result\":\"invalid\"}]}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "floor out",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"floor.events.reply\",\"id\":\"<uuid#51>\",\"payload\":{\"results\":[{\"event_id\":\"<uuid#52>\",\"result\":\"applied\"}]}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "order after out",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#22>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#22>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:delivery_with_address>\",\"status\":\"on_delivery\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"}},\"items\":[{\"id\":\"<uuid#23>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#24>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Ring the doorbell\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"kitchen_order_number\":1100,\"estimated_ready_at\":\"<time>\",\"driver_name\":\"Sam\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "floor not delivered retry",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"floor.events.reply\",\"id\":\"<uuid#53>\",\"payload\":{\"results\":[{\"event_id\":\"<uuid#54>\",\"result\":\"applied\"}]}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "order after not delivered",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#22>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#22>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:delivery_with_address>\",\"status\":\"ready\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"}},\"items\":[{\"id\":\"<uuid#23>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#24>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Ring the doorbell\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"kitchen_order_number\":1100,\"estimated_ready_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "floor out again + delivered",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"floor.events.reply\",\"id\":\"<uuid#55>\",\"payload\":{\"results\":[{\"event_id\":\"<uuid#56>\",\"result\":\"applied\"},{\"event_id\":\"<uuid#57>\",\"result\":\"applied\"}]}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "floor scheduled + cancelled",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"floor.events.reply\",\"id\":\"<uuid#58>\",\"payload\":{\"results\":[{\"event_id\":\"<uuid#59>\",\"result\":\"applied\"},{\"event_id\":\"<uuid#60>\",\"result\":\"applied\"},{\"event_id\":\"<uuid#61>\",\"result\":\"invalid\"}]}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "floor pickup accepted + cancel",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"floor.events.reply\",\"id\":\"<uuid#62>\",\"payload\":{\"results\":[{\"event_id\":\"<uuid#63>\",\"result\":\"applied\"},{\"event_id\":\"<uuid#64>\",\"result\":\"stale\"}]}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "floor unknown order",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"floor.events.reply\",\"id\":\"<uuid#65>\",\"payload\":{\"results\":[{\"event_id\":\"<uuid#66>\",\"result\":\"not_found\"}]}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "floor roster + shift",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"floor.events.reply\",\"id\":\"<uuid#67>\",\"payload\":{\"results\":[{\"event_id\":\"<uuid#68>\",\"result\":\"applied\"},{\"event_id\":\"<uuid#69>\",\"result\":\"applied\"}]}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "floor run",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"floor.events.reply\",\"id\":\"<uuid#70>\",\"payload\":{\"results\":[{\"event_id\":\"<uuid#71>\",\"result\":\"applied\"},{\"event_id\":\"<uuid#72>\",\"result\":\"invalid\"}]}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "floor bad payload",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"bad rpc payload: floor.events: json: cannot unmarshal string into Go value of type struct { Events []json.RawMessage \\\"json:\\\\\\\"events\\\\\\\"\\\" }\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "floor changes are not echoed to the agent",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "true",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-id after floor delivery_with_address",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#22>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#22>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:delivery_with_address>\",\"status\":\"completed\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"}},\"items\":[{\"id\":\"<uuid#23>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#24>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Ring the doorbell\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"kitchen_order_number\":1100,\"estimated_ready_at\":\"<time>\",\"driver_name\":\"Ana\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-id after floor basic_pickup_order",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#19>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#19>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:basic_pickup_order>\",\"status\":\"accepted\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#20>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"kitchen_order_number\":1101}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "list",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {
+   "num": 200
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#39>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:by-name>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#40>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":0,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#37>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:v1>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#38>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#34>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:future_scheduled_delivery>\",\"status\":\"scheduled\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"},\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#35>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#36>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Scheduled for later\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#31>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:coupon_and_partial_payment>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2100,\"tax_cents\":150,\"tip_cents\":300,\"discounts\":[{\"type\":\"promo\",\"code\":\"SAVE5\",\"label\":\"$5 Off\",\"amount_cents\":500}],\"total_cents\":2050},\"customer\":{\"display_name\":\"Alex Kim\",\"email\":\"alex@example.com\",\"phone\":\"5558889999\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#32>\",\"position\":0,\"sku\":\"PZ400\",\"name\":\"BBQ Chicken Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1800,\"line_total_cents\":1800,\"menu_item_id\":\"<uuid#33>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1500,\"last4\":\"1111\",\"auth_code\":\"AUTH555\"},{\"method\":\"cash\",\"amount_cents\":550}],\"notes\":\"Customer will pay rest on pickup\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":5.5,\"is_tax_exempt\":false,\"payments\":[{\"amount\":15,\"auth_code\":\"AUTH555\",\"transaction_id\":\"TXN555\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#29>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:third_party_delivery_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1500,\"tax_cents\":125,\"tip_cents\":0,\"total_cents\":1625},\"customer\":{\"display_name\":\"Mike Brown\",\"email\":\"mike@example.com\",\"phone\":\"5556667777\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"45 Market St\",\"city\":\"San Francisco\",\"state\":\"CA\",\"postal_code\":\"94103\",\"country\":\"US\"}},\"items\":[{\"id\":\"<uuid#30>\",\"position\":0,\"sku\":\"PZ101\",\"name\":\"Cheese Pizza\",\"size\":\"Small\",\"quantity\":1,\"unit_price_cents\":1500,\"line_total_cents\":1500,\"routing\":\"unmatched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":1625}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"delivery_provider\":{\"delivery_id\":\"DD-7890\",\"pickup_date\":\"<time>\",\"provider_name\":\"DoorDash\",\"status\":\"assigned\",\"tracking_url\":\"https://doordash.com/track/DD-7890\"},\"is_tax_exempt\":false,\"payments\":[{\"amount\":16.25,\"auth_code\":\"\",\"transaction_id\":\"DDPAY123\",\"type\":\"third_party\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#26>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:tax_exempt_corporate_order>\",\"status\":\"cancelled\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":12000,\"tax_cents\":0,\"tip_cents\":0,\"total_cents\":12000},\"customer\":{\"display_name\":\"Emily Watson\",\"email\":\"emily@techcorp.com\",\"phone\":\"5553332222\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#27>\",\"position\":0,\"sku\":\"PZ300\",\"name\":\"Veggie Pizza\",\"size\":\"Large\",\"quantity\":5,\"unit_price_cents\":2400,\"line_total_cents\":12000,\"menu_item_id\":\"<uuid#28>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":12000}],\"notes\":\"Company lunch order\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":true,\"payments\":[{\"amount\":120,\"auth_code\":\"\",\"transaction_id\":\"INV-9001\",\"type\":\"invoice\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-002\"}},{\"id\":\"<uuid#22>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:delivery_with_address>\",\"status\":\"completed\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"}},\"items\":[{\"id\":\"<uuid#23>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#24>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Ring the doorbell\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"kitchen_order_number\":1100,\"estimated_ready_at\":\"<time>\",\"driver_name\":\"Ana\"},{\"id\":\"<uuid#19>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:basic_pickup_order>\",\"status\":\"accepted\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#20>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"kitchen_order_number\":1101},{\"id\":\"<uuid#15>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_real_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":125,\"tax_cents\":11,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":186},\"customer\":{\"display_name\":\"BEN MANSURIQ\",\"email\":\"BENJAMIN.MANSURI@BRYGID.COM\",\"phone\":\"6046487389\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#16>\",\"position\":0,\"sku\":\"0\",\"name\":\"12 oz Soda\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":125,\"line_total_cents\":125,\"children\":[{\"id\":\"<uuid#17>\",\"position\":0,\"name\":\"Coke\",\"quantity\":1,\"unit_price_cents\":0,\"line_total_cents\":0,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#18>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":186}],\"notes\":\"test\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":1.86,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}},{\"id\":\"<uuid#11>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_delayed_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":599,\"tax_cents\":39,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":688},\"customer\":{\"display_name\":\"AARYAN DHAKAL\",\"email\":\"AARYAN.DHAKAL22@GMAIL.COM\",\"phone\":\"6674030865\"},\"fulfillment\":{\"type\":\"pickup\",\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#12>\",\"position\":0,\"sku\":\"0\",\"name\":\"Mozzarella Sticks\",\"size\":\"6 Piece\",\"quantity\":1,\"unit_price_cents\":599,\"line_total_cents\":599,\"menu_item_id\":\"<uuid#13>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":688}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":6.88,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}},{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_coupon_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2972,\"tax_cents\":181,\"tip_cents\":302,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":3505},\"customer\":{\"display_name\":\"ERIK DAVIS\",\"email\":\"ERIK_TAILS11@YAHOO.COM\",\"phone\":\"4432077156\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#4>\",\"position\":0,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"12 Medium\",\"quantity\":1,\"unit_price_cents\":999,\"line_total_cents\":1149,\"children\":[{\"id\":\"<uuid#5>\",\"position\":0,\"name\":\"Add Pineapple\",\"quantity\":1,\"unit_price_cents\":150,\"line_total_cents\":150,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#6>\",\"position\":1,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"14 Large\",\"quantity\":1,\"unit_price_cents\":1199,\"line_total_cents\":1374,\"children\":[{\"id\":\"<uuid#7>\",\"position\":0,\"name\":\"Add Double Cheese\",\"quantity\":1,\"unit_price_cents\":175,\"line_total_cents\":175,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#8>\",\"position\":2,\"sku\":\"0\",\"name\":\"Brownies\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":449,\"line_total_cents\":449,\"menu_item_id\":\"<uuid#9>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":3505,\"last4\":\"303\",\"auth_code\":\"052482\"}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":35.05,\"auth_code\":\"052482\",\"transaction_id\":\"\",\"type\":\"JCB\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "list page",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {
+   "offset": 2,
+   "num": 3
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#34>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:future_scheduled_delivery>\",\"status\":\"scheduled\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"},\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#35>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#36>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Scheduled for later\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#31>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:coupon_and_partial_payment>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2100,\"tax_cents\":150,\"tip_cents\":300,\"discounts\":[{\"type\":\"promo\",\"code\":\"SAVE5\",\"label\":\"$5 Off\",\"amount_cents\":500}],\"total_cents\":2050},\"customer\":{\"display_name\":\"Alex Kim\",\"email\":\"alex@example.com\",\"phone\":\"5558889999\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#32>\",\"position\":0,\"sku\":\"PZ400\",\"name\":\"BBQ Chicken Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1800,\"line_total_cents\":1800,\"menu_item_id\":\"<uuid#33>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1500,\"last4\":\"1111\",\"auth_code\":\"AUTH555\"},{\"method\":\"cash\",\"amount_cents\":550}],\"notes\":\"Customer will pay rest on pickup\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":5.5,\"is_tax_exempt\":false,\"payments\":[{\"amount\":15,\"auth_code\":\"AUTH555\",\"transaction_id\":\"TXN555\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#29>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:third_party_delivery_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1500,\"tax_cents\":125,\"tip_cents\":0,\"total_cents\":1625},\"customer\":{\"display_name\":\"Mike Brown\",\"email\":\"mike@example.com\",\"phone\":\"5556667777\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"45 Market St\",\"city\":\"San Francisco\",\"state\":\"CA\",\"postal_code\":\"94103\",\"country\":\"US\"}},\"items\":[{\"id\":\"<uuid#30>\",\"position\":0,\"sku\":\"PZ101\",\"name\":\"Cheese Pizza\",\"size\":\"Small\",\"quantity\":1,\"unit_price_cents\":1500,\"line_total_cents\":1500,\"routing\":\"unmatched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":1625}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"delivery_provider\":{\"delivery_id\":\"DD-7890\",\"pickup_date\":\"<time>\",\"provider_name\":\"DoorDash\",\"status\":\"assigned\",\"tracking_url\":\"https://doordash.com/track/DD-7890\"},\"is_tax_exempt\":false,\"payments\":[{\"amount\":16.25,\"auth_code\":\"\",\"transaction_id\":\"DDPAY123\",\"type\":\"third_party\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "list status",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {
+   "status": "completed"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#22>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:delivery_with_address>\",\"status\":\"completed\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"}},\"items\":[{\"id\":\"<uuid#23>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#24>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Ring the doorbell\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"kitchen_order_number\":1100,\"estimated_ready_at\":\"<time>\",\"driver_name\":\"Ana\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "list status accepted",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {
+   "status": "accepted"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#19>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:basic_pickup_order>\",\"status\":\"accepted\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#20>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"kitchen_order_number\":1101}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "list q",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {
+   "q": "DAVIS"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_coupon_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2972,\"tax_cents\":181,\"tip_cents\":302,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":3505},\"customer\":{\"display_name\":\"ERIK DAVIS\",\"email\":\"ERIK_TAILS11@YAHOO.COM\",\"phone\":\"4432077156\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#4>\",\"position\":0,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"12 Medium\",\"quantity\":1,\"unit_price_cents\":999,\"line_total_cents\":1149,\"children\":[{\"id\":\"<uuid#5>\",\"position\":0,\"name\":\"Add Pineapple\",\"quantity\":1,\"unit_price_cents\":150,\"line_total_cents\":150,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#6>\",\"position\":1,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"14 Large\",\"quantity\":1,\"unit_price_cents\":1199,\"line_total_cents\":1374,\"children\":[{\"id\":\"<uuid#7>\",\"position\":0,\"name\":\"Add Double Cheese\",\"quantity\":1,\"unit_price_cents\":175,\"line_total_cents\":175,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#8>\",\"position\":2,\"sku\":\"0\",\"name\":\"Brownies\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":449,\"line_total_cents\":449,\"menu_item_id\":\"<uuid#9>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":3505,\"last4\":\"303\",\"auth_code\":\"052482\"}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":35.05,\"auth_code\":\"052482\",\"transaction_id\":\"\",\"type\":\"JCB\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "list sort",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {
+   "sort": "placed_at_asc"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#39>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:by-name>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#40>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":0,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#37>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:v1>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#38>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#34>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:future_scheduled_delivery>\",\"status\":\"scheduled\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"},\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#35>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#36>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Scheduled for later\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#31>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:coupon_and_partial_payment>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2100,\"tax_cents\":150,\"tip_cents\":300,\"discounts\":[{\"type\":\"promo\",\"code\":\"SAVE5\",\"label\":\"$5 Off\",\"amount_cents\":500}],\"total_cents\":2050},\"customer\":{\"display_name\":\"Alex Kim\",\"email\":\"alex@example.com\",\"phone\":\"5558889999\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#32>\",\"position\":0,\"sku\":\"PZ400\",\"name\":\"BBQ Chicken Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1800,\"line_total_cents\":1800,\"menu_item_id\":\"<uuid#33>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1500,\"last4\":\"1111\",\"auth_code\":\"AUTH555\"},{\"method\":\"cash\",\"amount_cents\":550}],\"notes\":\"Customer will pay rest on pickup\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":5.5,\"is_tax_exempt\":false,\"payments\":[{\"amount\":15,\"auth_code\":\"AUTH555\",\"transaction_id\":\"TXN555\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#29>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:third_party_delivery_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1500,\"tax_cents\":125,\"tip_cents\":0,\"total_cents\":1625},\"customer\":{\"display_name\":\"Mike Brown\",\"email\":\"mike@example.com\",\"phone\":\"5556667777\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"45 Market St\",\"city\":\"San Francisco\",\"state\":\"CA\",\"postal_code\":\"94103\",\"country\":\"US\"}},\"items\":[{\"id\":\"<uuid#30>\",\"position\":0,\"sku\":\"PZ101\",\"name\":\"Cheese Pizza\",\"size\":\"Small\",\"quantity\":1,\"unit_price_cents\":1500,\"line_total_cents\":1500,\"routing\":\"unmatched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":1625}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"delivery_provider\":{\"delivery_id\":\"DD-7890\",\"pickup_date\":\"<time>\",\"provider_name\":\"DoorDash\",\"status\":\"assigned\",\"tracking_url\":\"https://doordash.com/track/DD-7890\"},\"is_tax_exempt\":false,\"payments\":[{\"amount\":16.25,\"auth_code\":\"\",\"transaction_id\":\"DDPAY123\",\"type\":\"third_party\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#26>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:tax_exempt_corporate_order>\",\"status\":\"cancelled\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":12000,\"tax_cents\":0,\"tip_cents\":0,\"total_cents\":12000},\"customer\":{\"display_name\":\"Emily Watson\",\"email\":\"emily@techcorp.com\",\"phone\":\"5553332222\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#27>\",\"position\":0,\"sku\":\"PZ300\",\"name\":\"Veggie Pizza\",\"size\":\"Large\",\"quantity\":5,\"unit_price_cents\":2400,\"line_total_cents\":12000,\"menu_item_id\":\"<uuid#28>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":12000}],\"notes\":\"Company lunch order\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":true,\"payments\":[{\"amount\":120,\"auth_code\":\"\",\"transaction_id\":\"INV-9001\",\"type\":\"invoice\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-002\"}},{\"id\":\"<uuid#22>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:delivery_with_address>\",\"status\":\"completed\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"}},\"items\":[{\"id\":\"<uuid#23>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#24>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Ring the doorbell\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"kitchen_order_number\":1100,\"estimated_ready_at\":\"<time>\",\"driver_name\":\"Ana\"},{\"id\":\"<uuid#19>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:basic_pickup_order>\",\"status\":\"accepted\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#20>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"kitchen_order_number\":1101},{\"id\":\"<uuid#15>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_real_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":125,\"tax_cents\":11,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":186},\"customer\":{\"display_name\":\"BEN MANSURIQ\",\"email\":\"BENJAMIN.MANSURI@BRYGID.COM\",\"phone\":\"6046487389\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#16>\",\"position\":0,\"sku\":\"0\",\"name\":\"12 oz Soda\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":125,\"line_total_cents\":125,\"children\":[{\"id\":\"<uuid#17>\",\"position\":0,\"name\":\"Coke\",\"quantity\":1,\"unit_price_cents\":0,\"line_total_cents\":0,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#18>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":186}],\"notes\":\"test\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":1.86,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}},{\"id\":\"<uuid#11>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_delayed_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":599,\"tax_cents\":39,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":688},\"customer\":{\"display_name\":\"AARYAN DHAKAL\",\"email\":\"AARYAN.DHAKAL22@GMAIL.COM\",\"phone\":\"6674030865\"},\"fulfillment\":{\"type\":\"pickup\",\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#12>\",\"position\":0,\"sku\":\"0\",\"name\":\"Mozzarella Sticks\",\"size\":\"6 Piece\",\"quantity\":1,\"unit_price_cents\":599,\"line_total_cents\":599,\"menu_item_id\":\"<uuid#13>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":688}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":6.88,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}},{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_coupon_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2972,\"tax_cents\":181,\"tip_cents\":302,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":3505},\"customer\":{\"display_name\":\"ERIK DAVIS\",\"email\":\"ERIK_TAILS11@YAHOO.COM\",\"phone\":\"4432077156\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#4>\",\"position\":0,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"12 Medium\",\"quantity\":1,\"unit_price_cents\":999,\"line_total_cents\":1149,\"children\":[{\"id\":\"<uuid#5>\",\"position\":0,\"name\":\"Add Pineapple\",\"quantity\":1,\"unit_price_cents\":150,\"line_total_cents\":150,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#6>\",\"position\":1,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"14 Large\",\"quantity\":1,\"unit_price_cents\":1199,\"line_total_cents\":1374,\"children\":[{\"id\":\"<uuid#7>\",\"position\":0,\"name\":\"Add Double Cheese\",\"quantity\":1,\"unit_price_cents\":175,\"line_total_cents\":175,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#8>\",\"position\":2,\"sku\":\"0\",\"name\":\"Brownies\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":449,\"line_total_cents\":449,\"menu_item_id\":\"<uuid#9>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":3505,\"last4\":\"303\",\"auth_code\":\"052482\"}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":35.05,\"auth_code\":\"052482\",\"transaction_id\":\"\",\"type\":\"JCB\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "list from/to",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {
+   "from": "<time>",
+   "to": "<time>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "list bad offset",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {
+   "offset": "abc"
+  },
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"offset must be an integer\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "list bad num",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {
+   "num": "xyz"
+  },
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"num must be an integer\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-source unknown",
+  "method": "GET",
+  "path": "/api/v1/orders/by-source/online/1",
+  "params": {},
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"order not found\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "by-id bad",
+  "method": "GET",
+  "path": "/api/v1/orders/nope",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"id must be a uuid\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "me orders",
+  "method": "GET",
+  "path": "/store/v1/me/orders",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#39>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:by-name>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#40>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":0,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#37>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:v1>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#38>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#34>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:future_scheduled_delivery>\",\"status\":\"scheduled\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"},\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#35>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#36>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Scheduled for later\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#31>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:coupon_and_partial_payment>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2100,\"tax_cents\":150,\"tip_cents\":300,\"discounts\":[{\"type\":\"promo\",\"code\":\"SAVE5\",\"label\":\"$5 Off\",\"amount_cents\":500}],\"total_cents\":2050},\"customer\":{\"display_name\":\"Alex Kim\",\"email\":\"alex@example.com\",\"phone\":\"5558889999\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#32>\",\"position\":0,\"sku\":\"PZ400\",\"name\":\"BBQ Chicken Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1800,\"line_total_cents\":1800,\"menu_item_id\":\"<uuid#33>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1500,\"last4\":\"1111\",\"auth_code\":\"AUTH555\"},{\"method\":\"cash\",\"amount_cents\":550}],\"notes\":\"Customer will pay rest on pickup\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":5.5,\"is_tax_exempt\":false,\"payments\":[{\"amount\":15,\"auth_code\":\"AUTH555\",\"transaction_id\":\"TXN555\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#29>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:third_party_delivery_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1500,\"tax_cents\":125,\"tip_cents\":0,\"total_cents\":1625},\"customer\":{\"display_name\":\"Mike Brown\",\"email\":\"mike@example.com\",\"phone\":\"5556667777\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"45 Market St\",\"city\":\"San Francisco\",\"state\":\"CA\",\"postal_code\":\"94103\",\"country\":\"US\"}},\"items\":[{\"id\":\"<uuid#30>\",\"position\":0,\"sku\":\"PZ101\",\"name\":\"Cheese Pizza\",\"size\":\"Small\",\"quantity\":1,\"unit_price_cents\":1500,\"line_total_cents\":1500,\"routing\":\"unmatched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":1625}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"delivery_provider\":{\"delivery_id\":\"DD-7890\",\"pickup_date\":\"<time>\",\"provider_name\":\"DoorDash\",\"status\":\"assigned\",\"tracking_url\":\"https://doordash.com/track/DD-7890\"},\"is_tax_exempt\":false,\"payments\":[{\"amount\":16.25,\"auth_code\":\"\",\"transaction_id\":\"DDPAY123\",\"type\":\"third_party\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},{\"id\":\"<uuid#26>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:tax_exempt_corporate_order>\",\"status\":\"cancelled\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":12000,\"tax_cents\":0,\"tip_cents\":0,\"total_cents\":12000},\"customer\":{\"display_name\":\"Emily Watson\",\"email\":\"emily@techcorp.com\",\"phone\":\"5553332222\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#27>\",\"position\":0,\"sku\":\"PZ300\",\"name\":\"Veggie Pizza\",\"size\":\"Large\",\"quantity\":5,\"unit_price_cents\":2400,\"line_total_cents\":12000,\"menu_item_id\":\"<uuid#28>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":12000}],\"notes\":\"Company lunch order\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":true,\"payments\":[{\"amount\":120,\"auth_code\":\"\",\"transaction_id\":\"INV-9001\",\"type\":\"invoice\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-002\"}},{\"id\":\"<uuid#22>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:delivery_with_address>\",\"status\":\"completed\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"}},\"items\":[{\"id\":\"<uuid#23>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#24>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Ring the doorbell\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"kitchen_order_number\":1100,\"estimated_ready_at\":\"<time>\",\"driver_name\":\"Ana\"},{\"id\":\"<uuid#19>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:basic_pickup_order>\",\"status\":\"accepted\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#20>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"},\"kitchen_order_number\":1101},{\"id\":\"<uuid#15>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_real_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":125,\"tax_cents\":11,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":186},\"customer\":{\"display_name\":\"BEN MANSURIQ\",\"email\":\"BENJAMIN.MANSURI@BRYGID.COM\",\"phone\":\"6046487389\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#16>\",\"position\":0,\"sku\":\"0\",\"name\":\"12 oz Soda\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":125,\"line_total_cents\":125,\"children\":[{\"id\":\"<uuid#17>\",\"position\":0,\"name\":\"Coke\",\"quantity\":1,\"unit_price_cents\":0,\"line_total_cents\":0,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#18>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":186}],\"notes\":\"test\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":1.86,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}},{\"id\":\"<uuid#11>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_delayed_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":599,\"tax_cents\":39,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":688},\"customer\":{\"display_name\":\"AARYAN DHAKAL\",\"email\":\"AARYAN.DHAKAL22@GMAIL.COM\",\"phone\":\"6674030865\"},\"fulfillment\":{\"type\":\"pickup\",\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#12>\",\"position\":0,\"sku\":\"0\",\"name\":\"Mozzarella Sticks\",\"size\":\"6 Piece\",\"quantity\":1,\"unit_price_cents\":599,\"line_total_cents\":599,\"menu_item_id\":\"<uuid#13>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":688}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":6.88,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}},{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_coupon_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2972,\"tax_cents\":181,\"tip_cents\":302,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":3505},\"customer\":{\"display_name\":\"ERIK DAVIS\",\"email\":\"ERIK_TAILS11@YAHOO.COM\",\"phone\":\"4432077156\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#4>\",\"position\":0,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"12 Medium\",\"quantity\":1,\"unit_price_cents\":999,\"line_total_cents\":1149,\"children\":[{\"id\":\"<uuid#5>\",\"position\":0,\"name\":\"Add Pineapple\",\"quantity\":1,\"unit_price_cents\":150,\"line_total_cents\":150,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#6>\",\"position\":1,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"14 Large\",\"quantity\":1,\"unit_price_cents\":1199,\"line_total_cents\":1374,\"children\":[{\"id\":\"<uuid#7>\",\"position\":0,\"name\":\"Add Double Cheese\",\"quantity\":1,\"unit_price_cents\":175,\"line_total_cents\":175,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#8>\",\"position\":2,\"sku\":\"0\",\"name\":\"Brownies\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":449,\"line_total_cents\":449,\"menu_item_id\":\"<uuid#9>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":3505,\"last4\":\"303\",\"auth_code\":\"052482\"}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":35.05,\"auth_code\":\"052482\",\"transaction_id\":\"\",\"type\":\"JCB\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "me floor",
+  "method": "GET",
+  "path": "/store/v1/me/floor",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"drivers\":[{\"id\":\"<driver>\",\"name\":\"Sam\",\"position\":1,\"status\":\"out\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#73>\",\"name\":\"Ana\",\"position\":2,\"status\":\"available\",\"updated_at\":\"<time>\"}],\"last_sync_at\":\"<time>\",\"shifts\":[{\"id\":\"<uuid#74>\",\"driver_id\":\"<driver>\",\"driver_name\":\"Sam\",\"clock_in\":\"<time>\",\"auto_out\":false}]}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "me delivery runs",
+  "method": "GET",
+  "path": "/store/v1/me/delivery-runs",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#71>\",\"batch_id\":7,\"driver_id\":\"<driver>\",\"driver_name\":\"Sam\",\"plan_id\":\"<uuid#75>\",\"suggested_ids\":[\"<uuid#22>\"],\"sent_ids\":[\"<uuid#22>\"],\"stops\":[{\"eta\":\"<time>\",\"order_id\":\"<uuid#22>\"}],\"at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "admin delivery runs",
+  "method": "GET",
+  "path": "/admin/v1/delivery-runs",
+  "params": {
+   "tenant_id": "<uuid#2>",
+   "location_id": "<uuid#3>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#71>\",\"batch_id\":7,\"driver_id\":\"<driver>\",\"driver_name\":\"Sam\",\"plan_id\":\"<uuid#75>\",\"suggested_ids\":[\"<uuid#22>\"],\"sent_ids\":[\"<uuid#22>\"],\"stops\":[{\"eta\":\"<time>\",\"order_id\":\"<uuid#22>\"}],\"at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "admin orders",
+  "method": "GET",
+  "path": "/admin/v1/orders",
+  "params": {
+   "tenant_id": "<uuid#2>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#39>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:by-name>\",\"status\":\"received\",\"customer_name\":\"John Doe\",\"total_cents\":1825,\"received_at\":\"<time>\"},{\"id\":\"<uuid#37>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:v1>\",\"status\":\"received\",\"customer_name\":\"John Doe\",\"total_cents\":1825,\"received_at\":\"<time>\"},{\"id\":\"<uuid#34>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:future_scheduled_delivery>\",\"status\":\"scheduled\",\"customer_name\":\"Sarah Connor\",\"total_cents\":3109,\"received_at\":\"<time>\"},{\"id\":\"<uuid#31>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:coupon_and_partial_payment>\",\"status\":\"received\",\"customer_name\":\"Alex Kim\",\"total_cents\":2050,\"received_at\":\"<time>\"},{\"id\":\"<uuid#29>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:third_party_delivery_order>\",\"status\":\"received\",\"customer_name\":\"Mike Brown\",\"total_cents\":1625,\"received_at\":\"<time>\"},{\"id\":\"<uuid#26>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:tax_exempt_corporate_order>\",\"status\":\"cancelled\",\"customer_name\":\"Emily Watson\",\"total_cents\":12000,\"received_at\":\"<time>\"},{\"id\":\"<uuid#22>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:delivery_with_address>\",\"status\":\"completed\",\"customer_name\":\"Sarah Connor\",\"total_cents\":3109,\"received_at\":\"<time>\"},{\"id\":\"<uuid#19>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:basic_pickup_order>\",\"status\":\"accepted\",\"customer_name\":\"John Doe\",\"total_cents\":1825,\"received_at\":\"<time>\"},{\"id\":\"<uuid#15>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_real_order>\",\"status\":\"received\",\"customer_name\":\"BEN MANSURIQ\",\"total_cents\":186,\"received_at\":\"<time>\"},{\"id\":\"<uuid#11>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_delayed_order>\",\"status\":\"received\",\"customer_name\":\"AARYAN DHAKAL\",\"total_cents\":688,\"received_at\":\"<time>\"},{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_coupon_order>\",\"status\":\"received\",\"customer_name\":\"ERIK DAVIS\",\"total_cents\":3505,\"received_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "admin orders by source",
+  "method": "GET",
+  "path": "/admin/v1/orders",
+  "params": {
+   "source_event_id": "<order_id:sample_coupon_order>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_coupon_order>\",\"status\":\"received\",\"customer_name\":\"ERIK DAVIS\",\"total_cents\":3505,\"received_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "menu unmatched",
+  "method": "GET",
+  "path": "/store/v1/me/menu/unmatched",
+  "params": {
+   "days": 7
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"name\":\"Regular Tomato  Cheese Pizza\",\"routing\":\"unmatched\",\"orders\":2,\"last_seen\":\"<time>\"},{\"name\":\"Cheese Pizza\",\"routing\":\"unmatched\",\"orders\":1,\"last_seen\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "restore",
+  "method": "GET",
+  "path": "/store/v1/agent/restore",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"state\":null,\"orders\":[{\"order\":{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_coupon_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2972,\"tax_cents\":181,\"tip_cents\":302,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":3505},\"customer\":{\"display_name\":\"ERIK DAVIS\",\"email\":\"ERIK_TAILS11@YAHOO.COM\",\"phone\":\"4432077156\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#4>\",\"position\":0,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"12 Medium\",\"quantity\":1,\"unit_price_cents\":999,\"line_total_cents\":1149,\"children\":[{\"id\":\"<uuid#5>\",\"position\":0,\"name\":\"Add Pineapple\",\"quantity\":1,\"unit_price_cents\":150,\"line_total_cents\":150,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#6>\",\"position\":1,\"sku\":\"0\",\"name\":\"Regular Tomato  Cheese Pizza\",\"size\":\"14 Large\",\"quantity\":1,\"unit_price_cents\":1199,\"line_total_cents\":1374,\"children\":[{\"id\":\"<uuid#7>\",\"position\":0,\"name\":\"Add Double Cheese\",\"quantity\":1,\"unit_price_cents\":175,\"line_total_cents\":175,\"notes\":\"add\"}],\"routing\":\"unmatched\"},{\"id\":\"<uuid#8>\",\"position\":2,\"sku\":\"0\",\"name\":\"Brownies\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":449,\"line_total_cents\":449,\"menu_item_id\":\"<uuid#9>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":3505,\"last4\":\"303\",\"auth_code\":\"052482\"}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":35.05,\"auth_code\":\"052482\",\"transaction_id\":\"\",\"type\":\"JCB\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}},\"agent_status\":null},{\"order\":{\"id\":\"<uuid#11>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_delayed_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":599,\"tax_cents\":39,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":688},\"customer\":{\"display_name\":\"AARYAN DHAKAL\",\"email\":\"AARYAN.DHAKAL22@GMAIL.COM\",\"phone\":\"6674030865\"},\"fulfillment\":{\"type\":\"pickup\",\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#12>\",\"position\":0,\"sku\":\"0\",\"name\":\"Mozzarella Sticks\",\"size\":\"6 Piece\",\"quantity\":1,\"unit_price_cents\":599,\"line_total_cents\":599,\"menu_item_id\":\"<uuid#13>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":688}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":6.88,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}},\"agent_status\":null},{\"order\":{\"id\":\"<uuid#15>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:sample_real_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":125,\"tax_cents\":11,\"tip_cents\":0,\"fees\":[{\"type\":\"other\",\"label\":\"Service Charge\",\"amount_cents\":50}],\"total_cents\":186},\"customer\":{\"display_name\":\"BEN MANSURIQ\",\"email\":\"BENJAMIN.MANSURI@BRYGID.COM\",\"phone\":\"6046487389\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#16>\",\"position\":0,\"sku\":\"0\",\"name\":\"12 oz Soda\",\"size\":\"Serving\",\"quantity\":1,\"unit_price_cents\":125,\"line_total_cents\":125,\"children\":[{\"id\":\"<uuid#17>\",\"position\":0,\"name\":\"Coke\",\"quantity\":1,\"unit_price_cents\":0,\"line_total_cents\":0,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#18>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":186}],\"notes\":\"test\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":1.86,\"is_tax_exempt\":false,\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0.0\",\"vendor_store_id\":\"\"}},\"agent_status\":null},{\"order\":{\"id\":\"<uuid#29>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:third_party_delivery_order>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1500,\"tax_cents\":125,\"tip_cents\":0,\"total_cents\":1625},\"customer\":{\"display_name\":\"Mike Brown\",\"email\":\"mike@example.com\",\"phone\":\"5556667777\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"45 Market St\",\"city\":\"San Francisco\",\"state\":\"CA\",\"postal_code\":\"94103\",\"country\":\"US\"}},\"items\":[{\"id\":\"<uuid#30>\",\"position\":0,\"sku\":\"PZ101\",\"name\":\"Cheese Pizza\",\"size\":\"Small\",\"quantity\":1,\"unit_price_cents\":1500,\"line_total_cents\":1500,\"routing\":\"unmatched\"}],\"payments\":[{\"method\":\"other\",\"amount_cents\":1625}],\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"delivery_provider\":{\"delivery_id\":\"DD-7890\",\"pickup_date\":\"<time>\",\"provider_name\":\"DoorDash\",\"status\":\"assigned\",\"tracking_url\":\"https://doordash.com/track/DD-7890\"},\"is_tax_exempt\":false,\"payments\":[{\"amount\":16.25,\"auth_code\":\"\",\"transaction_id\":\"DDPAY123\",\"type\":\"third_party\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},\"agent_status\":null},{\"order\":{\"id\":\"<uuid#31>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:coupon_and_partial_payment>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2100,\"tax_cents\":150,\"tip_cents\":300,\"discounts\":[{\"type\":\"promo\",\"code\":\"SAVE5\",\"label\":\"$5 Off\",\"amount_cents\":500}],\"total_cents\":2050},\"customer\":{\"display_name\":\"Alex Kim\",\"email\":\"alex@example.com\",\"phone\":\"5558889999\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#32>\",\"position\":0,\"sku\":\"PZ400\",\"name\":\"BBQ Chicken Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1800,\"line_total_cents\":1800,\"menu_item_id\":\"<uuid#33>\",\"printer_id\":\"<uuid#14>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1500,\"last4\":\"1111\",\"auth_code\":\"AUTH555\"},{\"method\":\"cash\",\"amount_cents\":550}],\"notes\":\"Customer will pay rest on pickup\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":5.5,\"is_tax_exempt\":false,\"payments\":[{\"amount\":15,\"auth_code\":\"AUTH555\",\"transaction_id\":\"TXN555\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},\"agent_status\":null},{\"order\":{\"id\":\"<uuid#34>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:future_scheduled_delivery>\",\"status\":\"scheduled\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":2000,\"tax_cents\":210,\"tip_cents\":500,\"fees\":[{\"type\":\"other\",\"label\":\"Standard delivery\",\"amount_cents\":399}],\"total_cents\":3109},\"customer\":{\"display_name\":\"Sarah Connor\",\"email\":\"sarah@example.com\",\"phone\":\"5559876543\"},\"fulfillment\":{\"type\":\"delivery\",\"address\":{\"line1\":\"123 Main St\",\"line2\":\"Apt 4B\",\"city\":\"New York\",\"state\":\"NY\",\"postal_code\":\"10001\",\"country\":\"US\",\"notes\":\"Main \\u0026 3rd\"},\"promised_at\":\"<time>\"},\"items\":[{\"id\":\"<uuid#35>\",\"position\":0,\"sku\":\"PZ200\",\"name\":\"Pepperoni Pizza\",\"size\":\"Large\",\"quantity\":1,\"unit_price_cents\":2000,\"line_total_cents\":2200,\"notes\":\"Well done\",\"children\":[{\"id\":\"<uuid#36>\",\"position\":0,\"name\":\"Extra Cheese\",\"quantity\":1,\"unit_price_cents\":200,\"line_total_cents\":200,\"notes\":\"add\"}],\"menu_item_id\":\"<uuid#25>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"cash\",\"amount_cents\":3109}],\"notes\":\"Scheduled for later\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":31.09,\"auth_code\":\"\",\"transaction_id\":\"\",\"type\":\"cash\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},\"agent_status\":null},{\"order\":{\"id\":\"<uuid#37>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:v1>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#38>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":<store_id>,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},\"agent_status\":null},{\"order\":{\"id\":\"<uuid#39>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"source\":\"online\",\"source_event_id\":\"<order_id:by-name>\",\"status\":\"received\",\"currency\":\"USD\",\"money\":{\"subtotal_cents\":1400,\"tax_cents\":175,\"tip_cents\":250,\"total_cents\":1825},\"customer\":{\"display_name\":\"John Doe\",\"email\":\"john.doe@example.com\",\"phone\":\"5551234567\"},\"fulfillment\":{\"type\":\"pickup\"},\"items\":[{\"id\":\"<uuid#40>\",\"position\":0,\"sku\":\"PZ100\",\"name\":\"Margherita Pizza\",\"size\":\"Medium\",\"quantity\":1,\"unit_price_cents\":1400,\"line_total_cents\":1400,\"menu_item_id\":\"<uuid#21>\",\"printer_id\":\"<uuid#10>\",\"routing\":\"matched\"}],\"payments\":[{\"method\":\"card\",\"amount_cents\":1825,\"last4\":\"4242\",\"auth_code\":\"AUTH123\"}],\"notes\":\"Extra napkins please\",\"placed_at\":\"<time>\",\"received_at\":\"<time>\",\"source_metadata\":{\"balance_owing\":0,\"is_tax_exempt\":false,\"payments\":[{\"amount\":18.25,\"auth_code\":\"AUTH123\",\"transaction_id\":\"TXN1001\",\"type\":\"card\"}],\"print_date\":\"<time>\",\"store_id\":0,\"store_name\":\"<tag> Test Pizza\",\"tver\":\"1.0\",\"vendor_store_id\":\"BRY-001\"}},\"agent_status\":null}],\"drivers\":[{\"id\":\"<driver>\",\"name\":\"Sam\",\"position\":1,\"status\":\"out\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#73>\",\"name\":\"Ana\",\"position\":2,\"status\":\"available\",\"updated_at\":\"<time>\"}]}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "admin order delete",
+  "method": "DELETE",
+  "path": "/admin/v1/orders/<uuid#15>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "deleted order",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#15>",
+  "params": {},
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"order not found\"}\n",
+  "mask": [],
+  "compare": "exact"
+ }
+]

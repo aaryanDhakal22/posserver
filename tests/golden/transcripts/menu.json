@@ -1,0 +1,805 @@
+[
+ {
+  "label": "menus empty",
+  "method": "GET",
+  "path": "/store/v1/me/menu/menus",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "menu add",
+  "method": "POST",
+  "path": "/store/v1/me/menu/menus",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Dinner\",\"description\":\"\",\"available\":true,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "menu add 2",
+  "method": "POST",
+  "path": "/store/v1/me/menu/menus",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#4>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Lunch\",\"description\":\"\",\"available\":true,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "menu add empty name",
+  "method": "POST",
+  "path": "/store/v1/me/menu/menus",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"name is required\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "menu edit",
+  "method": "PATCH",
+  "path": "/store/v1/me/menu/menus/<uuid#4>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#4>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Lunch Specials\",\"description\":\"\",\"available\":false,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "menus reorder",
+  "method": "POST",
+  "path": "/store/v1/me/menu/menus/reorder",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "menus reorder bad",
+  "method": "POST",
+  "path": "/store/v1/me/menu/menus/reorder",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"ids must be uuids\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "menus",
+  "method": "GET",
+  "path": "/store/v1/me/menu/menus",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#4>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Lunch Specials\",\"description\":\"\",\"available\":false,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Dinner\",\"description\":\"\",\"available\":true,\"position\":1,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "category add",
+  "method": "POST",
+  "path": "/store/v1/me/menu/menus/<uuid#1>/categories",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#5>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"menu_id\":\"<uuid#1>\",\"name\":\"Mains\",\"description\":\"\",\"available\":true,\"position\":0,\"default_printer_id\":null,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "category add 2",
+  "method": "POST",
+  "path": "/store/v1/me/menu/menus/<uuid#1>/categories",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#6>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"menu_id\":\"<uuid#1>\",\"name\":\"Sides\",\"description\":\"\",\"available\":true,\"position\":0,\"default_printer_id\":null,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "category add unknown menu",
+  "method": "POST",
+  "path": "/store/v1/me/menu/menus/<uuid#7>/categories",
+  "params": {},
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"not found\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "category edit",
+  "method": "PATCH",
+  "path": "/store/v1/me/menu/categories/<uuid#6>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#6>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"menu_id\":\"<uuid#1>\",\"name\":\"Sides \\u0026 Extras\",\"description\":\"\",\"available\":false,\"position\":0,\"default_printer_id\":\"<uuid#8>\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "categories reorder",
+  "method": "POST",
+  "path": "/store/v1/me/menu/categories/reorder",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "categories",
+  "method": "GET",
+  "path": "/store/v1/me/menu/menus/<uuid#1>/categories",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#6>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"menu_id\":\"<uuid#1>\",\"name\":\"Sides \\u0026 Extras\",\"description\":\"\",\"available\":false,\"position\":0,\"default_printer_id\":\"<uuid#8>\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#5>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"menu_id\":\"<uuid#1>\",\"name\":\"Mains\",\"description\":\"\",\"available\":true,\"position\":1,\"default_printer_id\":null,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "item add",
+  "method": "POST",
+  "path": "/store/v1/me/menu/categories/<uuid#5>/items",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#9>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"category_id\":\"<uuid#5>\",\"name\":\"Burger\",\"description\":\"\",\"price_cents\":500,\"tax_rate_bps\":0,\"in_stock\":true,\"out_until\":null,\"tags\":[],\"printer_id\":null,\"position\":0,\"attributes\":{},\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "item add 2",
+  "method": "POST",
+  "path": "/store/v1/me/menu/categories/<uuid#6>/items",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#10>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"category_id\":\"<uuid#6>\",\"name\":\"Fries\",\"description\":\"\",\"price_cents\":300,\"tax_rate_bps\":0,\"in_stock\":true,\"out_until\":null,\"tags\":[],\"printer_id\":null,\"position\":0,\"attributes\":{},\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "item add bad price",
+  "method": "POST",
+  "path": "/store/v1/me/menu/categories/<uuid#5>/items",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"price cannot be negative\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "item edit",
+  "method": "PATCH",
+  "path": "/store/v1/me/menu/items/<uuid#9>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#9>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"category_id\":\"<uuid#5>\",\"name\":\"Deluxe Burger\",\"description\":\"with cheese\",\"price_cents\":1299,\"tax_rate_bps\":600,\"in_stock\":true,\"out_until\":null,\"tags\":[\"Popular\"],\"printer_id\":null,\"position\":0,\"attributes\":{},\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "item edit out of scope",
+  "method": "PATCH",
+  "path": "/store/v1/me/menu/items/<uuid#7>",
+  "params": {},
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"not found\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "item printer",
+  "method": "PATCH",
+  "path": "/store/v1/me/menu/items/<uuid#9>/printer",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "item printer clear",
+  "method": "PATCH",
+  "path": "/store/v1/me/menu/items/<uuid#10>/printer",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "item printer foreign",
+  "method": "PATCH",
+  "path": "/store/v1/me/menu/items/<uuid#10>/printer",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"printer does not belong to this location\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "items reorder",
+  "method": "POST",
+  "path": "/store/v1/me/menu/items/reorder",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "items",
+  "method": "GET",
+  "path": "/store/v1/me/menu/categories/<uuid#5>/items",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#9>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"category_id\":\"<uuid#5>\",\"name\":\"Deluxe Burger\",\"description\":\"with cheese\",\"price_cents\":1299,\"tax_rate_bps\":600,\"in_stock\":true,\"out_until\":null,\"tags\":[\"Popular\"],\"printer_id\":\"<uuid#11>\",\"position\":0,\"attributes\":{},\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "group add",
+  "method": "POST",
+  "path": "/store/v1/me/menu/modifier-groups",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#12>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Add-ons\",\"required\":false,\"min_select\":0,\"max_select\":2,\"allow_multiple\":false,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "group add bad",
+  "method": "POST",
+  "path": "/store/v1/me/menu/modifier-groups",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"min select cannot exceed max select\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "group edit",
+  "method": "PATCH",
+  "path": "/store/v1/me/menu/modifier-groups/<uuid#12>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#12>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Toppings\",\"required\":false,\"min_select\":0,\"max_select\":3,\"allow_multiple\":true,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "option add",
+  "method": "POST",
+  "path": "/store/v1/me/menu/modifier-groups/<uuid#12>/options",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#13>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"group_id\":\"<uuid#12>\",\"name\":\"Bacon\",\"price_delta_cents\":150,\"in_stock\":true,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "option add 2",
+  "method": "POST",
+  "path": "/store/v1/me/menu/modifier-groups/<uuid#12>/options",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#14>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"group_id\":\"<uuid#12>\",\"name\":\"Onions\",\"price_delta_cents\":0,\"in_stock\":true,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "option edit",
+  "method": "PATCH",
+  "path": "/store/v1/me/menu/modifier-groups/<uuid#12>/options/<uuid#14>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#14>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"group_id\":\"<uuid#12>\",\"name\":\"Grilled Onions\",\"price_delta_cents\":50,\"in_stock\":false,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "options reorder",
+  "method": "POST",
+  "path": "/store/v1/me/menu/modifier-groups/<uuid#12>/options/reorder",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "options",
+  "method": "GET",
+  "path": "/store/v1/me/menu/modifier-groups/<uuid#12>/options",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#14>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"group_id\":\"<uuid#12>\",\"name\":\"Grilled Onions\",\"price_delta_cents\":50,\"in_stock\":false,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#13>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"group_id\":\"<uuid#12>\",\"name\":\"Bacon\",\"price_delta_cents\":150,\"in_stock\":true,\"position\":1,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "groups",
+  "method": "GET",
+  "path": "/store/v1/me/menu/modifier-groups",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#12>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Toppings\",\"required\":false,\"min_select\":0,\"max_select\":3,\"allow_multiple\":true,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "item link group",
+  "method": "POST",
+  "path": "/store/v1/me/menu/items/<uuid#9>/modifier-groups",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "item link group again",
+  "method": "POST",
+  "path": "/store/v1/me/menu/items/<uuid#9>/modifier-groups",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "item groups",
+  "method": "GET",
+  "path": "/store/v1/me/menu/items/<uuid#9>/modifier-groups",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"group\":{\"id\":\"<uuid#12>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Toppings\",\"required\":false,\"min_select\":0,\"max_select\":3,\"allow_multiple\":true,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},\"attach_position\":1}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "operator login wrong",
+  "method": "POST",
+  "path": "/store/v1/operator/login",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid username or password\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "operator login",
+  "method": "POST",
+  "path": "/store/v1/operator/login",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"allowed_locations\":[{\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\"}],\"operator\":{\"id\":\"<uuid#15>\",\"username\":\"op<tag-a>\",\"display_name\":\"Golden Op\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},\"token\":\"qopr_<token>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "operator me",
+  "method": "GET",
+  "path": "/store/v1/operator/me",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"allowed_locations\":[{\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\"}],\"operator_id\":\"<uuid#15>\",\"username\":\"op<tag-a>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "operator menu",
+  "method": "GET",
+  "path": "/store/v1/operator/menu",
+  "params": {
+   "location_id": "<uuid#3>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"location_id\":\"<uuid#3>\",\"menus\":[{\"id\":\"<uuid#4>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Lunch Specials\",\"description\":\"\",\"available\":false,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\",\"categories\":null},{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Dinner\",\"description\":\"\",\"available\":true,\"position\":1,\"created_at\":\"<time>\",\"updated_at\":\"<time>\",\"categories\":[{\"id\":\"<uuid#6>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"menu_id\":\"<uuid#1>\",\"name\":\"Sides \\u0026 Extras\",\"description\":\"\",\"available\":false,\"position\":0,\"default_printer_id\":\"<uuid#8>\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\",\"items\":[{\"id\":\"<uuid#10>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"category_id\":\"<uuid#6>\",\"name\":\"Fries\",\"description\":\"\",\"price_cents\":300,\"tax_rate_bps\":0,\"in_stock\":true,\"out_until\":null,\"tags\":[],\"printer_id\":null,\"position\":0,\"attributes\":{},\"created_at\":\"<time>\",\"updated_at\":\"<time>\",\"modifier_groups\":[]}]},{\"id\":\"<uuid#5>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"menu_id\":\"<uuid#1>\",\"name\":\"Mains\",\"description\":\"\",\"available\":true,\"position\":1,\"default_printer_id\":null,\"created_at\":\"<time>\",\"updated_at\":\"<time>\",\"items\":[{\"id\":\"<uuid#9>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"category_id\":\"<uuid#5>\",\"name\":\"Deluxe Burger\",\"description\":\"with cheese\",\"price_cents\":1299,\"tax_rate_bps\":600,\"in_stock\":true,\"out_until\":null,\"tags\":[\"Popular\"],\"printer_id\":\"<uuid#11>\",\"position\":0,\"attributes\":{},\"created_at\":\"<time>\",\"updated_at\":\"<time>\",\"modifier_groups\":[{\"id\":\"<uuid#12>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Toppings\",\"required\":false,\"min_select\":0,\"max_select\":3,\"allow_multiple\":true,\"created_at\":\"<time>\",\"updated_at\":\"<time>\",\"options\":[{\"id\":\"<uuid#14>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"group_id\":\"<uuid#12>\",\"name\":\"Grilled Onions\",\"price_delta_cents\":50,\"in_stock\":false,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#13>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"group_id\":\"<uuid#12>\",\"name\":\"Bacon\",\"price_delta_cents\":150,\"in_stock\":true,\"position\":1,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]}]}]}]}]}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "operator menu other store",
+  "method": "GET",
+  "path": "/store/v1/operator/menu",
+  "params": {
+   "location_id": "<uuid#16>"
+  },
+  "status": 403,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"not allowed for this location\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "operator menu no location",
+  "method": "GET",
+  "path": "/store/v1/operator/menu",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"location_id must be a uuid\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "operator me revoked",
+  "method": "GET",
+  "path": "/store/v1/operator/me",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid or expired token\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "item unlink group",
+  "method": "DELETE",
+  "path": "/store/v1/me/menu/items/<uuid#9>/modifier-groups/<uuid#12>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "option delete",
+  "method": "DELETE",
+  "path": "/store/v1/me/menu/modifier-groups/<uuid#12>/options/<uuid#13>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "group delete",
+  "method": "DELETE",
+  "path": "/store/v1/me/menu/modifier-groups/<uuid#12>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "item delete",
+  "method": "DELETE",
+  "path": "/store/v1/me/menu/items/<uuid#10>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "category delete",
+  "method": "DELETE",
+  "path": "/store/v1/me/menu/categories/<uuid#6>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "menu delete",
+  "method": "DELETE",
+  "path": "/store/v1/me/menu/menus/<uuid#4>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "menu delete again",
+  "method": "DELETE",
+  "path": "/store/v1/me/menu/menus/<uuid#4>",
+  "params": {},
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"not found\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "csv dry run",
+  "method": "POST",
+  "path": "/store/v1/me/menu/import",
+  "params": {
+   "dry_run": 1,
+   "replace": 0
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"dry_run\":true,\"replace\":false,\"rows\":4,\"menus_deleted\":0,\"menus\":1,\"categories\":2,\"category_printers\":1,\"items\":4,\"items_updated\":0,\"item_printers\":1,\"prints_on\":[{\"printer\":\"Pizza\",\"items\":2},{\"printer\":\"Sub\",\"items\":1}],\"items_no_printer\":1,\"changes\":[\"+ menu \\\"Main\\\"\",\"+ category \\\"Pizza\\\" (printer Pizza)\",\"  + \\\"Cheese Pizza\\\" $10.00\",\"  + \\\"Pepperoni Pizza\\\" $12.00\",\"  + \\\"Garlic Knots\\\" $4.00\",\"  ~ \\\"Garlic Knots\\\" printer → Sub\",\"+ category \\\"Subs\\\"\",\"  + \\\"Philly Cheese Steak\\\" $9.50\"]}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "csv import",
+  "method": "POST",
+  "path": "/store/v1/me/menu/import",
+  "params": {
+   "dry_run": 0,
+   "replace": 0
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"dry_run\":false,\"replace\":false,\"rows\":4,\"menus_deleted\":0,\"menus\":1,\"categories\":2,\"category_printers\":1,\"items\":4,\"items_updated\":0,\"item_printers\":1,\"prints_on\":[{\"printer\":\"Pizza\",\"items\":2},{\"printer\":\"Sub\",\"items\":1}],\"items_no_printer\":1,\"changes\":[\"+ menu \\\"Main\\\"\",\"+ category \\\"Pizza\\\" (printer Pizza)\",\"  + \\\"Cheese Pizza\\\" $10.00\",\"  + \\\"Pepperoni Pizza\\\" $12.00\",\"  + \\\"Garlic Knots\\\" $4.00\",\"  ~ \\\"Garlic Knots\\\" printer → Sub\",\"+ category \\\"Subs\\\"\",\"  + \\\"Philly Cheese Steak\\\" $9.50\"]}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "csv import again",
+  "method": "POST",
+  "path": "/store/v1/me/menu/import",
+  "params": {
+   "dry_run": 0,
+   "replace": 0
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"dry_run\":false,\"replace\":false,\"rows\":4,\"menus_deleted\":0,\"menus\":0,\"categories\":0,\"category_printers\":0,\"items\":0,\"items_updated\":0,\"item_printers\":0,\"prints_on\":[{\"printer\":\"Pizza\",\"items\":2},{\"printer\":\"Sub\",\"items\":1}],\"items_no_printer\":1,\"changes\":[]}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "csv bad header",
+  "method": "POST",
+  "path": "/store/v1/me/menu/import",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"dry_run\":false,\"replace\":false,\"rows\":1,\"menus_deleted\":0,\"menus\":0,\"categories\":1,\"category_printers\":0,\"items\":1,\"items_updated\":0,\"item_printers\":0,\"prints_on\":[],\"items_no_printer\":1,\"changes\":[\"+ category \\\"A\\\"\",\"  + \\\"B\\\" $0.00\"]}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "csv export",
+  "method": "GET",
+  "path": "/store/v1/me/menu/export.csv",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-disposition": "attachment; filename=\"menu.csv\"",
+   "content-type": "text/csv; charset=utf-8"
+  },
+  "cookies": [],
+  "body": "menu,category,item,price,printer,description\nDinner,Mains,Deluxe Burger,12.99,Pizza,with cheese\nMain,Pizza,Cheese Pizza,10.00,Pizza,\nMain,Pizza,Pepperoni Pizza,12.00,Pizza,\nMain,Pizza,Garlic Knots,4.00,Sub,\nMain,Subs,Philly Cheese Steak,9.50,,\nMain,A,B,0.00,,\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "csv replace",
+  "method": "POST",
+  "path": "/store/v1/me/menu/import",
+  "params": {
+   "dry_run": 0,
+   "replace": 1
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"dry_run\":false,\"replace\":true,\"rows\":6,\"menus_deleted\":2,\"menus\":2,\"categories\":4,\"category_printers\":2,\"items\":6,\"items_updated\":0,\"item_printers\":1,\"prints_on\":[{\"printer\":\"Pizza\",\"items\":3},{\"printer\":\"Sub\",\"items\":1}],\"items_no_printer\":2,\"changes\":[\"- menu \\\"Dinner\\\" (and everything in it)\",\"- menu \\\"Main\\\" (and everything in it)\",\"+ menu \\\"Dinner\\\"\",\"+ category \\\"Mains\\\" (printer Pizza)\",\"  + \\\"Deluxe Burger\\\" $12.99\",\"+ menu \\\"Main\\\"\",\"+ category \\\"Pizza\\\" (printer Pizza)\",\"  + \\\"Cheese Pizza\\\" $10.00\",\"  + \\\"Pepperoni Pizza\\\" $12.00\",\"  + \\\"Garlic Knots\\\" $4.00\",\"  ~ \\\"Garlic Knots\\\" printer → Sub\",\"+ category \\\"Subs\\\"\",\"  + \\\"Philly Cheese Steak\\\" $9.50\",\"+ category \\\"A\\\"\",\"  + \\\"B\\\" $0.00\"]}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "menus after csv",
+  "method": "GET",
+  "path": "/store/v1/me/menu/menus",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#17>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Dinner\",\"description\":\"\",\"available\":true,\"position\":0,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#18>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Main\",\"description\":\"\",\"available\":true,\"position\":1,\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "unmatched",
+  "method": "GET",
+  "path": "/store/v1/me/menu/unmatched",
+  "params": {
+   "days": 7
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[]\n",
+  "mask": [],
+  "compare": "exact"
+ }
+]
