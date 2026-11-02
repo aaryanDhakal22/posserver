@@ -13,6 +13,7 @@ import (
 type Querier interface {
 	AddOperatorLocation(ctx context.Context, arg AddOperatorLocationParams) error
 	AttachModifierGroup(ctx context.Context, arg AttachModifierGroupParams) error
+	AuthenticateChannel(ctx context.Context, keyHash pgtype.Text) (Channel, error)
 	// Unflag the location's current receipt printer (one per location).
 	ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error
 	CountItemsForGroup(ctx context.Context, arg CountItemsForGroupParams) (int64, error)
@@ -23,6 +24,8 @@ type Querier interface {
 	CountUnackedOrdersByTenant(ctx context.Context, arg CountUnackedOrdersByTenantParams) ([]CountUnackedOrdersByTenantRow, error)
 	// App releases (Quibase APKs) ----------------------------------------------------
 	CreateAppRelease(ctx context.Context, arg CreateAppReleaseParams) (CreateAppReleaseRow, error)
+	// ─── Channels (main 3.0) ──────────────────────────────────────────────────
+	CreateChannel(ctx context.Context, arg CreateChannelParams) (Channel, error)
 	// ───────────────────────────────────────────────────────────────────────────
 	// Devices (API keys)
 	// ───────────────────────────────────────────────────────────────────────────
@@ -62,6 +65,7 @@ type Querier interface {
 	DeferExternalStopPush(ctx context.Context, arg DeferExternalStopPushParams) error
 	DeferOrderGeoPush(ctx context.Context, arg DeferOrderGeoPushParams) error
 	DeleteAppRelease(ctx context.Context, arg DeleteAppReleaseParams) (int64, error)
+	DeleteChannel(ctx context.Context, id pgtype.UUID) (int64, error)
 	DeleteDevice(ctx context.Context, id pgtype.UUID) error
 	DeleteExternalStop(ctx context.Context, arg DeleteExternalStopParams) (int64, error)
 	DeleteExternalWork(ctx context.Context, orderID pgtype.UUID) error
@@ -107,6 +111,7 @@ type Querier interface {
 	GetAgentState(ctx context.Context, locationID pgtype.UUID) (AgentState, error)
 	GetAgentUpdate(ctx context.Context, id pgtype.UUID) (AgentUpdate, error)
 	GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKParams) ([]byte, error)
+	GetChannel(ctx context.Context, id pgtype.UUID) (Channel, error)
 	GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagReportRow, error)
 	GetExternalStop(ctx context.Context, arg GetExternalStopParams) (GeoExternalStop, error)
 	GetExternalWork(ctx context.Context, orderID pgtype.UUID) (GeoExternalWork, error)
@@ -176,6 +181,8 @@ type Querier interface {
 	ListAppReleases(ctx context.Context, app string) ([]ListAppReleasesRow, error)
 	ListCategoriesByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuCategory, error)
 	ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) ([]MenuCategory, error)
+	ListChannels(ctx context.Context) ([]Channel, error)
+	ListChannelsByLocation(ctx context.Context, locationID pgtype.UUID) ([]Channel, error)
 	ListDeliveryRuns(ctx context.Context, arg ListDeliveryRunsParams) ([]DeliveryRun, error)
 	ListDevicesByLocation(ctx context.Context, locationID pgtype.UUID) ([]Device, error)
 	ListDiagReports(ctx context.Context, arg ListDiagReportsParams) ([]ListDiagReportsRow, error)
@@ -260,6 +267,7 @@ type Querier interface {
 	ResetOrderGeoForChoice(ctx context.Context, arg ResetOrderGeoForChoiceParams) error
 	ResetOrderGeoForPin(ctx context.Context, orderID pgtype.UUID) error
 	RevokeAllOperatorTokens(ctx context.Context, operatorID pgtype.UUID) error
+	RevokeChannel(ctx context.Context, id pgtype.UUID) (Channel, error)
 	RevokeDevice(ctx context.Context, id pgtype.UUID) error
 	// Keep the newest `keep` active tokens of a location; revoke the rest.
 	RevokeExcessTabletTokens(ctx context.Context, arg RevokeExcessTabletTokensParams) (int64, error)
@@ -291,6 +299,7 @@ type Querier interface {
 	// the repo's assemble() is reused unchanged.
 	SearchOrdersInScope(ctx context.Context, arg SearchOrdersInScopeParams) ([]Order, error)
 	SetCategoryPosition(ctx context.Context, arg SetCategoryPositionParams) error
+	SetChannelKey(ctx context.Context, arg SetChannelKeyParams) (Channel, error)
 	SetDiagReportResolved(ctx context.Context, arg SetDiagReportResolvedParams) (int64, error)
 	SetExternalStopOutsideArea(ctx context.Context, arg SetExternalStopOutsideAreaParams) (int64, error)
 	// A pin or a chosen candidate: re-route from this point and push it again,
@@ -325,9 +334,11 @@ type Querier interface {
 	// reply). Only while the row is still 'requested' — a status report the agent
 	// already sent is newer and wins.
 	SettleAgentUpdateRequest(ctx context.Context, arg SettleAgentUpdateRequestParams) (int64, error)
+	TouchChannel(ctx context.Context, id pgtype.UUID) error
 	TouchDevice(ctx context.Context, id pgtype.UUID) error
 	TouchOperatorToken(ctx context.Context, id pgtype.UUID) error
 	TouchTabletToken(ctx context.Context, id pgtype.UUID) error
+	UpdateChannel(ctx context.Context, arg UpdateChannelParams) (Channel, error)
 	// Updates the editable surface of a location in one shot. Pass current values
 	// for fields you don't want to change — there's no partial-update semantics.
 	UpdateLocationDetails(ctx context.Context, arg UpdateLocationDetailsParams) (Location, error)

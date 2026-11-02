@@ -51,6 +51,31 @@ func (q *Queries) AttachModifierGroup(ctx context.Context, arg AttachModifierGro
 	return err
 }
 
+const authenticateChannel = `-- name: AuthenticateChannel :one
+SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at FROM channels WHERE key_hash = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) AuthenticateChannel(ctx context.Context, keyHash pgtype.Text) (Channel, error) {
+	row := q.db.QueryRow(ctx, authenticateChannel, keyHash)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.Permissions,
+		&i.Builtin,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const clearReceiptPrinter = `-- name: ClearReceiptPrinter :exec
 UPDATE printers SET is_receipt = false, updated_at = now()
 WHERE location_id = $1 AND is_receipt
@@ -204,6 +229,55 @@ func (q *Queries) CreateAppRelease(ctx context.Context, arg CreateAppReleasePara
 		&i.Sha256,
 		&i.Size,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createChannel = `-- name: CreateChannel :one
+
+INSERT INTO channels (tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at
+`
+
+type CreateChannelParams struct {
+	TenantID    pgtype.UUID `json:"tenant_id"`
+	LocationID  pgtype.UUID `json:"location_id"`
+	Kind        string      `json:"kind"`
+	Name        string      `json:"name"`
+	KeyHash     pgtype.Text `json:"key_hash"`
+	KeyPrefix   string      `json:"key_prefix"`
+	Permissions []byte      `json:"permissions"`
+	Builtin     bool        `json:"builtin"`
+}
+
+// ─── Channels (main 3.0) ──────────────────────────────────────────────────
+func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (Channel, error) {
+	row := q.db.QueryRow(ctx, createChannel,
+		arg.TenantID,
+		arg.LocationID,
+		arg.Kind,
+		arg.Name,
+		arg.KeyHash,
+		arg.KeyPrefix,
+		arg.Permissions,
+		arg.Builtin,
+	)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.Permissions,
+		&i.Builtin,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -940,6 +1014,18 @@ func (q *Queries) DeleteAppRelease(ctx context.Context, arg DeleteAppReleasePara
 	return result.RowsAffected(), nil
 }
 
+const deleteChannel = `-- name: DeleteChannel :execrows
+DELETE FROM channels WHERE id = $1 AND NOT builtin
+`
+
+func (q *Queries) DeleteChannel(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteChannel, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteDevice = `-- name: DeleteDevice :exec
 DELETE FROM devices WHERE id = $1
 `
@@ -1443,6 +1529,31 @@ func (q *Queries) GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKPara
 	var apk []byte
 	err := row.Scan(&apk)
 	return apk, err
+}
+
+const getChannel = `-- name: GetChannel :one
+SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at FROM channels WHERE id = $1
+`
+
+func (q *Queries) GetChannel(ctx context.Context, id pgtype.UUID) (Channel, error) {
+	row := q.db.QueryRow(ctx, getChannel, id)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.Permissions,
+		&i.Builtin,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getDiagReport = `-- name: GetDiagReport :one
@@ -3141,6 +3252,82 @@ func (q *Queries) ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) 
 			&i.Available,
 			&i.Position,
 			&i.DefaultPrinterID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChannels = `-- name: ListChannels :many
+SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at FROM channels ORDER BY created_at ASC
+`
+
+func (q *Queries) ListChannels(ctx context.Context) ([]Channel, error) {
+	rows, err := q.db.Query(ctx, listChannels)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Channel
+	for rows.Next() {
+		var i Channel
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Kind,
+			&i.Name,
+			&i.KeyHash,
+			&i.KeyPrefix,
+			&i.Permissions,
+			&i.Builtin,
+			&i.RevokedAt,
+			&i.LastUsedAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChannelsByLocation = `-- name: ListChannelsByLocation :many
+SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at FROM channels WHERE location_id = $1 ORDER BY created_at ASC
+`
+
+func (q *Queries) ListChannelsByLocation(ctx context.Context, locationID pgtype.UUID) ([]Channel, error) {
+	rows, err := q.db.Query(ctx, listChannelsByLocation, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Channel
+	for rows.Next() {
+		var i Channel
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Kind,
+			&i.Name,
+			&i.KeyHash,
+			&i.KeyPrefix,
+			&i.Permissions,
+			&i.Builtin,
+			&i.RevokedAt,
+			&i.LastUsedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -5038,6 +5225,33 @@ func (q *Queries) RevokeAllOperatorTokens(ctx context.Context, operatorID pgtype
 	return err
 }
 
+const revokeChannel = `-- name: RevokeChannel :one
+UPDATE channels SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
+WHERE id = $1 AND NOT builtin
+RETURNING id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at
+`
+
+func (q *Queries) RevokeChannel(ctx context.Context, id pgtype.UUID) (Channel, error) {
+	row := q.db.QueryRow(ctx, revokeChannel, id)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.Permissions,
+		&i.Builtin,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const revokeDevice = `-- name: RevokeDevice :exec
 UPDATE devices SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL
 `
@@ -5444,6 +5658,39 @@ type SetCategoryPositionParams struct {
 func (q *Queries) SetCategoryPosition(ctx context.Context, arg SetCategoryPositionParams) error {
 	_, err := q.db.Exec(ctx, setCategoryPosition, arg.ID, arg.TenantID, arg.Position)
 	return err
+}
+
+const setChannelKey = `-- name: SetChannelKey :one
+UPDATE channels SET key_hash = $2, key_prefix = $3, revoked_at = NULL, updated_at = now()
+WHERE id = $1 AND NOT builtin
+RETURNING id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at
+`
+
+type SetChannelKeyParams struct {
+	ID        pgtype.UUID `json:"id"`
+	KeyHash   pgtype.Text `json:"key_hash"`
+	KeyPrefix string      `json:"key_prefix"`
+}
+
+func (q *Queries) SetChannelKey(ctx context.Context, arg SetChannelKeyParams) (Channel, error) {
+	row := q.db.QueryRow(ctx, setChannelKey, arg.ID, arg.KeyHash, arg.KeyPrefix)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.Permissions,
+		&i.Builtin,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const setDiagReportResolved = `-- name: SetDiagReportResolved :execrows
@@ -5926,6 +6173,16 @@ func (q *Queries) SettleAgentUpdateRequest(ctx context.Context, arg SettleAgentU
 	return result.RowsAffected(), nil
 }
 
+const touchChannel = `-- name: TouchChannel :exec
+UPDATE channels SET last_used_at = now()
+WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')
+`
+
+func (q *Queries) TouchChannel(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, touchChannel, id)
+	return err
+}
+
 const touchDevice = `-- name: TouchDevice :exec
 UPDATE devices SET last_used_at = now() WHERE id = $1
 `
@@ -5951,6 +6208,39 @@ UPDATE tablet_report_tokens SET last_used_at = now() WHERE id = $1
 func (q *Queries) TouchTabletToken(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, touchTabletToken, id)
 	return err
+}
+
+const updateChannel = `-- name: UpdateChannel :one
+UPDATE channels SET name = $2, permissions = $3, updated_at = now()
+WHERE id = $1
+RETURNING id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at
+`
+
+type UpdateChannelParams struct {
+	ID          pgtype.UUID `json:"id"`
+	Name        string      `json:"name"`
+	Permissions []byte      `json:"permissions"`
+}
+
+func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (Channel, error) {
+	row := q.db.QueryRow(ctx, updateChannel, arg.ID, arg.Name, arg.Permissions)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.Permissions,
+		&i.Builtin,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateLocationDetails = `-- name: UpdateLocationDetails :one

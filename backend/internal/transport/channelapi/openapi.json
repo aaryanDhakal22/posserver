@@ -1,0 +1,97 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Quicc POS channel API",
+    "version": "1.0.0",
+    "description": "main's ports for every sales channel (main 3.0). A channel — the web storefront, the call center, a counter POS terminal, a vendor feed — is an adapter: it holds no business rules and asks main for the menu, prices, store status, orders and tracking. Each channel belongs to one store and authenticates with its own bearer key (qch_…, issued in main's admin UI). Every error is {error, code}; branch on code."
+  },
+  "servers": [{ "url": "/" }],
+  "security": [{ "channelKey": [] }],
+  "paths": {
+    "/channel/v1/me": {
+      "get": {
+        "operationId": "getMe",
+        "summary": "Who am I: the channel behind this key and its store",
+        "responses": {
+          "200": { "description": "The channel and its store", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Me" } } } },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/channel/v1/openapi.json": {
+      "get": {
+        "operationId": "getSpec",
+        "summary": "This document",
+        "security": [],
+        "responses": {
+          "200": { "description": "The OpenAPI document", "content": { "application/json": { "schema": { "type": "object" } } } }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "channelKey": { "type": "http", "scheme": "bearer", "description": "The channel's key: Authorization: Bearer qch_…" }
+    },
+    "responses": {
+      "Unauthorized": {
+        "description": "Missing, unknown or revoked channel key",
+        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" } } }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["error", "code"],
+        "properties": {
+          "error": { "type": "string", "description": "For people" },
+          "code": { "type": "string", "description": "Stable, for programs (unauthorized, forbidden, not_found, bad_request, …)" }
+        },
+        "additionalProperties": false
+      },
+      "Permissions": {
+        "type": "object",
+        "required": ["menu", "quote", "orders", "track", "payments"],
+        "properties": {
+          "menu": { "type": "boolean", "description": "May read the menu" },
+          "quote": { "type": "boolean", "description": "May price a cart" },
+          "orders": { "type": "boolean", "description": "May place orders" },
+          "track": { "type": "boolean", "description": "May follow its orders" },
+          "payments": { "type": "array", "items": { "enum": ["card", "cash"] }, "description": "Payment methods an order through this channel may use" }
+        },
+        "additionalProperties": false
+      },
+      "Channel": {
+        "type": "object",
+        "required": ["id", "kind", "name", "permissions"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "kind": { "enum": ["web", "operator", "counter", "vendor"] },
+          "name": { "type": "string" },
+          "permissions": { "$ref": "#/components/schemas/Permissions" }
+        },
+        "additionalProperties": false
+      },
+      "Store": {
+        "type": "object",
+        "required": ["tenant_id", "location_id", "name", "timezone"],
+        "properties": {
+          "tenant_id": { "type": "string", "format": "uuid" },
+          "location_id": { "type": "string", "format": "uuid" },
+          "name": { "type": "string" },
+          "timezone": { "type": "string", "description": "IANA zone, e.g. America/New_York" }
+        },
+        "additionalProperties": false
+      },
+      "Me": {
+        "type": "object",
+        "required": ["channel", "store"],
+        "properties": {
+          "channel": { "$ref": "#/components/schemas/Channel" },
+          "store": { "$ref": "#/components/schemas/Store" }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+}

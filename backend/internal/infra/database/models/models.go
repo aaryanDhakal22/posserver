@@ -61,6 +61,22 @@ type AppRelease struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type Channel struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	Kind        string             `json:"kind"`
+	Name        string             `json:"name"`
+	KeyHash     pgtype.Text        `json:"key_hash"`
+	KeyPrefix   string             `json:"key_prefix"`
+	Permissions []byte             `json:"permissions"`
+	Builtin     bool               `json:"builtin"`
+	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
+	LastUsedAt  pgtype.Timestamptz `json:"last_used_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type DeliveryRun struct {
 	ID           pgtype.UUID        `json:"id"`
 	TenantID     pgtype.UUID        `json:"tenant_id"`

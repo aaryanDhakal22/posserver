@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"quiccpos/main/internal/app/agentsync"
+	channelApp "quiccpos/main/internal/app/channel"
 	diagApp "quiccpos/main/internal/app/diag"
 	geoApp "quiccpos/main/internal/app/geo"
 	menuApp "quiccpos/main/internal/app/menu"
@@ -52,6 +53,8 @@ const (
 	adminUIPath = "/admin"
 	storePrefix = "/store/v1"
 	storeUIPath = "/store"
+	// channelPrefix is main 3.0's channel API (the ports).
+	channelPrefix = "/channel/v1"
 )
 
 type RouterDeps struct {
@@ -88,6 +91,8 @@ type RouterDeps struct {
 	MenuService *menuApp.Service
 	// OperatorService backs the operator accounts + read-only menu API.
 	OperatorService *operatorApp.Service
+	// ChannelService backs sales channels and the /channel/v1 key (main 3.0).
+	ChannelService *channelApp.Service
 	// AgentSync backs agent link / restore / backups / fleet health.
 	AgentSync *agentsync.Service
 	// Diag backs tablet diagnostics (report tokens, reports, admin view).
@@ -149,6 +154,7 @@ func routeTable(d RouterDeps) []routeDef {
 	admin := appMiddleware.AdminAuth(d.AdminAPIKey)
 	storeSession := appMiddleware.StoreSessionAuth(d.SessionSigner)
 	operatorAuth := appMiddleware.OperatorAuth(d.OperatorService, d.Meters)
+	channelAuth := appMiddleware.ChannelAuth(d.ChannelService)
 	// The tablet report key guards exactly one route (diag-reports) and is
 	// never combined with `device` — it must not reach orders or anything else.
 	reportKey := appMiddleware.ReportKeyAuth(d.Diag)
@@ -163,6 +169,7 @@ func routeTable(d RouterDeps) []routeDef {
 	menuH := handler.NewMenuHandler(d.MenuService, d.Logger)
 	floorH := handler.NewFloorHandler(d.Service, d.FloorService, d.Logger)
 	operatorH := handler.NewOperatorHandler(d.OperatorService, d.MenuService, d.Meters, d.Logger)
+	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
 	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
@@ -246,6 +253,15 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", adminPrefix+"/operators/:id", "admin", "Delete an operator (cascades tokens + locations)", operatorH.AdminDelete, admin),
 		def("PUT", adminPrefix+"/operators/:id/locations", "admin", "Set an operator's allowed locations", operatorH.AdminSetLocations, admin),
 		def("POST", adminPrefix+"/operators/:id/tokens/revoke", "admin", "Revoke all of an operator's tokens", operatorH.AdminRevokeTokens, admin),
+
+		// Sales channels (main 3.0): admin-managed, each with its own /channel/v1 key.
+		def("GET", adminPrefix+"/channels", "admin", "List sales channels (?location_id=)", channelH.AdminList, admin),
+		def("POST", adminPrefix+"/channels", "admin", "Create a channel {location_id, kind, name, permissions?} → key once", channelH.AdminCreate, admin),
+		def("GET", adminPrefix+"/channels/:id", "admin", "One channel", channelH.AdminGet, admin),
+		def("PATCH", adminPrefix+"/channels/:id", "admin", "Rename / set permissions", channelH.AdminUpdate, admin),
+		def("POST", adminPrefix+"/channels/:id/rotate", "admin", "Issue a new key (old one stops) → key once", channelH.AdminRotate, admin),
+		def("POST", adminPrefix+"/channels/:id/revoke", "admin", "Revoke the channel's key", channelH.AdminRevoke, admin),
+		def("DELETE", adminPrefix+"/channels/:id", "admin", "Delete a channel", channelH.AdminDelete, admin),
 
 		// Web app (compiled SvelteKit SPA) — served under /app; /admin + /store
 		// redirect in for back-compat. Assets live under /app/_app/*.
@@ -336,6 +352,10 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/operator/login", "none", "Operator login → read-only bearer token", operatorH.Login),
 		def("GET", storePrefix+"/operator/me", "operator", "Operator whoami + allowed locations", operatorH.Me, operatorAuth),
 		def("GET", storePrefix+"/operator/menu", "operator", "Full menu for an allowed location (POS read)", operatorH.Menu, operatorAuth),
+
+		// /channel/v1 — the ports every sales channel talks to (main 3.0).
+		def("GET", channelPrefix+"/openapi.json", "none", "The channel API's OpenAPI document", channelH.Spec),
+		def("GET", channelPrefix+"/me", "channel", "The channel behind the key and its store", channelH.Me, channelAuth),
 
 		def("GET", storeUIPath, "none", "Redirect → /app/store", redirectTo("/app/store")),
 		def("GET", storeUIPath+"/", "none", "Redirect → /app/store", redirectTo("/app/store")),

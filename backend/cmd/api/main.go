@@ -30,6 +30,7 @@ import (
 	"time"
 
 	authAppSvc "quiccpos/main/internal/app/auth"
+	channelApp "quiccpos/main/internal/app/channel"
 	menuApp "quiccpos/main/internal/app/menu"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
@@ -296,6 +297,7 @@ func main() {
 
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
 	operatorService := operatorApp.NewService(operatorRepo, tenancyService, lgr)
+	channelService := channelApp.NewService(repositories.NewChannelRepository(pool), tenancyService, lgr)
 
 	sqsClient, err := sqsconsumer.NewSQSClient(ctx, cfg, lgr)
 	if err != nil {
@@ -345,6 +347,7 @@ func main() {
 		MenuService:     menuService,
 		FloorService:    floorService,
 		OperatorService: operatorService,
+		ChannelService:  channelService,
 		AgentSync:       agentSync,
 		Diag:            diagService,
 		Geo:             geoService,

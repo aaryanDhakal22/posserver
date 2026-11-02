@@ -381,6 +381,19 @@ export interface OperatorAdmin {
   id: string; username: string; display_name: string; location_ids: string[]; created_at: string;
 }
 
+// --- sales channels (admin, main 3.0) -------------------------------------
+export type ChannelKind = 'web' | 'operator' | 'counter' | 'vendor';
+export interface ChannelPermissions {
+  menu: boolean; quote: boolean; orders: boolean; track: boolean; payments: ('card' | 'cash')[];
+}
+/** A store's sales channel; `key` only on create / rotate (shown once). */
+export interface ChannelAdmin {
+  id: string; tenant_id: string; location_id: string; kind: ChannelKind; name: string;
+  key_prefix: string; permissions: ChannelPermissions; builtin: boolean; active: boolean;
+  revoked_at: string | null; last_used_at: string | null; created_at: string; updated_at: string;
+  key?: string;
+}
+
 // --- tablet diagnostics (admin) -------------------------------------------
 /** One Quibase troubleshooting report as the admin list shows it. */
 export interface DiagSummary {

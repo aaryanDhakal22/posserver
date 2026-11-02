@@ -615,3 +615,23 @@ CREATE TABLE delivery_runs (
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
 );
 CREATE INDEX idx_delivery_runs_location ON delivery_runs (location_id, at DESC);
+
+-- 00017_channels (main 3.0): sales channels of a location (web, operator,
+--   counter, vendor), each with its own bearer key for /channel/v1.
+CREATE TABLE channels (
+    id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id    uuid        NOT NULL,
+    location_id  uuid        NOT NULL,
+    kind         text        NOT NULL CHECK (kind IN ('web', 'operator', 'counter', 'vendor')),
+    name         text        NOT NULL,
+    key_hash     text        UNIQUE,
+    key_prefix   text        NOT NULL DEFAULT '',
+    permissions  jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    builtin      boolean     NOT NULL DEFAULT false,
+    revoked_at   timestamptz,
+    last_used_at timestamptz,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    updated_at   timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_channels_location ON channels (location_id);

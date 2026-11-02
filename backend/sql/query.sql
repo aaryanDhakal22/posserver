@@ -1332,3 +1332,44 @@ WHERE tenant_id = @tenant_id AND location_id = @location_id
 UPDATE geo_external_stops SET outside_area = @outside_area, pushed_at = NULL, next_try_at = now(), updated_at = now()
 WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id
   AND state = 'located' AND outside_area <> @outside_area;
+
+-- ─── Channels (main 3.0) ──────────────────────────────────────────────────
+
+-- name: CreateChannel :one
+INSERT INTO channels (tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING *;
+
+-- name: GetChannel :one
+SELECT * FROM channels WHERE id = $1;
+
+-- name: ListChannels :many
+SELECT * FROM channels ORDER BY created_at ASC;
+
+-- name: ListChannelsByLocation :many
+SELECT * FROM channels WHERE location_id = $1 ORDER BY created_at ASC;
+
+-- name: UpdateChannel :one
+UPDATE channels SET name = $2, permissions = $3, updated_at = now()
+WHERE id = $1
+RETURNING *;
+
+-- name: SetChannelKey :one
+UPDATE channels SET key_hash = $2, key_prefix = $3, revoked_at = NULL, updated_at = now()
+WHERE id = $1 AND NOT builtin
+RETURNING *;
+
+-- name: RevokeChannel :one
+UPDATE channels SET revoked_at = COALESCE(revoked_at, now()), updated_at = now()
+WHERE id = $1 AND NOT builtin
+RETURNING *;
+
+-- name: DeleteChannel :execrows
+DELETE FROM channels WHERE id = $1 AND NOT builtin;
+
+-- name: AuthenticateChannel :one
+SELECT * FROM channels WHERE key_hash = $1 AND revoked_at IS NULL;
+
+-- name: TouchChannel :exec
+UPDATE channels SET last_used_at = now()
+WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute');
