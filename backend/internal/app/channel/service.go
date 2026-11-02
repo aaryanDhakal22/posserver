@@ -15,6 +15,7 @@ import (
 
 	authSvc "quiccpos/main/internal/app/auth"
 	channelDom "quiccpos/main/internal/domain/channel"
+	operatorDom "quiccpos/main/internal/domain/operator"
 	"quiccpos/main/internal/domain/tenancy"
 
 	"github.com/google/uuid"
@@ -36,6 +37,11 @@ var (
 	ErrBadView      = errors.New("view must be one of this store's views of the channel's kind")
 )
 
+type builtinKey struct {
+	location uuid.UUID
+	kind     channelDom.Kind
+}
+
 // LocationReader resolves a location's tenant (the tenancy service).
 type LocationReader interface {
 	GetLocation(ctx context.Context, id uuid.UUID) (*tenancy.Location, error)
@@ -48,7 +54,8 @@ type ViewReader interface {
 
 type Service struct {
 	builtinMu sync.Mutex
-	builtin   map[uuid.UUID]uuid.UUID // location → its built-in vendor channel
+	builtins  map[builtinKey]uuid.UUID // a location's built-in channel of a kind
+	operators OperatorAuth
 	repo      channelDom.Repository
 	locs      LocationReader
 	views     ViewReader
@@ -96,7 +103,7 @@ func (s *Service) Edit(ctx context.Context, id uuid.UUID, name *string, perms *c
 }
 
 func NewService(repo channelDom.Repository, locs LocationReader, lg zerolog.Logger) *Service {
-	return &Service{repo: repo, locs: locs, builtin: map[uuid.UUID]uuid.UUID{}, logger: lg.With().Str("module", "channel-service").Logger()}
+	return &Service{repo: repo, locs: locs, builtins: map[builtinKey]uuid.UUID{}, logger: lg.With().Str("module", "channel-service").Logger()}
 }
 
 // Create adds a channel to a location and returns it with its key, shown
@@ -248,23 +255,70 @@ func newKey() (string, error) {
 // created on first use. It has no key: it is how the SQS vendor feed's
 // orders are linked to a channel (main 3.0).
 func (s *Service) BuiltinVendor(ctx context.Context, tenantID, locationID uuid.UUID) (uuid.UUID, error) {
-	s.builtinMu.Lock()
-	defer s.builtinMu.Unlock()
-	if id, ok := s.builtin[locationID]; ok {
-		return id, nil
-	}
-	id, err := s.repo.BuiltinVendor(ctx, locationID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		var c *channelDom.Channel
-		c, err = s.repo.Create(ctx, channelDom.NewChannel{TenantID: tenantID, LocationID: locationID, Kind: channelDom.KindVendor,
-			Name: "Brygid", Permissions: channelDom.DefaultPermissions(channelDom.KindVendor), Builtin: true})
-		if err == nil {
-			id = c.ID
-		}
-	}
+	c, err := s.builtin(ctx, tenantID, locationID, channelDom.KindVendor, "Brygid")
 	if err != nil {
 		return uuid.Nil, err
 	}
-	s.builtin[locationID] = id
-	return id, nil
+	return c.ID, nil
+}
+
+// builtin is a location's built-in channel of a kind, created on first use
+// (cached; permissions are read fresh on every use).
+func (s *Service) builtin(ctx context.Context, tenantID, locationID uuid.UUID, kind channelDom.Kind, name string) (*channelDom.Channel, error) {
+	s.builtinMu.Lock()
+	defer s.builtinMu.Unlock()
+	key := builtinKey{locationID, kind}
+	if id, ok := s.builtins[key]; ok {
+		if c, err := s.repo.Get(ctx, id); err == nil {
+			return c, nil
+		}
+		delete(s.builtins, key)
+	}
+	c, err := s.repo.Builtin(ctx, locationID, kind)
+	if errors.Is(err, pgx.ErrNoRows) {
+		c, err = s.repo.Create(ctx, channelDom.NewChannel{TenantID: tenantID, LocationID: locationID, Kind: kind,
+			Name: name, Permissions: channelDom.DefaultPermissions(kind), Builtin: true})
+	}
+	if err != nil {
+		return nil, err
+	}
+	s.builtins[key] = c.ID
+	return c, nil
+}
+
+// OperatorAuth checks an operator's channel sign-in (the operator service).
+type OperatorAuth interface {
+	AuthenticateSession(ctx context.Context, raw string) (*operatorDom.Operator, []operatorDom.AllowedLocation, error)
+}
+
+// SetOperators lets operators' sign-ins open /channel/v1 (main 3.0 step 7).
+func (s *Service) SetOperators(o OperatorAuth) { s.operators = o }
+
+// ErrLocationNotAllowed: the operator may not take orders for that store.
+var ErrLocationNotAllowed = errors.New("this operator may not take orders for that store (X-Location-ID)")
+
+// AuthenticateOperator turns an operator's sign-in + the store they work on
+// into that store's built-in Call center channel and the operator.
+func (s *Service) AuthenticateOperator(ctx context.Context, raw string, locationID uuid.UUID) (*channelDom.Channel, *channelDom.Operator, error) {
+	if s.operators == nil {
+		return nil, nil, ErrInvalidKey
+	}
+	op, allowed, err := s.operators.AuthenticateSession(ctx, raw)
+	if err != nil {
+		return nil, nil, ErrInvalidKey
+	}
+	var tenantID uuid.UUID
+	for _, a := range allowed {
+		if a.LocationID == locationID {
+			tenantID = a.TenantID
+		}
+	}
+	if tenantID == uuid.Nil {
+		return nil, nil, ErrLocationNotAllowed
+	}
+	c, err := s.builtin(ctx, tenantID, locationID, channelDom.KindOperator, "Call center")
+	if err != nil {
+		return nil, nil, fmt.Errorf("operator channel: %w", err)
+	}
+	return c, &channelDom.Operator{ID: op.ID, Username: op.Username, DisplayName: op.DisplayName}, nil
 }

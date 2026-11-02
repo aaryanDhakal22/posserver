@@ -89,3 +89,11 @@ type Channel struct {
 
 // Active reports whether the channel's key works.
 func (c Channel) Active() bool { return c.RevokedAt == nil && c.KeyPrefix != "" }
+
+// Operator is the call-center operator signed in to an operator channel
+// (main 3.0): who took an order.
+type Operator struct {
+	ID          uuid.UUID `json:"id"`
+	Username    string    `json:"username"`
+	DisplayName string    `json:"display_name"`
+}

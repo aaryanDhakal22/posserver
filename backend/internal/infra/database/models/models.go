@@ -97,6 +97,7 @@ type ChannelOrder struct {
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	TrackToken    pgtype.Text        `json:"track_token"`
 	AlertedAt     pgtype.Timestamptz `json:"alerted_at"`
+	OperatorID    pgtype.UUID        `json:"operator_id"`
 }
 
 type Deal struct {

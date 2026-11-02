@@ -418,6 +418,8 @@ func routeTable(d RouterDeps) []routeDef {
 
 		// /channel/v1 — the ports every sales channel talks to (main 3.0).
 		def("GET", channelPrefix+"/openapi.json", "none", "The channel API's OpenAPI document", channelH.Spec, channelGzip),
+		def("POST", channelPrefix+"/operator/login", "none", "An operator signs in (12 h): then Bearer + X-Location-ID on /channel/v1", operatorH.ChannelLogin, channelGzip),
+		def("POST", channelPrefix+"/operator/logout", "none", "An operator signs out (Bearer the sign-in)", operatorH.ChannelLogout),
 		def("GET", channelPrefix+"/me", "channel", "The channel behind the key and its store", channelH.Me, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/menu", "channel", "The channel's menu (ETag = menu version)", viewH.ChannelMenu, channelAuth, channelGzip),
 		def("POST", channelPrefix+"/orders", "channel", "Place an order (orders permission; idempotent on client_order_id)", orderPortH.Place, channelAuth, channelGzip),

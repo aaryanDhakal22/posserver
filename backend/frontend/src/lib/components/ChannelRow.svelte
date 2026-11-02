@@ -106,8 +106,19 @@
         {#each channel.permissions.payments as m (m)}<Badge tone="mute">{m}</Badge>{/each}
         <span>· last used {used}</span>
       </div>
+      {#if channel.builtin}
+        <p class="m-0 mt-1 text-xs text-muted">
+          {channel.kind === 'operator'
+            ? 'Operators sign in to it (admin › Operators) and work this store; no key.'
+            : 'Holds the orders this feed sends; no key.'}
+        </p>
+      {/if}
     </div>
-    {#if !channel.builtin}
+    {#if channel.builtin}
+      <div class="flex items-center gap-1.5">
+        <Button size="sm" icon="pencil" onclick={openEdit} aria-expanded={showEdit}>Edit</Button>
+      </div>
+    {:else}
       <div class="flex items-center gap-1.5">
         <Button size="sm" icon="pencil" onclick={openEdit} aria-expanded={showEdit}>Edit</Button>
         <Button size="sm" icon="key" onclick={rotate}>New key</Button>

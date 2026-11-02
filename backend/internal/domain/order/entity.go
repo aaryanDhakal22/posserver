@@ -292,7 +292,8 @@ type ChannelRef struct {
 	ID            uuid.UUID
 	ClientOrderID string
 	Payment       []byte
-	TrackToken    string // the public tracking link's token ("" = none)
+	TrackToken    string     // the public tracking link's token ("" = none)
+	OperatorID    *uuid.UUID // the call-center operator who took it (main 3.0)
 }
 
 var (

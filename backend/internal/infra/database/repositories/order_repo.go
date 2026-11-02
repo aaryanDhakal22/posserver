@@ -98,6 +98,7 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 			TenantID: toPgUUID(uuid.UUID(o.TenantID())), LocationID: toPgUUID(uuid.UUID(o.LocationID())),
 			ClientOrderID: ch.ClientOrderID, Payment: pay,
 			TrackToken: pgtype.Text{String: ch.TrackToken, Valid: ch.TrackToken != ""},
+			OperatorID: pgIDPtr(ch.OperatorID),
 		}); err != nil {
 			if isUniqueViolation(err) {
 				log.Info().Msg("duplicate channel order; skipping")

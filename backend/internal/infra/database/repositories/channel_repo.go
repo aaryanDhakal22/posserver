@@ -157,10 +157,10 @@ func tsPtr(t pgtype.Timestamptz) *time.Time {
 	return &v
 }
 
-func (r *ChannelRepository) BuiltinVendor(ctx context.Context, locationID uuid.UUID) (uuid.UUID, error) {
-	row, err := models.New(r.pool).BuiltinVendorChannel(ctx, pgID(locationID))
+func (r *ChannelRepository) Builtin(ctx context.Context, locationID uuid.UUID, kind channel.Kind) (*channel.Channel, error) {
+	row, err := models.New(r.pool).BuiltinChannel(ctx, models.BuiltinChannelParams{LocationID: pgID(locationID), Kind: string(kind)})
 	if err != nil {
-		return uuid.Nil, err
+		return nil, err
 	}
-	return idOf(row.ID), nil
+	return channelOf(row)
 }

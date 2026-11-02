@@ -1589,8 +1589,8 @@ DELETE FROM deals WHERE id = $1 AND location_id = $2;
 -- ─── Channel orders (main 3.0 step 5) ───────────────────────────────────────
 
 -- name: InsertChannelOrder :exec
-INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment, track_token)
-VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg(track_token));
+INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment, track_token, operator_id)
+VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg(track_token), sqlc.narg(operator_id));
 
 -- name: GetChannelOrderByClient :one
 SELECT * FROM channel_orders WHERE channel_id = $1 AND client_order_id = $2;
@@ -1604,8 +1604,8 @@ WHERE channel_id = $1 AND created_at < $2
 ORDER BY created_at DESC
 LIMIT $3;
 
--- name: BuiltinVendorChannel :one
-SELECT * FROM channels WHERE location_id = $1 AND builtin AND kind = 'vendor' ORDER BY created_at LIMIT 1;
+-- name: BuiltinChannel :one
+SELECT * FROM channels WHERE location_id = $1 AND builtin AND kind = $2 ORDER BY created_at LIMIT 1;
 
 -- ─── Channel tracking (main 3.0 step 6) ─────────────────────────────────────
 
@@ -1647,3 +1647,6 @@ SELECT EXISTS (SELECT 1 FROM channel_events WHERE channel_id = $1 AND id = $2);
 
 -- name: LatestChannelEvent :one
 SELECT COALESCE(MAX(id), 0)::bigint FROM channel_events WHERE channel_id = $1;
+
+-- name: RevokeOperatorToken :execrows
+UPDATE operator_tokens SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL;

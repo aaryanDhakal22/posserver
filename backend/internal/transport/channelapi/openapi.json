@@ -16,6 +16,102 @@
     }
   ],
   "paths": {
+    "/channel/v1/operator/login": {
+      "post": {
+        "operationId": "operatorLogin",
+        "summary": "A call-center operator signs in (12 hours)",
+        "security": [],
+        "description": "Operators are created by the admin, each allowed some stores. The token then works on /channel/v1 as `Authorization: Bearer qops_…` with the store worked on as `X-Location-ID` (one of `locations`): it acts as that store's built-in Call center channel, and orders record the operator. It stops working after 12 hours or at sign-out. Failed sign-ins are throttled per username (429).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "username",
+                  "password"
+                ],
+                "properties": {
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperatorSession"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a sign-in body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "invalid_credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too_many_attempts (Retry-After)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channel/v1/operator/logout": {
+      "post": {
+        "operationId": "operatorLogout",
+        "summary": "Sign the operator out",
+        "security": [],
+        "description": "Bearer the sign-in. 204 also when it was already signed out.",
+        "responses": {
+          "204": {
+            "description": "Signed out"
+          },
+          "401": {
+            "description": "Not an operator sign-in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/channel/v1/me": {
       "get": {
         "operationId": "getMe",
@@ -764,7 +860,7 @@
       "channelKey": {
         "type": "http",
         "scheme": "bearer",
-        "description": "The channel's key: Authorization: Bearer qch_…"
+        "description": "The channel's key: Authorization: Bearer qch_… — or an operator's sign-in (Bearer qops_… from /channel/v1/operator/login) with X-Location-ID: the store; without it 400 location_required, a store the operator may not work on 403 location_not_allowed."
       }
     },
     "responses": {
@@ -926,6 +1022,9 @@
           },
           "store": {
             "$ref": "#/components/schemas/Store"
+          },
+          "operator": {
+            "$ref": "#/components/schemas/Operator"
           }
         },
         "additionalProperties": false
@@ -2472,7 +2571,8 @@
           "lines",
           "money",
           "payment",
-          "track_token"
+          "track_token",
+          "taken_by"
         ],
         "properties": {
           "id": {
@@ -2662,6 +2762,30 @@
           "track_token": {
             "type": "string",
             "description": "The customer's tracking link: GET /track/v1/{track_token}"
+          },
+          "taken_by": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "id",
+                  "display_name"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "display_name": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ],
+            "description": "The operator who took it (operator sign-ins)"
           }
         },
         "additionalProperties": false
@@ -2970,6 +3094,75 @@
           "at": {
             "type": "string",
             "format": "date-time"
+          }
+        },
+        "additionalProperties": false
+      },
+      "OperatorSession": {
+        "type": "object",
+        "required": [
+          "token",
+          "expires_at",
+          "operator",
+          "locations"
+        ],
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "qops_…"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "operator": {
+            "$ref": "#/components/schemas/Operator"
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "location_id",
+                "tenant_id",
+                "name"
+              ],
+              "properties": {
+                "location_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "tenant_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "Operator": {
+        "type": "object",
+        "required": [
+          "id",
+          "username",
+          "display_name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "username": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
           }
         },
         "additionalProperties": false

@@ -44,6 +44,12 @@ def test_every_new_route_wants_its_own_credential(admin, store) -> None:
     mgr = store.manager_session()
     key = admin.post(f"{ADMIN_V1}/channels", json={"location_id": store.location_id, "kind": "web", "name": "Web"}, timeout=5).json()["key"]
     admin_hdr = {"Authorization": admin.headers["Authorization"]}
+    # An operator's channel sign-in (step 7) opens no store or admin route.
+    user, pw = "iso" + uuid.uuid4().hex[:8], "pw-" + uuid.uuid4().hex[:6]
+    op = admin.post(f"{ADMIN_V1}/operators", json={"username": user, "password": pw, "display_name": "Iso"}, timeout=5).json()
+    admin.put(f"{ADMIN_V1}/operators/{op['id']}/locations", json={"location_ids": [store.location_id]}, timeout=5)
+    op_token = requests.post(f"{MAIN_BASE_URL}/channel/v1/operator/login", json={"username": user, "password": pw}, timeout=5).json()["token"]
+    op_hdr = {"Authorization": f"Bearer {op_token}", "X-Location-ID": store.location_id}
     bad = []
     try:
         for r in routes:
@@ -54,6 +60,7 @@ def test_every_new_route_wants_its_own_credential(admin, store) -> None:
             if r["auth"] == "store-session":
                 tries["channel key"] = {"headers": {"Authorization": f"Bearer {key}"}}
                 tries["admin key"] = {"headers": admin_hdr}
+                tries["operator sign-in"] = {"headers": op_hdr}
             elif r["auth"] == "channel":
                 tries["manager cookie"] = {"cookies": mgr.cookies}
                 tries["admin key"] = {"headers": admin_hdr}
@@ -61,12 +68,14 @@ def test_every_new_route_wants_its_own_credential(admin, store) -> None:
             elif r["auth"] == "admin":
                 tries["channel key"] = {"headers": {"Authorization": f"Bearer {key}"}}
                 tries["manager cookie"] = {"cookies": mgr.cookies}
+                tries["operator sign-in"] = {"headers": op_hdr}
             for what, kw in tries.items():
                 code = _call(m, url, **kw).status_code
                 if code != 401:
                     bad.append(f"{m} {r['path']} with {what}: {code}")
     finally:
         mgr.close()
+        admin.delete(f"{ADMIN_V1}/operators/{op['id']}", timeout=5)
     assert not bad, "\n".join(bad)
 
 

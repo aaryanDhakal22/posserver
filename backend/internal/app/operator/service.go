@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	authSvc "quiccpos/main/internal/app/auth"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	operatorDom "quiccpos/main/internal/domain/operator"
+	"quiccpos/main/internal/domain/tenancy"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -164,6 +166,51 @@ func generateToken() (string, error) {
 		return "", err
 	}
 	return "qopr_" + hex.EncodeToString(buf), nil
+}
+
+// Location reads a store (its name for the sign-in answer).
+func (s *Service) Location(ctx context.Context, id uuid.UUID) (*tenancy.Location, error) {
+	return s.tenancy.GetLocation(ctx, id)
+}
+
+// SessionTTL is how long an operator's channel sign-in lasts (a shift — the
+// owner, 2026-11-02).
+const SessionTTL = 12 * time.Hour
+
+// SessionPrefix marks an operator's channel sign-in (legacy read-only tokens
+// are qopr_ and never expire).
+const SessionPrefix = "qops_"
+
+// MintSession signs an operator in to the channel API: a qops_ token that
+// stops working after SessionTTL (or at sign-out / revoke).
+func (s *Service) MintSession(ctx context.Context, operatorID uuid.UUID) (string, time.Time, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", time.Time{}, err
+	}
+	raw := SessionPrefix + hex.EncodeToString(buf)
+	exp := time.Now().Add(SessionTTL).UTC()
+	if err := s.repo.CreateToken(ctx, operatorID, authSvc.HashKey(raw), raw[:12], &exp); err != nil {
+		return "", time.Time{}, err
+	}
+	return raw, exp, nil
+}
+
+// AuthenticateSession is AuthenticateToken for channel sign-ins only.
+func (s *Service) AuthenticateSession(ctx context.Context, raw string) (*operatorDom.Operator, []operatorDom.AllowedLocation, error) {
+	if !strings.HasPrefix(strings.TrimSpace(raw), SessionPrefix) {
+		return nil, nil, ErrInvalidToken
+	}
+	return s.AuthenticateToken(ctx, raw)
+}
+
+// RevokeSession signs a channel sign-in out (unknown / already out: no error).
+func (s *Service) RevokeSession(ctx context.Context, raw string) error {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, SessionPrefix) {
+		return ErrInvalidToken
+	}
+	return s.repo.RevokeToken(ctx, authSvc.HashKey(raw))
 }
 
 func IsInvalidToken(err error) bool       { return errors.Is(err, ErrInvalidToken) }

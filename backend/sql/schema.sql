@@ -816,7 +816,8 @@ CREATE TABLE channel_orders (
     payment         jsonb       NOT NULL DEFAULT '{}'::jsonb,
     created_at      timestamptz NOT NULL DEFAULT now(),
     track_token     text,
-    alerted_at      timestamptz
+    alerted_at      timestamptz,
+    operator_id     uuid        REFERENCES operators(id) ON DELETE SET NULL
 );
 CREATE UNIQUE INDEX idx_channel_orders_client ON channel_orders (channel_id, client_order_id) WHERE client_order_id <> '';
 CREATE INDEX idx_channel_orders_channel ON channel_orders (channel_id, created_at DESC);

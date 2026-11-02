@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strings"
 
 	menuApp "quiccpos/main/internal/app/menu"
 	operatorApp "quiccpos/main/internal/app/operator"
@@ -211,5 +212,68 @@ func (h *OperatorHandler) AdminRevokeTokens(c *echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, errResp(err.Error()))
 	}
 	h.meters.OperatorTokensRevoked.Add(c.Request().Context(), 1)
+	return c.NoContent(http.StatusNoContent)
+}
+
+// --- /channel/v1/operator (main 3.0 step 7) -----------------------------------
+
+// POST /channel/v1/operator/login {username, password} → a 12-hour sign-in
+// for the channel API: {token, expires_at, operator, locations}. Then every
+// /channel/v1 call carries the token as Bearer + the store as X-Location-ID.
+func (h *OperatorHandler) ChannelLogin(c *echo.Context) error {
+	ctx := c.Request().Context()
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := echo.BindBody(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, errCode("invalid body", "bad_request"))
+	}
+	if stop, err := h.logins.throttledCode(c, req.Username); stop {
+		return err
+	}
+	op, err := h.svc.Authenticate(ctx, req.Username, req.Password)
+	if err != nil {
+		if operatorApp.IsInvalidCredentials(err) {
+			h.logins.failed(req.Username)
+			return c.JSON(http.StatusUnauthorized, errCode("invalid username or password", "invalid_credentials"))
+		}
+		return c.JSON(http.StatusInternalServerError, errCode("sign-in failed", "internal"))
+	}
+	h.logins.succeeded(req.Username)
+	token, exp, err := h.svc.MintSession(ctx, op.ID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, errCode("sign-in failed", "internal"))
+	}
+	h.meters.OperatorTokensMinted.Add(ctx, 1)
+	allowed, err := h.svc.ListAllowedLocations(ctx, op.ID)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, errCode("sign-in failed", "internal"))
+	}
+	locs := make([]map[string]any, 0, len(allowed))
+	for _, a := range allowed {
+		name := ""
+		if l, err := h.svc.Location(ctx, a.LocationID); err == nil && l != nil {
+			name = l.Name
+		}
+		locs = append(locs, map[string]any{"location_id": a.LocationID, "tenant_id": a.TenantID, "name": name})
+	}
+	return c.JSON(http.StatusOK, map[string]any{
+		"token": token, "expires_at": exp,
+		"operator":  map[string]any{"id": op.ID, "username": op.Username, "display_name": op.DisplayName},
+		"locations": locs,
+	})
+}
+
+// POST /channel/v1/operator/logout (Bearer the sign-in) → 204, also for one
+// already signed out.
+func (h *OperatorHandler) ChannelLogout(c *echo.Context) error {
+	raw := strings.TrimSpace(strings.TrimPrefix(c.Request().Header.Get("Authorization"), "Bearer "))
+	if err := h.svc.RevokeSession(c.Request().Context(), raw); err != nil {
+		if operatorApp.IsInvalidToken(err) {
+			return c.JSON(http.StatusUnauthorized, errCode("not an operator sign-in", "unauthorized"))
+		}
+		return c.JSON(http.StatusInternalServerError, errCode("sign-out failed", "internal"))
+	}
 	return c.NoContent(http.StatusNoContent)
 }

@@ -14,7 +14,7 @@ type Querier interface {
 	AddOperatorLocation(ctx context.Context, arg AddOperatorLocationParams) error
 	AttachModifierGroup(ctx context.Context, arg AttachModifierGroupParams) error
 	AuthenticateChannel(ctx context.Context, keyHash pgtype.Text) (Channel, error)
-	BuiltinVendorChannel(ctx context.Context, locationID pgtype.UUID) (Channel, error)
+	BuiltinChannel(ctx context.Context, arg BuiltinChannelParams) (Channel, error)
 	ChannelEventExists(ctx context.Context, arg ChannelEventExistsParams) (bool, error)
 	ChannelEventsAfter(ctx context.Context, arg ChannelEventsAfterParams) ([]ChannelEvent, error)
 	// Keyed-channel orders the Pi hasn't accepted N minutes after they were
@@ -334,6 +334,7 @@ type Querier interface {
 	RevokeDevice(ctx context.Context, id pgtype.UUID) error
 	// Keep the newest `keep` active tokens of a location; revoke the rest.
 	RevokeExcessTabletTokens(ctx context.Context, arg RevokeExcessTabletTokensParams) (int64, error)
+	RevokeOperatorToken(ctx context.Context, tokenHash string) (int64, error)
 	RevokeTabletTokenByID(ctx context.Context, id pgtype.UUID) (int64, error)
 	// ---------------------------------------------------------------------------
 	// 00010_diagnostics: tablet report tokens + troubleshooting reports

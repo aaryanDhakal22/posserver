@@ -77,12 +77,17 @@ func (q *Queries) AuthenticateChannel(ctx context.Context, keyHash pgtype.Text) 
 	return i, err
 }
 
-const builtinVendorChannel = `-- name: BuiltinVendorChannel :one
-SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id FROM channels WHERE location_id = $1 AND builtin AND kind = 'vendor' ORDER BY created_at LIMIT 1
+const builtinChannel = `-- name: BuiltinChannel :one
+SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id FROM channels WHERE location_id = $1 AND builtin AND kind = $2 ORDER BY created_at LIMIT 1
 `
 
-func (q *Queries) BuiltinVendorChannel(ctx context.Context, locationID pgtype.UUID) (Channel, error) {
-	row := q.db.QueryRow(ctx, builtinVendorChannel, locationID)
+type BuiltinChannelParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Kind       string      `json:"kind"`
+}
+
+func (q *Queries) BuiltinChannel(ctx context.Context, arg BuiltinChannelParams) (Channel, error) {
+	row := q.db.QueryRow(ctx, builtinChannel, arg.LocationID, arg.Kind)
 	var i Channel
 	err := row.Scan(
 		&i.ID,
@@ -2084,7 +2089,7 @@ func (q *Queries) GetChannel(ctx context.Context, id pgtype.UUID) (Channel, erro
 }
 
 const getChannelOrder = `-- name: GetChannelOrder :one
-SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at FROM channel_orders WHERE order_id = $1
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id FROM channel_orders WHERE order_id = $1
 `
 
 func (q *Queries) GetChannelOrder(ctx context.Context, orderID pgtype.UUID) (ChannelOrder, error) {
@@ -2100,12 +2105,13 @@ func (q *Queries) GetChannelOrder(ctx context.Context, orderID pgtype.UUID) (Cha
 		&i.CreatedAt,
 		&i.TrackToken,
 		&i.AlertedAt,
+		&i.OperatorID,
 	)
 	return i, err
 }
 
 const getChannelOrderByClient = `-- name: GetChannelOrderByClient :one
-SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at FROM channel_orders WHERE channel_id = $1 AND client_order_id = $2
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id FROM channel_orders WHERE channel_id = $1 AND client_order_id = $2
 `
 
 type GetChannelOrderByClientParams struct {
@@ -2126,12 +2132,13 @@ func (q *Queries) GetChannelOrderByClient(ctx context.Context, arg GetChannelOrd
 		&i.CreatedAt,
 		&i.TrackToken,
 		&i.AlertedAt,
+		&i.OperatorID,
 	)
 	return i, err
 }
 
 const getChannelOrderByToken = `-- name: GetChannelOrderByToken :one
-SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at FROM channel_orders WHERE track_token = $1
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id FROM channel_orders WHERE track_token = $1
 `
 
 func (q *Queries) GetChannelOrderByToken(ctx context.Context, trackToken pgtype.Text) (ChannelOrder, error) {
@@ -2147,6 +2154,7 @@ func (q *Queries) GetChannelOrderByToken(ctx context.Context, trackToken pgtype.
 		&i.CreatedAt,
 		&i.TrackToken,
 		&i.AlertedAt,
+		&i.OperatorID,
 	)
 	return i, err
 }
@@ -3424,8 +3432,8 @@ func (q *Queries) InsertChannelEvent(ctx context.Context, arg InsertChannelEvent
 
 const insertChannelOrder = `-- name: InsertChannelOrder :exec
 
-INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment, track_token)
-VALUES ($1, $2, $3, $4, $5, $6, $7)
+INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment, track_token, operator_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 `
 
 type InsertChannelOrderParams struct {
@@ -3436,6 +3444,7 @@ type InsertChannelOrderParams struct {
 	ClientOrderID string      `json:"client_order_id"`
 	Payment       []byte      `json:"payment"`
 	TrackToken    pgtype.Text `json:"track_token"`
+	OperatorID    pgtype.UUID `json:"operator_id"`
 }
 
 // ─── Channel orders (main 3.0 step 5) ───────────────────────────────────────
@@ -3448,6 +3457,7 @@ func (q *Queries) InsertChannelOrder(ctx context.Context, arg InsertChannelOrder
 		arg.ClientOrderID,
 		arg.Payment,
 		arg.TrackToken,
+		arg.OperatorID,
 	)
 	return err
 }
@@ -4139,7 +4149,7 @@ func (q *Queries) ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) 
 }
 
 const listChannelOrders = `-- name: ListChannelOrders :many
-SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at FROM channel_orders
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id FROM channel_orders
 WHERE channel_id = $1 AND created_at < $2
 ORDER BY created_at DESC
 LIMIT $3
@@ -4170,6 +4180,7 @@ func (q *Queries) ListChannelOrders(ctx context.Context, arg ListChannelOrdersPa
 			&i.CreatedAt,
 			&i.TrackToken,
 			&i.AlertedAt,
+			&i.OperatorID,
 		); err != nil {
 			return nil, err
 		}
@@ -6603,6 +6614,18 @@ type RevokeExcessTabletTokensParams struct {
 // Keep the newest `keep` active tokens of a location; revoke the rest.
 func (q *Queries) RevokeExcessTabletTokens(ctx context.Context, arg RevokeExcessTabletTokensParams) (int64, error) {
 	result, err := q.db.Exec(ctx, revokeExcessTabletTokens, arg.LocationID, arg.Keep)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeOperatorToken = `-- name: RevokeOperatorToken :execrows
+UPDATE operator_tokens SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) RevokeOperatorToken(ctx context.Context, tokenHash string) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeOperatorToken, tokenHash)
 	if err != nil {
 		return 0, err
 	}

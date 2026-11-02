@@ -48,6 +48,9 @@ func (h *OrderPortHandler) Place(c *echo.Context) error {
 	if err := echo.BindBody(c, &req); err != nil {
 		return c.JSON(http.StatusBadRequest, errCode("invalid order", "bad_request"))
 	}
+	if op, ok := appMiddleware.ChannelOperatorFromContext(c.Request().Context()); ok {
+		req.TakenBy = &op
+	}
 	v, created, err := h.svc.Place(c.Request().Context(), ch, req)
 	if err != nil {
 		return h.fail(c, err)

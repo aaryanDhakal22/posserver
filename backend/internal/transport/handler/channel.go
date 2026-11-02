@@ -40,10 +40,14 @@ func (h *ChannelHandler) Me(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, errCode("store lookup failed", "internal"))
 	}
-	return c.JSON(http.StatusOK, map[string]any{
+	out := map[string]any{
 		"channel": map[string]any{"id": ch.ID, "kind": ch.Kind, "name": ch.Name, "permissions": ch.Permissions},
 		"store":   map[string]any{"tenant_id": ch.TenantID, "location_id": ch.LocationID, "name": loc.Name, "timezone": loc.Timezone},
-	})
+	}
+	if op, ok := appMiddleware.ChannelOperatorFromContext(c.Request().Context()); ok {
+		out["operator"] = op // signed in as an operator (main 3.0 step 7)
+	}
+	return c.JSON(http.StatusOK, out)
 }
 
 // GET /channel/v1/openapi.json (none) — the contract adapters build against.

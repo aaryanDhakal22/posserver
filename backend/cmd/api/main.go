@@ -339,6 +339,7 @@ func main() {
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
 	operatorService := operatorApp.NewService(operatorRepo, tenancyService, lgr)
 	channelService := channelApp.NewService(repositories.NewChannelRepository(pool), tenancyService, lgr)
+	channelService.SetOperators(operatorService) // an operator's sign-in opens /channel/v1 as the store's Call center
 	channelService.SetViews(menuViewService)
 
 	sqsClient, err := sqsconsumer.NewSQSClient(ctx, cfg, lgr)

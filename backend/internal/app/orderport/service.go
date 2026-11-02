@@ -133,6 +133,10 @@ type Request struct {
 	PromisedAt         *time.Time `json:"promised_at"` // nil = as soon as possible
 	Notes              string     `json:"notes"`
 	ExpectedTotalCents *int64     `json:"expected_total_cents"` // the total the channel showed
+
+	// TakenBy is the operator signed in to an operator channel (set by the
+	// handler from the sign-in, never from the body).
+	TakenBy *channelDom.Operator `json:"-"`
 }
 
 var (
@@ -518,23 +522,30 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 	if err != nil {
 		return nil, err
 	}
+	meta := map[string]any{"channel": map[string]any{"id": ch.ID.String(), "kind": string(ch.Kind), "name": ch.Name},
+		"client_order_id": req.ClientOrderID}
+	ref := &order.ChannelRef{ID: ch.ID, ClientOrderID: req.ClientOrderID, Payment: payRef, TrackToken: token}
+	if op := req.TakenBy; op != nil {
+		meta["operator"] = map[string]any{"id": op.ID.String(), "display_name": op.DisplayName}
+		id := op.ID
+		ref.OperatorID = &id
+	}
 	return order.NewOrder(order.NewOrderInput{
-		RawPayload:    raw,
-		Channel:       &order.ChannelRef{ID: ch.ID, ClientOrderID: req.ClientOrderID, Payment: payRef, TrackToken: token},
-		TenantID:      order.TenantID(ch.TenantID),
-		LocationID:    order.LocationID(ch.LocationID),
-		Source:        order.Source(ch.Kind),
-		SourceEventID: sourceEventID(ch, req.ClientOrderID),
-		Customer:      order.Customer{DisplayName: req.Customer.Name, Phone: req.Customer.Phone, Email: req.Customer.Email},
-		Fulfillment:   ful,
-		Items:         items,
-		Money:         money,
-		Currency:      "USD",
-		Payments:      pays,
-		PlacedAt:      s.now().UTC(),
-		Notes:         strings.TrimSpace(req.Notes),
-		SourceMetadata: map[string]any{"channel": map[string]any{"id": ch.ID.String(), "kind": string(ch.Kind), "name": ch.Name},
-			"client_order_id": req.ClientOrderID},
+		RawPayload:     raw,
+		Channel:        ref,
+		TenantID:       order.TenantID(ch.TenantID),
+		LocationID:     order.LocationID(ch.LocationID),
+		Source:         order.Source(ch.Kind),
+		SourceEventID:  sourceEventID(ch, req.ClientOrderID),
+		Customer:       order.Customer{DisplayName: req.Customer.Name, Phone: req.Customer.Phone, Email: req.Customer.Email},
+		Fulfillment:    ful,
+		Items:          items,
+		Money:          money,
+		Currency:       "USD",
+		Payments:       pays,
+		PlacedAt:       s.now().UTC(),
+		Notes:          strings.TrimSpace(req.Notes),
+		SourceMetadata: meta,
 	})
 }
 
@@ -554,12 +565,18 @@ type View struct {
 	Customer         struct {
 		Name string `json:"name"`
 	} `json:"customer"`
-	Lines []ViewLine `json:"lines"`
-	Money ViewMoney  `json:"money"`
-	Pay   struct {
+	TakenBy *TakenBy   `json:"taken_by"` // the operator who took it (operator channels)
+	Lines   []ViewLine `json:"lines"`
+	Money   ViewMoney  `json:"money"`
+	Pay     struct {
 		Method string `json:"method"` // cash | card
 		Status string `json:"status"` // due | paid
 	} `json:"payment"`
+}
+
+type TakenBy struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
 }
 
 type ViewLine struct {
@@ -591,6 +608,11 @@ func viewOf(o *order.Order, clientOrderID, trackToken string) *View {
 		PlacedAt: o.PlacedAt(), PromisedAt: o.Fulfillment().PromisedAt, KitchenNumber: snap.KitchenNumber, EstimatedReadyAt: snap.EstimatedReadyAt,
 		Lines: []ViewLine{}}
 	v.Customer.Name = o.Customer().DisplayName
+	if op, ok := snap.SourceMeta["operator"].(map[string]any); ok {
+		id, _ := op["id"].(string)
+		name, _ := op["display_name"].(string)
+		v.TakenBy = &TakenBy{ID: id, DisplayName: name}
+	}
 	for _, it := range o.Items() {
 		l := ViewLine{Name: it.Name, Size: it.Size, Qty: it.Quantity, TotalCents: int64(it.LineTotal), Mods: []string{}, Notes: it.Notes}
 		for _, c := range it.Children {

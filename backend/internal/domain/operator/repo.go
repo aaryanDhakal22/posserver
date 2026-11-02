@@ -26,4 +26,6 @@ type Repository interface {
 	AuthenticateToken(ctx context.Context, tokenHash string) (*TokenAuth, error)
 	TouchToken(ctx context.Context, tokenID uuid.UUID) error
 	RevokeAllTokens(ctx context.Context, operatorID uuid.UUID) error
+	// RevokeToken revokes one token by its hash (a sign-out).
+	RevokeToken(ctx context.Context, tokenHash string) error
 }

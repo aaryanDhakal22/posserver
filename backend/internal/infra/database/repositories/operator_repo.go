@@ -136,3 +136,8 @@ func (r *OperatorRepository) TouchToken(ctx context.Context, tokenID uuid.UUID) 
 func (r *OperatorRepository) RevokeAllTokens(ctx context.Context, operatorID uuid.UUID) error {
 	return models.New(r.pool).RevokeAllOperatorTokens(ctx, pgID(operatorID))
 }
+
+func (r *OperatorRepository) RevokeToken(ctx context.Context, tokenHash string) error {
+	_, err := models.New(r.pool).RevokeOperatorToken(ctx, tokenHash)
+	return err
+}
