@@ -166,6 +166,209 @@
         }
       }
     },
+    "/channel/v1/orders": {
+      "post": {
+        "operationId": "placeOrder",
+        "summary": "Place an order",
+        "description": "Checked against the store's status (open now, or promised_at one of /store/times), re-priced (cart problems → 422 cart_invalid with issues; expected_total_cents different from main's → 409 price_changed: refresh), a delivery address the store reaches (the website must be inside the area; the call center and counter may send any), paid through the payment port (cash = due at the store / to the driver; card only where a card processor is connected). Idempotent: the same client_order_id answers 200 with the same order. Needs the orders permission and the payment method in the channel's payments.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OrderRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Placed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Order"
+                }
+              }
+            }
+          },
+          "200": {
+            "description": "Placed before with this client_order_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Order"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A malformed order (bad_request)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderError"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "402": {
+            "description": "payment_declined",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "forbidden (no orders permission) or payment_not_allowed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "store_paused, store_closed, bad_time, price_changed, payment_unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "cart_invalid (issues), outside_area, address_unknown",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "try_again (an address lookup or main is unavailable)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "operationId": "listOrders",
+        "summary": "This channel's orders, newest first",
+        "parameters": [
+          {
+            "name": "before",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Orders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Order"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad before / limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderError"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/channel/v1/orders/{id}": {
+      "get": {
+        "operationId": "getOrder",
+        "summary": "One of this channel's orders",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Order"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "Not this channel's order",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderError"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
     "/channel/v1/quote": {
       "post": {
         "operationId": "quote",
@@ -1935,6 +2138,374 @@
               },
               "delivery": {
                 "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      },
+      "OrderError": {
+        "type": "object",
+        "required": [
+          "error",
+          "code"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Issue"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "OrderRequest": {
+        "type": "object",
+        "required": [
+          "client_order_id",
+          "type",
+          "lines",
+          "payment",
+          "customer"
+        ],
+        "properties": {
+          "client_order_id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_.:-]{1,64}$",
+            "description": "The channel's idempotency key"
+          },
+          "type": {
+            "enum": [
+              "pickup",
+              "delivery"
+            ]
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CartLine"
+            }
+          },
+          "code": {
+            "type": "string"
+          },
+          "tip_cents": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tip_pct": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "first_order": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "payment": {
+            "type": "object",
+            "required": [
+              "method"
+            ],
+            "properties": {
+              "method": {
+                "enum": [
+                  "cash",
+                  "card"
+                ]
+              },
+              "token": {
+                "type": "string",
+                "description": "The card processor's token (card)"
+              }
+            },
+            "additionalProperties": false
+          },
+          "customer": {
+            "type": "object",
+            "required": [
+              "name",
+              "phone"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "phone": {
+                "type": "string",
+                "description": "US, 10 digits (any formatting)"
+              },
+              "email": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "address": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "line1"
+                ],
+                "properties": {
+                  "line1": {
+                    "type": "string"
+                  },
+                  "line2": {
+                    "type": "string"
+                  },
+                  "city": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "zip": {
+                    "type": "string"
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "promised_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "null = as soon as possible; else one of /store/times"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "expected_total_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The total the channel showed; refused if main's differs"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Order": {
+        "type": "object",
+        "required": [
+          "id",
+          "client_order_id",
+          "status",
+          "type",
+          "placed_at",
+          "promised_at",
+          "kitchen_number",
+          "estimated_ready_at",
+          "customer",
+          "lines",
+          "money",
+          "payment"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "client_order_id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "received",
+              "scheduled",
+              "accepted",
+              "ready",
+              "on_delivery",
+              "completed",
+              "cancelled"
+            ]
+          },
+          "type": {
+            "enum": [
+              "pickup",
+              "delivery"
+            ]
+          },
+          "placed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "promised_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "kitchen_number": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "estimated_ready_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "customer": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name",
+                "size",
+                "qty",
+                "total_cents",
+                "mods",
+                "notes"
+              ],
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "string"
+                },
+                "qty": {
+                  "type": "integer"
+                },
+                "total_cents": {
+                  "type": "integer"
+                },
+                "mods": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "notes": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "money": {
+            "type": "object",
+            "required": [
+              "subtotal_cents",
+              "discounts",
+              "fees",
+              "tax_cents",
+              "tip_cents",
+              "total_cents"
+            ],
+            "properties": {
+              "subtotal_cents": {
+                "type": "integer"
+              },
+              "discounts": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "label",
+                    "amount_cents"
+                  ],
+                  "properties": {
+                    "label": {
+                      "type": "string"
+                    },
+                    "amount_cents": {
+                      "type": "integer"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "fees": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "label",
+                    "amount_cents"
+                  ],
+                  "properties": {
+                    "label": {
+                      "type": "string"
+                    },
+                    "amount_cents": {
+                      "type": "integer"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "tax_cents": {
+                "type": "integer"
+              },
+              "tip_cents": {
+                "type": "integer"
+              },
+              "total_cents": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          },
+          "payment": {
+            "type": "object",
+            "required": [
+              "method",
+              "status"
+            ],
+            "properties": {
+              "method": {
+                "enum": [
+                  "cash",
+                  "card"
+                ]
+              },
+              "status": {
+                "enum": [
+                  "due",
+                  "paid"
+                ]
               }
             },
             "additionalProperties": false

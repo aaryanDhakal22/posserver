@@ -64,6 +64,15 @@ type Caster struct {
 	tracer   trace.Tracer
 	resolver StoreResolver
 	router   ItemRouter // nil = no kitchen routing (items print as one receipt)
+	// vendor finds the location's built-in vendor channel (main 3.0); nil or
+	// an error = the order is saved without a channel link.
+	vendor func(ctx context.Context, tenantID, locationID uuid.UUID) (uuid.UUID, error)
+}
+
+// SetVendorChannel links every order to its location's built-in vendor
+// channel (Brygid's feed). Never blocks ingest: a failure only logs.
+func (c *Caster) SetVendorChannel(fn func(ctx context.Context, tenantID, locationID uuid.UUID) (uuid.UUID, error)) {
+	c.vendor = fn
 }
 
 // New builds a Caster. The tenant/location for each order are resolved per-call
@@ -158,7 +167,17 @@ func (c *Caster) Cast(ctx context.Context, in order.CastInput) (*order.Order, er
 		return nil, fmt.Errorf("online cast: route items: %w", err)
 	}
 
+	var channel *order.ChannelRef
+	if c.vendor != nil {
+		if id, err := c.vendor(ctx, uuid.UUID(tenantID), uuid.UUID(locationID)); err != nil {
+			c.logger.Warn().Ctx(ctx).Err(err).Msg("online cast: no vendor channel; saved without a channel link")
+		} else {
+			channel = &order.ChannelRef{ID: id}
+		}
+	}
+
 	agg, err := order.NewOrder(order.NewOrderInput{
+		Channel:        channel,
 		TenantID:       tenantID,
 		LocationID:     locationID,
 		Source:         order.SourceOnline,

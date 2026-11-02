@@ -29,4 +29,6 @@ type Repository interface {
 	Delete(ctx context.Context, id uuid.UUID) (bool, error)
 	Authenticate(ctx context.Context, keyHash string) (*Channel, error)
 	Touch(ctx context.Context, id uuid.UUID) error
+	// BuiltinVendor is the location's built-in vendor channel's id (pgx.ErrNoRows = none yet).
+	BuiltinVendor(ctx context.Context, locationID uuid.UUID) (uuid.UUID, error)
 }

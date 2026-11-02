@@ -77,6 +77,32 @@ func (q *Queries) AuthenticateChannel(ctx context.Context, keyHash pgtype.Text) 
 	return i, err
 }
 
+const builtinVendorChannel = `-- name: BuiltinVendorChannel :one
+SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id FROM channels WHERE location_id = $1 AND builtin AND kind = 'vendor' ORDER BY created_at LIMIT 1
+`
+
+func (q *Queries) BuiltinVendorChannel(ctx context.Context, locationID pgtype.UUID) (Channel, error) {
+	row := q.db.QueryRow(ctx, builtinVendorChannel, locationID)
+	var i Channel
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.Permissions,
+		&i.Builtin,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.ViewID,
+	)
+	return i, err
+}
+
 const clearReceiptPrinter = `-- name: ClearReceiptPrinter :exec
 UPDATE printers SET is_receipt = false, updated_at = now()
 WHERE location_id = $1 AND is_receipt
@@ -1951,6 +1977,49 @@ func (q *Queries) GetChannel(ctx context.Context, id pgtype.UUID) (Channel, erro
 	return i, err
 }
 
+const getChannelOrder = `-- name: GetChannelOrder :one
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at FROM channel_orders WHERE order_id = $1
+`
+
+func (q *Queries) GetChannelOrder(ctx context.Context, orderID pgtype.UUID) (ChannelOrder, error) {
+	row := q.db.QueryRow(ctx, getChannelOrder, orderID)
+	var i ChannelOrder
+	err := row.Scan(
+		&i.OrderID,
+		&i.ChannelID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.ClientOrderID,
+		&i.Payment,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getChannelOrderByClient = `-- name: GetChannelOrderByClient :one
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at FROM channel_orders WHERE channel_id = $1 AND client_order_id = $2
+`
+
+type GetChannelOrderByClientParams struct {
+	ChannelID     pgtype.UUID `json:"channel_id"`
+	ClientOrderID string      `json:"client_order_id"`
+}
+
+func (q *Queries) GetChannelOrderByClient(ctx context.Context, arg GetChannelOrderByClientParams) (ChannelOrder, error) {
+	row := q.db.QueryRow(ctx, getChannelOrderByClient, arg.ChannelID, arg.ClientOrderID)
+	var i ChannelOrder
+	err := row.Scan(
+		&i.OrderID,
+		&i.ChannelID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.ClientOrderID,
+		&i.Payment,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getDeal = `-- name: GetDeal :one
 SELECT id, tenant_id, location_id, kind, name, description, active, channel_kinds, def, code, position, created_at, updated_at FROM deals WHERE id = $1 AND location_id = $2
 `
@@ -3199,6 +3268,34 @@ func (q *Queries) InsertAgentUpdate(ctx context.Context, arg InsertAgentUpdatePa
 	return err
 }
 
+const insertChannelOrder = `-- name: InsertChannelOrder :exec
+
+INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment)
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type InsertChannelOrderParams struct {
+	OrderID       pgtype.UUID `json:"order_id"`
+	ChannelID     pgtype.UUID `json:"channel_id"`
+	TenantID      pgtype.UUID `json:"tenant_id"`
+	LocationID    pgtype.UUID `json:"location_id"`
+	ClientOrderID string      `json:"client_order_id"`
+	Payment       []byte      `json:"payment"`
+}
+
+// ─── Channel orders (main 3.0 step 5) ───────────────────────────────────────
+func (q *Queries) InsertChannelOrder(ctx context.Context, arg InsertChannelOrderParams) error {
+	_, err := q.db.Exec(ctx, insertChannelOrder,
+		arg.OrderID,
+		arg.ChannelID,
+		arg.TenantID,
+		arg.LocationID,
+		arg.ClientOrderID,
+		arg.Payment,
+	)
+	return err
+}
+
 const insertDeliveryRun = `-- name: InsertDeliveryRun :execrows
 INSERT INTO delivery_runs (id, tenant_id, location_id, batch_id, driver_id, driver_name,
                            plan_id, suggested_ids, sent_ids, stops, at)
@@ -3863,6 +3960,47 @@ func (q *Queries) ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) 
 			&i.DefaultPrinterID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listChannelOrders = `-- name: ListChannelOrders :many
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at FROM channel_orders
+WHERE channel_id = $1 AND created_at < $2
+ORDER BY created_at DESC
+LIMIT $3
+`
+
+type ListChannelOrdersParams struct {
+	ChannelID pgtype.UUID        `json:"channel_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	Limit     int32              `json:"limit"`
+}
+
+func (q *Queries) ListChannelOrders(ctx context.Context, arg ListChannelOrdersParams) ([]ChannelOrder, error) {
+	rows, err := q.db.Query(ctx, listChannelOrders, arg.ChannelID, arg.CreatedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelOrder
+	for rows.Next() {
+		var i ChannelOrder
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.ChannelID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.ClientOrderID,
+			&i.Payment,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

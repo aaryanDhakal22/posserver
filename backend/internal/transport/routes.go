@@ -31,6 +31,7 @@ import (
 	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
+	"quiccpos/main/internal/app/orderport"
 	pricingApp "quiccpos/main/internal/app/pricing"
 	"quiccpos/main/internal/app/printerstatus"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
@@ -95,6 +96,8 @@ type RouterDeps struct {
 	MenuService *menuApp.Service
 	// OperatorService backs the operator accounts + read-only menu API.
 	OperatorService *operatorApp.Service
+	// OrderPort places channel orders (main 3.0).
+	OrderPort *orderport.Service
 	// Pricing backs pricing settings, deals and quotes (main 3.0).
 	Pricing *pricingApp.Service
 	// StoreStatus backs a store's ordering status (main 3.0).
@@ -186,6 +189,7 @@ func routeTable(d RouterDeps) []routeDef {
 	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
 	pricingH := handler.NewPricingHandler(d.Pricing, d.Logger)
+	orderPortH := handler.NewOrderPortHandler(d.OrderPort, d.Logger)
 	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
@@ -412,6 +416,9 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", channelPrefix+"/openapi.json", "none", "The channel API's OpenAPI document", channelH.Spec, channelGzip),
 		def("GET", channelPrefix+"/me", "channel", "The channel behind the key and its store", channelH.Me, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/menu", "channel", "The channel's menu (ETag = menu version)", viewH.ChannelMenu, channelAuth, channelGzip),
+		def("POST", channelPrefix+"/orders", "channel", "Place an order (orders permission; idempotent on client_order_id)", orderPortH.Place, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/orders", "channel", "This channel's orders, newest first (?before=&limit=)", orderPortH.List, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/orders/:id", "channel", "One of this channel's orders", orderPortH.Get, channelAuth, channelGzip),
 		def("POST", channelPrefix+"/quote", "channel", "Price a cart (quote permission)", pricingH.ChannelQuote, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/pricing", "channel", "What this channel prices with (settings, deals, item facts) — for previews", pricingH.ChannelPricing, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/store", "channel", "The store's status: open/paused/closed, order types + ETAs, sold out", statusH.ChannelStore, channelAuth, channelGzip),

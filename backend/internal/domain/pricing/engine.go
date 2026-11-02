@@ -123,7 +123,41 @@ type priced struct {
 	bankItem string // deal eligibility ("" = none)
 	rateItem string // whose tax rate applies
 	size     string
+	sizeName string
+	choice   string // a combined item: the choice's name
+	opts     []ResolvedOption
 	issues   []Issue
+}
+
+// Resolved is one configured menu item as an order line is built from it.
+type Resolved struct {
+	Name       string // the menu item's name
+	ChoiceName string // a combined item: the choice picked
+	BankItem   string // the bank item it is ("" = an added item)
+	RateItem   string // the bank item whose tax / printer applies
+	SizeID     string
+	SizeName   string
+	BaseCents  int64 // the item's (size's) price
+	UnitCents  int64 // with the charged options
+	Options    []ResolvedOption
+	Issues     []Issue
+}
+
+// ResolvedOption is one option on the item: picked, or a default left off.
+type ResolvedOption struct {
+	Name           string
+	Portion        string // left | right | "" (whole)
+	PriceCents     int64  // for the item's size
+	RemovedDefault bool   // "NO x"
+	Included       bool   // one of a bundle step's included options (not charged)
+}
+
+// Resolve resolves a selection against the context's menu; free = the
+// priciest options included at no charge (a bundle step's).
+func Resolve(ctx Context, sel Selection, free int) Resolved {
+	p := newEngine(ctx).price(sel, free)
+	return Resolved{Name: p.name, ChoiceName: p.choice, BankItem: p.bankItem, RateItem: p.rateItem, SizeID: p.size, SizeName: p.sizeName,
+		BaseCents: p.base, UnitCents: p.unit, Options: p.opts, Issues: p.issues}
 }
 
 type engine struct {
@@ -181,6 +215,7 @@ func (e *engine) price(sel Selection, free int) priced {
 			return p
 		}
 		p.mods = append(p.mods, ch.Name)
+		p.choice = ch.Name
 		sizes, base, soldOut = ch.Sizes, ch.PriceCents, ch.SoldOut
 		p.bankItem, p.rateItem = ch.ItemID.String(), ch.ItemID.String()
 	case len(it.Anchor.ItemIDs) > 0 && it.Anchor.ItemIDs[0].String() == it.ID:
@@ -202,7 +237,7 @@ func (e *engine) price(sel Selection, free int) priced {
 			p.issues = append(p.issues, Issue{Code: IssueUnknownSize, Message: it.Name + ": that size is gone."})
 			return p
 		}
-		base, p.size = sz.PriceCents, sz.SizeID.String()
+		base, p.size, p.sizeName = sz.PriceCents, sz.SizeID.String(), sz.Name
 		p.mods = append(p.mods, sz.Name)
 	} else if sel.SizeID != "" {
 		p.issues = append(p.issues, Issue{Code: IssueUnknownSize, Message: it.Name + ": that size is gone."})
@@ -258,6 +293,11 @@ func (e *engine) price(sel Selection, free int) priced {
 			if price > 0 {
 				extras = append(extras, price)
 			}
+			portion := ""
+			if half != "" {
+				portion = pk.Portion
+			}
+			p.opts = append(p.opts, ResolvedOption{Name: o.Name, Portion: portion, PriceCents: price})
 		}
 		// "NO onions": a default left off in a pick-many group (in a pick-one
 		// group the choice replaces it).
@@ -265,6 +305,7 @@ func (e *engine) price(sel Selection, free int) priced {
 			for _, o := range g.Options {
 				if o.IsDefault && !seen[o.ID.String()] {
 					p.mods = append(p.mods, "NO "+o.Name)
+					p.opts = append(p.opts, ResolvedOption{Name: o.Name, RemovedDefault: true})
 				}
 			}
 		}
@@ -293,6 +334,19 @@ func (e *engine) price(sel Selection, free int) priced {
 	for i, x := range extras {
 		if i >= free {
 			p.extras += x
+		}
+	}
+	// Mark the included ones: the priciest `free` charged options.
+	charged := make([]int, 0, len(p.opts))
+	for i, o := range p.opts {
+		if o.PriceCents > 0 && !o.RemovedDefault {
+			charged = append(charged, i)
+		}
+	}
+	sort.SliceStable(charged, func(a, b int) bool { return p.opts[charged[a]].PriceCents > p.opts[charged[b]].PriceCents })
+	for k, i := range charged {
+		if k < free {
+			p.opts[i].Included = true
 		}
 	}
 	p.base = base

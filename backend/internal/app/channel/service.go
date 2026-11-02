@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"sync"
 
 	authSvc "quiccpos/main/internal/app/auth"
 	channelDom "quiccpos/main/internal/domain/channel"
@@ -46,10 +47,12 @@ type ViewReader interface {
 }
 
 type Service struct {
-	repo   channelDom.Repository
-	locs   LocationReader
-	views  ViewReader
-	logger zerolog.Logger
+	builtinMu sync.Mutex
+	builtin   map[uuid.UUID]uuid.UUID // location → its built-in vendor channel
+	repo      channelDom.Repository
+	locs      LocationReader
+	views     ViewReader
+	logger    zerolog.Logger
 }
 
 // SetViews plugs in the menu views (set once at startup).
@@ -93,7 +96,7 @@ func (s *Service) Edit(ctx context.Context, id uuid.UUID, name *string, perms *c
 }
 
 func NewService(repo channelDom.Repository, locs LocationReader, lg zerolog.Logger) *Service {
-	return &Service{repo: repo, locs: locs, logger: lg.With().Str("module", "channel-service").Logger()}
+	return &Service{repo: repo, locs: locs, builtin: map[uuid.UUID]uuid.UUID{}, logger: lg.With().Str("module", "channel-service").Logger()}
 }
 
 // Create adds a channel to a location and returns it with its key, shown
@@ -239,4 +242,29 @@ func newKey() (string, error) {
 		return "", err
 	}
 	return KeyPrefix + hex.EncodeToString(buf), nil
+}
+
+// BuiltinVendor is a location's built-in vendor channel (Brygid's feed),
+// created on first use. It has no key: it is how the SQS vendor feed's
+// orders are linked to a channel (main 3.0).
+func (s *Service) BuiltinVendor(ctx context.Context, tenantID, locationID uuid.UUID) (uuid.UUID, error) {
+	s.builtinMu.Lock()
+	defer s.builtinMu.Unlock()
+	if id, ok := s.builtin[locationID]; ok {
+		return id, nil
+	}
+	id, err := s.repo.BuiltinVendor(ctx, locationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		var c *channelDom.Channel
+		c, err = s.repo.Create(ctx, channelDom.NewChannel{TenantID: tenantID, LocationID: locationID, Kind: channelDom.KindVendor,
+			Name: "Brygid", Permissions: channelDom.DefaultPermissions(channelDom.KindVendor), Builtin: true})
+		if err == nil {
+			id = c.ID
+		}
+	}
+	if err != nil {
+		return uuid.Nil, err
+	}
+	s.builtin[locationID] = id
+	return id, nil
 }

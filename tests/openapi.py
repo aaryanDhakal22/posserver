@@ -56,8 +56,12 @@ def check(resp: requests.Response, op_id: str) -> Any:
         return None
     assert resp.headers.get("Content-Type", "").startswith("application/json"), f"{op_id}: content type {resp.headers.get('Content-Type')}"
     body = resp.json()
-    registry = Registry().with_resource("urn:channel-api", Resource(contents=spec(), specification=DRAFT202012))
-    schema = {"$ref": "urn:channel-api#" + _pointer(content["schema"])} if "$ref" in content["schema"] else content["schema"]
+    # An inline schema (e.g. an array of $refs) is placed inside the document
+    # so its "#/components/…" refs resolve against it.
+    doc = {**spec(), "x-inline": content["schema"]}
+    registry = Registry().with_resource("urn:channel-api", Resource(contents=doc, specification=DRAFT202012))
+    target = _pointer(content["schema"]) if "$ref" in content["schema"] else "/x-inline"
+    schema = {"$ref": "urn:channel-api#" + target}
     errors = sorted(Draft202012Validator(schema, registry=registry).iter_errors(body), key=lambda e: list(e.path))
     assert not errors, f"{op_id} {resp.status_code} does not match the spec:\n" + "\n".join(
         f"  at /{'/'.join(map(str, e.path))}: {e.message}" for e in errors[:10])

@@ -634,3 +634,33 @@ func (s *Service) UnmatchedNames(ctx context.Context, tenantID, locationID uuid.
 func normalizeItemName(s string) string {
 	return strings.ToLower(strings.Join(strings.Fields(s), " "))
 }
+
+// RouteBankItems routes items whose bank item is known (channel orders, main
+// 3.0): the item's printer, else its category's default; an id that is no
+// longer on the menu is unmatched.
+func (s *Service) RouteBankItems(ctx context.Context, locationID uuid.UUID, ids []uuid.UUID) ([]order.ItemRoute, error) {
+	entries, err := s.repo.ListRoutingByLocation(ctx, locationID)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[uuid.UUID]menuDom.RouteEntry, len(entries))
+	for _, e := range entries {
+		byID[e.ItemID] = e
+	}
+	out := make([]order.ItemRoute, len(ids))
+	for i, id := range ids {
+		e, ok := byID[id]
+		switch {
+		case !ok:
+			out[i] = order.ItemRoute{Routing: order.RoutingUnmatched}
+		case e.PrinterID == nil:
+			item := e.ItemID
+			out[i] = order.ItemRoute{MenuItemID: &item, Routing: order.RoutingUnassigned}
+		default:
+			item, pid := e.ItemID, *e.PrinterID
+			out[i] = order.ItemRoute{MenuItemID: &item, PrinterID: &pid, Routing: order.RoutingMatched}
+		}
+		s.meters.OrderItemsRouted.Add(ctx, 1, observability.WithLocation(ctx, locationID, attribute.String("routing", string(out[i].Routing))))
+	}
+	return out, nil
+}

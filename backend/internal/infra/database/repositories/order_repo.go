@@ -88,6 +88,24 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 		}
 	}
 
+	if ch := o.Channel(); ch != nil {
+		pay := ch.Payment
+		if len(pay) == 0 {
+			pay = []byte("{}")
+		}
+		if err := q.InsertChannelOrder(ctx, models.InsertChannelOrderParams{
+			OrderID: toPgUUID(uuid.UUID(o.ID())), ChannelID: toPgUUID(ch.ID),
+			TenantID: toPgUUID(uuid.UUID(o.TenantID())), LocationID: toPgUUID(uuid.UUID(o.LocationID())),
+			ClientOrderID: ch.ClientOrderID, Payment: pay,
+		}); err != nil {
+			if isUniqueViolation(err) {
+				log.Info().Msg("duplicate channel order; skipping")
+				return order.ErrDuplicate
+			}
+			return fmt.Errorf("create channel order: %w", err)
+		}
+	}
+
 	for _, ev := range o.PullEvents() {
 		if err := insertOutboxEvent(ctx, q, o.TenantID(), o.LocationID(), ev, r.handlerNames); err != nil {
 			return fmt.Errorf("emit domain event %s: %w", ev.Type, err)

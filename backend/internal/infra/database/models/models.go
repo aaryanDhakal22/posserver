@@ -78,6 +78,16 @@ type Channel struct {
 	ViewID      pgtype.UUID        `json:"view_id"`
 }
 
+type ChannelOrder struct {
+	OrderID       pgtype.UUID        `json:"order_id"`
+	ChannelID     pgtype.UUID        `json:"channel_id"`
+	TenantID      pgtype.UUID        `json:"tenant_id"`
+	LocationID    pgtype.UUID        `json:"location_id"`
+	ClientOrderID string             `json:"client_order_id"`
+	Payment       []byte             `json:"payment"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+}
+
 type Deal struct {
 	ID           pgtype.UUID        `json:"id"`
 	TenantID     pgtype.UUID        `json:"tenant_id"`

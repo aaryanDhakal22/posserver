@@ -805,3 +805,16 @@ CREATE TABLE deals (
 );
 CREATE INDEX idx_deals_location ON deals (location_id);
 CREATE UNIQUE INDEX idx_deals_code ON deals (location_id, upper(code)) WHERE kind = 'code';
+
+-- 00022_channel_orders (main 3.0): an order's channel + idempotency key + payment ref.
+CREATE TABLE channel_orders (
+    order_id        uuid        PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+    channel_id      uuid        REFERENCES channels(id) ON DELETE SET NULL,
+    tenant_id       uuid        NOT NULL,
+    location_id     uuid        NOT NULL,
+    client_order_id text        NOT NULL DEFAULT '',
+    payment         jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX idx_channel_orders_client ON channel_orders (channel_id, client_order_id) WHERE client_order_id <> '';
+CREATE INDEX idx_channel_orders_channel ON channel_orders (channel_id, created_at DESC);

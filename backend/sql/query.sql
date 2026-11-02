@@ -1585,3 +1585,24 @@ RETURNING *;
 
 -- name: DeleteDeal :execrows
 DELETE FROM deals WHERE id = $1 AND location_id = $2;
+
+-- ─── Channel orders (main 3.0 step 5) ───────────────────────────────────────
+
+-- name: InsertChannelOrder :exec
+INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment)
+VALUES ($1, $2, $3, $4, $5, $6);
+
+-- name: GetChannelOrderByClient :one
+SELECT * FROM channel_orders WHERE channel_id = $1 AND client_order_id = $2;
+
+-- name: GetChannelOrder :one
+SELECT * FROM channel_orders WHERE order_id = $1;
+
+-- name: ListChannelOrders :many
+SELECT * FROM channel_orders
+WHERE channel_id = $1 AND created_at < $2
+ORDER BY created_at DESC
+LIMIT $3;
+
+-- name: BuiltinVendorChannel :one
+SELECT * FROM channels WHERE location_id = $1 AND builtin AND kind = 'vendor' ORDER BY created_at LIMIT 1;

@@ -35,9 +35,11 @@ import (
 	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
+	"quiccpos/main/internal/app/orderport"
 	pricingApp "quiccpos/main/internal/app/pricing"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
+	"quiccpos/main/internal/domain/payment"
 	tenancyDomain "quiccpos/main/internal/domain/tenancy"
 
 	sqsconsumer "quiccpos/main/internal/infra/sqs"
@@ -305,6 +307,14 @@ func main() {
 	storeStatusService := storestatusApp.NewService(repositories.NewStoreStatusRepository(pool), tenancyService, geoService, lgr)
 	go storeStatusService.RunRestock(ctx)
 	pricingService := pricingApp.NewService(repositories.NewPricingRepository(pool), menuViewService, storeStatusService, tenancyService, lgr)
+	// The payment port: cash everywhere; the test card on dev and staging
+	// only — no card charging in prod until Square (the owner, 2026-11-02).
+	gateways := map[string]payment.Gateway{payment.MethodCash: payment.Cash{}}
+	if env := cfg.AppConfig.AppEnv; env == "dev" || env == "staging" {
+		gateways[payment.MethodCard] = payment.NewTestCard()
+	}
+	orderPortService := orderport.NewService(pricingService, storeStatusService, menuViewService, menuService, svc,
+		repositories.NewChannelOrderRepository(pool), gateways, lgr)
 	go geoService.BackfillStores(ctx)
 
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
@@ -323,6 +333,7 @@ func main() {
 	// caster routes each order to a tenant/location by its store_name (see
 	// storeResolver + tenancy.ResolveStoreByName).
 	onlineCaster := online.New(lgr, storeResolver{svc: tenancyService}, menuService)
+	onlineCaster.SetVendorChannel(channelService.BuiltinVendor) // Brygid's orders link to its built-in channel
 	casters := map[order.Source]sqsconsumer.Caster{
 		order.SourceOnline: onlineCaster,
 	}
@@ -364,6 +375,7 @@ func main() {
 		MenuViewService: menuViewService,
 		StoreStatus:     storeStatusService,
 		Pricing:         pricingService,
+		OrderPort:       orderPortService,
 		AgentSync:       agentSync,
 		Diag:            diagService,
 		Geo:             geoService,

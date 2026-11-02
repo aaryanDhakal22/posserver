@@ -14,6 +14,7 @@ type Querier interface {
 	AddOperatorLocation(ctx context.Context, arg AddOperatorLocationParams) error
 	AttachModifierGroup(ctx context.Context, arg AttachModifierGroupParams) error
 	AuthenticateChannel(ctx context.Context, keyHash pgtype.Text) (Channel, error)
+	BuiltinVendorChannel(ctx context.Context, locationID pgtype.UUID) (Channel, error)
 	// Unflag the location's current receipt printer (one per location).
 	ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error
 	ClearStorePause(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error)
@@ -134,6 +135,8 @@ type Querier interface {
 	GetAgentUpdate(ctx context.Context, id pgtype.UUID) (AgentUpdate, error)
 	GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKParams) ([]byte, error)
 	GetChannel(ctx context.Context, id pgtype.UUID) (Channel, error)
+	GetChannelOrder(ctx context.Context, orderID pgtype.UUID) (ChannelOrder, error)
+	GetChannelOrderByClient(ctx context.Context, arg GetChannelOrderByClientParams) (ChannelOrder, error)
 	GetDeal(ctx context.Context, arg GetDealParams) (Deal, error)
 	GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagReportRow, error)
 	GetExternalStop(ctx context.Context, arg GetExternalStopParams) (GeoExternalStop, error)
@@ -188,6 +191,8 @@ type Querier interface {
 	// 00012: Pi updates (agent_updates)
 	// ---------------------------------------------------------------------------
 	InsertAgentUpdate(ctx context.Context, arg InsertAgentUpdateParams) error
+	// ─── Channel orders (main 3.0 step 5) ───────────────────────────────────────
+	InsertChannelOrder(ctx context.Context, arg InsertChannelOrderParams) error
 	InsertDeliveryRun(ctx context.Context, arg InsertDeliveryRunParams) (int64, error)
 	InsertDiagReport(ctx context.Context, arg InsertDiagReportParams) (int64, error)
 	InsertDriver(ctx context.Context, arg InsertDriverParams) error
@@ -212,6 +217,7 @@ type Querier interface {
 	ListAppReleases(ctx context.Context, app string) ([]ListAppReleasesRow, error)
 	ListCategoriesByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuCategory, error)
 	ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) ([]MenuCategory, error)
+	ListChannelOrders(ctx context.Context, arg ListChannelOrdersParams) ([]ChannelOrder, error)
 	ListChannels(ctx context.Context) ([]Channel, error)
 	ListChannelsByLocation(ctx context.Context, locationID pgtype.UUID) ([]Channel, error)
 	ListDeals(ctx context.Context, locationID pgtype.UUID) ([]Deal, error)
