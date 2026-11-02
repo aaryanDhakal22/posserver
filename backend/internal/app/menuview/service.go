@@ -256,6 +256,17 @@ func (s *Service) View(ctx context.Context, locationID, id uuid.UUID) (*menuview
 	return v, nil
 }
 
+// ViewFor is the view a channel reads: its own when set (and still the
+// store's), else the store's default view of its kind.
+func (s *Service) ViewFor(ctx context.Context, tenantID, locationID uuid.UUID, kind menuview.Kind, viewID *uuid.UUID) (*menuview.View, error) {
+	if viewID != nil {
+		if v, err := s.View(ctx, locationID, *viewID); err == nil {
+			return v, nil
+		}
+	}
+	return s.DefaultView(ctx, tenantID, locationID, kind)
+}
+
 // ViewKind is the kind of one of a location's views (channelApp.ViewReader).
 func (s *Service) ViewKind(ctx context.Context, locationID, id uuid.UUID) (string, error) {
 	v, err := s.View(ctx, locationID, id)

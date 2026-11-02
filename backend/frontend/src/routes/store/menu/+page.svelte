@@ -38,6 +38,7 @@
   import ImportDialog from '$lib/components/menu/ImportDialog.svelte';
   import SizesTab from '$lib/components/menu/SizesTab.svelte';
   import ViewsTab from '$lib/components/menu/ViewsTab.svelte';
+  import DealsTab from '$lib/components/menu/DealsTab.svelte';
   import { loadPiStatus, type PiLink } from '$lib/store/pi';
 
   // Menu editor: items grouped by category (inline price + stock, side panel
@@ -358,7 +359,8 @@
     { id: 'modifiers', label: 'Modifier groups' },
     { id: 'categories', label: 'Categories' },
     { id: 'sizes', label: 'Sizes' },
-    { id: 'views', label: 'Views' }
+    { id: 'views', label: 'Views' },
+    { id: 'deals', label: 'Deals' }
   ];
 </script>
 
@@ -400,6 +402,8 @@
     <ModifiersTab {sizes} />
   {:else if tab === 'sizes'}
     <SizesTab {sizes} onreload={loadBank} />
+  {:else if tab === 'deals'}
+    <DealsTab {bank} />
   {:else if tab === 'views'}
     <ViewsTab {bank} onbankchange={loadUnmatched} />
   {:else if tab === 'categories'}

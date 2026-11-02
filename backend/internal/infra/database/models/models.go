@@ -78,6 +78,22 @@ type Channel struct {
 	ViewID      pgtype.UUID        `json:"view_id"`
 }
 
+type Deal struct {
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	Kind         string             `json:"kind"`
+	Name         string             `json:"name"`
+	Description  string             `json:"description"`
+	Active       bool               `json:"active"`
+	ChannelKinds []string           `json:"channel_kinds"`
+	Def          []byte             `json:"def"`
+	Code         string             `json:"code"`
+	Position     int32              `json:"position"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type DeliveryRun struct {
 	ID           pgtype.UUID        `json:"id"`
 	TenantID     pgtype.UUID        `json:"tenant_id"`
@@ -525,6 +541,14 @@ type Payment struct {
 	Last4       string             `json:"last4"`
 	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
 	AuthCode    string             `json:"auth_code"`
+}
+
+type PricingSetting struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	Kind       string             `json:"kind"`
+	Settings   []byte             `json:"settings"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Printer struct {

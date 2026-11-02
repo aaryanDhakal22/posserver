@@ -143,7 +143,8 @@ def _run(rec: Rec, admin: requests.Session, a: Store) -> None:
         ask("printers live", "GET", "/store/v1/me/printers/live", None, "printer.report.request",
             {"reported_at": T0, "agent_version": "2.4.2", "printers": [{"name": "Pizza", "ip": "10.0.0.20", "up": True}]},
             session=mgr, mask=("age_seconds",))
-        rec.call("agent updates", "GET", "/admin/v1/agent-updates", session=admin, params={"location_id": a.location_id})
+        # Two rows can share requested_at (the list sorts on it alone): order-free.
+        rec.call("agent updates", "GET", "/admin/v1/agent-updates", session=admin, params={"location_id": a.location_id}, unordered=True)
 
         # Printer follow + found printer: replies, then the re-pushed store_config.
         printers = {p["name"]: p for p in mgr.get(f"{rec.base}/store/v1/me/printers", timeout=5).json()}

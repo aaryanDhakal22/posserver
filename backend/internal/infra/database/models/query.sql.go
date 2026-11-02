@@ -310,6 +310,55 @@ func (q *Queries) CreateChannel(ctx context.Context, arg CreateChannelParams) (C
 	return i, err
 }
 
+const createDeal = `-- name: CreateDeal :one
+INSERT INTO deals (tenant_id, location_id, kind, name, description, active, channel_kinds, def, code, position)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, (SELECT COALESCE(MAX(position) + 1, 0) FROM deals WHERE location_id = $2))
+RETURNING id, tenant_id, location_id, kind, name, description, active, channel_kinds, def, code, position, created_at, updated_at
+`
+
+type CreateDealParams struct {
+	TenantID     pgtype.UUID `json:"tenant_id"`
+	LocationID   pgtype.UUID `json:"location_id"`
+	Kind         string      `json:"kind"`
+	Name         string      `json:"name"`
+	Description  string      `json:"description"`
+	Active       bool        `json:"active"`
+	ChannelKinds []string    `json:"channel_kinds"`
+	Def          []byte      `json:"def"`
+	Code         string      `json:"code"`
+}
+
+func (q *Queries) CreateDeal(ctx context.Context, arg CreateDealParams) (Deal, error) {
+	row := q.db.QueryRow(ctx, createDeal,
+		arg.TenantID,
+		arg.LocationID,
+		arg.Kind,
+		arg.Name,
+		arg.Description,
+		arg.Active,
+		arg.ChannelKinds,
+		arg.Def,
+		arg.Code,
+	)
+	var i Deal
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.Description,
+		&i.Active,
+		&i.ChannelKinds,
+		&i.Def,
+		&i.Code,
+		&i.Position,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createDevice = `-- name: CreateDevice :one
 
 INSERT INTO devices (tenant_id, location_id, name, kind, key_hash, key_prefix)
@@ -1196,6 +1245,23 @@ func (q *Queries) DeleteChannel(ctx context.Context, id pgtype.UUID) (int64, err
 	return result.RowsAffected(), nil
 }
 
+const deleteDeal = `-- name: DeleteDeal :execrows
+DELETE FROM deals WHERE id = $1 AND location_id = $2
+`
+
+type DeleteDealParams struct {
+	ID         pgtype.UUID `json:"id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+func (q *Queries) DeleteDeal(ctx context.Context, arg DeleteDealParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteDeal, arg.ID, arg.LocationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteDevice = `-- name: DeleteDevice :exec
 DELETE FROM devices WHERE id = $1
 `
@@ -1453,6 +1519,20 @@ DELETE FROM outbox_events WHERE aggregate_id = $1
 // has no FK to orders, so this is explicit; dispatches cascade off outbox_events.
 func (q *Queries) DeleteOrderOutbox(ctx context.Context, aggregateID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteOrderOutbox, aggregateID)
+	return err
+}
+
+const deletePricingSettings = `-- name: DeletePricingSettings :exec
+DELETE FROM pricing_settings WHERE location_id = $1 AND kind = $2
+`
+
+type DeletePricingSettingsParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Kind       string      `json:"kind"`
+}
+
+func (q *Queries) DeletePricingSettings(ctx context.Context, arg DeletePricingSettingsParams) error {
+	_, err := q.db.Exec(ctx, deletePricingSettings, arg.LocationID, arg.Kind)
 	return err
 }
 
@@ -1867,6 +1947,36 @@ func (q *Queries) GetChannel(ctx context.Context, id pgtype.UUID) (Channel, erro
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.ViewID,
+	)
+	return i, err
+}
+
+const getDeal = `-- name: GetDeal :one
+SELECT id, tenant_id, location_id, kind, name, description, active, channel_kinds, def, code, position, created_at, updated_at FROM deals WHERE id = $1 AND location_id = $2
+`
+
+type GetDealParams struct {
+	ID         pgtype.UUID `json:"id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+func (q *Queries) GetDeal(ctx context.Context, arg GetDealParams) (Deal, error) {
+	row := q.db.QueryRow(ctx, getDeal, arg.ID, arg.LocationID)
+	var i Deal
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.Description,
+		&i.Active,
+		&i.ChannelKinds,
+		&i.Def,
+		&i.Code,
+		&i.Position,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -3842,6 +3952,44 @@ func (q *Queries) ListChannelsByLocation(ctx context.Context, locationID pgtype.
 	return items, nil
 }
 
+const listDeals = `-- name: ListDeals :many
+SELECT id, tenant_id, location_id, kind, name, description, active, channel_kinds, def, code, position, created_at, updated_at FROM deals WHERE location_id = $1 ORDER BY position, created_at
+`
+
+func (q *Queries) ListDeals(ctx context.Context, locationID pgtype.UUID) ([]Deal, error) {
+	rows, err := q.db.Query(ctx, listDeals, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Deal
+	for rows.Next() {
+		var i Deal
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Kind,
+			&i.Name,
+			&i.Description,
+			&i.Active,
+			&i.ChannelKinds,
+			&i.Def,
+			&i.Code,
+			&i.Position,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listDeliveryRuns = `-- name: ListDeliveryRuns :many
 SELECT id, tenant_id, location_id, batch_id, driver_id, driver_name, plan_id,
        suggested_ids, sent_ids, stops, at, created_at
@@ -5107,6 +5255,38 @@ func (q *Queries) ListOrderGeoByIDs(ctx context.Context, arg ListOrderGeoByIDsPa
 			&i.State,
 			&i.Lat,
 			&i.Lng,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPricingSettings = `-- name: ListPricingSettings :many
+
+SELECT location_id, tenant_id, kind, settings, updated_at FROM pricing_settings WHERE location_id = $1 ORDER BY kind
+`
+
+// ─── Pricing + deals (main 3.0 step 4) ──────────────────────────────────────
+func (q *Queries) ListPricingSettings(ctx context.Context, locationID pgtype.UUID) ([]PricingSetting, error) {
+	rows, err := q.db.Query(ctx, listPricingSettings, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PricingSetting
+	for rows.Next() {
+		var i PricingSetting
+		if err := rows.Scan(
+			&i.LocationID,
+			&i.TenantID,
+			&i.Kind,
+			&i.Settings,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -7246,6 +7426,55 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 	return i, err
 }
 
+const updateDeal = `-- name: UpdateDeal :one
+UPDATE deals SET kind = $3, name = $4, description = $5, active = $6, channel_kinds = $7, def = $8, code = $9, updated_at = now()
+WHERE id = $1 AND location_id = $2
+RETURNING id, tenant_id, location_id, kind, name, description, active, channel_kinds, def, code, position, created_at, updated_at
+`
+
+type UpdateDealParams struct {
+	ID           pgtype.UUID `json:"id"`
+	LocationID   pgtype.UUID `json:"location_id"`
+	Kind         string      `json:"kind"`
+	Name         string      `json:"name"`
+	Description  string      `json:"description"`
+	Active       bool        `json:"active"`
+	ChannelKinds []string    `json:"channel_kinds"`
+	Def          []byte      `json:"def"`
+	Code         string      `json:"code"`
+}
+
+func (q *Queries) UpdateDeal(ctx context.Context, arg UpdateDealParams) (Deal, error) {
+	row := q.db.QueryRow(ctx, updateDeal,
+		arg.ID,
+		arg.LocationID,
+		arg.Kind,
+		arg.Name,
+		arg.Description,
+		arg.Active,
+		arg.ChannelKinds,
+		arg.Def,
+		arg.Code,
+	)
+	var i Deal
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Kind,
+		&i.Name,
+		&i.Description,
+		&i.Active,
+		&i.ChannelKinds,
+		&i.Def,
+		&i.Code,
+		&i.Position,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateLocationDetails = `-- name: UpdateLocationDetails :one
 UPDATE locations SET
     name           = $2,
@@ -8067,6 +8296,28 @@ type UpsertGeoCachePinnedParams struct {
 
 func (q *Queries) UpsertGeoCachePinned(ctx context.Context, arg UpsertGeoCachePinnedParams) error {
 	_, err := q.db.Exec(ctx, upsertGeoCachePinned, arg.AddressKey, arg.Lat, arg.Lng)
+	return err
+}
+
+const upsertPricingSettings = `-- name: UpsertPricingSettings :exec
+INSERT INTO pricing_settings (location_id, tenant_id, kind, settings) VALUES ($1, $2, $3, $4)
+ON CONFLICT (location_id, kind) DO UPDATE SET settings = EXCLUDED.settings, updated_at = now()
+`
+
+type UpsertPricingSettingsParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	Kind       string      `json:"kind"`
+	Settings   []byte      `json:"settings"`
+}
+
+func (q *Queries) UpsertPricingSettings(ctx context.Context, arg UpsertPricingSettingsParams) error {
+	_, err := q.db.Exec(ctx, upsertPricingSettings,
+		arg.LocationID,
+		arg.TenantID,
+		arg.Kind,
+		arg.Settings,
+	)
 	return err
 }
 

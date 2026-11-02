@@ -35,6 +35,7 @@ import (
 	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
+	pricingApp "quiccpos/main/internal/app/pricing"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	tenancyDomain "quiccpos/main/internal/domain/tenancy"
@@ -303,6 +304,7 @@ func main() {
 	// delivery check, and 86'd items back at each location's reset hour.
 	storeStatusService := storestatusApp.NewService(repositories.NewStoreStatusRepository(pool), tenancyService, geoService, lgr)
 	go storeStatusService.RunRestock(ctx)
+	pricingService := pricingApp.NewService(repositories.NewPricingRepository(pool), menuViewService, storeStatusService, tenancyService, lgr)
 	go geoService.BackfillStores(ctx)
 
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
@@ -361,6 +363,7 @@ func main() {
 		ChannelService:  channelService,
 		MenuViewService: menuViewService,
 		StoreStatus:     storeStatusService,
+		Pricing:         pricingService,
 		AgentSync:       agentSync,
 		Diag:            diagService,
 		Geo:             geoService,

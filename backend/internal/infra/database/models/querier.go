@@ -27,6 +27,7 @@ type Querier interface {
 	CreateAppRelease(ctx context.Context, arg CreateAppReleaseParams) (CreateAppReleaseRow, error)
 	// ─── Channels (main 3.0) ──────────────────────────────────────────────────
 	CreateChannel(ctx context.Context, arg CreateChannelParams) (Channel, error)
+	CreateDeal(ctx context.Context, arg CreateDealParams) (Deal, error)
 	// ───────────────────────────────────────────────────────────────────────────
 	// Devices (API keys)
 	// ───────────────────────────────────────────────────────────────────────────
@@ -72,6 +73,7 @@ type Querier interface {
 	DeferOrderGeoPush(ctx context.Context, arg DeferOrderGeoPushParams) error
 	DeleteAppRelease(ctx context.Context, arg DeleteAppReleaseParams) (int64, error)
 	DeleteChannel(ctx context.Context, id pgtype.UUID) (int64, error)
+	DeleteDeal(ctx context.Context, arg DeleteDealParams) (int64, error)
 	DeleteDevice(ctx context.Context, id pgtype.UUID) error
 	DeleteExternalStop(ctx context.Context, arg DeleteExternalStopParams) (int64, error)
 	DeleteExternalWork(ctx context.Context, orderID pgtype.UUID) error
@@ -98,6 +100,7 @@ type Querier interface {
 	// Remove the outbox rows for one order (aggregate_id = order id). outbox_events
 	// has no FK to orders, so this is explicit; dispatches cascade off outbox_events.
 	DeleteOrderOutbox(ctx context.Context, aggregateID pgtype.UUID) error
+	DeletePricingSettings(ctx context.Context, arg DeletePricingSettingsParams) error
 	DeletePrinter(ctx context.Context, id pgtype.UUID) error
 	// Used by the store-config editor's replace-all reconciliation.
 	DeletePrintersByLocation(ctx context.Context, locationID pgtype.UUID) error
@@ -131,6 +134,7 @@ type Querier interface {
 	GetAgentUpdate(ctx context.Context, id pgtype.UUID) (AgentUpdate, error)
 	GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKParams) ([]byte, error)
 	GetChannel(ctx context.Context, id pgtype.UUID) (Channel, error)
+	GetDeal(ctx context.Context, arg GetDealParams) (Deal, error)
 	GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagReportRow, error)
 	GetExternalStop(ctx context.Context, arg GetExternalStopParams) (GeoExternalStop, error)
 	GetExternalWork(ctx context.Context, orderID pgtype.UUID) (GeoExternalWork, error)
@@ -210,6 +214,7 @@ type Querier interface {
 	ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) ([]MenuCategory, error)
 	ListChannels(ctx context.Context) ([]Channel, error)
 	ListChannelsByLocation(ctx context.Context, locationID pgtype.UUID) ([]Channel, error)
+	ListDeals(ctx context.Context, locationID pgtype.UUID) ([]Deal, error)
 	ListDeliveryRuns(ctx context.Context, arg ListDeliveryRunsParams) ([]DeliveryRun, error)
 	ListDevicesByLocation(ctx context.Context, locationID pgtype.UUID) ([]Device, error)
 	ListDiagReports(ctx context.Context, arg ListDiagReportsParams) ([]ListDiagReportsRow, error)
@@ -246,6 +251,8 @@ type Querier interface {
 	ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) ([]ModifierOption, error)
 	ListOptionsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ModifierOption, error)
 	ListOrderGeoByIDs(ctx context.Context, arg ListOrderGeoByIDsParams) ([]ListOrderGeoByIDsRow, error)
+	// ─── Pricing + deals (main 3.0 step 4) ──────────────────────────────────────
+	ListPricingSettings(ctx context.Context, locationID pgtype.UUID) ([]PricingSetting, error)
 	ListPrinterIPChanges(ctx context.Context, arg ListPrinterIPChangesParams) ([]ListPrinterIPChangesRow, error)
 	ListPrintersByLocation(ctx context.Context, locationID pgtype.UUID) ([]Printer, error)
 	// Top-level item names ordered at a location since a time, with counts — the
@@ -387,6 +394,7 @@ type Querier interface {
 	TouchOperatorToken(ctx context.Context, id pgtype.UUID) error
 	TouchTabletToken(ctx context.Context, id pgtype.UUID) error
 	UpdateChannel(ctx context.Context, arg UpdateChannelParams) (Channel, error)
+	UpdateDeal(ctx context.Context, arg UpdateDealParams) (Deal, error)
 	// Updates the editable surface of a location in one shot. Pass current values
 	// for fields you don't want to change — there's no partial-update semantics.
 	UpdateLocationDetails(ctx context.Context, arg UpdateLocationDetailsParams) (Location, error)
@@ -427,6 +435,7 @@ type Querier interface {
 	// A geocode result. A pinned entry is never overwritten by a geocode.
 	UpsertGeoCacheGeocoded(ctx context.Context, arg UpsertGeoCacheGeocodedParams) error
 	UpsertGeoCachePinned(ctx context.Context, arg UpsertGeoCachePinnedParams) error
+	UpsertPricingSettings(ctx context.Context, arg UpsertPricingSettingsParams) error
 	UpsertStoreHoursException(ctx context.Context, arg UpsertStoreHoursExceptionParams) (StoreHoursException, error)
 	WakeLocationExternalStops(ctx context.Context, arg WakeLocationExternalStopsParams) (int64, error)
 	// The location's agent (re)connected: push everything it has not acked now.

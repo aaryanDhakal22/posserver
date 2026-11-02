@@ -1554,3 +1554,34 @@ RETURNING *;
 
 -- name: DeleteStoreHoursException :execrows
 DELETE FROM store_hours_exceptions WHERE id = $1 AND location_id = $2;
+
+-- ─── Pricing + deals (main 3.0 step 4) ──────────────────────────────────────
+
+-- name: ListPricingSettings :many
+SELECT * FROM pricing_settings WHERE location_id = $1 ORDER BY kind;
+
+-- name: UpsertPricingSettings :exec
+INSERT INTO pricing_settings (location_id, tenant_id, kind, settings) VALUES ($1, $2, $3, $4)
+ON CONFLICT (location_id, kind) DO UPDATE SET settings = EXCLUDED.settings, updated_at = now();
+
+-- name: DeletePricingSettings :exec
+DELETE FROM pricing_settings WHERE location_id = $1 AND kind = $2;
+
+-- name: ListDeals :many
+SELECT * FROM deals WHERE location_id = $1 ORDER BY position, created_at;
+
+-- name: GetDeal :one
+SELECT * FROM deals WHERE id = $1 AND location_id = $2;
+
+-- name: CreateDeal :one
+INSERT INTO deals (tenant_id, location_id, kind, name, description, active, channel_kinds, def, code, position)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, (SELECT COALESCE(MAX(position) + 1, 0) FROM deals WHERE location_id = $2))
+RETURNING *;
+
+-- name: UpdateDeal :one
+UPDATE deals SET kind = $3, name = $4, description = $5, active = $6, channel_kinds = $7, def = $8, code = $9, updated_at = now()
+WHERE id = $1 AND location_id = $2
+RETURNING *;
+
+-- name: DeleteDeal :execrows
+DELETE FROM deals WHERE id = $1 AND location_id = $2;

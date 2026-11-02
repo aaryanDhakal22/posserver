@@ -15,6 +15,7 @@
   import StoreMap from '$lib/components/StoreMap.svelte';
   import OrderingCard from '$lib/components/store/OrderingCard.svelte';
   import SpecialDays from '$lib/components/store/SpecialDays.svelte';
+  import PricingCard from '$lib/components/store/PricingCard.svelte';
 
   // Location details + opening hours. PATCH /me/location is a full replace,
   // so every field goes back with the hours merged into the config.
@@ -162,6 +163,7 @@
   <div class="flex flex-col gap-4 max-w-[760px] mt-4">
     <SpecialDays />
     <OrderingCard resetLabel={resetLabel(loc.daily_reset_hour)} />
+    <PricingCard />
   </div>
   <form class="max-w-[760px] mt-4" onsubmit={onSaveDevices}>
     <Card title="Alerts">

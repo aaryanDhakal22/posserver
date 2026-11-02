@@ -65,17 +65,20 @@ class Rec:
     def call(self, label: str, method: str, path: str, *, session: requests.Session | None = None,
              headers: dict | None = None, json_body: Any = None, data: Any = None, params: dict | None = None,
              filt: Callable[[Any], Any] | None = None, mask: tuple[str, ...] = (), compare: str = "",
-             stream: bool = False, redirects: bool = True, timeout: float = 10) -> requests.Response:
+             stream: bool = False, redirects: bool = True, timeout: float = 10, unordered: bool = False) -> requests.Response:
         """One HTTP request → one step. filt re-shapes a JSON body (keep only
-        this chapter's rows of a shared list); mask blanks volatile keys."""
+        this chapter's rows of a shared list); mask blanks volatile keys;
+        unordered: a JSON list whose order main doesn't fix (rows that tie on
+        the sort key) compares as a multiset."""
         s = session or requests
         r = s.request(method, self.base + path, headers=headers, json=json_body, data=data, params=params,
                       timeout=timeout, stream=stream, allow_redirects=redirects)
-        return self.record(label, method, path, r, params=params, filt=filt, mask=mask, compare=compare, stream=stream)
+        return self.record(label, method, path, r, params=params, filt=filt, mask=mask, compare=compare, stream=stream,
+                           unordered=unordered)
 
     def record(self, label: str, method: str, path: str, r: requests.Response, *, params: dict | None = None,
                filt: Callable[[Any], Any] | None = None, mask: tuple[str, ...] = (), compare: str = "",
-               stream: bool = False) -> requests.Response:
+               stream: bool = False, unordered: bool = False) -> requests.Response:
         """A response made elsewhere (a call that had to run on a thread
         while the test played the agent) → one step."""
         body = "" if stream else r.text
@@ -87,6 +90,7 @@ class Rec:
             "headers": {k.lower(): v for k, v in r.headers.items() if k.lower() in _KEEP_HEADERS},
             "cookies": _cookie_shapes(r),
             "body": body, "mask": list(mask), "compare": compare or compare_mode(path),
+            **({"unordered": True} if unordered else {}),
         })
         return r
 
@@ -157,6 +161,13 @@ def compare(want: list[dict], got: list[dict]) -> list[str]:
     for i, w in enumerate(want):
         g = gl[(i, w["label"])]
         where = f"[{i}] {w['label']} ({w['method']} {w['path']})"
+        if g.get("unordered") and w["body"] != g["body"]:
+            try:
+                same = sorted(map(_dump, _loads(w["body"]))) == sorted(map(_dump, _loads(g["body"])))
+            except (ValueError, TypeError):
+                same = False
+            if same:
+                w = {**w, "body": g["body"]}  # the same rows, in another order
         for k in ("method", "path", "params", "status", "headers", "cookies"):
             if w[k] != g[k]:
                 problems.append(f"{where}: {k} {json.dumps(w[k])} → {json.dumps(g[k])}")

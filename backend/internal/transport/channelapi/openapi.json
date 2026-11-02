@@ -138,6 +138,82 @@
         }
       }
     },
+    "/channel/v1/pricing": {
+      "get": {
+        "operationId": "getPricing",
+        "summary": "What this channel prices with: settings, deals and item facts (everything but the menu)",
+        "description": "For instant previews in the client: run the same engine (main's frontend/src/lib/pricing/engine.ts) over /channel/v1/menu (same menu_version) and this. POST /channel/v1/quote stays the authority. Needs the quote permission.",
+        "responses": {
+          "200": {
+            "description": "The pricing context",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PricingContext"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/channel/v1/quote": {
+      "post": {
+        "operationId": "quote",
+        "summary": "Price a cart",
+        "description": "Prices against this channel's menu, settings and deals right now. errors[] says what stops the cart being ordered as it is (sold out, option rules, a deal or code that doesn't apply, an order type that's off, the delivery minimum); the totals are still computed. Needs the quote permission.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Cart"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The quote",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Quote"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a cart",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
     "/channel/v1/store": {
       "get": {
         "operationId": "getStore",
@@ -1224,6 +1300,644 @@
               },
               "additionalProperties": false
             }
+          }
+        },
+        "additionalProperties": false
+      },
+      "Pick": {
+        "type": "object",
+        "required": [
+          "group_id",
+          "option_id"
+        ],
+        "properties": {
+          "group_id": {
+            "type": "string"
+          },
+          "option_id": {
+            "type": "string"
+          },
+          "portion": {
+            "enum": [
+              "",
+              "whole",
+              "left",
+              "right"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "Selection": {
+        "type": "object",
+        "required": [
+          "item_id"
+        ],
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "description": "A menu item's id"
+          },
+          "choice_id": {
+            "type": "string",
+            "description": "A combined item: the choice's item_id"
+          },
+          "size_id": {
+            "type": "string"
+          },
+          "options": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Pick"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "CartLine": {
+        "type": "object",
+        "required": [],
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "description": "A menu item's id"
+          },
+          "choice_id": {
+            "type": "string",
+            "description": "A combined item: the choice's item_id"
+          },
+          "size_id": {
+            "type": "string"
+          },
+          "options": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Pick"
+            }
+          },
+          "qty": {
+            "type": "integer",
+            "description": "1–50"
+          },
+          "note": {
+            "type": "string"
+          },
+          "deal_id": {
+            "type": "string",
+            "description": "A bundle deal; then picks fill its steps"
+          },
+          "picks": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/Selection"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "Cart": {
+        "type": "object",
+        "required": [
+          "type",
+          "lines"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "pickup",
+              "delivery"
+            ]
+          },
+          "payment": {
+            "enum": [
+              "",
+              "card",
+              "cash"
+            ]
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CartLine"
+            }
+          },
+          "code": {
+            "type": "string"
+          },
+          "tip_cents": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tip_pct": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "first_order": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "QuoteLine": {
+        "type": "object",
+        "required": [
+          "index",
+          "name",
+          "mods",
+          "qty",
+          "unit_cents",
+          "total_cents",
+          "regular_cents",
+          "deal_id"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "mods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "qty": {
+            "type": "integer"
+          },
+          "unit_cents": {
+            "type": "integer"
+          },
+          "total_cents": {
+            "type": "integer"
+          },
+          "regular_cents": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "A bundle: its picks' own price"
+          },
+          "deal_id": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Discount": {
+        "type": "object",
+        "required": [
+          "type",
+          "deal_id",
+          "label",
+          "amount_cents"
+        ],
+        "properties": {
+          "type": {
+            "enum": [
+              "deal",
+              "code",
+              "cash"
+            ]
+          },
+          "deal_id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "amount_cents": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Issue": {
+        "type": "object",
+        "required": [
+          "code",
+          "message",
+          "line"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "empty, unknown_item, unknown_size, unknown_option, option_rules, sold_out, deal_ended, deal_unavailable, deal_slot, code_invalid, code_minimum, code_first_order, code_not_combinable, type_off, bad_type, delivery_minimum"
+          },
+          "message": {
+            "type": "string",
+            "description": "For people"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "Quote": {
+        "type": "object",
+        "required": [
+          "lines",
+          "subtotal_cents",
+          "discounts",
+          "delivery_fee_cents",
+          "service_fee_cents",
+          "tax_cents",
+          "tip_cents",
+          "card_fee_cents",
+          "total_cents",
+          "saved_cents",
+          "errors",
+          "warnings",
+          "nudges"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuoteLine"
+            }
+          },
+          "subtotal_cents": {
+            "type": "integer"
+          },
+          "discounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Discount"
+            }
+          },
+          "delivery_fee_cents": {
+            "type": "integer"
+          },
+          "service_fee_cents": {
+            "type": "integer"
+          },
+          "tax_cents": {
+            "type": "integer"
+          },
+          "tip_cents": {
+            "type": "integer"
+          },
+          "card_fee_cents": {
+            "type": "integer"
+          },
+          "total_cents": {
+            "type": "integer"
+          },
+          "saved_cents": {
+            "type": "integer"
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Issue"
+            }
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "nudges": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "Eligible": {
+        "type": "object",
+        "required": [],
+        "properties": {
+          "items": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "categories": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "sizes": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "Deal": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "name",
+          "active",
+          "fulfil",
+          "schedule"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "bundle",
+              "mix",
+              "nth",
+              "code",
+              "free_item"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "fulfil": {
+            "enum": [
+              "",
+              "both",
+              "pickup",
+              "delivery"
+            ]
+          },
+          "schedule": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [],
+                "properties": {
+                  "days": {
+                    "type": [
+                      "array",
+                      "null"
+                    ],
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "start": {
+                    "type": "string"
+                  },
+                  "end": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "price_cents": {
+            "type": "integer"
+          },
+          "slots": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "label",
+                "eligible",
+                "included_options"
+              ],
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "eligible": {
+                  "$ref": "#/components/schemas/Eligible"
+                },
+                "included_options": {
+                  "type": "integer"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "eligible": {
+            "$ref": "#/components/schemas/Eligible"
+          },
+          "qty": {
+            "type": "integer"
+          },
+          "each_cents": {
+            "type": "integer"
+          },
+          "n": {
+            "type": "integer"
+          },
+          "pct": {
+            "type": "integer"
+          },
+          "code": {
+            "type": "string"
+          },
+          "amount_cents": {
+            "type": "integer"
+          },
+          "first_order_only": {
+            "type": "boolean"
+          },
+          "min_subtotal_cents": {
+            "type": "integer"
+          }
+        },
+        "additionalProperties": false
+      },
+      "PricingSettings": {
+        "type": "object",
+        "required": [
+          "tax_bps",
+          "service_fee_cents",
+          "service_fee_bps",
+          "delivery_fee_cents",
+          "free_delivery_over_cents",
+          "delivery_min_cents",
+          "tips",
+          "card_fee",
+          "stacking"
+        ],
+        "properties": {
+          "tax_bps": {
+            "type": "integer"
+          },
+          "service_fee_cents": {
+            "type": "integer"
+          },
+          "service_fee_bps": {
+            "type": "integer"
+          },
+          "delivery_fee_cents": {
+            "type": "integer"
+          },
+          "free_delivery_over_cents": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "delivery_min_cents": {
+            "type": "integer"
+          },
+          "tips": {
+            "type": "object",
+            "required": [
+              "enabled",
+              "presets",
+              "default_pct"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "presets": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "default_pct": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          },
+          "card_fee": {
+            "type": "object",
+            "required": [
+              "mode",
+              "bps"
+            ],
+            "properties": {
+              "mode": {
+                "enum": [
+                  "none",
+                  "surcharge",
+                  "cash_discount"
+                ]
+              },
+              "bps": {
+                "type": "integer"
+              }
+            },
+            "additionalProperties": false
+          },
+          "stacking": {
+            "enum": [
+              "best",
+              "stack",
+              "single"
+            ]
+          }
+        },
+        "additionalProperties": false
+      },
+      "PricingContext": {
+        "type": "object",
+        "required": [
+          "menu_version",
+          "items",
+          "settings",
+          "deals",
+          "timezone",
+          "types"
+        ],
+        "properties": {
+          "menu_version": {
+            "type": "integer"
+          },
+          "items": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "category_id",
+                "tax_bps"
+              ],
+              "properties": {
+                "category_id": {
+                  "type": "string"
+                },
+                "tax_bps": {
+                  "type": "integer",
+                  "description": "0 = the store rate"
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "Bank item id → facts"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/PricingSettings"
+          },
+          "deals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Deal"
+            }
+          },
+          "timezone": {
+            "type": "string"
+          },
+          "types": {
+            "type": "object",
+            "required": [
+              "pickup",
+              "delivery"
+            ],
+            "properties": {
+              "pickup": {
+                "type": "boolean"
+              },
+              "delivery": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
           }
         },
         "additionalProperties": false

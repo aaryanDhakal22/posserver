@@ -701,3 +701,33 @@ export function storeTime(iso: string | null | undefined, tz: string): string {
     return d.toLocaleTimeString();
   }
 }
+
+// --- pricing + deals (main 3.0) ---------------------------------------------
+export interface PricingFees {
+  service_fee_cents: number; service_fee_bps: number; delivery_fee_cents: number;
+  free_delivery_over_cents: number | null; delivery_min_cents: number;
+}
+export interface PricingTips { enabled: boolean; presets: number[]; default_pct: number }
+export interface PricingStore {
+  tax_bps: number; stacking: 'best' | 'stack' | 'single'; fees: PricingFees; tips: PricingTips; card_fee: { mode: string; bps: number };
+}
+export interface PricingKind { fees: PricingFees | null; tips: PricingTips | null; card_fee: { mode: string; bps: number } | null }
+export interface PricingBody { store: PricingStore; kinds: Record<string, PricingKind> }
+export type DealKind = 'bundle' | 'mix' | 'nth' | 'code' | 'free_item';
+export interface DealEligible { items: string[]; categories: string[]; sizes: string[] }
+export interface StoreDeal {
+  id: string; kind: DealKind; name: string; description: string; active: boolean; fulfil: string;
+  schedule: { days: string[]; start: string; end: string } | null;
+  price_cents?: number; slots?: { label: string; eligible: DealEligible; included_options: number }[];
+  eligible?: DealEligible | null; qty?: number; each_cents?: number; n?: number; pct?: number;
+  code?: string; amount_cents?: number; first_order_only?: boolean; min_subtotal_cents?: number;
+  channel_kinds: string[]; position?: number;
+}
+export const DEAL_KINDS: { kind: DealKind; label: string; help: string }[] = [
+  { kind: 'bundle', label: 'Combo', help: 'Pick items for each step at one price (e.g. a 16" pizza + wings for $19.99)' },
+  { kind: 'mix', label: 'Mix & match', help: 'Any N of these for $X each (e.g. any 2 pizzas $10 each)' },
+  { kind: 'nth', label: 'Every Nth', help: 'Every Nth one is % off (e.g. 2nd wings half off)' },
+  { kind: 'code', label: 'Promo code', help: 'A code customers type for % or $ off' },
+  { kind: 'free_item', label: 'Free item', help: 'One of these free once the order reaches $Y' }
+];
+export const CHANNEL_KIND_LABELS: Record<string, string> = { web: 'Website', operator: 'Call center', counter: 'Counter', vendor: 'Vendor' };

@@ -52,7 +52,7 @@
   }}
 >
   {#if open}
-    <div class="card flex flex-col gap-4 p-6" style="width: min({width}px, calc(100vw - 32px)); box-shadow: var(--shadow-pop);">
+    <div class="card flex flex-col gap-4 p-6" style="width: min({width}px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); box-shadow: var(--shadow-pop);">
       <div class="flex items-start gap-3">
         <div class="flex-1 min-w-0">
           <h2 id="{uid}-t" class="m-0 text-lg font-semibold">{title}</h2>
@@ -64,7 +64,8 @@
           </button>
         {/if}
       </div>
-      {@render children?.()}
+      <!-- A tall body scrolls; the title and the buttons stay in view. -->
+      <div class="min-h-0 overflow-y-auto -mx-6 px-6 -my-1 py-1">{@render children?.()}</div>
       {#if footer}<div class="flex flex-wrap justify-end gap-2">{@render footer()}</div>{/if}
     </div>
   {/if}

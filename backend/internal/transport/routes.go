@@ -31,6 +31,7 @@ import (
 	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
+	pricingApp "quiccpos/main/internal/app/pricing"
 	"quiccpos/main/internal/app/printerstatus"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
@@ -94,6 +95,8 @@ type RouterDeps struct {
 	MenuService *menuApp.Service
 	// OperatorService backs the operator accounts + read-only menu API.
 	OperatorService *operatorApp.Service
+	// Pricing backs pricing settings, deals and quotes (main 3.0).
+	Pricing *pricingApp.Service
 	// StoreStatus backs a store's ordering status (main 3.0).
 	StoreStatus *storestatusApp.Service
 	// MenuViewService backs the menu bank + views (main 3.0).
@@ -182,6 +185,7 @@ func routeTable(d RouterDeps) []routeDef {
 	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
 	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
+	pricingH := handler.NewPricingHandler(d.Pricing, d.Logger)
 	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
@@ -368,6 +372,15 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", storePrefix+"/me/pause", "store-session", "Take orders again", statusH.MeResume, storeSession),
 		def("POST", storePrefix+"/me/hours-exceptions", "store-session", "Set a date closed or its own hours {date, closed, hours, note}", statusH.MeSetException, storeSession),
 		def("DELETE", storePrefix+"/me/hours-exceptions/:id", "store-session", "Remove a date exception", statusH.MeDeleteException, storeSession),
+		// Pricing + deals (main 3.0).
+		def("GET", storePrefix+"/me/pricing", "store-session", "Pricing settings: the store's + each channel kind's sets", pricingH.MePricing, storeSession),
+		def("PUT", storePrefix+"/me/pricing", "store-session", "Replace the pricing settings {store, kinds}", pricingH.MeSavePricing, storeSession),
+		def("GET", storePrefix+"/me/pricing/context", "store-session", "What a channel kind prices with (?kind=web) — for previews", pricingH.MeContext, storeSession),
+		def("POST", storePrefix+"/me/quote", "store-session", "Price a cart as a channel kind would (?kind=web)", pricingH.MeQuote, storeSession),
+		def("GET", storePrefix+"/me/deals", "store-session", "The store's deals", pricingH.MeDeals, storeSession),
+		def("POST", storePrefix+"/me/deals", "store-session", "Add a deal (bundle, mix, nth, code, free_item)", pricingH.MeCreateDeal, storeSession),
+		def("PUT", storePrefix+"/me/deals/:id", "store-session", "Replace a deal", pricingH.MeUpdateDeal, storeSession),
+		def("DELETE", storePrefix+"/me/deals/:id", "store-session", "Delete a deal", pricingH.MeDeleteDeal, storeSession),
 		// The menu bank + views (main 3.0).
 		def("GET", storePrefix+"/me/menu/bank", "store-session", "The whole menu bank (sizes, items with sizes + groups, options with prices)", viewH.MeBank, storeSession),
 		def("GET", storePrefix+"/me/menu/sizes", "store-session", "List the store's sizes", viewH.MeListSizes, storeSession),
@@ -399,6 +412,8 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", channelPrefix+"/openapi.json", "none", "The channel API's OpenAPI document", channelH.Spec, channelGzip),
 		def("GET", channelPrefix+"/me", "channel", "The channel behind the key and its store", channelH.Me, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/menu", "channel", "The channel's menu (ETag = menu version)", viewH.ChannelMenu, channelAuth, channelGzip),
+		def("POST", channelPrefix+"/quote", "channel", "Price a cart (quote permission)", pricingH.ChannelQuote, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/pricing", "channel", "What this channel prices with (settings, deals, item facts) — for previews", pricingH.ChannelPricing, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/store", "channel", "The store's status: open/paused/closed, order types + ETAs, sold out", statusH.ChannelStore, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/store/times", "channel", "Times an order can be promised for (?type=pickup|delivery&date=YYYY-MM-DD)", statusH.ChannelTimes, channelAuth, channelGzip),
 		def("POST", channelPrefix+"/store/delivery-check", "channel", "Does the store deliver to this address {line1, city, state, zip}", statusH.ChannelDeliveryCheck, channelAuth, channelGzip),

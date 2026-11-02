@@ -775,3 +775,33 @@ CREATE TABLE store_hours_exceptions (
     UNIQUE (location_id, day),
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
 );
+
+-- 00021_pricing_deals (main 3.0): pricing defaults + per-kind sets, and deals.
+CREATE TABLE pricing_settings (
+    location_id uuid        NOT NULL,
+    tenant_id   uuid        NOT NULL,
+    kind        text        NOT NULL DEFAULT '' CHECK (kind IN ('', 'web', 'operator', 'counter', 'vendor')),
+    settings    jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (location_id, kind),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+
+CREATE TABLE deals (
+    id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id     uuid        NOT NULL,
+    location_id   uuid        NOT NULL,
+    kind          text        NOT NULL CHECK (kind IN ('bundle', 'mix', 'nth', 'code', 'free_item')),
+    name          text        NOT NULL,
+    description   text        NOT NULL DEFAULT '',
+    active        boolean     NOT NULL DEFAULT true,
+    channel_kinds text[]      NOT NULL DEFAULT '{web,operator,counter}',
+    def           jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    code          text        NOT NULL DEFAULT '',
+    position      integer     NOT NULL DEFAULT 0,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_deals_location ON deals (location_id);
+CREATE UNIQUE INDEX idx_deals_code ON deals (location_id, upper(code)) WHERE kind = 'code';

@@ -377,16 +377,9 @@ func (h *MenuViewHandler) MeVendorMap(c *echo.Context) error {
 
 // --- /channel/v1/menu -----------------------------------------------------------
 
-// channelView is the view a channel reads: its own when set, else its
-// store's default view of its kind.
+// channelView is the view a channel reads.
 func (h *MenuViewHandler) channelView(c *echo.Context, ch *channelDom.Channel) (*menuview.View, error) {
-	ctx := c.Request().Context()
-	if ch.ViewID != nil {
-		if v, err := h.svc.View(ctx, ch.LocationID, *ch.ViewID); err == nil {
-			return v, nil
-		}
-	}
-	return h.svc.DefaultView(ctx, ch.TenantID, ch.LocationID, menuview.Kind(ch.Kind))
+	return h.svc.ViewFor(c.Request().Context(), ch.TenantID, ch.LocationID, menuview.Kind(ch.Kind), ch.ViewID)
 }
 
 func menuChannel(c *echo.Context) (*channelDom.Channel, error) {

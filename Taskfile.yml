@@ -220,10 +220,11 @@ tasks:
       - npm run dev
 
   ui-check:
-    desc: Type-check + lint the SvelteKit app (svelte-check)
+    desc: Type-check + lint the SvelteKit app (svelte-check), and run the TS pricing engine over the shared cases (Node ≥ 23)
     dir: backend/frontend
     cmds:
       - npm run check
+      - node --test "tests/*.test.mjs"
 
   ui-build:
     desc: Build the SvelteKit app and copy it into the Go embed dir
