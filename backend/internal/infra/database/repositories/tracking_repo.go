@@ -30,7 +30,8 @@ type TrackLink struct {
 	TrackToken    string
 }
 
-// Link is the order's link to a keyed channel (pgx.ErrNoRows = none).
+// Link is the order's link to a channel that follows its orders: any but the
+// built-in vendor feed (pgx.ErrNoRows = none).
 func (r *TrackingRepository) Link(ctx context.Context, orderID uuid.UUID) (TrackLink, error) {
 	row, err := models.New(r.pool).TrackingLink(ctx, pgID(orderID))
 	if err != nil {

@@ -1,6 +1,7 @@
 // Package tracking follows channel orders (main 3.0 step 6): the
-// channel-tracking outbox handler turns each change of a keyed channel's
-// order into a stream event (GET /channel/v1/events, resumable for 24 h);
+// channel-tracking outbox handler turns each change of a channel's order
+// (any channel but the built-in vendor feed) into a stream event
+// (GET /channel/v1/events, resumable for 24 h);
 // a channel reads one order's status; a customer reads it by the public
 // tracking token; and the owner is paged about a channel order the Pi
 // hasn't accepted in time (the notification port).
@@ -105,7 +106,7 @@ func driverOf(status, name string) *Driver {
 	return nil
 }
 
-// Record stores a stream event for a keyed channel's order (the outbox
+// Record stores a stream event for a channel's order (the outbox
 // handler); other orders are ignored. Idempotent enough: a replayed outbox
 // row adds the same state again, which a channel treats as no change.
 func (s *Service) Record(ctx context.Context, ev order.DomainEvent) error {
@@ -130,7 +131,7 @@ func (s *Service) Record(ctx context.Context, ev order.DomainEvent) error {
 	}
 	link, err := s.repo.Link(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil // not a keyed channel's order
+		return nil // not a channel order, or the vendor feed's
 	}
 	if err != nil {
 		return err

@@ -166,7 +166,7 @@ SELECT co.order_id, co.channel_id, co.location_id, c.name AS channel_name, o.cus
 FROM channel_orders co
 JOIN channels c ON c.id = co.channel_id
 JOIN orders o ON o.id = co.order_id
-WHERE NOT c.builtin AND co.alerted_at IS NULL
+WHERE NOT (c.builtin AND c.kind = 'vendor') AND co.alerted_at IS NULL
   AND co.created_at < $1::timestamptz AND co.created_at > $2::timestamptz
   AND o.status IN ('received', 'validated')
   AND (o.promised_at IS NULL OR o.promised_at < $3::timestamptz)
@@ -186,8 +186,8 @@ type ChannelOrdersToAlertRow struct {
 	CustomerDisplayName string      `json:"customer_display_name"`
 }
 
-// Keyed-channel orders the Pi hasn't accepted N minutes after they were
-// placed (ASAP, or due within the window), not paged yet.
+// Channel orders (not the vendor feed's) the Pi hasn't accepted N minutes
+// after they were placed (ASAP, or due within the window), not paged yet.
 func (q *Queries) ChannelOrdersToAlert(ctx context.Context, arg ChannelOrdersToAlertParams) ([]ChannelOrdersToAlertRow, error) {
 	rows, err := q.db.Query(ctx, channelOrdersToAlert, arg.PlacedBefore, arg.PlacedAfter, arg.DueBefore)
 	if err != nil {
@@ -7747,7 +7747,7 @@ const trackingLink = `-- name: TrackingLink :one
 
 SELECT co.order_id, co.channel_id, co.client_order_id, co.track_token
 FROM channel_orders co JOIN channels c ON c.id = co.channel_id
-WHERE co.order_id = $1 AND NOT c.builtin
+WHERE co.order_id = $1 AND NOT (c.builtin AND c.kind = 'vendor')
 `
 
 type TrackingLinkRow struct {
@@ -7758,7 +7758,9 @@ type TrackingLinkRow struct {
 }
 
 // ─── Channel tracking (main 3.0 step 6) ─────────────────────────────────────
-// An order's channel link, when its channel is a keyed one (not a built-in feed).
+// An order's channel link, unless its channel is the built-in vendor feed
+// (Brygid's orders are followed on the Pi, not through a channel). The
+// built-in Call center follows its orders like a keyed channel.
 func (q *Queries) TrackingLink(ctx context.Context, orderID pgtype.UUID) (TrackingLinkRow, error) {
 	row := q.db.QueryRow(ctx, trackingLink, orderID)
 	var i TrackingLinkRow

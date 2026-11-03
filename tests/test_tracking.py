@@ -31,8 +31,8 @@ CH_V1 = f"{MAIN_BASE_URL}/channel/v1"
 class ChannelStream:
     """Reads a channel's SSE stream on a thread: (id, event, data) tuples."""
 
-    def __init__(self, key: str, last_event_id: str | None = None) -> None:
-        headers = {"Authorization": f"Bearer {key}"}
+    def __init__(self, key: str, last_event_id: str | None = None, extra: dict | None = None) -> None:
+        headers = {"Authorization": f"Bearer {key}", **(extra or {})}
         if last_event_id:
             headers["Last-Event-ID"] = last_event_id
         self.resp = requests.get(f"{CH_V1}/events", headers=headers, stream=True, timeout=(5, 60))

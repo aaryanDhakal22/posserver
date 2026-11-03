@@ -9,6 +9,8 @@
   * an order records who took it (taken_by; source_metadata.operator on the
     Pi's frame)
   * sign-out, admin revoke, throttled bad passwords
+  * the call center follows the orders it took (/status, /events) like any
+    channel — only the built-in vendor feed is left out of tracking
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ import requests
 from conftest import ADMIN_V1, MAIN_BASE_URL, STORE_V1
 from openapi import check
 from sse import SSEStream
+from test_tracking import ChannelStream
 
 CH_V1 = f"{MAIN_BASE_URL}/channel/v1"
 
@@ -130,3 +133,30 @@ def test_sign_out_revoke_and_throttle(admin, operator) -> None:
              for _ in range(6)]
     assert check(codes[0], "operatorLogin")["code"] == "invalid_credentials"
     assert codes[-1].status_code == 429 and check(codes[-1], "operatorLogin")["code"] == "too_many_attempts"
+
+
+def test_operator_follows_its_order(admin, operator) -> None:
+    """The call center reads the status of an order it took and sees it on
+    the stream, like any channel (staging soak 2026-11-02)."""
+    a = operator["a"]
+    mgr = a.manager_session()
+    try:
+        m = mgr.post(f"{STORE_V1}/me/menu/menus", json={"name": "Main"}, timeout=5).json()
+        c = mgr.post(f"{STORE_V1}/me/menu/menus/{m['id']}/categories", json={"name": "Food"}, timeout=5).json()
+        item = mgr.post(f"{STORE_V1}/me/menu/categories/{c['id']}/items", json={"name": "Pie", "price_cents": 999}, timeout=5).json()
+    finally:
+        mgr.close()
+    token = _login(operator)["token"]
+    h = _hdr(token, a)
+    body = {"client_order_id": "op-" + secrets.token_hex(5), "type": "pickup", "lines": [{"item_id": item["id"], "qty": 1}],
+            "payment": {"method": "cash"}, "customer": {"name": "Caller Two", "phone": "4105550124"}}
+    stream = ChannelStream(token, extra={"X-Location-ID": a.location_id})
+    try:
+        o = check(requests.post(f"{CH_V1}/orders", json=body, headers=h, timeout=10), "placeOrder")
+        _, ev = stream.status()
+        assert ev["order_id"] == o["id"] and ev["status"] == "received"
+    finally:
+        stream.close()
+    st = requests.get(f"{CH_V1}/orders/{o['id']}/status", headers=h, timeout=5)
+    assert st.status_code == 200, st.text
+    assert check(st, "getOrderStatus")["status"] == "received"

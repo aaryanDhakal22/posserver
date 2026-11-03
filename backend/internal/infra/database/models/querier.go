@@ -17,8 +17,8 @@ type Querier interface {
 	BuiltinChannel(ctx context.Context, arg BuiltinChannelParams) (Channel, error)
 	ChannelEventExists(ctx context.Context, arg ChannelEventExistsParams) (bool, error)
 	ChannelEventsAfter(ctx context.Context, arg ChannelEventsAfterParams) ([]ChannelEvent, error)
-	// Keyed-channel orders the Pi hasn't accepted N minutes after they were
-	// placed (ASAP, or due within the window), not paged yet.
+	// Channel orders (not the vendor feed's) the Pi hasn't accepted N minutes
+	// after they were placed (ASAP, or due within the window), not paged yet.
 	ChannelOrdersToAlert(ctx context.Context, arg ChannelOrdersToAlertParams) ([]ChannelOrdersToAlertRow, error)
 	// Unflag the location's current receipt printer (one per location).
 	ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error
@@ -411,7 +411,9 @@ type Querier interface {
 	TouchOperatorToken(ctx context.Context, id pgtype.UUID) error
 	TouchTabletToken(ctx context.Context, id pgtype.UUID) error
 	// ─── Channel tracking (main 3.0 step 6) ─────────────────────────────────────
-	// An order's channel link, when its channel is a keyed one (not a built-in feed).
+	// An order's channel link, unless its channel is the built-in vendor feed
+	// (Brygid's orders are followed on the Pi, not through a channel). The
+	// built-in Call center follows its orders like a keyed channel.
 	TrackingLink(ctx context.Context, orderID pgtype.UUID) (TrackingLinkRow, error)
 	UpdateChannel(ctx context.Context, arg UpdateChannelParams) (Channel, error)
 	UpdateDeal(ctx context.Context, arg UpdateDealParams) (Deal, error)

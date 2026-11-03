@@ -16,8 +16,8 @@ type TrackingRecorder interface {
 }
 
 // Tracking feeds the channels' live streams (main 3.0): every order.received
-// / order.status_changed of a keyed channel's order becomes a stream event.
-// Other orders (Brygid's, older ones) are skipped. A database failure is
+// / order.status_changed of a channel order (not the vendor feed's) becomes
+// a stream event. Other orders (Brygid's, older ones) are skipped. A database failure is
 // transient (the dispatcher retries).
 type Tracking struct {
 	rec TrackingRecorder

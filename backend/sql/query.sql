@@ -1610,10 +1610,12 @@ SELECT * FROM channels WHERE location_id = $1 AND builtin AND kind = $2 ORDER BY
 -- ─── Channel tracking (main 3.0 step 6) ─────────────────────────────────────
 
 -- name: TrackingLink :one
--- An order's channel link, when its channel is a keyed one (not a built-in feed).
+-- An order's channel link, unless its channel is the built-in vendor feed
+-- (Brygid's orders are followed on the Pi, not through a channel). The
+-- built-in Call center follows its orders like a keyed channel.
 SELECT co.order_id, co.channel_id, co.client_order_id, co.track_token
 FROM channel_orders co JOIN channels c ON c.id = co.channel_id
-WHERE co.order_id = $1 AND NOT c.builtin;
+WHERE co.order_id = $1 AND NOT (c.builtin AND c.kind = 'vendor');
 
 -- name: InsertChannelEvent :one
 INSERT INTO channel_events (channel_id, order_id, type, payload) VALUES ($1, $2, $3, $4) RETURNING id;
@@ -1628,13 +1630,13 @@ DELETE FROM channel_events WHERE created_at < $1;
 SELECT * FROM channel_orders WHERE track_token = $1;
 
 -- name: ChannelOrdersToAlert :many
--- Keyed-channel orders the Pi hasn't accepted N minutes after they were
--- placed (ASAP, or due within the window), not paged yet.
+-- Channel orders (not the vendor feed's) the Pi hasn't accepted N minutes
+-- after they were placed (ASAP, or due within the window), not paged yet.
 SELECT co.order_id, co.channel_id, co.location_id, c.name AS channel_name, o.customer_display_name
 FROM channel_orders co
 JOIN channels c ON c.id = co.channel_id
 JOIN orders o ON o.id = co.order_id
-WHERE NOT c.builtin AND co.alerted_at IS NULL
+WHERE NOT (c.builtin AND c.kind = 'vendor') AND co.alerted_at IS NULL
   AND co.created_at < @placed_before::timestamptz AND co.created_at > @placed_after::timestamptz
   AND o.status IN ('received', 'validated')
   AND (o.promised_at IS NULL OR o.promised_at < @due_before::timestamptz);
