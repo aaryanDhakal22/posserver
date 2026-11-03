@@ -30,10 +30,18 @@ import (
 	"time"
 
 	authAppSvc "quiccpos/main/internal/app/auth"
+	channelApp "quiccpos/main/internal/app/channel"
 	menuApp "quiccpos/main/internal/app/menu"
+	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
+	"quiccpos/main/internal/app/orderport"
+	pricingApp "quiccpos/main/internal/app/pricing"
+	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
+	"quiccpos/main/internal/app/tracking"
+	"quiccpos/main/internal/domain/notify"
+	"quiccpos/main/internal/domain/payment"
 	tenancyDomain "quiccpos/main/internal/domain/tenancy"
 
 	sqsconsumer "quiccpos/main/internal/infra/sqs"
@@ -162,7 +170,11 @@ func main() {
 	// transaction.
 	sseHandler := handlers.NewSSE(broker, lgr)
 
-	allHandlers := []dispatch.Handler{sseHandler}
+	// Channel tracking (3.0): a keyed channel's order changes feed its live
+	// stream. Wired to the order service + the owner pager further down.
+	trackingService := tracking.NewService(repositories.NewTrackingRepository(pool), lgr)
+
+	allHandlers := []dispatch.Handler{sseHandler, handlers.NewTracking(trackingService)}
 	handlerNames := make([]string, 0, len(allHandlers))
 	for _, h := range allHandlers {
 		handlerNames = append(handlerNames, h.Name())
@@ -218,6 +230,9 @@ func main() {
 
 	menuRepo := repositories.NewMenuRepository(pool, lgr)
 	menuService := menuApp.NewService(menuRepo, tenancyService, meters, lgr)
+	// The menu bank's views (3.0); the vendor view's name mappings feed kitchen routing.
+	menuViewService := menuviewApp.NewService(repositories.NewMenuBankRepository(pool), menuService, lgr)
+	menuService.SetVendorMapper(menuViewService)
 
 	// Agent reliability + headless recovery: order acks + re-sends, the
 	// agent's state/health reports, link with the manager login, restore,
@@ -267,6 +282,18 @@ func main() {
 	ownerPager.SetEndpoint(pushoverURL)
 	ownerPager.SetDevices(adminDevices)
 	diagService := diagApp.New(pool, ownerPager, tenancyService, lgr)
+
+	// The notification port (3.0): problems with channel orders → the log and
+	// the store owner's phones (+ the admin's).
+	notifier := notify.Fanout{notify.Log{Logger: lgr}, notify.Pushover{Pager: ownerPager, Devices: func(ctx context.Context, locationID uuid.UUID) ([]string, error) {
+		l, err := tenancyService.GetLocation(ctx, locationID)
+		if err != nil {
+			return nil, err
+		}
+		return tenancyDomain.OwnerDevices(l.Config), nil
+	}}}
+	trackingService.Wire(svc, tenancyService, notifier)
+	go trackingService.RunMaintenance(ctx)
 	requester.RegisterInbound(diagApp.MsgDiagReport, diagService.HandleRPC)
 	go diagService.RunPrune(ctx)
 
@@ -292,10 +319,28 @@ func main() {
 	floorService.OnDeliveryRun(repositories.NewDeliveryRunStore(pool))
 	mainLogger.Info().Str("geo_providers", geoService.Providers().Name()).Msg("geo worker configured")
 	go geoService.Run(ctx)
+
+	// Store status (3.0): ordering settings, pause, hours exceptions, the
+	// delivery check, and 86'd items back at each location's reset hour.
+	storeStatusService := storestatusApp.NewService(repositories.NewStoreStatusRepository(pool), tenancyService, geoService, lgr)
+	go storeStatusService.RunRestock(ctx)
+	pricingService := pricingApp.NewService(repositories.NewPricingRepository(pool), menuViewService, storeStatusService, tenancyService, lgr)
+	// The payment port: cash everywhere; the test card on dev and staging
+	// only — no card charging in prod until Square (the owner, 2026-11-02).
+	gateways := map[string]payment.Gateway{payment.MethodCash: payment.Cash{}}
+	if env := cfg.AppConfig.AppEnv; env == "dev" || env == "staging" {
+		gateways[payment.MethodCard] = payment.NewTestCard()
+	}
+	orderPortService := orderport.NewService(pricingService, storeStatusService, menuViewService, menuService, svc,
+		repositories.NewChannelOrderRepository(pool), gateways, lgr)
+	orderPortService.SetNotifier(notifier) // a failed refund pages the owner
 	go geoService.BackfillStores(ctx)
 
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
 	operatorService := operatorApp.NewService(operatorRepo, tenancyService, lgr)
+	channelService := channelApp.NewService(repositories.NewChannelRepository(pool), tenancyService, lgr)
+	channelService.SetOperators(operatorService) // an operator's sign-in opens /channel/v1 as the store's Call center
+	channelService.SetViews(menuViewService)
 
 	sqsClient, err := sqsconsumer.NewSQSClient(ctx, cfg, lgr)
 	if err != nil {
@@ -308,6 +353,7 @@ func main() {
 	// caster routes each order to a tenant/location by its store_name (see
 	// storeResolver + tenancy.ResolveStoreByName).
 	onlineCaster := online.New(lgr, storeResolver{svc: tenancyService}, menuService)
+	onlineCaster.SetVendorChannel(channelService.BuiltinVendor) // Brygid's orders link to its built-in channel
 	casters := map[order.Source]sqsconsumer.Caster{
 		order.SourceOnline: onlineCaster,
 	}
@@ -345,6 +391,12 @@ func main() {
 		MenuService:     menuService,
 		FloorService:    floorService,
 		OperatorService: operatorService,
+		ChannelService:  channelService,
+		MenuViewService: menuViewService,
+		StoreStatus:     storeStatusService,
+		Pricing:         pricingService,
+		OrderPort:       orderPortService,
+		Tracking:        trackingService,
 		AgentSync:       agentSync,
 		Diag:            diagService,
 		Geo:             geoService,

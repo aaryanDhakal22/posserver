@@ -61,6 +61,61 @@ type AppRelease struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type Channel struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	Kind        string             `json:"kind"`
+	Name        string             `json:"name"`
+	KeyHash     pgtype.Text        `json:"key_hash"`
+	KeyPrefix   string             `json:"key_prefix"`
+	Permissions []byte             `json:"permissions"`
+	Builtin     bool               `json:"builtin"`
+	RevokedAt   pgtype.Timestamptz `json:"revoked_at"`
+	LastUsedAt  pgtype.Timestamptz `json:"last_used_at"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	ViewID      pgtype.UUID        `json:"view_id"`
+}
+
+type ChannelEvent struct {
+	ID        int64              `json:"id"`
+	ChannelID pgtype.UUID        `json:"channel_id"`
+	OrderID   pgtype.UUID        `json:"order_id"`
+	Type      string             `json:"type"`
+	Payload   []byte             `json:"payload"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type ChannelOrder struct {
+	OrderID       pgtype.UUID        `json:"order_id"`
+	ChannelID     pgtype.UUID        `json:"channel_id"`
+	TenantID      pgtype.UUID        `json:"tenant_id"`
+	LocationID    pgtype.UUID        `json:"location_id"`
+	ClientOrderID string             `json:"client_order_id"`
+	Payment       []byte             `json:"payment"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	TrackToken    pgtype.Text        `json:"track_token"`
+	AlertedAt     pgtype.Timestamptz `json:"alerted_at"`
+	OperatorID    pgtype.UUID        `json:"operator_id"`
+}
+
+type Deal struct {
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	Kind         string             `json:"kind"`
+	Name         string             `json:"name"`
+	Description  string             `json:"description"`
+	Active       bool               `json:"active"`
+	ChannelKinds []string           `json:"channel_kinds"`
+	Def          []byte             `json:"def"`
+	Code         string             `json:"code"`
+	Position     int32              `json:"position"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+}
+
 type DeliveryRun struct {
 	ID           pgtype.UUID        `json:"id"`
 	TenantID     pgtype.UUID        `json:"tenant_id"`
@@ -279,6 +334,72 @@ type MenuItem struct {
 	Attributes  []byte             `json:"attributes"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+	KitchenName string             `json:"kitchen_name"`
+	Sku         string             `json:"sku"`
+}
+
+type MenuItemSize struct {
+	TenantID    pgtype.UUID `json:"tenant_id"`
+	LocationID  pgtype.UUID `json:"location_id"`
+	ItemID      pgtype.UUID `json:"item_id"`
+	SizeID      pgtype.UUID `json:"size_id"`
+	PriceCents  int64       `json:"price_cents"`
+	KitchenName string      `json:"kitchen_name"`
+	Position    int32       `json:"position"`
+}
+
+type MenuSize struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Name       string             `json:"name"`
+	Short      string             `json:"short"`
+	Position   int32              `json:"position"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type MenuVersion struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	Version    int64              `json:"version"`
+	ChangedAt  pgtype.Timestamptz `json:"changed_at"`
+}
+
+type MenuView struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Kind       string             `json:"kind"`
+	Name       string             `json:"name"`
+	Rules      []byte             `json:"rules"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type MenuViewBuild struct {
+	ViewID      pgtype.UUID        `json:"view_id"`
+	MenuVersion int64              `json:"menu_version"`
+	Build       []byte             `json:"build"`
+	BuiltAt     pgtype.Timestamptz `json:"built_at"`
+}
+
+type MenuViewEntry struct {
+	ID                 pgtype.UUID        `json:"id"`
+	TenantID           pgtype.UUID        `json:"tenant_id"`
+	LocationID         pgtype.UUID        `json:"location_id"`
+	ViewID             pgtype.UUID        `json:"view_id"`
+	Kind               string             `json:"kind"`
+	Anchor             []byte             `json:"anchor"`
+	DisplayName        string             `json:"display_name"`
+	Description        string             `json:"description"`
+	Photo              string             `json:"photo"`
+	Category           string             `json:"category"`
+	Position           int32              `json:"position"`
+	Hidden             bool               `json:"hidden"`
+	PriceOverrideCents pgtype.Int8        `json:"price_override_cents"`
+	Extra              []byte             `json:"extra"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 type ModifierGroup struct {
@@ -292,6 +413,7 @@ type ModifierGroup struct {
 	AllowMultiple bool               `json:"allow_multiple"`
 	CreatedAt     pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+	Portions      bool               `json:"portions"`
 }
 
 type ModifierOption struct {
@@ -305,6 +427,16 @@ type ModifierOption struct {
 	Position        int32              `json:"position"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	IsDefault       bool               `json:"is_default"`
+	KitchenName     string             `json:"kitchen_name"`
+}
+
+type ModifierOptionPrice struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	OptionID   pgtype.UUID `json:"option_id"`
+	SizeID     pgtype.UUID `json:"size_id"`
+	PriceCents int64       `json:"price_cents"`
 }
 
 type Operator struct {
@@ -433,6 +565,14 @@ type Payment struct {
 	AuthCode    string             `json:"auth_code"`
 }
 
+type PricingSetting struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	Kind       string             `json:"kind"`
+	Settings   []byte             `json:"settings"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Printer struct {
 	ID         pgtype.UUID        `json:"id"`
 	TenantID   pgtype.UUID        `json:"tenant_id"`
@@ -466,6 +606,32 @@ type StatusEvent struct {
 	Actor      string             `json:"actor"`
 	ActorID    pgtype.UUID        `json:"actor_id"`
 	Reason     string             `json:"reason"`
+}
+
+type StoreHoursException struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Day        pgtype.Date        `json:"day"`
+	Closed     bool               `json:"closed"`
+	Hours      []byte             `json:"hours"`
+	Note       string             `json:"note"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type StoreOrdering struct {
+	LocationID         pgtype.UUID        `json:"location_id"`
+	TenantID           pgtype.UUID        `json:"tenant_id"`
+	PickupEnabled      bool               `json:"pickup_enabled"`
+	DeliveryEnabled    bool               `json:"delivery_enabled"`
+	PickupEtaMinutes   int32              `json:"pickup_eta_minutes"`
+	DeliveryEtaMinutes int32              `json:"delivery_eta_minutes"`
+	ScheduleDays       int32              `json:"schedule_days"`
+	PausedAt           pgtype.Timestamptz `json:"paused_at"`
+	PausedUntil        pgtype.Timestamptz `json:"paused_until"`
+	PauseNote          string             `json:"pause_note"`
+	RestockedAt        pgtype.Timestamptz `json:"restocked_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 type TabletReportToken struct {

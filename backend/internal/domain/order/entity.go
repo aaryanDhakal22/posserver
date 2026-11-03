@@ -247,6 +247,10 @@ type Order struct {
 
 	rawPayload []byte
 
+	// channel: the sales channel it came through (main 3.0). Not part of
+	// the Snapshot — deployed agents see the same order as before.
+	channel *ChannelRef
+
 	// Floor fields mirrored from the agent (see ApplyFloorUpdate).
 	kitchenNumber    *int
 	estimatedReadyAt *time.Time
@@ -276,6 +280,20 @@ type NewOrderInput struct {
 
 	SourceMetadata map[string]any
 	RawPayload     []byte
+
+	// Channel: the sales channel (main 3.0), saved with the order.
+	Channel *ChannelRef
+}
+
+// ChannelRef links an order to its sales channel: the channel, the channel's
+// idempotency key ("" for Brygid's feed) and the payment reference a refund
+// needs (JSON, may be empty).
+type ChannelRef struct {
+	ID            uuid.UUID
+	ClientOrderID string
+	Payment       []byte
+	TrackToken    string     // the public tracking link's token ("" = none)
+	OperatorID    *uuid.UUID // the call-center operator who took it (main 3.0)
 }
 
 var (
@@ -342,6 +360,7 @@ func NewOrder(in NewOrderInput) (*Order, error) {
 		sourceMetadata: in.SourceMetadata,
 		rawPayload:     rawCopy,
 		payments:       append([]Payment(nil), in.Payments...),
+		channel:        in.Channel,
 	}
 	o.recordEvent(EventOrderReceived, o.Snapshot())
 	return o, nil
@@ -506,3 +525,6 @@ func moneyReconciles(m MoneyBreakdown) bool {
 	}
 	return diff <= 1
 }
+
+// Channel is the sales channel the order came through (nil = none recorded).
+func (o *Order) Channel() *ChannelRef { return o.channel }

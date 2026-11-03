@@ -11,10 +11,12 @@ import (
 
 // HopBuckets are the explicit histogram boundaries (seconds) for the
 // machine hops of the order path (observability/TENANT-SCOPING.md §2):
-// sub-second resolution up to 30 s, plus a 1 / 5 / 30 min tail so an outage
-// backlog (agent offline, SQS redrive, a Pi syncing after an internet drop)
-// lands in a real bucket instead of +Inf.
-var HopBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 1800}
+// sub-second resolution up to 30 s, 1–5 min steps (the vendor hands orders
+// over 1–4 min after its minute-precision placed_at, so a 60 → 300 gap made
+// the ingest p95 read ~4.8 min), plus a 30 min tail so an outage backlog
+// (agent offline, SQS redrive, a Pi syncing after an internet drop) lands in a
+// real bucket instead of +Inf.
+var HopBuckets = []float64{0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 90, 120, 180, 300, 1800}
 
 // NewHopHistogram creates a seconds histogram with HopBuckets.
 func NewHopHistogram(m metric.Meter, name, desc string) (metric.Float64Histogram, error) {

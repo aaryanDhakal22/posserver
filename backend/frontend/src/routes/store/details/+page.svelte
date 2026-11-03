@@ -13,6 +13,9 @@
   import HoursEditor from '$lib/components/HoursEditor.svelte';
   import LocationFields, { locationForm, type LocationForm } from '$lib/components/LocationFields.svelte';
   import StoreMap from '$lib/components/StoreMap.svelte';
+  import OrderingCard from '$lib/components/store/OrderingCard.svelte';
+  import SpecialDays from '$lib/components/store/SpecialDays.svelte';
+  import PricingCard from '$lib/components/store/PricingCard.svelte';
 
   // Location details + opening hours. PATCH /me/location is a full replace,
   // so every field goes back with the hours merged into the config.
@@ -30,6 +33,8 @@
     return bad ? `“${bad}” isn't a Pushover device name — use 1–25 letters, numbers, - or _.` : '';
   });
   const devicesDirty = $derived(!!loc && splitDevices(devices).join(',') !== splitDevices(devicesFromConfig(loc.config)).join(','));
+
+  const resetLabel = (h: number) => new Date(2000, 0, 1, h).toLocaleTimeString('en-US', { hour: 'numeric' });
 
   function fill(l: Location) {
     loc = l;
@@ -141,7 +146,7 @@
 
 <svelte:head><title>Details & hours — quicc</title></svelte:head>
 
-<PageHeader title="Details & hours" subtitle="Printed on receipts. Opening hours decide when the Pi-offline alert is on." />
+<PageHeader title="Details & hours" subtitle="Printed on receipts. Opening hours decide when channels take orders and when the Pi-offline alert is on." />
 
 {#if !loc}
   <Card><Skeleton lines={6} /></Card>
@@ -155,6 +160,11 @@
     </Card>
     <div><Button type="submit" variant="primary" loading={saving}>Save details & hours</Button></div>
   </form>
+  <div class="flex flex-col gap-4 max-w-[760px] mt-4">
+    <SpecialDays />
+    <OrderingCard resetLabel={resetLabel(loc.daily_reset_hour)} />
+    <PricingCard />
+  </div>
   <form class="max-w-[760px] mt-4" onsubmit={onSaveDevices}>
     <Card title="Alerts">
       <div class="flex flex-col gap-4">

@@ -56,6 +56,9 @@ services:
       GEO_CENSUS_URL:
       GEO_NOMINATIM_URL:
       ORDER_REDELIVER_AFTER:
+      # Dev only: the pytest suites fail logins on purpose and run back to back;
+      # the global failed-login ceiling (30 per 10 min elsewhere) would trip.
+      LOGIN_GLOBAL_MAX: "1000"
       OTEL_EXPORTER_OTLP_ENDPOINT:
       OTEL_EXPORTER_OTLP_HEADERS:
       OTEL_SERVICE_NAME:

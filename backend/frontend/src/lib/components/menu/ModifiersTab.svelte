@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { storeApi, toCents, centsInput, type ModifierGroup, type ModifierOption } from '$lib/api';
+  import { storeApi, toCents, centsInput, type ModifierGroup, type ModifierOption, type MenuSize, type BankGroup } from '$lib/api';
   import { confirmDialog } from '$lib/confirm.svelte';
   import { toast } from '$lib/toast.svelte';
   import Button from '$lib/ui/Button.svelte';
@@ -9,6 +9,46 @@
   import Icon from '$lib/ui/Icon.svelte';
 
   // Reusable modifier groups (attach them to items in the item panel).
+  // `sizes` = the store's sizes; each group's bank data (halves, defaults,
+  // kitchen names, per-size prices) is read from the bank on select.
+  let { sizes = [] }: { sizes?: MenuSize[] } = $props();
+
+  type BankRow = { option_id: string; name: string; is_default: boolean; kitchen_name: string; prices: Record<string, string> };
+  let portions = $state(false);
+  let bankRows = $state<BankRow[]>([]);
+  async function loadBank(gid: string) {
+    const bank = await storeApi<{ groups: Record<string, BankGroup> }>('/me/menu/bank');
+    const g = bank.groups[gid];
+    portions = g?.portions ?? false;
+    bankRows = (g?.options ?? []).map((o) => ({
+      option_id: o.id,
+      name: o.name,
+      is_default: o.is_default,
+      kitchen_name: o.kitchen_name,
+      prices: Object.fromEntries((o.prices || []).map((p) => [p.size_id, centsInput(p.price_cents)]))
+    }));
+  }
+  async function saveBank() {
+    if (!selected) return;
+    const options = [];
+    for (const r of bankRows) {
+      const prices = [];
+      for (const sz of sizes) {
+        const raw = (r.prices[sz.id] ?? '').trim();
+        if (!raw) continue;
+        const c = toCents(raw);
+        if (c === null || c < 0) return toast.error(`${r.name}, ${sz.name}: “${raw}” isn't a valid price. Not saved.`);
+        prices.push({ size_id: sz.id, price_cents: c });
+      }
+      options.push({ option_id: r.option_id, is_default: r.is_default, kitchen_name: r.kitchen_name, prices });
+    }
+    try {
+      await storeApi(`/me/menu/modifier-groups/${selected.id}/bank`, { method: 'PUT', body: JSON.stringify({ portions, options }) });
+      toast.success('Saved');
+    } catch (err) {
+      toast.error(err);
+    }
+  }
   let groups = $state<ModifierGroup[]>([]);
   let selected = $state<ModifierGroup | null>(null);
   let options = $state<ModifierOption[]>([]);
@@ -25,6 +65,7 @@
     selected = { ...g };
     badDelta = {};
     options = await storeApi<ModifierOption[]>(`/me/menu/modifier-groups/${g.id}/options`);
+    await loadBank(g.id);
   }
   onMount(() => load().catch((e) => toast.error(e)));
 
@@ -93,6 +134,7 @@
       const added = newOpt.name.trim();
       newOpt = { name: '', price: '0.00' };
       options = await storeApi<ModifierOption[]>(`/me/menu/modifier-groups/${selected.id}/options`);
+      await loadBank(selected.id);
       toast.success(`“${added}” added`);
     } catch (err) {
       toast.error(err);
@@ -123,7 +165,10 @@
   async function deleteOption(o: ModifierOption) {
     try {
       await storeApi(`/me/menu/modifier-groups/${o.group_id}/options/${o.id}`, { method: 'DELETE' });
-      if (selected) options = await storeApi<ModifierOption[]>(`/me/menu/modifier-groups/${selected.id}/options`);
+      if (selected) {
+        options = await storeApi<ModifierOption[]>(`/me/menu/modifier-groups/${selected.id}/options`);
+        await loadBank(selected.id);
+      }
       toast.success(`“${o.name}” removed`);
     } catch (err) {
       toast.error(err);
@@ -204,6 +249,43 @@
             <Button type="submit" icon="plus">Add option</Button>
           </form>
         </div>
+
+        {#if bankRows.length}
+          <div class="pt-4 border-t border-border flex flex-col gap-3">
+            <div>
+              <span class="lbl !mb-0.5" id="mg-bank">Defaults, kitchen names and size prices</span>
+              <p class="help !mt-0">A default option comes on the item unless the customer removes it. Leave a size price empty to use the option's price above.</p>
+            </div>
+            <label class="flex items-center gap-2.5"><Switch bind:checked={portions} label="Options can go on a half" />Options can go on a half (left / right / whole)</label>
+            <div class="overflow-x-auto">
+              <table class="w-full text-[13px]" aria-labelledby="mg-bank">
+                <thead>
+                  <tr class="text-left text-muted">
+                    <th class="font-semibold py-1 pr-2">Option</th>
+                    <th class="font-semibold py-1 pr-2">Default</th>
+                    <th class="font-semibold py-1 pr-2">Kitchen name</th>
+                    {#each sizes as sz (sz.id)}<th class="font-semibold py-1 pr-2 whitespace-nowrap">{sz.short || sz.name} ($)</th>{/each}
+                  </tr>
+                </thead>
+                <tbody>
+                  {#each bankRows as r (r.option_id)}
+                    <tr>
+                      <td class="py-1 pr-2 whitespace-nowrap">{r.name}</td>
+                      <td class="py-1 pr-2"><Switch bind:checked={r.is_default} label="{r.name} is a default" /></td>
+                      <td class="py-1 pr-2"><input class="field !min-w-[120px]" bind:value={r.kitchen_name} placeholder={r.name} aria-label="Kitchen name for {r.name}" /></td>
+                      {#each sizes as sz (sz.id)}
+                        <td class="py-1 pr-2">
+                          <input class="field mono text-right !w-20" inputmode="decimal" bind:value={r.prices[sz.id]} aria-label="{r.name} on {sz.name} ($)" />
+                        </td>
+                      {/each}
+                    </tr>
+                  {/each}
+                </tbody>
+              </table>
+            </div>
+            <div><Button variant="primary" onclick={saveBank}>Save defaults and prices</Button></div>
+          </div>
+        {/if}
       </div>
     {/if}
   </section>

@@ -8,9 +8,22 @@
 package ratelimit
 
 import (
+	"os"
+	"strconv"
 	"sync"
 	"time"
 )
+
+// GlobalMax is the global failed-login ceiling (link, manager session,
+// operator login): def, or LOGIN_GLOBAL_MAX when that is a positive integer.
+// Only the dev compose sets it — the pytest suites fail logins on purpose and
+// run back to back, faster than the 10-minute window forgets them.
+func GlobalMax(def int) int {
+	if n, err := strconv.Atoi(os.Getenv("LOGIN_GLOBAL_MAX")); err == nil && n > 0 {
+		return n
+	}
+	return def
+}
 
 // maxKeys bounds memory under key spraying (random usernames): past it, Add
 // first drops every expired entry.

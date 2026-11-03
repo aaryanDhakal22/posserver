@@ -1,0 +1,583 @@
+[
+ {
+  "label": "health",
+  "method": "GET",
+  "path": "/health",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8"
+  },
+  "cookies": [],
+  "body": "OK",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "version",
+  "method": "GET",
+  "path": "/api/v1/version",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"commit\":\"\\u003cmasked\\u003e\",\"service\":\"quicc-main\",\"version\":\"\\u003cmasked\\u003e\"}",
+  "mask": [
+   "version",
+   "commit"
+  ],
+  "compare": "exact"
+ },
+ {
+  "label": "ready",
+  "method": "GET",
+  "path": "/api/v1/ready",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"ready\":true,\"db\":{\"ok\":true,\"latency_ms\":\"\\u003cmasked\\u003e\"},\"sqs\":{\"ok\":true,\"latency_ms\":\"\\u003cmasked\\u003e\"}}",
+  "mask": [
+   "latency_ms"
+  ],
+  "compare": "exact"
+ },
+ {
+  "label": "routes",
+  "method": "GET",
+  "path": "/__routes",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[\"DELETE /admin/v1/app-releases/:code admin\",\"DELETE /admin/v1/devices/:id admin\",\"DELETE /admin/v1/geo/test-providers admin\",\"DELETE /admin/v1/operators/:id admin\",\"DELETE /admin/v1/orders admin\",\"DELETE /admin/v1/orders/:id admin\",\"DELETE /admin/v1/tenants/:id admin\",\"DELETE /store/v1/agent/tablet-tokens/:tablet_id device\",\"DELETE /store/v1/me/menu/categories/:id store-session\",\"DELETE /store/v1/me/menu/items/:id store-session\",\"DELETE /store/v1/me/menu/items/:id/modifier-groups/:groupId store-session\",\"DELETE /store/v1/me/menu/menus/:id store-session\",\"DELETE /store/v1/me/menu/modifier-groups/:id store-session\",\"DELETE /store/v1/me/menu/modifier-groups/:id/options/:optId store-session\",\"DELETE /store/v1/me/printers/:id store-session\",\"DELETE /store/v1/session store-session\",\"GET /__routes none\",\"GET /admin none\",\"GET /admin/ none\",\"GET /admin/v1/agent-backups admin\",\"GET /admin/v1/agent-backups/:id admin\",\"GET /admin/v1/agent-updates admin\",\"GET /admin/v1/agents/health admin\",\"GET /admin/v1/app-releases admin\",\"GET /admin/v1/delivery-runs admin\",\"GET /admin/v1/devices admin\",\"GET /admin/v1/diag-reports admin\",\"GET /admin/v1/diag-reports/:id admin\",\"GET /admin/v1/geo admin\",\"GET /admin/v1/locations admin\",\"GET /admin/v1/operators admin\",\"GET /admin/v1/orders admin\",\"GET /admin/v1/overview admin\",\"GET /admin/v1/tablet-tokens admin\",\"GET /admin/v1/tenants admin\",\"GET /api/v1/events/orders device\",\"GET /api/v1/orders device\",\"GET /api/v1/orders/:id device\",\"GET /api/v1/orders/by-source/:source/:source_event_id device\",\"GET /api/v1/ready none\",\"GET /api/v1/version none\",\"GET /app none\",\"GET /app/* none\",\"GET /health none\",\"GET /store none\",\"GET /store/ none\",\"GET /store/v1/agent/app/latest device\",\"GET /store/v1/agent/app/releases/:code/apk device\",\"GET /store/v1/agent/credential device\",\"GET /store/v1/agent/restore device\",\"GET /store/v1/agent/secrets device\",\"GET /store/v1/me/delivery-runs store-session\",\"GET /store/v1/me/devices store-session\",\"GET /store/v1/me/floor store-session\",\"GET /store/v1/me/location store-session\",\"GET /store/v1/me/menu/categories/:id/items store-session\",\"GET /store/v1/me/menu/export.csv store-session\",\"GET /store/v1/me/menu/items/:id/modifier-groups store-session\",\"GET /store/v1/me/menu/menus store-session\",\"GET /store/v1/me/menu/menus/:id/categories store-session\",\"GET /store/v1/me/menu/modifier-groups store-session\",\"GET /store/v1/me/menu/modifier-groups/:id/options store-session\",\"GET /store/v1/me/menu/unmatched store-session\",\"GET /store/v1/me/orders store-session\",\"GET /store/v1/me/printers store-session\",\"GET /store/v1/me/printers/ip-changes store-session\",\"GET /store/v1/me/printers/live store-session\",\"GET /store/v1/operator/me operator\",\"GET /store/v1/operator/menu operator\",\"GET /store/v1/session store-session\",\"GET /store/v1/store-config device\",\"PATCH /admin/v1/diag-reports/:id admin\",\"PATCH /admin/v1/locations/:id admin\",\"PATCH /admin/v1/locations/:id/map admin\",\"PATCH /admin/v1/operators/:id admin\",\"PATCH /admin/v1/tenants/:id/config admin\",\"PATCH /admin/v1/tenants/:id/credentials admin\",\"PATCH /admin/v1/tenants/:id/store-id admin\",\"PATCH /store/v1/me/location store-session\",\"PATCH /store/v1/me/menu/categories/:id store-session\",\"PATCH /store/v1/me/menu/items/:id store-session\",\"PATCH /store/v1/me/menu/items/:id/printer store-session\",\"PATCH /store/v1/me/menu/menus/:id store-session\",\"PATCH /store/v1/me/menu/modifier-groups/:id store-session\",\"PATCH /store/v1/me/menu/modifier-groups/:id/options/:optId store-session\",\"PATCH /store/v1/me/printers/:id store-session\",\"POST /admin/v1/agent/ping admin\",\"POST /admin/v1/agent/rollback admin\",\"POST /admin/v1/agent/update admin\",\"POST /admin/v1/app-releases admin\",\"POST /admin/v1/devices admin\",\"POST /admin/v1/devices/:id/revoke admin\",\"POST /admin/v1/geo/test-providers admin\",\"POST /admin/v1/operators admin\",\"POST /admin/v1/operators/:id/tokens/revoke admin\",\"POST /admin/v1/tablet-tokens/:id/revoke admin\",\"POST /admin/v1/tenants admin\",\"POST /admin/v1/tenants/:id/store-session admin\",\"POST /store/v1/agent/backup device\",\"POST /store/v1/agent/link none\",\"POST /store/v1/agent/revoke device\",\"POST /store/v1/agent/rpc device\",\"POST /store/v1/agent/tablet-tokens device\",\"POST /store/v1/me/alerts/test store-session\",\"POST /store/v1/me/devices store-session\",\"POST /store/v1/me/devices/:id/revoke store-session\",\"POST /store/v1/me/menu/categories/:id/items store-session\",\"POST /store/v1/me/menu/categories/reorder store-session\",\"POST /store/v1/me/menu/import store-session\",\"POST /store/v1/me/menu/items/:id/modifier-groups store-session\",\"POST /store/v1/me/menu/items/reorder store-session\",\"POST /store/v1/me/menu/menus store-session\",\"POST /store/v1/me/menu/menus/:id/categories store-session\",\"POST /store/v1/me/menu/menus/reorder store-session\",\"POST /store/v1/me/menu/modifier-groups store-session\",\"POST /store/v1/me/menu/modifier-groups/:id/options store-session\",\"POST /store/v1/me/menu/modifier-groups/:id/options/reorder store-session\",\"POST /store/v1/me/printers store-session\",\"POST /store/v1/operator/login none\",\"POST /store/v1/session none\",\"POST /store/v1/tablet/diag-reports report-key\",\"PUT /admin/v1/locations/:id/pin admin\",\"PUT /admin/v1/operators/:id/locations admin\",\"PUT /store/v1/me/location/pin store-session\"]",
+  "mask": [],
+  "compare": "superset"
+ },
+ {
+  "label": "spa /app",
+  "method": "GET",
+  "path": "/app",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "cache-control": "no-cache",
+   "content-type": "text/html; charset=utf-8"
+  },
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "spa /app/store/menu",
+  "method": "GET",
+  "path": "/app/store/menu",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "cache-control": "no-cache",
+   "content-type": "text/html; charset=utf-8"
+  },
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "spa /admin",
+  "method": "GET",
+  "path": "/admin",
+  "params": {},
+  "status": 302,
+  "headers": {
+   "location": "/app/admin"
+  },
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "spa /admin/",
+  "method": "GET",
+  "path": "/admin/",
+  "params": {},
+  "status": 302,
+  "headers": {
+   "location": "/app/admin"
+  },
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "spa /store",
+  "method": "GET",
+  "path": "/store",
+  "params": {},
+  "status": 302,
+  "headers": {
+   "location": "/app/store"
+  },
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "spa /store/",
+  "method": "GET",
+  "path": "/store/",
+  "params": {},
+  "status": 302,
+  "headers": {
+   "location": "/app/store"
+  },
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "orders key none",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"missing X-STORE-API-KEY header\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "order key none",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#1>",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"missing X-STORE-API-KEY header\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "sse key none",
+  "method": "GET",
+  "path": "/api/v1/events/orders",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"missing X-STORE-API-KEY header\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "store-config key none",
+  "method": "GET",
+  "path": "/store/v1/store-config",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"missing X-STORE-API-KEY header\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "agent rpc key none",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"missing X-STORE-API-KEY header\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "agent restore key none",
+  "method": "GET",
+  "path": "/store/v1/agent/restore",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"missing X-STORE-API-KEY header\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "orders key bad",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid API key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "order key bad",
+  "method": "GET",
+  "path": "/api/v1/orders/<uuid#1>",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid API key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "sse key bad",
+  "method": "GET",
+  "path": "/api/v1/events/orders",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid API key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "store-config key bad",
+  "method": "GET",
+  "path": "/store/v1/store-config",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid API key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "agent rpc key bad",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid API key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "agent restore key bad",
+  "method": "GET",
+  "path": "/store/v1/agent/restore",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid API key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "admin none",
+  "method": "GET",
+  "path": "/admin/v1/overview",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid admin key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "admin wrong bearer",
+  "method": "GET",
+  "path": "/admin/v1/overview",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid admin key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "admin wrong x-admin-key",
+  "method": "GET",
+  "path": "/admin/v1/overview",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid admin key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "session none",
+  "method": "GET",
+  "path": "/store/v1/session",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"login required\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "me none",
+  "method": "GET",
+  "path": "/store/v1/me/location",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"login required\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "me garbage cookie",
+  "method": "GET",
+  "path": "/store/v1/me/location",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"login required\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "login no password",
+  "method": "POST",
+  "path": "/store/v1/session",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid username or password\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "login unknown",
+  "method": "POST",
+  "path": "/store/v1/session",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid username or password\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "login not json",
+  "method": "POST",
+  "path": "/store/v1/session",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid body\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "operator me none",
+  "method": "GET",
+  "path": "/store/v1/operator/me",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"missing bearer token\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "operator me bad",
+  "method": "GET",
+  "path": "/store/v1/operator/me",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid or expired token\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "operator menu bad",
+  "method": "GET",
+  "path": "/store/v1/operator/menu",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid or expired token\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "operator login no password",
+  "method": "POST",
+  "path": "/store/v1/operator/login",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid username or password\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "operator login unknown",
+  "method": "POST",
+  "path": "/store/v1/operator/login",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid username or password\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "diag report none",
+  "method": "POST",
+  "path": "/store/v1/tablet/diag-reports",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"missing X-Quibase-Report-Key header\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "diag report bad",
+  "method": "POST",
+  "path": "/store/v1/tablet/diag-reports",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"code\":\"invalid_report_key\",\"error\":\"invalid report key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "agent link no password",
+  "method": "POST",
+  "path": "/store/v1/agent/link",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"code\":\"invalid_credentials\",\"error\":\"wrong username or password\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "agent link unknown",
+  "method": "POST",
+  "path": "/store/v1/agent/link",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"code\":\"invalid_credentials\",\"error\":\"wrong username or password\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "unknown route",
+  "method": "GET",
+  "path": "/api/v1/nope",
+  "params": {},
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"message\":\"Not Found\"}\n",
+  "mask": [],
+  "compare": "exact"
+ }
+]

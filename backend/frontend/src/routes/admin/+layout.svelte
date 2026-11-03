@@ -19,6 +19,7 @@
     { href: base + '/admin', label: 'Overview', icon: 'dashboard' },
     { href: base + '/admin/tenants', label: 'Stores', icon: 'store', match: base + '/admin/tenants' },
     { href: base + '/admin/operators', label: 'Operators', icon: 'users', match: base + '/admin/operators' },
+    { href: base + '/admin/channels', label: 'Channels', icon: 'key', match: base + '/admin/channels' },
     { href: base + '/admin/diagnostics', label: 'Diagnostics', icon: 'activity', match: base + '/admin/diagnostics', badge: unresolved || undefined }
   ]);
 

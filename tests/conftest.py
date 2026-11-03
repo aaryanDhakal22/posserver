@@ -180,12 +180,16 @@ class Store:
         return o
 
     def delete(self) -> None:
+        """Delete the store; a delete main refuses fails the test (a store
+        that can't be deleted is a bug, not something to sweep later)."""
         try:
             r = self.admin.delete(f"{ADMIN_V1}/tenants/{self.tenant_id}", timeout=10)
-            if r.status_code < 500:
-                _CREATED_TENANTS.discard(self.tenant_id)
         except requests.RequestException:
-            pass
+            return  # main went away; the session sweep retries
+        if r.status_code in (200, 204, 404):
+            _CREATED_TENANTS.discard(self.tenant_id)
+            return
+        raise AssertionError(f"deleting test store {self.name} failed: {r.status_code} {r.text[:300]}")
 
 
 @pytest.fixture

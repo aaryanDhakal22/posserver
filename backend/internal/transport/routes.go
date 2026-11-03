@@ -24,13 +24,19 @@ import (
 	"strings"
 
 	"quiccpos/main/internal/app/agentsync"
+	channelApp "quiccpos/main/internal/app/channel"
 	diagApp "quiccpos/main/internal/app/diag"
 	geoApp "quiccpos/main/internal/app/geo"
 	menuApp "quiccpos/main/internal/app/menu"
+	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
+	"quiccpos/main/internal/app/orderport"
+	pricingApp "quiccpos/main/internal/app/pricing"
 	"quiccpos/main/internal/app/printerstatus"
+	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
+	"quiccpos/main/internal/app/tracking"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
 	"quiccpos/main/internal/transport/handler"
@@ -43,6 +49,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/labstack/echo/v5"
+	echomw "github.com/labstack/echo/v5/middleware"
 	"github.com/rs/zerolog"
 )
 
@@ -52,6 +59,8 @@ const (
 	adminUIPath = "/admin"
 	storePrefix = "/store/v1"
 	storeUIPath = "/store"
+	// channelPrefix is main 3.0's channel API (the ports).
+	channelPrefix = "/channel/v1"
 )
 
 type RouterDeps struct {
@@ -88,6 +97,18 @@ type RouterDeps struct {
 	MenuService *menuApp.Service
 	// OperatorService backs the operator accounts + read-only menu API.
 	OperatorService *operatorApp.Service
+	// Tracking follows channel orders (main 3.0).
+	Tracking *tracking.Service
+	// OrderPort places channel orders (main 3.0).
+	OrderPort *orderport.Service
+	// Pricing backs pricing settings, deals and quotes (main 3.0).
+	Pricing *pricingApp.Service
+	// StoreStatus backs a store's ordering status (main 3.0).
+	StoreStatus *storestatusApp.Service
+	// MenuViewService backs the menu bank + views (main 3.0).
+	MenuViewService *menuviewApp.Service
+	// ChannelService backs sales channels and the /channel/v1 key (main 3.0).
+	ChannelService *channelApp.Service
 	// AgentSync backs agent link / restore / backups / fleet health.
 	AgentSync *agentsync.Service
 	// Diag backs tablet diagnostics (report tokens, reports, admin view).
@@ -149,6 +170,10 @@ func routeTable(d RouterDeps) []routeDef {
 	admin := appMiddleware.AdminAuth(d.AdminAPIKey)
 	storeSession := appMiddleware.StoreSessionAuth(d.SessionSigner)
 	operatorAuth := appMiddleware.OperatorAuth(d.OperatorService, d.Meters)
+	channelAuth := appMiddleware.ChannelAuth(d.ChannelService)
+	// The channel API alone is gzipped (a menu is large); legacy routes are
+	// left byte-for-byte as deployed clients know them.
+	channelGzip := echomw.GzipWithConfig(echomw.GzipConfig{MinLength: 1024})
 	// The tablet report key guards exactly one route (diag-reports) and is
 	// never combined with `device` — it must not reach orders or anything else.
 	reportKey := appMiddleware.ReportKeyAuth(d.Diag)
@@ -163,6 +188,12 @@ func routeTable(d RouterDeps) []routeDef {
 	menuH := handler.NewMenuHandler(d.MenuService, d.Logger)
 	floorH := handler.NewFloorHandler(d.Service, d.FloorService, d.Logger)
 	operatorH := handler.NewOperatorHandler(d.OperatorService, d.MenuService, d.Meters, d.Logger)
+	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
+	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
+	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
+	pricingH := handler.NewPricingHandler(d.Pricing, d.Logger)
+	orderPortH := handler.NewOrderPortHandler(d.OrderPort, d.Logger)
+	trackingH := handler.NewTrackingHandler(d.Tracking, d.Logger)
 	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
@@ -223,6 +254,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", adminPrefix+"/geo", "admin", "Active geocoding/routing providers", geoH.AdminStatus, admin),
 		def("POST", adminPrefix+"/geo/test-providers", "admin", "DEV ONLY: point the geo providers at a test fake {census_url, nominatim_url, osrm_url}", geoH.DevSetProviders, admin),
 		def("DELETE", adminPrefix+"/geo/test-providers", "admin", "DEV ONLY: restore the env geo providers", geoH.DevResetProviders, admin),
+		def("POST", adminPrefix+"/store-status/restock", "admin", "DEV ONLY: bring a location's 86'd items back now {location_id}", statusH.DevRestock, admin),
 		def("POST", adminPrefix+"/devices", "admin", "Mint an agent device (cleartext key once)", adminH.MintAgentDevice, admin),
 		def("GET", adminPrefix+"/devices", "admin", "List all devices", adminH.ListDevices, admin),
 		def("POST", adminPrefix+"/devices/:id/revoke", "admin", "Revoke a device (tombstone)", adminH.RevokeDevice, admin),
@@ -246,6 +278,15 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", adminPrefix+"/operators/:id", "admin", "Delete an operator (cascades tokens + locations)", operatorH.AdminDelete, admin),
 		def("PUT", adminPrefix+"/operators/:id/locations", "admin", "Set an operator's allowed locations", operatorH.AdminSetLocations, admin),
 		def("POST", adminPrefix+"/operators/:id/tokens/revoke", "admin", "Revoke all of an operator's tokens", operatorH.AdminRevokeTokens, admin),
+
+		// Sales channels (main 3.0): admin-managed, each with its own /channel/v1 key.
+		def("GET", adminPrefix+"/channels", "admin", "List sales channels (?location_id=)", channelH.AdminList, admin),
+		def("POST", adminPrefix+"/channels", "admin", "Create a channel {location_id, kind, name, permissions?} → key once", channelH.AdminCreate, admin),
+		def("GET", adminPrefix+"/channels/:id", "admin", "One channel", channelH.AdminGet, admin),
+		def("PATCH", adminPrefix+"/channels/:id", "admin", "Rename / set permissions", channelH.AdminUpdate, admin),
+		def("POST", adminPrefix+"/channels/:id/rotate", "admin", "Issue a new key (old one stops) → key once", channelH.AdminRotate, admin),
+		def("POST", adminPrefix+"/channels/:id/revoke", "admin", "Revoke the channel's key", channelH.AdminRevoke, admin),
+		def("DELETE", adminPrefix+"/channels/:id", "admin", "Delete a channel", channelH.AdminDelete, admin),
 
 		// Web app (compiled SvelteKit SPA) — served under /app; /admin + /store
 		// redirect in for back-compat. Assets live under /app/_app/*.
@@ -331,11 +372,69 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/me/menu/modifier-groups/:id/options/reorder", "store-session", "Reorder options", menuH.MeReorderOptions, storeSession),
 		def("PATCH", storePrefix+"/me/menu/modifier-groups/:id/options/:optId", "store-session", "Edit an option", menuH.MeUpdateOption, storeSession),
 		def("DELETE", storePrefix+"/me/menu/modifier-groups/:id/options/:optId", "store-session", "Delete an option", menuH.MeDeleteOption, storeSession),
+		// Store status (main 3.0).
+		def("GET", storePrefix+"/me/status", "store-session", "The store status channels see (open/paused/closed, types, sold out)", statusH.MeStatus, storeSession),
+		def("GET", storePrefix+"/me/ordering", "store-session", "Ordering settings (types, ETAs, scheduling, pause) + hours exceptions", statusH.MeOrdering, storeSession),
+		def("PUT", storePrefix+"/me/ordering", "store-session", "Set order types, ETAs and scheduling days", statusH.MeUpdateOrdering, storeSession),
+		def("POST", storePrefix+"/me/pause", "store-session", "Pause orders {preset: 15m|30m|60m|today|indefinite, note}", statusH.MePause, storeSession),
+		def("DELETE", storePrefix+"/me/pause", "store-session", "Take orders again", statusH.MeResume, storeSession),
+		def("POST", storePrefix+"/me/hours-exceptions", "store-session", "Set a date closed or its own hours {date, closed, hours, note}", statusH.MeSetException, storeSession),
+		def("DELETE", storePrefix+"/me/hours-exceptions/:id", "store-session", "Remove a date exception", statusH.MeDeleteException, storeSession),
+		// Pricing + deals (main 3.0).
+		def("GET", storePrefix+"/me/pricing", "store-session", "Pricing settings: the store's + each channel kind's sets", pricingH.MePricing, storeSession),
+		def("PUT", storePrefix+"/me/pricing", "store-session", "Replace the pricing settings {store, kinds}", pricingH.MeSavePricing, storeSession),
+		def("GET", storePrefix+"/me/pricing/context", "store-session", "What a channel kind prices with (?kind=web) — for previews", pricingH.MeContext, storeSession),
+		def("POST", storePrefix+"/me/quote", "store-session", "Price a cart as a channel kind would (?kind=web)", pricingH.MeQuote, storeSession),
+		def("GET", storePrefix+"/me/deals", "store-session", "The store's deals", pricingH.MeDeals, storeSession),
+		def("POST", storePrefix+"/me/deals", "store-session", "Add a deal (bundle, mix, nth, code, free_item)", pricingH.MeCreateDeal, storeSession),
+		def("PUT", storePrefix+"/me/deals/:id", "store-session", "Replace a deal", pricingH.MeUpdateDeal, storeSession),
+		def("DELETE", storePrefix+"/me/deals/:id", "store-session", "Delete a deal", pricingH.MeDeleteDeal, storeSession),
+		// The menu bank + views (main 3.0).
+		def("GET", storePrefix+"/me/menu/bank", "store-session", "The whole menu bank (sizes, items with sizes + groups, options with prices)", viewH.MeBank, storeSession),
+		def("GET", storePrefix+"/me/menu/sizes", "store-session", "List the store's sizes", viewH.MeListSizes, storeSession),
+		def("POST", storePrefix+"/me/menu/sizes", "store-session", "Add a size {name, short}", viewH.MeCreateSize, storeSession),
+		def("POST", storePrefix+"/me/menu/sizes/reorder", "store-session", "Reorder sizes {ids}", viewH.MeReorderSizes, storeSession),
+		def("PATCH", storePrefix+"/me/menu/sizes/:id", "store-session", "Rename a size", viewH.MeUpdateSize, storeSession),
+		def("DELETE", storePrefix+"/me/menu/sizes/:id", "store-session", "Delete a size (its item/option prices go with it)", viewH.MeDeleteSize, storeSession),
+		def("PUT", storePrefix+"/me/menu/items/:id/bank", "store-session", "Set an item's kitchen name, SKU and sizes", viewH.MeSetItemBank, storeSession),
+		def("PUT", storePrefix+"/me/menu/modifier-groups/:id/bank", "store-session", "Set a group's halves flag and its options' defaults, kitchen names, size prices", viewH.MeSetGroupBank, storeSession),
+		def("GET", storePrefix+"/me/menu/views", "store-session", "List the menu views (defaults created on first use)", viewH.MeListViews, storeSession),
+		def("POST", storePrefix+"/me/menu/views", "store-session", "Add a view {kind, name, rules}", viewH.MeCreateView, storeSession),
+		def("GET", storePrefix+"/me/menu/views/:id", "store-session", "One view", viewH.MeGetView, storeSession),
+		def("PATCH", storePrefix+"/me/menu/views/:id", "store-session", "Rename a view / set its rules", viewH.MeUpdateView, storeSession),
+		def("DELETE", storePrefix+"/me/menu/views/:id", "store-session", "Delete a view", viewH.MeDeleteView, storeSession),
+		def("GET", storePrefix+"/me/menu/views/:id/build", "store-session", "A view as its channels see it + needs attention", viewH.MeBuildView, storeSession),
+		def("GET", storePrefix+"/me/menu/views/:id/entries", "store-session", "A view's entries", viewH.MeListEntries, storeSession),
+		def("POST", storePrefix+"/me/menu/views/:id/entries", "store-session", "Add an entry (item, merge, augment, map)", viewH.MeCreateEntry, storeSession),
+		def("PUT", storePrefix+"/me/menu/entries/:id", "store-session", "Replace an entry", viewH.MeUpdateEntry, storeSession),
+		def("DELETE", storePrefix+"/me/menu/entries/:id", "store-session", "Delete an entry", viewH.MeDeleteEntry, storeSession),
+		def("GET", storePrefix+"/me/menu/vendor", "store-session", "The vendor view (Brygid): mappings + names nothing routes", viewH.MeVendor, storeSession),
+		def("POST", storePrefix+"/me/menu/vendor/maps", "store-session", "Map a vendor item name to a bank item {vendor_name, item_id}", viewH.MeVendorMap, storeSession),
 
 		// Operators (call-center order-takers) — read-only menu via bearer token.
 		def("POST", storePrefix+"/operator/login", "none", "Operator login → read-only bearer token", operatorH.Login),
 		def("GET", storePrefix+"/operator/me", "operator", "Operator whoami + allowed locations", operatorH.Me, operatorAuth),
 		def("GET", storePrefix+"/operator/menu", "operator", "Full menu for an allowed location (POS read)", operatorH.Menu, operatorAuth),
+
+		// /channel/v1 — the ports every sales channel talks to (main 3.0).
+		def("GET", channelPrefix+"/openapi.json", "none", "The channel API's OpenAPI document", channelH.Spec, channelGzip),
+		def("POST", channelPrefix+"/operator/login", "none", "An operator signs in (12 h): then Bearer + X-Location-ID on /channel/v1", operatorH.ChannelLogin, channelGzip),
+		def("POST", channelPrefix+"/operator/logout", "none", "An operator signs out (Bearer the sign-in)", operatorH.ChannelLogout),
+		def("GET", channelPrefix+"/me", "channel", "The channel behind the key and its store", channelH.Me, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/menu", "channel", "The channel's menu (ETag = menu version)", viewH.ChannelMenu, channelAuth, channelGzip),
+		def("POST", channelPrefix+"/orders", "channel", "Place an order (orders permission; idempotent on client_order_id)", orderPortH.Place, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/orders", "channel", "This channel's orders, newest first (?before=&limit=)", orderPortH.List, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/orders/:id", "channel", "One of this channel's orders", orderPortH.Get, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/orders/:id/status", "channel", "One of this channel's orders: its tracking state (track permission)", trackingH.Status, channelAuth, channelGzip),
+		// No gzip on the stream: the compressor would hold events back.
+		def("GET", channelPrefix+"/events", "channel", "This channel's orders as they change (SSE, Last-Event-ID resumes 24 h)", trackingH.Events, channelAuth),
+		def("GET", "/track/v1/:token", "none", "A customer's tracking link: status, kitchen #, ready-by, driver first name", trackingH.Public),
+		def("POST", channelPrefix+"/quote", "channel", "Price a cart (quote permission)", pricingH.ChannelQuote, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/pricing", "channel", "What this channel prices with (settings, deals, item facts) — for previews", pricingH.ChannelPricing, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/store", "channel", "The store's status: open/paused/closed, order types + ETAs, sold out", statusH.ChannelStore, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/store/times", "channel", "Times an order can be promised for (?type=pickup|delivery&date=YYYY-MM-DD)", statusH.ChannelTimes, channelAuth, channelGzip),
+		def("POST", channelPrefix+"/store/delivery-check", "channel", "Does the store deliver to this address {line1, city, state, zip}", statusH.ChannelDeliveryCheck, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/menu/version", "channel", "The menu version (?since=N → changed)", viewH.ChannelMenuVersion, channelAuth, channelGzip),
 
 		def("GET", storeUIPath, "none", "Redirect → /app/store", redirectTo("/app/store")),
 		def("GET", storeUIPath+"/", "none", "Redirect → /app/store", redirectTo("/app/store")),

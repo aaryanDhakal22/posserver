@@ -23,8 +23,9 @@ const (
 	loginFailMax    = 5
 	loginFailWindow = 10 * time.Minute
 	loginGlobalKey  = "*"
-	loginGlobalMax  = 30
 )
+
+var loginGlobalMax = ratelimit.GlobalMax(30)
 
 func newLoginLimiter() *loginLimiter {
 	return &loginLimiter{w: ratelimit.New(loginFailMax, loginFailWindow)}
@@ -35,13 +36,22 @@ func loginKey(username string) string { return "u:" + strings.ToLower(strings.Tr
 // throttled answers 429 (with Retry-After) when username, or everyone, is
 // over the limit; it returns false when the attempt may go ahead.
 func (l *loginLimiter) throttled(c *echo.Context, username string) (bool, error) {
+	return l.throttledBody(c, username, errResp("too many failed logins — try again in a few minutes"))
+}
+
+// throttledCode is throttled with a {error, code} body (the channel API's shape).
+func (l *loginLimiter) throttledCode(c *echo.Context, username string) (bool, error) {
+	return l.throttledBody(c, username, errCode("too many failed sign-ins — try again in a few minutes", "too_many_attempts"))
+}
+
+func (l *loginLimiter) throttledBody(c *echo.Context, username string, body map[string]string) (bool, error) {
 	key := loginKey(username)
 	if l.w.Allow(key) && l.w.AllowN(loginGlobalKey, loginGlobalMax) {
 		return false, nil
 	}
 	wait := max(l.w.RetryAfter(key), l.w.RetryAfterN(loginGlobalKey, loginGlobalMax))
 	c.Response().Header().Set("Retry-After", strconv.Itoa(int(math.Ceil(wait.Seconds()))))
-	return true, c.JSON(http.StatusTooManyRequests, errResp("too many failed logins — try again in a few minutes"))
+	return true, c.JSON(http.StatusTooManyRequests, body)
 }
 
 func (l *loginLimiter) failed(username string) {

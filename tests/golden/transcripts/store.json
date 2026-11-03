@@ -1,0 +1,534 @@
+[
+ {
+  "label": "login wrong password",
+  "method": "POST",
+  "path": "/store/v1/session",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid username or password\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "login",
+  "method": "POST",
+  "path": "/store/v1/session",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [
+   "quicc_<token>=<value>; HttpOnly; Max-Age=43200; Path=/store; SameSite=Lax"
+  ],
+  "body": "{\"location_id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"tenant_name\":\"<tag> Test Pizza\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "whoami",
+  "method": "GET",
+  "path": "/store/v1/session",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"impersonated\":false,\"location\":{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"slug\":\"main\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{},\"created_at\":\"<time>\",\"lat\":null,\"lng\":null,\"geo_source\":\"\",\"delivery_radius_m\":8047,\"map\":null},\"tenant\":{\"id\":\"<uuid#2>\",\"slug\":\"t-<tag>\",\"name\":\"<tag> Test Pizza\",\"config\":{},\"username\":\"mgr<tag>\",\"has_login\":true,\"store_id\":<store_id>,\"created_at\":\"<time>\"}}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "location",
+  "method": "GET",
+  "path": "/store/v1/me/location",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"slug\":\"main\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{},\"created_at\":\"<time>\",\"lat\":null,\"lng\":null,\"geo_source\":\"\",\"delivery_radius_m\":8047,\"map\":null}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "location save",
+  "method": "PATCH",
+  "path": "/store/v1/me/location",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"slug\":\"main\",\"name\":\"Golden Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":4,\"phone\":\"4105550199\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{\"opening_hours\":{\"fri\":[{\"close\":\"14:00\",\"open\":\"11:00\"},{\"close\":\"02:00\",\"open\":\"16:00\"}],\"mon\":[{\"close\":\"22:00\",\"open\":\"11:00\"}]}},\"created_at\":\"<time>\",\"lat\":null,\"lng\":null,\"geo_source\":\"\",\"delivery_radius_m\":8047,\"map\":null}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "location save bad tz",
+  "method": "PATCH",
+  "path": "/store/v1/me/location",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"unknown timezone \\\"Mars/Base\\\"\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "location save bad hours",
+  "method": "PATCH",
+  "path": "/store/v1/me/location",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"opening_hours mon: \\\"25:00\\\" is not HH:MM\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "location save bad device",
+  "method": "PATCH",
+  "path": "/store/v1/me/location",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"code\":\"bad_device\",\"error\":\"\\\"bad device!\\\" is not a Pushover device name (1-25 letters, numbers, - or _)\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "location after",
+  "method": "GET",
+  "path": "/store/v1/me/location",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"slug\":\"main\",\"name\":\"Golden Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":4,\"phone\":\"4105550199\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{\"opening_hours\":{\"fri\":[{\"close\":\"14:00\",\"open\":\"11:00\"},{\"close\":\"02:00\",\"open\":\"16:00\"}],\"mon\":[{\"close\":\"22:00\",\"open\":\"11:00\"}]}},\"created_at\":\"<time>\",\"lat\":null,\"lng\":null,\"geo_source\":\"\",\"delivery_radius_m\":8047,\"map\":null}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "pin",
+  "method": "PUT",
+  "path": "/store/v1/me/location/pin",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"slug\":\"main\",\"name\":\"Golden Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":4,\"phone\":\"4105550199\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{\"opening_hours\":{\"fri\":[{\"close\":\"14:00\",\"open\":\"11:00\"},{\"close\":\"02:00\",\"open\":\"16:00\"}],\"mon\":[{\"close\":\"22:00\",\"open\":\"11:00\"}]}},\"created_at\":\"<time>\",\"lat\":40.665,\"lng\":-74.118,\"geo_source\":\"manual\",\"delivery_radius_m\":8047,\"map\":null}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "pin bad",
+  "method": "PUT",
+  "path": "/store/v1/me/location/pin",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"lat must be -90..90 and lng -180..180\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "pin missing",
+  "method": "PUT",
+  "path": "/store/v1/me/location/pin",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"body must be {lat, lng}\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "alerts test no devices",
+  "method": "POST",
+  "path": "/store/v1/me/alerts/test",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"code\":\"no_devices\",\"error\":\"No phones saved yet — add one and save first.\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "printer add",
+  "method": "POST",
+  "path": "/store/v1/me/printers",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#3>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#1>\",\"name\":\"Pizza\",\"ip\":\"10.0.0.42\",\"is_receipt\":true,\"mac\":\"\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "printer add 2",
+  "method": "POST",
+  "path": "/store/v1/me/printers",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#4>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#1>\",\"name\":\"Wings\",\"ip\":\"10.0.0.7\",\"is_receipt\":false,\"mac\":\"\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "printer add dup name",
+  "method": "POST",
+  "path": "/store/v1/me/printers",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"a printer with that name already exists\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "printer add bad ip",
+  "method": "POST",
+  "path": "/store/v1/me/printers",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#5>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#1>\",\"name\":\"X\",\"ip\":\"nope\",\"is_receipt\":false,\"mac\":\"\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "printer edit",
+  "method": "PATCH",
+  "path": "/store/v1/me/printers/<uuid#3>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#3>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#1>\",\"name\":\"Pizza 2\",\"ip\":\"10.0.0.43\",\"is_receipt\":true,\"mac\":\"\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "printers",
+  "method": "GET",
+  "path": "/store/v1/me/printers",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#3>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#1>\",\"name\":\"Pizza 2\",\"ip\":\"10.0.0.43\",\"is_receipt\":true,\"mac\":\"\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#4>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#1>\",\"name\":\"Wings\",\"ip\":\"10.0.0.7\",\"is_receipt\":false,\"mac\":\"\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#5>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#1>\",\"name\":\"X\",\"ip\":\"nope\",\"is_receipt\":false,\"mac\":\"\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "printers live (no agent)",
+  "method": "GET",
+  "path": "/store/v1/me/printers/live",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"agent_online\":false,\"found\":[],\"printers\":[]}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "printer ip changes",
+  "method": "GET",
+  "path": "/store/v1/me/printers/ip-changes",
+  "params": {
+   "limit": 20
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#6>\",\"printer_id\":\"<uuid#3>\",\"printer_name\":\"Pizza 2\",\"old_ip\":\"10.0.0.42\",\"new_ip\":\"10.0.0.43\",\"mac\":\"\",\"source\":\"manager\",\"at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "printer delete",
+  "method": "DELETE",
+  "path": "/store/v1/me/printers/<uuid#3>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "printer delete again",
+  "method": "DELETE",
+  "path": "/store/v1/me/printers/<uuid#3>",
+  "params": {},
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"printer not found\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "printers after",
+  "method": "GET",
+  "path": "/store/v1/me/printers",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#4>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#1>\",\"name\":\"Wings\",\"ip\":\"10.0.0.7\",\"is_receipt\":true,\"mac\":\"\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#5>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#1>\",\"name\":\"X\",\"ip\":\"nope\",\"is_receipt\":false,\"mac\":\"\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "device mobile",
+  "method": "POST",
+  "path": "/store/v1/me/devices",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"device\":{\"id\":\"<uuid#7>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#1>\",\"name\":\"phone\",\"kind\":\"mobile\",\"key_prefix\":\"qpos_<token>\",\"created_at\":\"<time>\"},\"api_key\":\"qpos_<token>\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "device agent refused",
+  "method": "POST",
+  "path": "/store/v1/me/devices",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"kind must be one of: mobile, kiosk, ingest (agents are minted via /admin)\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "devices",
+  "method": "GET",
+  "path": "/store/v1/me/devices",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#7>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#1>\",\"name\":\"phone\",\"kind\":\"mobile\",\"key_prefix\":\"qpos_<token>\",\"created_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "mobile key reads orders",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "mobile key no sse",
+  "method": "GET",
+  "path": "/api/v1/events/orders",
+  "params": {},
+  "status": 403,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"this key is not an agent key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "mobile key no store-config",
+  "method": "GET",
+  "path": "/store/v1/store-config",
+  "params": {},
+  "status": 403,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"this key is not an agent key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "device revoke",
+  "method": "POST",
+  "path": "/store/v1/me/devices/<uuid#7>/revoke",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "revoked key",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid API key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "orders",
+  "method": "GET",
+  "path": "/store/v1/me/orders",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "floor",
+  "method": "GET",
+  "path": "/store/v1/me/floor",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"drivers\":[],\"last_sync_at\":null,\"shifts\":[]}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "delivery runs",
+  "method": "GET",
+  "path": "/store/v1/me/delivery-runs",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "impersonated whoami",
+  "method": "GET",
+  "path": "/store/v1/session",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"impersonated\":true,\"impersonated_by\":\"admin\",\"location\":{\"id\":\"<uuid#1>\",\"tenant_id\":\"<uuid#2>\",\"slug\":\"main\",\"name\":\"Golden Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":4,\"phone\":\"4105550199\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{\"opening_hours\":{\"fri\":[{\"close\":\"14:00\",\"open\":\"11:00\"},{\"close\":\"02:00\",\"open\":\"16:00\"}],\"mon\":[{\"close\":\"22:00\",\"open\":\"11:00\"}]}},\"created_at\":\"<time>\",\"lat\":40.665,\"lng\":-74.118,\"geo_source\":\"manual\",\"delivery_radius_m\":8047,\"map\":null},\"tenant\":{\"id\":\"<uuid#2>\",\"slug\":\"t-<tag>\",\"name\":\"<tag> Test Pizza\",\"config\":{},\"username\":\"mgr<tag>\",\"has_login\":true,\"store_id\":<store_id>,\"created_at\":\"<time>\"}}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "logout",
+  "method": "DELETE",
+  "path": "/store/v1/session",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [
+   "quicc_<token>=; HttpOnly; Max-Age=0; Path=/store; SameSite=Lax"
+  ],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "after logout",
+  "method": "GET",
+  "path": "/store/v1/session",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"login required\"}\n",
+  "mask": [],
+  "compare": "additive"
+ }
+]

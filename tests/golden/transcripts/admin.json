@@ -1,0 +1,895 @@
+[
+ {
+  "label": "tenants list",
+  "method": "GET",
+  "path": "/admin/v1/tenants",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<tenant-a>\",\"slug\":\"t-<tag-a>\",\"name\":\"<tag-a> Test Pizza\",\"config\":{},\"username\":\"\",\"has_login\":false,\"store_id\":<store_id-a>,\"created_at\":\"<time>\"}]",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant create",
+  "method": "POST",
+  "path": "/admin/v1/tenants",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#1>\",\"slug\":\"t-<tag-c>\",\"name\":\"<tag-c> Test Pizza\",\"config\":{},\"username\":\"\",\"has_login\":false,\"store_id\":null,\"created_at\":\"<time>\",\"location\":{\"id\":\"<uuid#2>\",\"tenant_id\":\"<uuid#1>\",\"slug\":\"main\",\"name\":\"<tag-c> Test Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{},\"created_at\":\"<time>\",\"lat\":null,\"lng\":null,\"geo_source\":\"\",\"delivery_radius_m\":8047,\"map\":null}}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant create dup slug",
+  "method": "POST",
+  "path": "/admin/v1/tenants",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"create tenant: ERROR: duplicate key value violates unique constraint \\\"tenants_slug_key\\\" (SQLSTATE 23505)\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant create bad",
+  "method": "POST",
+  "path": "/admin/v1/tenants",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"slug and name are required\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant config",
+  "method": "PATCH",
+  "path": "/admin/v1/tenants/<tenant-a>/config",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<tenant-a>\",\"slug\":\"t-<tag-a>\",\"name\":\"<tag-a> Test Pizza\",\"config\":{\"golden\":1},\"username\":\"\",\"has_login\":false,\"store_id\":<store_id-a>,\"created_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant config unknown",
+  "method": "PATCH",
+  "path": "/admin/v1/tenants/<uuid#3>/config",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"tenant id is required\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant credentials",
+  "method": "PATCH",
+  "path": "/admin/v1/tenants/<tenant-a>/credentials",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant credentials reserved",
+  "method": "PATCH",
+  "path": "/admin/v1/tenants/<tenant-a>/credentials",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"username \\\"admin\\\" is reserved\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant credentials taken",
+  "method": "PATCH",
+  "path": "/admin/v1/tenants/<tenant-b>/credentials",
+  "params": {},
+  "status": 409,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"username already taken\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant store-id taken",
+  "method": "PATCH",
+  "path": "/admin/v1/tenants/<tenant-a>/store-id",
+  "params": {},
+  "status": 409,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"store_id is already assigned to another tenant\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant store-id bad",
+  "method": "PATCH",
+  "path": "/admin/v1/tenants/<tenant-a>/store-id",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"store_id must be a positive integer\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant store-id clear",
+  "method": "PATCH",
+  "path": "/admin/v1/tenants/<uuid#1>/store-id",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#1>\",\"slug\":\"t-<tag-c>\",\"name\":\"<tag-c> Test Pizza\",\"config\":{},\"username\":\"\",\"has_login\":false,\"store_id\":null,\"created_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant store-id set",
+  "method": "PATCH",
+  "path": "/admin/v1/tenants/<tenant-a>/store-id",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<tenant-a>\",\"slug\":\"t-<tag-a>\",\"name\":\"<tag-a> Test Pizza\",\"config\":{\"golden\":1},\"username\":\"mgr<tag-a>\",\"has_login\":true,\"store_id\":<store_id-a>,\"created_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant store-session",
+  "method": "POST",
+  "path": "/admin/v1/tenants/<tenant-a>/store-session",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [
+   "quicc_<token>=<value>; HttpOnly; Max-Age=7200; Path=/store; SameSite=Lax"
+  ],
+  "body": "{\"expires_in_seconds\":7200,\"location_id\":\"<location-a>\",\"tenant_id\":\"<tenant-a>\",\"tenant_name\":\"<tag-a> Test Pizza\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant delete",
+  "method": "DELETE",
+  "path": "/admin/v1/tenants/<uuid#1>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tenant delete again",
+  "method": "DELETE",
+  "path": "/admin/v1/tenants/<uuid#1>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "locations list",
+  "method": "GET",
+  "path": "/admin/v1/locations",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<location-a>\",\"tenant_id\":\"<tenant-a>\",\"slug\":\"main\",\"name\":\"<tag-a> Test Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{},\"created_at\":\"<time>\",\"lat\":null,\"lng\":null,\"geo_source\":\"\",\"delivery_radius_m\":8047,\"map\":null}]",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "location patch",
+  "method": "PATCH",
+  "path": "/admin/v1/locations/<location-a>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<location-a>\",\"tenant_id\":\"<tenant-a>\",\"slug\":\"main\",\"name\":\"Golden Main\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{\"golden\":true},\"created_at\":\"<time>\",\"lat\":null,\"lng\":null,\"geo_source\":\"\",\"delivery_radius_m\":8047,\"map\":null}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "location pin",
+  "method": "PUT",
+  "path": "/admin/v1/locations/<location-a>/pin",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<location-a>\",\"tenant_id\":\"<tenant-a>\",\"slug\":\"main\",\"name\":\"Golden Main\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{\"golden\":true},\"created_at\":\"<time>\",\"lat\":40.665,\"lng\":-74.118,\"geo_source\":\"manual\",\"delivery_radius_m\":8047,\"map\":null}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "location pin bad",
+  "method": "PUT",
+  "path": "/admin/v1/locations/<location-a>/pin",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"lat must be -90..90 and lng -180..180\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "location map bad",
+  "method": "PATCH",
+  "path": "/admin/v1/locations/<location-a>/map",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"url must be http(s)\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "location map clear",
+  "method": "PATCH",
+  "path": "/admin/v1/locations/<location-a>/map",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<location-a>\",\"tenant_id\":\"<tenant-a>\",\"slug\":\"main\",\"name\":\"Golden Main\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{\"golden\":true},\"created_at\":\"<time>\",\"lat\":40.665,\"lng\":-74.118,\"geo_source\":\"manual\",\"delivery_radius_m\":8047,\"map\":null}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "device mint",
+  "method": "POST",
+  "path": "/admin/v1/devices",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"device\":{\"id\":\"<uuid#4>\",\"tenant_id\":\"<tenant-a>\",\"location_id\":\"<location-a>\",\"name\":\"golden-agent\",\"kind\":\"agent\",\"key_prefix\":\"qpos_<token>\",\"created_at\":\"<time>\"},\"api_key\":\"qpos_<token>\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "device mint bad",
+  "method": "POST",
+  "path": "/admin/v1/devices",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"location_id must be a uuid\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "devices list",
+  "method": "GET",
+  "path": "/admin/v1/devices",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#4>\",\"tenant_id\":\"<tenant-a>\",\"location_id\":\"<location-a>\",\"name\":\"golden-agent\",\"kind\":\"agent\",\"key_prefix\":\"qpos_<token>\",\"created_at\":\"<time>\"}]",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "device revoke",
+  "method": "POST",
+  "path": "/admin/v1/devices/<uuid#4>/revoke",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "device revoke again",
+  "method": "POST",
+  "path": "/admin/v1/devices/<uuid#4>/revoke",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "device delete",
+  "method": "DELETE",
+  "path": "/admin/v1/devices/<uuid#4>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "device delete unknown",
+  "method": "DELETE",
+  "path": "/admin/v1/devices/<uuid#4>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "operator create",
+  "method": "POST",
+  "path": "/admin/v1/operators",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#5>\",\"username\":\"op<tag-a>\",\"display_name\":\"Golden Operator\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "operator create dup",
+  "method": "POST",
+  "path": "/admin/v1/operators",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"create operator: ERROR: duplicate key value violates unique constraint \\\"operators_username_key\\\" (SQLSTATE 23505)\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "operators list",
+  "method": "GET",
+  "path": "/admin/v1/operators",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#5>\",\"username\":\"op<tag-a>\",\"display_name\":\"Golden Operator\",\"location_ids\":[],\"created_at\":\"<time>\"}]",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "operator patch",
+  "method": "PATCH",
+  "path": "/admin/v1/operators/<uuid#5>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#5>\",\"username\":\"op<tag-a>\",\"display_name\":\"Golden Op 2\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "operator locations",
+  "method": "PUT",
+  "path": "/admin/v1/operators/<uuid#5>/locations",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "operator revoke tokens",
+  "method": "POST",
+  "path": "/admin/v1/operators/<uuid#5>/tokens/revoke",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "operator delete",
+  "method": "DELETE",
+  "path": "/admin/v1/operators/<uuid#5>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "operator delete unknown",
+  "method": "DELETE",
+  "path": "/admin/v1/operators/<uuid#5>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tablet tokens",
+  "method": "GET",
+  "path": "/admin/v1/tablet-tokens",
+  "params": {
+   "location_id": "<location-a>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "tablet token revoke unknown",
+  "method": "POST",
+  "path": "/admin/v1/tablet-tokens/<uuid#3>/revoke",
+  "params": {},
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"token not found\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "agent backups",
+  "method": "GET",
+  "path": "/admin/v1/agent-backups",
+  "params": {
+   "location_id": "<location-a>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "agent backup unknown",
+  "method": "GET",
+  "path": "/admin/v1/agent-backups/<uuid#3>",
+  "params": {},
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"no such backup\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "agent updates",
+  "method": "GET",
+  "path": "/admin/v1/agent-updates",
+  "params": {
+   "location_id": "<location-a>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "diag reports",
+  "method": "GET",
+  "path": "/admin/v1/diag-reports",
+  "params": {
+   "tenant_id": "<tenant-a>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "diag report unknown",
+  "method": "GET",
+  "path": "/admin/v1/diag-reports/<uuid#3>",
+  "params": {},
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"report not found\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "diag report patch unknown",
+  "method": "PATCH",
+  "path": "/admin/v1/diag-reports/<uuid#3>",
+  "params": {},
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"report not found\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "delivery runs",
+  "method": "GET",
+  "path": "/admin/v1/delivery-runs",
+  "params": {
+   "tenant_id": "<tenant-a>",
+   "location_id": "<location-a>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "orders",
+  "method": "GET",
+  "path": "/admin/v1/orders",
+  "params": {
+   "tenant_id": "<tenant-a>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "orders delete tenant",
+  "method": "DELETE",
+  "path": "/admin/v1/orders",
+  "params": {
+   "tenant_id": "<tenant-a>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"deleted\":0}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "order delete unknown",
+  "method": "DELETE",
+  "path": "/admin/v1/orders/<uuid#3>",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "agents health",
+  "method": "GET",
+  "path": "/admin/v1/agents/health",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[]",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "overview",
+  "method": "GET",
+  "path": "/admin/v1/overview",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"devices\":[\"…\"],\"locations\":[\"…\"],\"tenants\":[\"…\"]}",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "geo",
+  "method": "GET",
+  "path": "/admin/v1/geo",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"provider\":\"str\",\"routing\":\"bool\"}",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "agent ping offline",
+  "method": "POST",
+  "path": "/admin/v1/agent/ping",
+  "params": {},
+  "status": 503,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"agent offline\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "agent update offline",
+  "method": "POST",
+  "path": "/admin/v1/agent/update",
+  "params": {},
+  "status": 503,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"code\":\"agent_offline\",\"error\":\"the Pi is not connected\",\"id\":\"<uuid#6>\",\"state\":\"unreachable\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "agent rollback offline",
+  "method": "POST",
+  "path": "/admin/v1/agent/rollback",
+  "params": {},
+  "status": 503,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"code\":\"agent_offline\",\"error\":\"the Pi is not connected\",\"id\":\"<uuid#7>\",\"state\":\"unreachable\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "agent update wrong scope",
+  "method": "POST",
+  "path": "/admin/v1/agent/update",
+  "params": {},
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"no such location for that tenant\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "agent updates after",
+  "method": "GET",
+  "path": "/admin/v1/agent-updates",
+  "params": {
+   "location_id": "<location-a>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#7>\",\"tenant_id\":\"<tenant-a>\",\"location_id\":\"<location-a>\",\"action\":\"rollback\",\"requested_by\":\"console\",\"force\":false,\"state\":\"unreachable\",\"from_version\":\"\",\"to_version\":\"\",\"error\":\"the Pi is not connected\",\"requested_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#6>\",\"tenant_id\":\"<tenant-a>\",\"location_id\":\"<location-a>\",\"action\":\"update\",\"requested_by\":\"admin\",\"force\":true,\"state\":\"unreachable\",\"from_version\":\"\",\"to_version\":\"\",\"error\":\"the Pi is not connected\",\"requested_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "release upload",
+  "method": "POST",
+  "path": "/admin/v1/app-releases",
+  "params": {
+   "app": "<app>",
+   "version_code": 10,
+   "version_name": "1.0.10"
+  },
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"app\":\"<app>\",\"version_code\":10,\"version_name\":\"1.0.10\",\"sha256\":\"5c7b5a09897e3b47a7ce99b89c848464ce96b65b58ac7cd30ec2f41fbb1ea36b\",\"size\":2052,\"created_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "release upload not newer",
+  "method": "POST",
+  "path": "/admin/v1/app-releases",
+  "params": {
+   "app": "<app>",
+   "version_code": 10,
+   "version_name": "1.0.10"
+  },
+  "status": 409,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"code\":\"not_newer\",\"error\":\"version_code must be newer than the latest release\",\"latest\":10}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "release upload not apk",
+  "method": "POST",
+  "path": "/admin/v1/app-releases",
+  "params": {
+   "app": "<app>",
+   "version_code": 11,
+   "version_name": "1.0.11"
+  },
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"body is not an APK (zip)\"}\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "releases list",
+  "method": "GET",
+  "path": "/admin/v1/app-releases",
+  "params": {
+   "app": "<app>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"app\":\"<app>\",\"version_code\":10,\"version_name\":\"1.0.10\",\"sha256\":\"5c7b5a09897e3b47a7ce99b89c848464ce96b65b58ac7cd30ec2f41fbb1ea36b\",\"size\":2052,\"created_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "release delete",
+  "method": "DELETE",
+  "path": "/admin/v1/app-releases/10",
+  "params": {
+   "app": "<app>"
+  },
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "additive"
+ },
+ {
+  "label": "release delete again",
+  "method": "DELETE",
+  "path": "/admin/v1/app-releases/10",
+  "params": {
+   "app": "<app>"
+  },
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"no such release\"}\n",
+  "mask": [],
+  "compare": "additive"
+ }
+]

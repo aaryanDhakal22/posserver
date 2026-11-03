@@ -1,0 +1,840 @@
+[
+ {
+  "label": "link wrong password",
+  "method": "POST",
+  "path": "/store/v1/agent/link",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"code\":\"invalid_credentials\",\"error\":\"wrong username or password\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "link",
+  "method": "POST",
+  "path": "/store/v1/agent/link",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"api_key\":\"qpos_<token>\",\"device_id\":\"<uuid#1>\",\"tenant\":{\"id\":\"<uuid#2>\",\"slug\":\"t-<tag>\",\"name\":\"<tag> Test Pizza\"},\"location\":{\"id\":\"<uuid#3>\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\"},\"manager\":{\"username\":\"mgr<tag>\",\"password_hash\":\"<bcrypt>\"},\"secrets\":{\"otlp_endpoint\":\"https://otlp.quiccpos.com\",\"otlp_headers\":\"Authorization=Bearer 6e666771cd63fbc975d99f453d28f0cadcd502cce396f8d6e226d6e79ad14682\"},\"revoked_agents\":null}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "store-config",
+  "method": "GET",
+  "path": "/store/v1/store-config",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"location\":{\"id\":\"<uuid#3>\",\"tenant_id\":\"<uuid#2>\",\"slug\":\"main\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{},\"created_at\":\"<time>\",\"lat\":null,\"lng\":null,\"geo_source\":\"\",\"delivery_radius_m\":8047,\"map\":null},\"printers\":[{\"id\":\"<uuid#4>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Pizza\",\"ip\":\"10.0.0.20\",\"is_receipt\":true,\"mac\":\"\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#5>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"name\":\"Wings\",\"ip\":\"10.0.0.21\",\"is_receipt\":false,\"mac\":\"\",\"created_at\":\"<time>\",\"updated_at\":\"<time>\"}]}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "restore (nothing yet)",
+  "method": "GET",
+  "path": "/store/v1/agent/restore",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"state\":null,\"orders\":[],\"drivers\":[]}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "credential",
+  "method": "GET",
+  "path": "/store/v1/agent/credential",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"username\":\"mgr<tag>\",\"password_hash\":\"<bcrypt>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "secrets",
+  "method": "GET",
+  "path": "/store/v1/agent/secrets",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"pushover_app_token\":\"\\u003cmasked\\u003e\",\"pushover_user_key\":\"\\u003cmasked\\u003e\",\"pushover_boss_key\":\"\\u003cmasked\\u003e\",\"pushover_admin_devices\":\"\\u003cmasked\\u003e\"}",
+  "mask": [
+   "pushover_app_token",
+   "pushover_user_key",
+   "pushover_boss_key",
+   "pushover_admin_devices"
+  ],
+  "compare": "exact"
+ },
+ {
+  "label": "backup bad",
+  "method": "POST",
+  "path": "/store/v1/agent/backup",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"not an SQLite database\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "backup",
+  "method": "POST",
+  "path": "/store/v1/agent/backup",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#6>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"device_id\":\"<uuid#1>\",\"size\":1016,\"sha256\":\"20950651a8f527dfc39e1c4e52918c4a60c85ca7b32c0726c303d17dc3ed50b6\",\"created_at\":\"<time>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "app latest none",
+  "method": "GET",
+  "path": "/store/v1/agent/app/latest",
+  "params": {
+   "app": "golden-none"
+  },
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "app apk none",
+  "method": "GET",
+  "path": "/store/v1/agent/app/releases/1/apk",
+  "params": {
+   "app": "golden-none"
+  },
+  "status": 404,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"no such release\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "tablet token",
+  "method": "POST",
+  "path": "/store/v1/agent/tablet-tokens",
+  "params": {},
+  "status": 201,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#7>\",\"token\":\"qrep_<token>\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "tablet token bad",
+  "method": "POST",
+  "path": "/store/v1/agent/tablet-tokens",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"tablet_id is required\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "diag direct",
+  "method": "POST",
+  "path": "/store/v1/tablet/diag-reports",
+  "params": {},
+  "status": 202,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"duplicate\":false,\"id\":\"<uuid#8>\",\"stored\":true}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "diag direct duplicate",
+  "method": "POST",
+  "path": "/store/v1/tablet/diag-reports",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"duplicate\":true,\"id\":\"<uuid#8>\",\"stored\":false}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "diag direct bad",
+  "method": "POST",
+  "path": "/store/v1/tablet/diag-reports",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"bad diagnostics report: not a JSON object\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "report key opens nothing else",
+  "method": "GET",
+  "path": "/api/v1/orders",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid API key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "diag via pi",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"diag.report.reply\",\"id\":\"<uuid#9>\",\"payload\":{\"duplicate\":false,\"id\":\"<uuid#10>\",\"stored\":true}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "diag via pi duplicate",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"diag.report.reply\",\"id\":\"<uuid#11>\",\"payload\":{\"duplicate\":true,\"id\":\"<uuid#10>\",\"stored\":false}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "diag via pi bad",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"bad rpc payload: bad diagnostics report: id must be a uuid\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "admin diag list",
+  "method": "GET",
+  "path": "/admin/v1/diag-reports",
+  "params": {
+   "tenant_id": "<uuid#2>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#10>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"store_name\":\"<tag> Test Pizza\",\"tablet_id\":\"tab-pi\",\"tablet_name\":\"Counter (Pi)\",\"via\":\"pi\",\"kind\":\"full_check\",\"scenario\":\"\",\"outcome\":\"ok\",\"headline\":\"All good\",\"cause\":\"printer_paper\",\"fixed_by\":\"printer_paper\",\"app_version\":\"2.0.3\",\"agent_version\":\"2.4.2\",\"created_at\":\"<time>\",\"received_at\":\"<time>\",\"paged_at\":null,\"resolved_at\":null},{\"id\":\"<uuid#8>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"store_name\":\"<tag> Test Pizza\",\"tablet_id\":\"tab-golden\",\"tablet_name\":\"Counter\",\"via\":\"direct\",\"kind\":\"guide\",\"scenario\":\"printer\",\"outcome\":\"fixed\",\"headline\":\"Kitchen printer was out of paper\",\"cause\":\"printer_paper\",\"fixed_by\":\"printer_paper\",\"app_version\":\"2.0.3\",\"agent_version\":\"2.4.2\",\"created_at\":\"<time>\",\"received_at\":\"<time>\",\"paged_at\":null,\"resolved_at\":null}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "admin diag get",
+  "method": "GET",
+  "path": "/admin/v1/diag-reports/<uuid#8>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#8>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"store_name\":\"<tag> Test Pizza\",\"tablet_id\":\"tab-golden\",\"tablet_name\":\"Counter\",\"via\":\"direct\",\"kind\":\"guide\",\"scenario\":\"printer\",\"outcome\":\"fixed\",\"headline\":\"Kitchen printer was out of paper\",\"cause\":\"printer_paper\",\"fixed_by\":\"printer_paper\",\"app_version\":\"2.0.3\",\"agent_version\":\"2.4.2\",\"created_at\":\"<time>\",\"received_at\":\"<time>\",\"paged_at\":null,\"resolved_at\":null,\"report\":{\"v\":1,\"id\":\"<uuid#8>\",\"pi\":{\"store\":\"golden\",\"address\":\"192.168.1.219:80\",\"version\":\"2.4.2\",\"last_diag\":{}},\"log\":[\"golden line 1\"],\"kind\":\"guide\",\"note\":\"\",\"cause\":\"printer_paper\",\"steps\":[{\"at\":\"<time>\",\"id\":\"paper\",\"answer\":\"yes\",\"result\":\"fixed\"}],\"checks\":{\"pi_port\":{\"plain\":\"The Pi answers\",\"status\":\"ok\",\"details\":\"200 in 12 ms\"}},\"tablet\":{\"name\":\"Counter\",\"model\":\"golden\",\"checks\":{\"battery\":true,\"installs\":true,\"full_screen\":true,\"notifications\":true,\"alarm_volume_pct\":80},\"device_id\":\"dev-1\",\"android_sdk\":34,\"app_version\":\"2.0.3\"},\"outcome\":\"fixed\",\"fixed_by\":\"printer_paper\",\"headline\":\"Kitchen printer was out of paper\",\"scenario\":\"printer\",\"created_at\":\"<time>\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "admin diag resolve",
+  "method": "PATCH",
+  "path": "/admin/v1/diag-reports/<uuid#8>",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#8>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"store_name\":\"<tag> Test Pizza\",\"tablet_id\":\"tab-golden\",\"tablet_name\":\"Counter\",\"via\":\"direct\",\"kind\":\"guide\",\"scenario\":\"printer\",\"outcome\":\"fixed\",\"headline\":\"Kitchen printer was out of paper\",\"cause\":\"printer_paper\",\"fixed_by\":\"printer_paper\",\"app_version\":\"2.0.3\",\"agent_version\":\"2.4.2\",\"created_at\":\"<time>\",\"received_at\":\"<time>\",\"paged_at\":null,\"resolved_at\":\"<time>\",\"report\":{\"v\":1,\"id\":\"<uuid#8>\",\"pi\":{\"store\":\"golden\",\"address\":\"192.168.1.219:80\",\"version\":\"2.4.2\",\"last_diag\":{}},\"log\":[\"golden line 1\"],\"kind\":\"guide\",\"note\":\"\",\"cause\":\"printer_paper\",\"steps\":[{\"at\":\"<time>\",\"id\":\"paper\",\"answer\":\"yes\",\"result\":\"fixed\"}],\"checks\":{\"pi_port\":{\"plain\":\"The Pi answers\",\"status\":\"ok\",\"details\":\"200 in 12 ms\"}},\"tablet\":{\"name\":\"Counter\",\"model\":\"golden\",\"checks\":{\"battery\":true,\"installs\":true,\"full_screen\":true,\"notifications\":true,\"alarm_volume_pct\":80},\"device_id\":\"dev-1\",\"android_sdk\":34,\"app_version\":\"2.0.3\"},\"outcome\":\"fixed\",\"fixed_by\":\"printer_paper\",\"headline\":\"Kitchen printer was out of paper\",\"scenario\":\"printer\",\"created_at\":\"<time>\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "admin tablet tokens",
+  "method": "GET",
+  "path": "/admin/v1/tablet-tokens",
+  "params": {
+   "location_id": "<uuid#3>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#7>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"location_name\":\"<tag> Test Pizza\",\"tablet_id\":\"tab-golden\",\"tablet_name\":\"Counter\",\"key_prefix\":\"qrep_<token>\",\"created_at\":\"<time>\",\"last_used_at\":\"<time>\",\"revoked_at\":null}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "tablet token revoke",
+  "method": "DELETE",
+  "path": "/store/v1/agent/tablet-tokens/tab-golden",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "tablet token revoke unknown",
+  "method": "DELETE",
+  "path": "/store/v1/agent/tablet-tokens/tab-gone",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "printer report",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "agent state",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"agent.state.reply\",\"id\":\"<uuid#12>\",\"payload\":{\"ok\":true}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "agent health",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"agent.health.reply\",\"id\":\"<uuid#13>\",\"payload\":{\"ok\":true}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "admin agents health",
+  "method": "GET",
+  "path": "/admin/v1/agents/health",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"location_id\":\"<uuid#3>\",\"tenant_id\":\"<uuid#2>\",\"location_name\":\"<tag> Test Pizza\",\"connected\":false,\"at\":\"<time>\",\"health\":{\"at\":\"<time>\",\"temp_c\":51.5,\"version\":\"2.4.2\",\"device_id\":\"x\",\"disk_free_bytes\":123456789},\"tablets\":[]}]",
+  "mask": [
+   "last_seen_at",
+   "age_seconds"
+  ],
+  "compare": "exact"
+ },
+ {
+  "label": "update status",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"agent.update.status.reply\",\"id\":\"<uuid#14>\",\"payload\":{\"ok\":true}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "update status bad",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"bad rpc payload: agent.update.status needs an id and a state\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "unknown type",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 202,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "bad payload",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"bad rpc payload: agent.health: json: cannot unmarshal string into Go value of type struct { At time.Time \\\"json:\\\\\\\"at\\\\\\\"\\\"; DeviceID string \\\"json:\\\\\\\"device_id\\\\\\\"\\\" }\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "rpc not json",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 400,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid envelope\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "reply nobody waits for",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 202,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "sse first frame event",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "store_config",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "sse store_config",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"tenant\":{\"id\":\"<uuid#2>\",\"slug\":\"t-<tag>\",\"name\":\"<tag> Test Pizza\",\"config\":{}},\"location\":{\"id\":\"<uuid#3>\",\"slug\":\"main\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{},\"lat\":null,\"lng\":null,\"delivery_radius_m\":8047,\"map\":null},\"printers\":[{\"id\":\"<uuid#4>\",\"name\":\"Pizza\",\"ip\":\"10.0.0.20\",\"is_receipt\":true,\"updated_at\":\"<time>\"},{\"id\":\"<uuid#5>\",\"name\":\"Wings\",\"ip\":\"10.0.0.21\",\"is_receipt\":false,\"updated_at\":\"<time>\"}]}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "ping: command frame",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"type\":\"ping\",\"id\":\"<uuid#15>\"}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "ping: reply",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "ping: answer",
+  "method": "POST",
+  "path": "/admin/v1/agent/ping",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"payload\":{\"pong\":true},\"type\":\"ping.reply\"}",
+  "mask": [
+   "rtt_ms",
+   "elapsed_ms"
+  ],
+  "compare": "exact"
+ },
+ {
+  "label": "update: command frame",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"type\":\"agent.update\",\"id\":\"<uuid#16>\",\"payload\":{\"force\":true,\"id\":\"<uuid#17>\",\"requested_by\":\"admin\"}}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "update: reply",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "update: answer",
+  "method": "POST",
+  "path": "/admin/v1/agent/update",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#17>\",\"accepted\":true,\"state\":\"waiting_for_idle\",\"code\":\"\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "rollback: command frame",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"type\":\"agent.rollback\",\"id\":\"<uuid#18>\",\"payload\":{\"id\":\"<uuid#19>\",\"requested_by\":\"admin\"}}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "rollback: reply",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "rollback: answer",
+  "method": "POST",
+  "path": "/admin/v1/agent/rollback",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"id\":\"<uuid#19>\",\"accepted\":false,\"state\":\"rejected\",\"code\":\"no_previous\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "printers live: command frame",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"type\":\"printer.report.request\",\"id\":\"<uuid#20>\"}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "printers live: reply",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "printers live: answer",
+  "method": "GET",
+  "path": "/store/v1/me/printers/live",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"age_seconds\":\"\\u003cmasked\\u003e\",\"agent_online\":true,\"found\":[],\"printers\":[{\"name\":\"Pizza\",\"ip\":\"10.0.0.20\",\"up\":true}],\"reported_at\":\"<time>\"}",
+  "mask": [
+   "age_seconds"
+  ],
+  "compare": "exact"
+ },
+ {
+  "label": "agent updates",
+  "method": "GET",
+  "path": "/admin/v1/agent-updates",
+  "params": {
+   "location_id": "<uuid#3>"
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#21>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"action\":\"update\",\"requested_by\":\"pi-web\",\"force\":false,\"state\":\"running\",\"from_version\":\"2.4.1\",\"to_version\":\"2.4.2\",\"error\":\"\",\"requested_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#19>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"action\":\"rollback\",\"requested_by\":\"admin\",\"force\":false,\"state\":\"rejected\",\"from_version\":\"\",\"to_version\":\"\",\"error\":\"no_previous\",\"requested_at\":\"<time>\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#17>\",\"tenant_id\":\"<uuid#2>\",\"location_id\":\"<uuid#3>\",\"action\":\"update\",\"requested_by\":\"admin\",\"force\":true,\"state\":\"waiting_for_idle\",\"from_version\":\"\",\"to_version\":\"\",\"error\":\"\",\"requested_at\":\"<time>\",\"updated_at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "printer moved",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"printer.moved.reply\",\"id\":\"<uuid#22>\",\"payload\":{\"applied\":true,\"reason\":\"\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "store_config after move",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"tenant\":{\"id\":\"<uuid#2>\",\"slug\":\"t-<tag>\",\"name\":\"<tag> Test Pizza\",\"config\":{}},\"location\":{\"id\":\"<uuid#3>\",\"slug\":\"main\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{},\"lat\":null,\"lng\":null,\"delivery_radius_m\":8047,\"map\":null},\"printers\":[{\"id\":\"<uuid#4>\",\"name\":\"Pizza\",\"ip\":\"10.0.0.33\",\"is_receipt\":true,\"mac\":\"aa:bb:cc:00:00:01\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#5>\",\"name\":\"Wings\",\"ip\":\"10.0.0.21\",\"is_receipt\":false,\"updated_at\":\"<time>\"}]}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "printer moved stale",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"printer.moved.reply\",\"id\":\"<uuid#23>\",\"payload\":{\"applied\":false,\"reason\":\"stale_old_ip\"}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "printer add",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"printer.add.reply\",\"id\":\"<uuid#24>\",\"payload\":{\"id\":\"<uuid#25>\",\"ip\":\"10.0.0.40\",\"name\":\"Bar\",\"ok\":true}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "store_config after add",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"tenant\":{\"id\":\"<uuid#2>\",\"slug\":\"t-<tag>\",\"name\":\"<tag> Test Pizza\",\"config\":{}},\"location\":{\"id\":\"<uuid#3>\",\"slug\":\"main\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{},\"lat\":null,\"lng\":null,\"delivery_radius_m\":8047,\"map\":null},\"printers\":[{\"id\":\"<uuid#25>\",\"name\":\"Bar\",\"ip\":\"10.0.0.40\",\"is_receipt\":false,\"mac\":\"aa:bb:cc:00:00:02\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#4>\",\"name\":\"Pizza\",\"ip\":\"10.0.0.33\",\"is_receipt\":true,\"mac\":\"aa:bb:cc:00:00:01\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#5>\",\"name\":\"Wings\",\"ip\":\"10.0.0.21\",\"is_receipt\":false,\"updated_at\":\"<time>\"}]}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "printer add dup",
+  "method": "POST",
+  "path": "/store/v1/agent/rpc",
+  "params": {},
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"type\":\"printer.add.reply\",\"id\":\"<uuid#26>\",\"payload\":{\"code\":\"name_taken\",\"ok\":false}}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "ip changes",
+  "method": "GET",
+  "path": "/store/v1/me/printers/ip-changes",
+  "params": {
+   "limit": 20
+  },
+  "status": 200,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "[{\"id\":\"<uuid#27>\",\"printer_id\":\"<uuid#4>\",\"printer_name\":\"Pizza\",\"old_ip\":\"10.0.0.20\",\"new_ip\":\"10.0.0.33\",\"mac\":\"aa:bb:cc:00:00:01\",\"source\":\"agent\",\"at\":\"<time>\"}]\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "store_config after manager edit",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "{\"tenant\":{\"id\":\"<uuid#2>\",\"slug\":\"t-<tag>\",\"name\":\"<tag> Test Pizza\",\"config\":{}},\"location\":{\"id\":\"<uuid#3>\",\"slug\":\"main\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{},\"lat\":null,\"lng\":null,\"delivery_radius_m\":8047,\"map\":null},\"printers\":[{\"id\":\"<uuid#25>\",\"name\":\"Bar 2\",\"ip\":\"10.0.0.42\",\"is_receipt\":false,\"mac\":\"aa:bb:cc:00:00:02\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#4>\",\"name\":\"Pizza\",\"ip\":\"10.0.0.33\",\"is_receipt\":true,\"mac\":\"aa:bb:cc:00:00:01\",\"updated_at\":\"<time>\"},{\"id\":\"<uuid#5>\",\"name\":\"Wings\",\"ip\":\"10.0.0.21\",\"is_receipt\":false,\"updated_at\":\"<time>\"}]}",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "revoke",
+  "method": "POST",
+  "path": "/store/v1/agent/revoke",
+  "params": {},
+  "status": 204,
+  "headers": {},
+  "cookies": [],
+  "body": "",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "revoked key",
+  "method": "GET",
+  "path": "/store/v1/store-config",
+  "params": {},
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "cookies": [],
+  "body": "{\"error\":\"invalid API key\"}\n",
+  "mask": [],
+  "compare": "exact"
+ },
+ {
+  "label": "stream closed",
+  "method": "",
+  "path": "",
+  "params": {},
+  "status": 0,
+  "headers": {},
+  "cookies": [],
+  "body": "true",
+  "mask": [],
+  "compare": "exact"
+ }
+]

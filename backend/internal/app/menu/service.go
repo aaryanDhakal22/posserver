@@ -36,7 +36,19 @@ type Service struct {
 	tracer  trace.Tracer
 	// listPrinters resolves a location's printers (tenancy's; swapped in tests).
 	listPrinters func(ctx context.Context, locationID uuid.UUID) ([]tenancyDom.Printer, error)
+	// vendor maps vendor item names to bank items (the vendor view, 3.0); nil = none.
+	vendor VendorMapper
 }
+
+// VendorMapper is a location's vendor name → menu item mappings, keyed by the
+// normalized vendor name (menuviewApp.Service.VendorMaps).
+type VendorMapper interface {
+	VendorMaps(ctx context.Context, locationID uuid.UUID) (map[string]uuid.UUID, error)
+}
+
+// SetVendorMapper plugs in the vendor view's mappings (set once at startup;
+// the views service depends on this one, so it can't be a constructor arg).
+func (s *Service) SetVendorMapper(m VendorMapper) { s.vendor = m }
 
 func NewService(repo menuDom.Repository, tenancy *tenancyApp.Service, meters observability.Meters, lg zerolog.Logger) *Service {
 	s := &Service{
@@ -534,6 +546,27 @@ func (s *Service) routingTable(ctx context.Context, locationID uuid.UUID) (map[s
 			byName[k] = e
 		}
 	}
+	if s.vendor == nil {
+		return byName, nil
+	}
+	// A vendor-view mapping wins over the name match: the manager chose it.
+	maps, err := s.vendor.VendorMaps(ctx, locationID)
+	if err != nil {
+		// Never block ingest on the mappings: route by name as before.
+		s.logger.Warn().Ctx(ctx).Err(err).Str("location_id", locationID.String()).Msg("vendor mappings unavailable, routing by name")
+		return byName, nil
+	}
+	if len(maps) > 0 {
+		byID := make(map[uuid.UUID]menuDom.RouteEntry, len(entries))
+		for _, e := range entries {
+			byID[e.ItemID] = e
+		}
+		for name, itemID := range maps {
+			if e, ok := byID[itemID]; ok {
+				byName[name] = e
+			}
+		}
+	}
 	return byName, nil
 }
 
@@ -600,4 +633,34 @@ func (s *Service) UnmatchedNames(ctx context.Context, tenantID, locationID uuid.
 // normalizeItemName is the menu-matching key: lowercased, whitespace collapsed.
 func normalizeItemName(s string) string {
 	return strings.ToLower(strings.Join(strings.Fields(s), " "))
+}
+
+// RouteBankItems routes items whose bank item is known (channel orders, main
+// 3.0): the item's printer, else its category's default; an id that is no
+// longer on the menu is unmatched.
+func (s *Service) RouteBankItems(ctx context.Context, locationID uuid.UUID, ids []uuid.UUID) ([]order.ItemRoute, error) {
+	entries, err := s.repo.ListRoutingByLocation(ctx, locationID)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[uuid.UUID]menuDom.RouteEntry, len(entries))
+	for _, e := range entries {
+		byID[e.ItemID] = e
+	}
+	out := make([]order.ItemRoute, len(ids))
+	for i, id := range ids {
+		e, ok := byID[id]
+		switch {
+		case !ok:
+			out[i] = order.ItemRoute{Routing: order.RoutingUnmatched}
+		case e.PrinterID == nil:
+			item := e.ItemID
+			out[i] = order.ItemRoute{MenuItemID: &item, Routing: order.RoutingUnassigned}
+		default:
+			item, pid := e.ItemID, *e.PrinterID
+			out[i] = order.ItemRoute{MenuItemID: &item, PrinterID: &pid, Routing: order.RoutingMatched}
+		}
+		s.meters.OrderItemsRouted.Add(ctx, 1, observability.WithLocation(ctx, locationID, attribute.String("routing", string(out[i].Routing))))
+	}
+	return out, nil
 }

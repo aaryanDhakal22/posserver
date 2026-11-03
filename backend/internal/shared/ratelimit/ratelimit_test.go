@@ -63,3 +63,15 @@ func TestWindowAllowNSharedKey(t *testing.T) {
 		t.Fatal("RetryAfterN should be positive when full")
 	}
 }
+
+func TestGlobalMax(t *testing.T) {
+	for _, c := range []struct {
+		env  string
+		want int
+	}{{"", 30}, {"1000", 1000}, {"0", 30}, {"-5", 30}, {"lots", 30}} {
+		t.Setenv("LOGIN_GLOBAL_MAX", c.env)
+		if got := GlobalMax(30); got != c.want {
+			t.Errorf("LOGIN_GLOBAL_MAX=%q: got %d, want %d", c.env, got, c.want)
+		}
+	}
+}

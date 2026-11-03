@@ -107,7 +107,8 @@ func TestHopBucketsCoverSubSecondToThirtySeconds(t *testing.T) {
 	if !slices.IsSorted(HopBuckets) {
 		t.Fatalf("HopBuckets not sorted: %v", HopBuckets)
 	}
-	for _, b := range []float64{0.05, 1, 30} {
+	// 90/120/180: the vendor's 1–4 min hand-over must not fall in one wide bucket.
+	for _, b := range []float64{0.05, 1, 30, 90, 120, 180} {
 		if !slices.Contains(HopBuckets, b) {
 			t.Errorf("HopBuckets missing %v", b)
 		}

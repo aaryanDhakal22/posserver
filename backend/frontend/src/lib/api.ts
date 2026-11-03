@@ -335,6 +335,60 @@ export interface ModifierOption {
 }
 export interface ItemGroupLink { group: ModifierGroup; attach_position: number; }
 
+// --- the menu bank + views (main 3.0) --------------------------------------
+/** One of the store-wide sizes ("12 Medium"). */
+export interface MenuSize { id: string; location_id: string; name: string; short: string; position: number; }
+export interface ItemSize { size_id: string; price_cents: number; kitchen_name?: string; position?: number; }
+export interface OptionPrice { size_id: string; price_cents: number; }
+/** GET /me/menu/bank — the bank as views compile from it. */
+export interface BankItem extends Item { kitchen_name: string; sku: string; sizes: ItemSize[]; group_ids: string[]; }
+export interface BankOption extends ModifierOption { is_default: boolean; kitchen_name: string; prices: OptionPrice[]; }
+export interface BankGroup extends ModifierGroup { portions: boolean; options: BankOption[]; }
+export interface Bank {
+  location_id: string; version: number; sizes: MenuSize[];
+  menus: (Menu & { categories: (Category & { items: BankItem[] })[] })[];
+  groups: Record<string, BankGroup>;
+}
+export type ViewKind = 'web' | 'operator' | 'counter' | 'vendor';
+export interface ViewRules { markup_bps: number; round: 'none' | 'ceil_99'; hidden_categories: string[]; require_photo: boolean; }
+export interface MenuView {
+  id: string; tenant_id: string; location_id: string; kind: ViewKind; name: string; rules: ViewRules;
+  created_at: string; updated_at: string;
+}
+export type EntryKind = 'item' | 'merge' | 'augment' | 'map';
+export interface ViewEntry {
+  id: string; view_id: string; kind: EntryKind;
+  anchor: { item_ids: string[]; size_id?: string };
+  display_name: string; description: string; photo: string; category: string; position: number; hidden: boolean;
+  price_override_cents: number | null;
+  extra: { size_prices?: Record<string, number>; labels?: Record<string, string>; vendor_name?: string; vendor_size?: string };
+}
+export interface NeedsAttention { code: string; entry_id?: string; item_id?: string; name?: string; message: string; orders?: number; }
+export interface BuildItem {
+  id: string; name: string; description: string; photo: string; anchor: { item_ids: string[] };
+  price_cents: number; sizes: { size_id: string; name: string; price_cents: number }[]; sold_out: boolean;
+  choices?: { item_id: string; name: string; price_cents: number; sold_out: boolean }[];
+}
+/** GET /me/menu/views/:id/build — a view as its channels see it. */
+export interface ViewBuild {
+  view: { id: string; kind: ViewKind; name: string }; version: number;
+  categories: { key: string; name: string; items: BuildItem[] }[];
+  maps?: { entry_id: string; vendor_name: string; vendor_size: string; item_id: string }[];
+  needs_attention: NeedsAttention[];
+}
+export const VIEW_KINDS: { kind: ViewKind; label: string; help: string }[] = [
+  { kind: 'web', label: 'Website', help: 'What customers see on the ordering site' },
+  { kind: 'operator', label: 'Call center', help: 'What the call-center operators see' },
+  { kind: 'counter', label: 'Counter', help: 'What a counter POS terminal sees' },
+  { kind: 'vendor', label: 'Brygid', help: 'Matches the vendor’s item names to your items' }
+];
+/** "12 Medium $11.99 · 16 X-Large $15.99" for an item's sizes. */
+export function sizesLine(sizes: ItemSize[] | undefined, all: MenuSize[]): string {
+  return (sizes || [])
+    .map((s) => `${all.find((x) => x.id === s.size_id)?.name ?? '?'} ${dollars(s.price_cents)}`)
+    .join(' · ');
+}
+
 /** An order as main stores it, with the floor fields the agent synced. */
 export interface StoreOrder {
   id: string;
@@ -379,6 +433,19 @@ export interface PrinterIPChange {
 // --- operators (admin) ---------------------------------------------------
 export interface OperatorAdmin {
   id: string; username: string; display_name: string; location_ids: string[]; created_at: string;
+}
+
+// --- sales channels (admin, main 3.0) -------------------------------------
+export type ChannelKind = 'web' | 'operator' | 'counter' | 'vendor';
+export interface ChannelPermissions {
+  menu: boolean; quote: boolean; orders: boolean; track: boolean; payments: ('card' | 'cash')[];
+}
+/** A store's sales channel; `key` only on create / rotate (shown once). */
+export interface ChannelAdmin {
+  id: string; tenant_id: string; location_id: string; kind: ChannelKind; name: string;
+  key_prefix: string; permissions: ChannelPermissions; builtin: boolean; active: boolean;
+  revoked_at: string | null; last_used_at: string | null; created_at: string; updated_at: string;
+  key?: string;
 }
 
 // --- tablet diagnostics (admin) -------------------------------------------
@@ -592,3 +659,75 @@ export function durationSince(t: string | null | undefined): string {
   if (h < 48) return m % 60 ? `${h} h ${m % 60} min` : `${h} h`;
   return `${Math.floor(h / 24)} days`;
 }
+
+// --- store status (main 3.0) ------------------------------------------------
+export interface HoursRange { open: string; close: string; }
+export interface OrderingSettings {
+  pickup_enabled: boolean; delivery_enabled: boolean;
+  pickup_eta_minutes: number; delivery_eta_minutes: number; schedule_days: number;
+  paused_at: string | null; paused_until: string | null; pause_note: string;
+}
+export interface HoursException { id: string; date: string; closed: boolean; hours: HoursRange[]; note: string; }
+/** GET /me/status — what every channel sees. */
+export interface StoreStatus {
+  store: { name: string; timezone: string; phone: string; address_line1: string; address_line2: string };
+  state: 'open' | 'paused' | 'closed';
+  accepting: boolean; open_now: boolean; hours_set: boolean;
+  pause: { since: string; until: string | null; note: string } | null;
+  next_open_at: string | null; closes_at: string | null;
+  today: { date: string; closed: boolean; hours: HoursRange[]; note: string };
+  order_types: { pickup: { enabled: boolean; eta_minutes: number }; delivery: { enabled: boolean; eta_minutes: number; radius_m?: number } };
+  scheduling: { days_ahead: number; slot_minutes: number };
+  sold_out: { item_id: string; name: string; until: string | null }[];
+  menu_version: number;
+}
+export const PAUSE_PRESETS = [
+  { value: '15m', label: '15 min' },
+  { value: '30m', label: '30 min' },
+  { value: '60m', label: '1 hour' },
+  { value: 'today', label: 'Rest of today' },
+  { value: 'indefinite', label: 'Until I resume' }
+];
+/** "7:30 PM" today, else "Tue 7:30 PM", in the store's zone. */
+export function storeTime(iso: string | null | undefined, tz: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  const opts: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit', timeZone: tz || undefined };
+  const sameDay = new Date().toLocaleDateString('en-US', { timeZone: tz || undefined }) === d.toLocaleDateString('en-US', { timeZone: tz || undefined });
+  if (!sameDay) opts.weekday = 'short';
+  try {
+    return d.toLocaleTimeString('en-US', opts);
+  } catch {
+    return d.toLocaleTimeString();
+  }
+}
+
+// --- pricing + deals (main 3.0) ---------------------------------------------
+export interface PricingFees {
+  service_fee_cents: number; service_fee_bps: number; delivery_fee_cents: number;
+  free_delivery_over_cents: number | null; delivery_min_cents: number;
+}
+export interface PricingTips { enabled: boolean; presets: number[]; default_pct: number }
+export interface PricingStore {
+  tax_bps: number; stacking: 'best' | 'stack' | 'single'; fees: PricingFees; tips: PricingTips; card_fee: { mode: string; bps: number };
+}
+export interface PricingKind { fees: PricingFees | null; tips: PricingTips | null; card_fee: { mode: string; bps: number } | null }
+export interface PricingBody { store: PricingStore; kinds: Record<string, PricingKind> }
+export type DealKind = 'bundle' | 'mix' | 'nth' | 'code' | 'free_item';
+export interface DealEligible { items: string[]; categories: string[]; sizes: string[] }
+export interface StoreDeal {
+  id: string; kind: DealKind; name: string; description: string; active: boolean; fulfil: string;
+  schedule: { days: string[]; start: string; end: string } | null;
+  price_cents?: number; slots?: { label: string; eligible: DealEligible; included_options: number }[];
+  eligible?: DealEligible | null; qty?: number; each_cents?: number; n?: number; pct?: number;
+  code?: string; amount_cents?: number; first_order_only?: boolean; min_subtotal_cents?: number;
+  channel_kinds: string[]; position?: number;
+}
+export const DEAL_KINDS: { kind: DealKind; label: string; help: string }[] = [
+  { kind: 'bundle', label: 'Combo', help: 'Pick items for each step at one price (e.g. a 16" pizza + wings for $19.99)' },
+  { kind: 'mix', label: 'Mix & match', help: 'Any N of these for $X each (e.g. any 2 pizzas $10 each)' },
+  { kind: 'nth', label: 'Every Nth', help: 'Every Nth one is % off (e.g. 2nd wings half off)' },
+  { kind: 'code', label: 'Promo code', help: 'A code customers type for % or $ off' },
+  { kind: 'free_item', label: 'Free item', help: 'One of these free once the order reaches $Y' }
+];
+export const CHANNEL_KIND_LABELS: Record<string, string> = { web: 'Website', operator: 'Call center', counter: 'Counter', vendor: 'Vendor' };
