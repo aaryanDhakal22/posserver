@@ -22,7 +22,8 @@
     { href: base + '/store/menu', label: 'Menu', icon: 'utensils', match: base + '/store/menu' },
     { href: base + '/store/printers', label: 'Printers', icon: 'printer', match: base + '/store/printers' },
     { href: base + '/store/devices', label: 'Devices', icon: 'tablet', match: base + '/store/devices' },
-    { href: base + '/store/details', label: 'Details & hours', icon: 'clock', match: base + '/store/details' }
+    { href: base + '/store/details', label: 'Details & hours', icon: 'clock', match: base + '/store/details' },
+    { href: base + '/store/payments', label: 'Payments', icon: 'card', match: base + '/store/payments' }
   ];
 
   onMount(async () => {

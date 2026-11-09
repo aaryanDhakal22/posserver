@@ -95,18 +95,42 @@ func (h *SquareHandler) MeDisconnect(c *echo.Context) error {
 	return c.NoContent(http.StatusNoContent)
 }
 
-// GET /store/v1/me/card-holds?limit= — recent online card holds.
+// GET /store/v1/me/card-holds?status=held|captured|cancelled|failed&limit= —
+// recent online card holds with who ordered.
 func (h *SquareHandler) MeHolds(c *echo.Context) error {
 	_, lid, _ := meScope(c)
 	limit, _ := strconv.Atoi(c.QueryParam("limit"))
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	hs, err := h.holds.Holds(c.Request().Context(), lid, limit)
+	status := c.QueryParam("status")
+	switch status {
+	case "", "held", "captured", "cancelled", "failed":
+	default:
+		return c.JSON(http.StatusBadRequest, errCode("status must be held, captured, cancelled or failed", "bad_request"))
+	}
+	hs, err := h.holds.Rows(c.Request().Context(), lid, status, limit)
 	if err != nil {
 		return h.sErr(c, err)
 	}
 	return c.JSON(http.StatusOK, map[string]any{"holds": hs})
+}
+
+// POST /store/v1/me/card-holds/:order_id/capture — "Charge now".
+func (h *SquareHandler) MeChargeNow(c *echo.Context) error {
+	_, lid, _ := meScope(c)
+	oid, ok := orderParam(c)
+	if !ok {
+		return c.JSON(http.StatusNotFound, errCode("not found", "not_found"))
+	}
+	hold, err := h.holds.ChargeNow(c.Request().Context(), lid, oid)
+	if errors.Is(err, cardholdApp.ErrNotHeld) {
+		return c.JSON(http.StatusConflict, errCode(err.Error(), "not_held"))
+	}
+	if err != nil {
+		return h.sErr(c, err)
+	}
+	return c.JSON(http.StatusOK, hold)
 }
 
 // --- Square → main ----------------------------------------------------------------

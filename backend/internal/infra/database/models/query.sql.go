@@ -4955,6 +4955,96 @@ func (q *Queries) ListCardHolds(ctx context.Context, arg ListCardHoldsParams) ([
 	return items, nil
 }
 
+const listCardHoldsWithOrders = `-- name: ListCardHoldsWithOrders :many
+SELECT h.order_id, h.tenant_id, h.location_id, h.gateway, h.payment_ref, h.amount_cents, h.tip_cents, h.added_tip_cents, h.status, h.capture_reason, h.due_at, h.capture_requested_at, h.next_try_at, h.attempts, h.last_error, h.captured_cents, h.tip_payment_ref, h.tip_note, h.captured_at, h.cancelled_at, h.created_at, h.updated_at, o.customer_display_name, o.fulfillment_type, o.placed_at, o.status AS order_status
+FROM card_holds h JOIN orders o ON o.id = h.order_id
+WHERE h.location_id = $1 AND ($3::text IS NULL OR h.status = $3)
+ORDER BY h.created_at DESC LIMIT $2
+`
+
+type ListCardHoldsWithOrdersParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Limit      int32       `json:"limit"`
+	Status     pgtype.Text `json:"status"`
+}
+
+type ListCardHoldsWithOrdersRow struct {
+	OrderID             pgtype.UUID        `json:"order_id"`
+	TenantID            pgtype.UUID        `json:"tenant_id"`
+	LocationID          pgtype.UUID        `json:"location_id"`
+	Gateway             string             `json:"gateway"`
+	PaymentRef          string             `json:"payment_ref"`
+	AmountCents         int64              `json:"amount_cents"`
+	TipCents            int64              `json:"tip_cents"`
+	AddedTipCents       int64              `json:"added_tip_cents"`
+	Status              string             `json:"status"`
+	CaptureReason       string             `json:"capture_reason"`
+	DueAt               pgtype.Timestamptz `json:"due_at"`
+	CaptureRequestedAt  pgtype.Timestamptz `json:"capture_requested_at"`
+	NextTryAt           pgtype.Timestamptz `json:"next_try_at"`
+	Attempts            int32              `json:"attempts"`
+	LastError           string             `json:"last_error"`
+	CapturedCents       int64              `json:"captured_cents"`
+	TipPaymentRef       string             `json:"tip_payment_ref"`
+	TipNote             string             `json:"tip_note"`
+	CapturedAt          pgtype.Timestamptz `json:"captured_at"`
+	CancelledAt         pgtype.Timestamptz `json:"cancelled_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	CustomerDisplayName string             `json:"customer_display_name"`
+	FulfillmentType     string             `json:"fulfillment_type"`
+	PlacedAt            pgtype.Timestamptz `json:"placed_at"`
+	OrderStatus         string             `json:"order_status"`
+}
+
+// The Payments page: a store's holds with who ordered, newest first (?status=).
+func (q *Queries) ListCardHoldsWithOrders(ctx context.Context, arg ListCardHoldsWithOrdersParams) ([]ListCardHoldsWithOrdersRow, error) {
+	rows, err := q.db.Query(ctx, listCardHoldsWithOrders, arg.LocationID, arg.Limit, arg.Status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCardHoldsWithOrdersRow
+	for rows.Next() {
+		var i ListCardHoldsWithOrdersRow
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Gateway,
+			&i.PaymentRef,
+			&i.AmountCents,
+			&i.TipCents,
+			&i.AddedTipCents,
+			&i.Status,
+			&i.CaptureReason,
+			&i.DueAt,
+			&i.CaptureRequestedAt,
+			&i.NextTryAt,
+			&i.Attempts,
+			&i.LastError,
+			&i.CapturedCents,
+			&i.TipPaymentRef,
+			&i.TipNote,
+			&i.CapturedAt,
+			&i.CancelledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.CustomerDisplayName,
+			&i.FulfillmentType,
+			&i.PlacedAt,
+			&i.OrderStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCategoriesByLocation = `-- name: ListCategoriesByLocation :many
 SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
 FROM menu_categories WHERE location_id = $1 ORDER BY position ASC, created_at ASC

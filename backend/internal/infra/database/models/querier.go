@@ -265,6 +265,8 @@ type Querier interface {
 	ListAllLocations(ctx context.Context) ([]Location, error)
 	ListAppReleases(ctx context.Context, app string) ([]ListAppReleasesRow, error)
 	ListCardHolds(ctx context.Context, arg ListCardHoldsParams) ([]CardHold, error)
+	// The Payments page: a store's holds with who ordered, newest first (?status=).
+	ListCardHoldsWithOrders(ctx context.Context, arg ListCardHoldsWithOrdersParams) ([]ListCardHoldsWithOrdersRow, error)
 	ListCategoriesByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuCategory, error)
 	ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) ([]MenuCategory, error)
 	ListChannelOrders(ctx context.Context, arg ListChannelOrdersParams) ([]ChannelOrder, error)

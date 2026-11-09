@@ -44,6 +44,7 @@ type Repo interface {
 	Retry(ctx context.Context, orderID uuid.UUID, next time.Time, lastError string) error
 	Failed(ctx context.Context, orderID uuid.UUID, lastError string) error
 	SetDue(ctx context.Context, orderID uuid.UUID, due time.Time) error
+	HoldRows(ctx context.Context, locationID uuid.UUID, status string, limit int) ([]repositories.HoldRow, error)
 }
 
 // Orders reads an order (the buyer behind a saved card).
@@ -355,4 +356,28 @@ func (s *Service) gone(ctx context.Context, h repositories.CardHold) {
 	_ = s.repo.Cancelled(ctx, h.OrderID, "voided or expired at the processor")
 	s.page(ctx, h.LocationID, "Card hold gone", fmt.Sprintf("A %s card hold was voided or expired before main could capture it (payment %s). The order is unpaid.",
 		money(h.AmountCents+h.TipCents), h.PaymentRef))
+}
+
+// Rows lists a store's holds with their orders (the Payments page; "" = any status).
+func (s *Service) Rows(ctx context.Context, locationID uuid.UUID, status string, limit int) ([]repositories.HoldRow, error) {
+	return s.repo.HoldRows(ctx, locationID, status, limit)
+}
+
+// ErrNotHeld: the hold isn't waiting any more (charged, released or failed).
+var ErrNotHeld = errors.New("this card order isn't waiting to be charged")
+
+// ChargeNow captures one of the store's waiting holds at once (the
+// manager's "Charge now").
+func (s *Service) ChargeNow(ctx context.Context, locationID, orderID uuid.UUID) (repositories.CardHold, error) {
+	h, err := s.repo.Hold(ctx, orderID)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && h.LocationID != locationID) {
+		return h, pgx.ErrNoRows
+	}
+	if err != nil {
+		return h, err
+	}
+	if h.Status != "held" {
+		return h, ErrNotHeld
+	}
+	return s.CaptureNow(ctx, locationID, orderID)
 }

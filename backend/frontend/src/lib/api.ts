@@ -731,3 +731,54 @@ export const DEAL_KINDS: { kind: DealKind; label: string; help: string }[] = [
   { kind: 'free_item', label: 'Free item', help: 'One of these free once the order reaches $Y' }
 ];
 export const CHANNEL_KIND_LABELS: Record<string, string> = { web: 'Website', operator: 'Call center', counter: 'Counter', vendor: 'Vendor' };
+
+// --- Payments (weborder stage 2): Square + online card holds ----------------------
+
+export interface SquareLocation {
+  id: string;
+  name: string;
+  status: string;
+  currency: string;
+}
+
+export interface SquareStatus {
+  enabled: boolean;
+  env: 'production' | 'sandbox' | 'fake' | 'off';
+  app_id: string;
+  connected: boolean;
+  state: '' | 'connected' | 'revoked' | 'error';
+  merchant_id: string;
+  square_location_id: string;
+  locations: SquareLocation[];
+  last_error: string;
+  connected_at: string | null;
+  holds_open: number;
+}
+
+export type HoldStatus = 'held' | 'captured' | 'cancelled' | 'failed';
+
+export interface CardHoldRow {
+  order_id: string;
+  order_ref: string;
+  customer: string;
+  type: string;
+  placed_at: string;
+  order_status: string;
+  gateway: string;
+  payment_ref: string;
+  amount_cents: number;
+  tip_cents: number;
+  added_tip_cents: number;
+  status: HoldStatus;
+  capture_reason: string;
+  due_at: string;
+  capture_requested_at: string | null;
+  attempts: number;
+  last_error: string;
+  captured_cents: number;
+  tip_payment_ref: string;
+  tip_note: string;
+  captured_at: string | null;
+  cancelled_at: string | null;
+  created_at: string;
+}

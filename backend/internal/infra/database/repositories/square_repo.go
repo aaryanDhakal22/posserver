@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"quiccpos/main/internal/infra/database/models"
@@ -264,4 +265,35 @@ func (r *SquareRepository) HoldByRef(ctx context.Context, locationID uuid.UUID, 
 		return CardHold{}, err
 	}
 	return holdOf(row), nil
+}
+
+// HoldRow is a hold as the Payments page lists it: with who ordered.
+type HoldRow struct {
+	CardHold
+	OrderRef    string    `json:"order_ref"`
+	Customer    string    `json:"customer"`
+	Type        string    `json:"type"`
+	PlacedAt    time.Time `json:"placed_at"`
+	OrderStatus string    `json:"order_status"`
+}
+
+// HoldRows lists a store's holds with their orders, newest first ("" = any status).
+func (r *SquareRepository) HoldRows(ctx context.Context, locationID uuid.UUID, status string, limit int) ([]HoldRow, error) {
+	rows, err := models.New(r.pool).ListCardHoldsWithOrders(ctx, models.ListCardHoldsWithOrdersParams{LocationID: pgID(locationID),
+		Limit: int32(limit), Status: pgtype.Text{String: status, Valid: status != ""}})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]HoldRow, 0, len(rows))
+	for _, x := range rows {
+		h := holdOf(models.CardHold{OrderID: x.OrderID, TenantID: x.TenantID, LocationID: x.LocationID, Gateway: x.Gateway,
+			PaymentRef: x.PaymentRef, AmountCents: x.AmountCents, TipCents: x.TipCents, AddedTipCents: x.AddedTipCents, Status: x.Status,
+			CaptureReason: x.CaptureReason, DueAt: x.DueAt, CaptureRequestedAt: x.CaptureRequestedAt, NextTryAt: x.NextTryAt,
+			Attempts: x.Attempts, LastError: x.LastError, CapturedCents: x.CapturedCents, TipPaymentRef: x.TipPaymentRef,
+			TipNote: x.TipNote, CapturedAt: x.CapturedAt, CancelledAt: x.CancelledAt, CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt})
+		id := h.OrderID.String()
+		out = append(out, HoldRow{CardHold: h, OrderRef: "#" + strings.ToUpper(id[len(id)-6:]), Customer: x.CustomerDisplayName,
+			Type: x.FulfillmentType, PlacedAt: x.PlacedAt.Time, OrderStatus: x.OrderStatus})
+	}
+	return out, nil
 }

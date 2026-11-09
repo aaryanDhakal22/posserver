@@ -261,3 +261,34 @@ def test_webhooks_and_disconnect_with_open_holds(admin, store, mgr) -> None:
     assert _ok(mgr.get(f"{STORE_V1}/me/square", timeout=5))["state"] == "revoked"
     web = _channel(admin, store, "web")
     assert check(requests.get(f"{CH_V1}/payments", headers=web, timeout=5), "getPayments")["card"] is None
+
+
+def test_payments_page_api(admin, store, mgr, make_store) -> None:
+    """What the store's Payments page uses: holds with who ordered (filtered)
+    and Charge now — only for this store's waiting holds."""
+    _connect(mgr)
+    m = _menu(mgr)
+    web = _channel(admin, store, "web")
+    a = check(_place(web, _order([_pizza(m)], method="card", token="cnon:card-nonce-ok")), "placeOrder")
+    b = check(_place(web, _order([_pizza(m)], method="card", token="cnon:card-nonce-ok")), "placeOrder")
+    rows = _ok(mgr.get(f"{STORE_V1}/me/card-holds", params={"status": "held"}, timeout=5))["holds"]
+    assert {r["order_id"] for r in rows} == {a["id"], b["id"]}
+    row = next(r for r in rows if r["order_id"] == a["id"])
+    assert row["customer"] == "Ada Lovelace" and row["type"] == "pickup" and row["order_ref"] == "#" + a["id"][-6:].upper()
+    assert mgr.get(f"{STORE_V1}/me/card-holds", params={"status": "nope"}, timeout=5).status_code == 400
+
+    # Another store's manager can't charge it.
+    other = make_store().manager_session()
+    assert other.post(f"{STORE_V1}/me/card-holds/{a['id']}/capture", timeout=10).status_code == 404
+
+    h = _ok(mgr.post(f"{STORE_V1}/me/card-holds/{a['id']}/capture", timeout=30))
+    assert h["status"] == "captured" and h["capture_reason"] == "manual"
+    r = mgr.post(f"{STORE_V1}/me/card-holds/{a['id']}/capture", timeout=10)
+    assert r.status_code == 409 and r.json()["code"] == "not_held"
+    assert [r["order_id"] for r in _ok(mgr.get(f"{STORE_V1}/me/card-holds", params={"status": "captured"}, timeout=5))["holds"]] == [a["id"]]
+    assert _ok(mgr.get(f"{STORE_V1}/me/square", timeout=10))["holds_open"] == 1
+
+    # The store's email for receipt replies.
+    assert _ok(mgr.get(f"{STORE_V1}/me/site/contact", timeout=5)) == {"reply_email": ""}
+    assert _ok(mgr.put(f"{STORE_V1}/me/site/contact", json={"reply_email": "owner@example.com"}, timeout=5)) == {"reply_email": "owner@example.com"}
+    assert _ok(mgr.put(f"{STORE_V1}/me/site/contact", json={"reply_email": ""}, timeout=5)) == {"reply_email": ""}

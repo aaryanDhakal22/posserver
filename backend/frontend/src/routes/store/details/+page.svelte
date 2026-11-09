@@ -23,6 +23,11 @@
   let form = $state<LocationForm>({ name: '', phone: '', address_line1: '', address_line2: '', timezone: DEFAULT_TIMEZONE, daily_reset_hour: 0 });
   let hours = $state<WeekHours>(hoursFromConfig({}));
   let saving = $state(false);
+  // The store's email: customers' replies to their receipts go here
+  // (GET/PUT /me/site/contact; saved with the details).
+  let replyEmail = $state('');
+  let savedReplyEmail = '';
+  const emailErr = $derived(replyEmail.trim() && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(replyEmail.trim()) ? "That isn't an email address." : '');
   // Alerts: the owner's Pushover device names (config.pushover_owner_devices),
   // saved on their own so unsaved detail edits are left alone.
   let devices = $state('');
@@ -45,7 +50,12 @@
 
   onMount(async () => {
     try {
-      fill(await storeApi<Location>('/me/location'));
+      const [l, contact] = await Promise.all([
+        storeApi<Location>('/me/location'),
+        storeApi<{ reply_email: string }>('/me/site/contact').catch(() => ({ reply_email: '' }))
+      ]);
+      fill(l);
+      replyEmail = savedReplyEmail = contact.reply_email;
     } catch (e) {
       toast.error(e);
     }
@@ -118,9 +128,16 @@
 
   async function save(e: SubmitEvent) {
     e.preventDefault();
-    if (!loc || saving) return;
+    if (!loc || saving || emailErr) return;
     saving = true;
     try {
+      if (replyEmail.trim() !== savedReplyEmail) {
+        const c = await storeApi<{ reply_email: string }>('/me/site/contact', {
+          method: 'PUT',
+          body: JSON.stringify({ reply_email: replyEmail.trim() })
+        });
+        replyEmail = savedReplyEmail = c.reply_email;
+      }
       const l = await storeApi<Location>('/me/location', {
         method: 'PATCH',
         body: JSON.stringify({
@@ -154,11 +171,16 @@
   <form class="flex flex-col gap-4 max-w-[760px]" onsubmit={save}>
     <Card title="Store details">
       <LocationFields bind:value={form} idPrefix="sd" />
+      <div class="mt-4 sm:max-w-[calc(50%-0.5rem)]">
+        <label class="lbl" for="sd-email">Store email</label>
+        <input id="sd-email" class="field" type="email" bind:value={replyEmail} placeholder="owner@example.com" autocomplete="off" aria-invalid={!!emailErr || undefined} />
+        {#if emailErr}<p class="field-error" role="alert">{emailErr}</p>{:else}<p class="help">When customers reply to their emailed receipts, the reply comes here. Leave it empty to turn replies off.</p>{/if}
+      </div>
     </Card>
     <Card>
       <HoursEditor bind:hours idPrefix="sd-hours" />
     </Card>
-    <div><Button type="submit" variant="primary" loading={saving}>Save details & hours</Button></div>
+    <div><Button type="submit" variant="primary" loading={saving} disabled={!!emailErr}>Save details & hours</Button></div>
   </form>
   <div class="flex flex-col gap-4 max-w-[760px] mt-4">
     <SpecialDays />

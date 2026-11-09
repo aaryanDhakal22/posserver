@@ -184,7 +184,7 @@ func (s *Service) ConnectURL(locationID uuid.UUID) (string, error) {
 // Square location when the account has exactly one that takes cards. It
 // returns the store and where to send the owner.
 func (s *Service) Callback(ctx context.Context, code, state, errParam string) (uuid.UUID, string, error) {
-	back := strings.TrimRight(s.cfg.AppURL, "/") + "/app/store/details?square="
+	back := strings.TrimRight(s.cfg.AppURL, "/") + "/app/store/payments?square="
 	if !s.Enabled() {
 		return uuid.Nil, back + "error", ErrDisabled
 	}

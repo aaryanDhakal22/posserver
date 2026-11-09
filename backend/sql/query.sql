@@ -1745,6 +1745,13 @@ SELECT * FROM card_holds WHERE order_id = $1;
 -- name: ListCardHolds :many
 SELECT * FROM card_holds WHERE location_id = $1 ORDER BY created_at DESC LIMIT $2;
 
+-- name: ListCardHoldsWithOrders :many
+-- The Payments page: a store's holds with who ordered, newest first (?status=).
+SELECT h.*, o.customer_display_name, o.fulfillment_type, o.placed_at, o.status AS order_status
+FROM card_holds h JOIN orders o ON o.id = h.order_id
+WHERE h.location_id = $1 AND (sqlc.narg(status)::text IS NULL OR h.status = sqlc.narg(status))
+ORDER BY h.created_at DESC LIMIT $2;
+
 -- name: ClaimCardHolds :many
 -- Holds to capture now (asked for, or past their safety time), leased for
 -- two minutes so a slow capture isn't picked up twice.
