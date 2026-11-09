@@ -232,7 +232,7 @@ func (s *Service) Callback(ctx context.Context, code, state, errParam string) (u
 	return lid, back + "connected", nil
 }
 
-// Status is Store › Details › Square.
+// Status is the Square card on Store › Payments.
 type Status struct {
 	Enabled          bool              `json:"enabled"`
 	Env              string            `json:"env"`
