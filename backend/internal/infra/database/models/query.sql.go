@@ -6241,6 +6241,38 @@ func (q *Queries) MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams
 	return items, nil
 }
 
+const moveMenuCategory = `-- name: MoveMenuCategory :exec
+UPDATE menu_categories SET menu_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2
+`
+
+type MoveMenuCategoryParams struct {
+	ID       pgtype.UUID `json:"id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+	MenuID   pgtype.UUID `json:"menu_id"`
+}
+
+// The bank import: a category moves to another menu of the location.
+func (q *Queries) MoveMenuCategory(ctx context.Context, arg MoveMenuCategoryParams) error {
+	_, err := q.db.Exec(ctx, moveMenuCategory, arg.ID, arg.TenantID, arg.MenuID)
+	return err
+}
+
+const moveMenuItem = `-- name: MoveMenuItem :exec
+UPDATE menu_items SET category_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2
+`
+
+type MoveMenuItemParams struct {
+	ID         pgtype.UUID `json:"id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	CategoryID pgtype.UUID `json:"category_id"`
+}
+
+// The bank import (bankimport): an item moves to another category of the location.
+func (q *Queries) MoveMenuItem(ctx context.Context, arg MoveMenuItemParams) error {
+	_, err := q.db.Exec(ctx, moveMenuItem, arg.ID, arg.TenantID, arg.CategoryID)
+	return err
+}
+
 const movePrinterIP = `-- name: MovePrinterIP :one
 UPDATE printers
 SET ip = $1,

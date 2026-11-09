@@ -1,0 +1,224 @@
+// Package bankdoc is the bank document: a location's whole Canonical Menu
+// bank, its views and its deals as one JSON document that names things
+// instead of using ids, so it can be written by a tool (the weborder menu
+// converter), reviewed, applied in one transaction and exported again.
+//
+// Matching rules (the import):
+//   - sizes, modifier groups, menus, categories and items match the existing
+//     rows of the location by name (case, repeated spaces and outer spaces
+//     ignored); an option matches by name within its group; a view by kind +
+//     name; a deal by name. Category and item names must be unique in the
+//     document (they are what views and deals refer to).
+//   - Absent optional fields keep what is there: `available` / `in_stock`
+//     (new rows: true), `printer` (new rows: none), an item's `tags`,
+//     `sizes` and `groups`. Sold-out state (`out_until`) is never touched.
+//   - A view's entries are replaced by the document's (views are generated).
+//   - Nothing is deleted unless the import is asked to prune; views are never
+//     deleted (channels point at them).
+package bankdoc
+
+import (
+	"context"
+	"errors"
+	"strings"
+
+	"quiccpos/main/internal/domain/menu"
+	"quiccpos/main/internal/domain/menuview"
+	"quiccpos/main/internal/domain/pricing"
+
+	"github.com/google/uuid"
+)
+
+// Format is the document format this main reads and writes.
+const Format = 1
+
+// ErrRollback, returned from inside Tx work, rolls the transaction back
+// without failing (a dry run).
+var ErrRollback = errors.New("roll back")
+
+// Document is a location's bank, views and deals.
+type Document struct {
+	Format int     `json:"format"`
+	Sizes  []Size  `json:"sizes"`
+	Groups []Group `json:"groups"`
+	Menus  []Menu  `json:"menus"`
+	Views  []View  `json:"views"`
+	Deals  []Deal  `json:"deals"`
+}
+
+// Size is a store size ("12 Medium", short "12\"").
+type Size struct {
+	Name  string `json:"name"`
+	Short string `json:"short"`
+}
+
+// Group is a reusable modifier group.
+type Group struct {
+	Name          string   `json:"name"`
+	Required      bool     `json:"required"`
+	MinSelect     int      `json:"min_select"`
+	MaxSelect     int      `json:"max_select"` // 0 = unlimited
+	AllowMultiple bool     `json:"allow_multiple"`
+	Portions      bool     `json:"portions"` // halves
+	Options       []Option `json:"options"`
+}
+
+// Option is one choice of a group. Prices maps size names to the option's
+// price on an item of that size; PriceCents is the price on any other item.
+type Option struct {
+	Name        string           `json:"name"`
+	PriceCents  int64            `json:"price_cents"`
+	InStock     *bool            `json:"in_stock,omitempty"`
+	IsDefault   bool             `json:"is_default"`
+	KitchenName string           `json:"kitchen_name"`
+	Prices      map[string]int64 `json:"prices,omitempty"`
+}
+
+// Menu → Category → Item is the bank's tree.
+type Menu struct {
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	Available   *bool      `json:"available,omitempty"`
+	Categories  []Category `json:"categories"`
+}
+
+// Category: Printer names the store printer (nil = keep, "" = none).
+type Category struct {
+	Name        string  `json:"name"`
+	Description string  `json:"description"`
+	Available   *bool   `json:"available,omitempty"`
+	Printer     *string `json:"printer,omitempty"`
+	Items       []Item  `json:"items"`
+}
+
+// Item is one bank item. Printer nil = keep ("" = inherit the category's);
+// Sizes / Groups / Tags nil = keep, empty = none.
+type Item struct {
+	Name        string      `json:"name"`
+	Description string      `json:"description"`
+	PriceCents  int64       `json:"price_cents"`
+	TaxRateBps  int         `json:"tax_rate_bps"`
+	InStock     *bool       `json:"in_stock,omitempty"`
+	Tags        *[]string   `json:"tags,omitempty"`
+	Printer     *string     `json:"printer,omitempty"`
+	KitchenName string      `json:"kitchen_name"`
+	SKU         string      `json:"sku"`
+	Sizes       *[]ItemSize `json:"sizes,omitempty"`
+	Groups      *[]string   `json:"groups,omitempty"`
+}
+
+// ItemSize is a size an item comes in.
+type ItemSize struct {
+	Size        string `json:"size"`
+	PriceCents  int64  `json:"price_cents"`
+	KitchenName string `json:"kitchen_name"`
+}
+
+// View is a view of the bank and its entries (replaced as a whole).
+type View struct {
+	Kind    string  `json:"kind"`
+	Name    string  `json:"name"`
+	Rules   Rules   `json:"rules"`
+	Entries []Entry `json:"entries"`
+}
+
+// Rules are menuview.Rules with category names.
+type Rules struct {
+	MarkupBps        int      `json:"markup_bps"`
+	Round            string   `json:"round"`
+	HiddenCategories []string `json:"hidden_categories"`
+	RequirePhoto     bool     `json:"require_photo"`
+}
+
+// Entry is a menuview.Entry with item and size names.
+type Entry struct {
+	Kind               string            `json:"kind"`
+	Items              []string          `json:"items"`
+	Size               string            `json:"size,omitempty"`
+	DisplayName        string            `json:"display_name,omitempty"`
+	Description        string            `json:"description,omitempty"`
+	Photo              string            `json:"photo,omitempty"`
+	Category           string            `json:"category,omitempty"`
+	Position           *int              `json:"position,omitempty"` // nil = its index
+	Hidden             bool              `json:"hidden,omitempty"`
+	PriceOverrideCents *int64            `json:"price_override_cents,omitempty"`
+	SizePrices         map[string]int64  `json:"size_prices,omitempty"` // size name → cents
+	Labels             map[string]string `json:"labels,omitempty"`      // item name → label
+	VendorName         string            `json:"vendor_name,omitempty"`
+	VendorSize         string            `json:"vendor_size,omitempty"`
+}
+
+// Deal is a pricing.StoreDeal whose eligibility (items, categories, sizes)
+// names bank items, categories and sizes instead of ids.
+type Deal = pricing.StoreDeal
+
+// Norm is how names match: lower case, inner whitespace collapsed, trimmed.
+func Norm(s string) string {
+	return strings.Join(strings.Fields(strings.ToLower(s)), " ")
+}
+
+// ---- the import's store side ---------------------------------------------------
+
+// Printer is a store printer (name → id).
+type Printer struct {
+	ID   uuid.UUID
+	Name string
+}
+
+// GroupRow is a modifier group with its bank flag.
+type GroupRow struct {
+	menu.ModifierGroup
+	Portions bool
+}
+
+// OptionRow is a modifier option with its bank fields.
+type OptionRow struct {
+	menu.ModifierOption
+	IsDefault   bool
+	KitchenName string
+}
+
+// Tx is everything the import reads and writes, inside one transaction that
+// holds the location's import lock. Rows are the location's; ids are checked
+// against the tenant by the store.
+type Tx interface {
+	Bank(ctx context.Context) (*menu.Bank, error)
+	Printers(ctx context.Context) ([]Printer, error)
+	Views(ctx context.Context) ([]menuview.View, error)
+	Entries(ctx context.Context, viewID uuid.UUID) ([]menuview.Entry, error)
+	Deals(ctx context.Context) ([]pricing.StoreDeal, error)
+
+	CreateSize(ctx context.Context, name, short string, position int) (uuid.UUID, error)
+	UpdateSize(ctx context.Context, id uuid.UUID, name, short string, position int) error
+	DeleteSize(ctx context.Context, id uuid.UUID) error
+
+	CreateMenu(ctx context.Context, m menu.Menu) (uuid.UUID, error)
+	UpdateMenu(ctx context.Context, m menu.Menu) error // name, description, available, position
+	DeleteMenu(ctx context.Context, id uuid.UUID) error
+
+	CreateCategory(ctx context.Context, c menu.Category) (uuid.UUID, error)
+	UpdateCategory(ctx context.Context, c menu.Category) error // + menu (move), printer, position
+	DeleteCategory(ctx context.Context, id uuid.UUID) error
+
+	CreateItem(ctx context.Context, it menu.Item) (uuid.UUID, error)
+	UpdateItem(ctx context.Context, it menu.Item) error // + category (move), printer, position
+	SetItemBank(ctx context.Context, id uuid.UUID, x menu.ItemExtra) error
+	SetItemGroups(ctx context.Context, id uuid.UUID, groups []uuid.UUID) error
+	DeleteItem(ctx context.Context, id uuid.UUID) error
+
+	CreateGroup(ctx context.Context, g GroupRow) (uuid.UUID, error)
+	UpdateGroup(ctx context.Context, g GroupRow) error
+	DeleteGroup(ctx context.Context, id uuid.UUID) error
+	CreateOption(ctx context.Context, o OptionRow) (uuid.UUID, error)
+	UpdateOption(ctx context.Context, o OptionRow) error // + position, default, kitchen name
+	SetOptionPrices(ctx context.Context, id uuid.UUID, prices []menu.OptionPrice) error
+	DeleteOption(ctx context.Context, id uuid.UUID) error
+
+	CreateView(ctx context.Context, kind menuview.Kind, name string, rules menuview.Rules) (uuid.UUID, error)
+	UpdateView(ctx context.Context, id uuid.UUID, name string, rules menuview.Rules) error
+	ReplaceEntries(ctx context.Context, view menuview.View, entries []menuview.Entry) error
+
+	CreateDeal(ctx context.Context, d pricing.StoreDeal) error
+	UpdateDeal(ctx context.Context, id uuid.UUID, d pricing.StoreDeal) error
+	DeleteDeal(ctx context.Context, id uuid.UUID) error
+}

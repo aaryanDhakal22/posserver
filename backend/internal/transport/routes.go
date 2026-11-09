@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"quiccpos/main/internal/app/agentsync"
+	"quiccpos/main/internal/app/bankimport"
 	channelApp "quiccpos/main/internal/app/channel"
 	diagApp "quiccpos/main/internal/app/diag"
 	geoApp "quiccpos/main/internal/app/geo"
@@ -107,6 +108,8 @@ type RouterDeps struct {
 	StoreStatus *storestatusApp.Service
 	// MenuViewService backs the menu bank + views (main 3.0).
 	MenuViewService *menuviewApp.Service
+	// BankImport applies / exports a store's bank document (weborder converter).
+	BankImport *bankimport.Service
 	// ChannelService backs sales channels and the /channel/v1 key (main 3.0).
 	ChannelService *channelApp.Service
 	// AgentSync backs agent link / restore / backups / fleet health.
@@ -190,6 +193,7 @@ func routeTable(d RouterDeps) []routeDef {
 	operatorH := handler.NewOperatorHandler(d.OperatorService, d.MenuService, d.Meters, d.Logger)
 	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
 	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
+	bankDocH := handler.NewBankImportHandler(d.BankImport, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
 	pricingH := handler.NewPricingHandler(d.Pricing, d.Logger)
 	orderPortH := handler.NewOrderPortHandler(d.OrderPort, d.Logger)
@@ -391,6 +395,8 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", storePrefix+"/me/deals/:id", "store-session", "Delete a deal", pricingH.MeDeleteDeal, storeSession),
 		// The menu bank + views (main 3.0).
 		def("GET", storePrefix+"/me/menu/bank", "store-session", "The whole menu bank (sizes, items with sizes + groups, options with prices)", viewH.MeBank, storeSession),
+		def("GET", storePrefix+"/me/menu/bank/document", "store-session", "The bank, views and deals as one document (names, no ids)", bankDocH.MeExport, storeSession),
+		def("POST", storePrefix+"/me/menu/bank/apply", "store-session", "Apply a bank document in one transaction (?dry_run=1 reports + rolls back, ?prune=1 deletes what it doesn't name)", bankDocH.MeApply, storeSession),
 		def("GET", storePrefix+"/me/menu/sizes", "store-session", "List the store's sizes", viewH.MeListSizes, storeSession),
 		def("POST", storePrefix+"/me/menu/sizes", "store-session", "Add a size {name, short}", viewH.MeCreateSize, storeSession),
 		def("POST", storePrefix+"/me/menu/sizes/reorder", "store-session", "Reorder sizes {ids}", viewH.MeReorderSizes, storeSession),

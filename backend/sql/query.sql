@@ -590,6 +590,14 @@ ORDER BY (m.available AND c.available) DESC, m.position, c.position, i.position,
 -- name: SetItemPrinter :exec
 UPDATE menu_items SET printer_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
 
+-- name: MoveMenuItem :exec
+-- The bank import (bankimport): an item moves to another category of the location.
+UPDATE menu_items SET category_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
+
+-- name: MoveMenuCategory :exec
+-- The bank import: a category moves to another menu of the location.
+UPDATE menu_categories SET menu_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
+
 -- name: SetItemPosition :exec
 UPDATE menu_items SET position = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
 

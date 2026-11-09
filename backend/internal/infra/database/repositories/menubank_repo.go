@@ -33,12 +33,16 @@ func NewMenuBankRepository(pool *pgxpool.Pool) *MenuBankRepository {
 // sizes and attached groups, every group with its options and their per-size
 // prices, the store sizes and the menu version.
 func (r *MenuBankRepository) LoadBank(ctx context.Context, locationID uuid.UUID) (*menu.Bank, error) {
-	q := models.New(r.pool)
+	return loadBank(ctx, models.New(r.pool), locationID)
+}
+
+// loadBank reads a bank through q (the pool, or the bank import's tx).
+func loadBank(ctx context.Context, q *models.Queries, locationID uuid.UUID) (*menu.Bank, error) {
 	lid := pgID(locationID)
 	// The version first: a write landing while the rows below are read makes
 	// the bank newer than its version (the next read rebuilds), never older
 	// (a stale build cached under the new version).
-	ver, err := r.Version(ctx, locationID)
+	ver, err := versionOf(ctx, q, locationID)
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +151,11 @@ func (r *MenuBankRepository) LoadBank(ctx context.Context, locationID uuid.UUID)
 
 // Version is a location's menu version (1 before anything ever changed).
 func (r *MenuBankRepository) Version(ctx context.Context, locationID uuid.UUID) (menu.Version, error) {
-	row, err := models.New(r.pool).GetMenuVersion(ctx, pgID(locationID))
+	return versionOf(ctx, models.New(r.pool), locationID)
+}
+
+func versionOf(ctx context.Context, q *models.Queries, locationID uuid.UUID) (menu.Version, error) {
+	row, err := q.GetMenuVersion(ctx, pgID(locationID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return menu.Version{Version: 1}, nil
 	}

@@ -30,6 +30,7 @@ import (
 	"time"
 
 	authAppSvc "quiccpos/main/internal/app/auth"
+	"quiccpos/main/internal/app/bankimport"
 	channelApp "quiccpos/main/internal/app/channel"
 	menuApp "quiccpos/main/internal/app/menu"
 	menuviewApp "quiccpos/main/internal/app/menuview"
@@ -232,6 +233,7 @@ func main() {
 	menuService := menuApp.NewService(menuRepo, tenancyService, meters, lgr)
 	// The menu bank's views (3.0); the vendor view's name mappings feed kitchen routing.
 	menuViewService := menuviewApp.NewService(repositories.NewMenuBankRepository(pool), menuService, lgr)
+	bankImportService := bankimport.NewService(repositories.NewBankImportRepository(pool), lgr)
 	menuService.SetVendorMapper(menuViewService)
 
 	// Agent reliability + headless recovery: order acks + re-sends, the
@@ -393,6 +395,7 @@ func main() {
 		OperatorService: operatorService,
 		ChannelService:  channelService,
 		MenuViewService: menuViewService,
+		BankImport:      bankImportService,
 		StoreStatus:     storeStatusService,
 		Pricing:         pricingService,
 		OrderPort:       orderPortService,

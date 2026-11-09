@@ -301,6 +301,10 @@ type Querier interface {
 	// Agent reliability + recovery (00009) -------------------------------------------
 	// Returns received_at of each newly acked order (orders.ack.latency).
 	MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) ([]pgtype.Timestamptz, error)
+	// The bank import: a category moves to another menu of the location.
+	MoveMenuCategory(ctx context.Context, arg MoveMenuCategoryParams) error
+	// The bank import (bankimport): an item moves to another category of the location.
+	MoveMenuItem(ctx context.Context, arg MoveMenuItemParams) error
 	// The Pi followed a printer to a new IP. Applied only while the printer still
 	// has the IP the Pi saw (a manager edit in between wins); an empty mac keeps
 	// the stored one.

@@ -388,14 +388,38 @@ func (s *Service) entry(ctx context.Context, locationID, id uuid.UUID) (*menuvie
 }
 
 func (s *Service) validEntry(ctx context.Context, v *menuview.View, e *menuview.Entry) error {
+	if err := entryShape(v.Kind, e); err != nil {
+		return err
+	}
+	bank, err := s.repo.LoadBank(ctx, v.LocationID)
+	if err != nil {
+		return err
+	}
+	return entryRefs(bank, e)
+}
+
+// ValidEntry checks an entry of a view of kind k against a bank and trims its
+// names (the bank import checks every entry against the bank it is writing).
+func ValidEntry(bank *menuDom.Bank, k menuview.Kind, e *menuview.Entry) error {
+	if err := entryShape(k, e); err != nil {
+		return err
+	}
+	return entryRefs(bank, e)
+}
+
+// ValidRules checks (and defaults) a view's rules.
+func ValidRules(r *menuview.Rules) error { return validRules(r) }
+
+// entryShape checks an entry's kind, anchors and prices (no bank needed).
+func entryShape(k menuview.Kind, e *menuview.Entry) error {
 	bad := func(msg string) error { return fmt.Errorf("%w: %s", ErrBadEntry, msg) }
 	switch e.Kind {
 	case menuview.EntryItem, menuview.EntryMerge, menuview.EntryAugment:
-		if v.Kind == menuview.KindVendor {
+		if k == menuview.KindVendor {
 			return bad("a vendor view only maps names (kind map)")
 		}
 	case menuview.EntryMap:
-		if v.Kind != menuview.KindVendor {
+		if k != menuview.KindVendor {
 			return bad("only a vendor view maps names")
 		}
 	default:
@@ -420,10 +444,13 @@ func (s *Service) validEntry(ctx context.Context, v *menuview.View, e *menuview.
 			return ErrBadPrice
 		}
 	}
-	bank, err := s.repo.LoadBank(ctx, v.LocationID)
-	if err != nil {
-		return err
-	}
+	return nil
+}
+
+// entryRefs checks that an entry's items and sizes are the bank's, and trims
+// its names.
+func entryRefs(bank *menuDom.Bank, e *menuview.Entry) error {
+	bad := func(msg string) error { return fmt.Errorf("%w: %s", ErrBadEntry, msg) }
 	for _, id := range e.Anchor.ItemIDs {
 		if _, _, ok := bank.Item(id); !ok {
 			return bad("anchor " + id.String() + " is not an item of this store")
