@@ -2434,6 +2434,7 @@
           "next_open_at",
           "closes_at",
           "today",
+          "week",
           "order_types",
           "scheduling",
           "sold_out",
@@ -2561,6 +2562,38 @@
               }
             },
             "additionalProperties": false
+          },
+          "week": {
+            "type": "array",
+            "description": "Today and the next six days (special days applied), for an hours card",
+            "items": {
+              "type": "object",
+              "required": [
+                "date",
+                "closed",
+                "hours",
+                "note"
+              ],
+              "properties": {
+                "date": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "closed": {
+                  "type": "boolean"
+                },
+                "hours": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HoursRange"
+                  }
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
           },
           "order_types": {
             "type": "object",

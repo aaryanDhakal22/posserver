@@ -101,6 +101,10 @@ func TestExceptions(t *testing.T) {
 	if s.State != StateClosed || !s.Today.Closed || s.Today.Note != "Election day" || !s.NextOpenAt.Equal(at(2, 16, 0)) {
 		t.Errorf("closed day: %+v next %v", s, s.NextOpenAt)
 	}
+	if w := s.Week; len(w) != 7 || w[0].Date != "2026-11-03" || !w[0].Closed || w[0].Note != "Election day" ||
+		w[1].Date != "2026-11-04" || len(w[1].Hours) != 1 || w[1].Hours[0].Open != "16:00" || w[2].Closed {
+		t.Errorf("week: %+v", s.Week)
+	}
 	if s = Compute(at(2, 19, 0), sc, settings(), 0); !s.ClosesAt.Equal(at(2, 20, 0)) {
 		t.Errorf("own hours: %+v", s)
 	}

@@ -296,6 +296,9 @@ type Status struct {
 	NextOpenAt *time.Time `json:"next_open_at"` // when ASAP orders are next taken (null = open now, or unknown)
 	ClosesAt   *time.Time `json:"closes_at"`
 	Today      Today      `json:"today"`
+	// Week is today and the next six days (special days applied), for a
+	// storefront's hours card (weborder stage 4).
+	Week       []Today    `json:"week"`
 	OrderTypes OrderTypes `json:"order_types"`
 	Scheduling Scheduling `json:"scheduling"`
 }
@@ -329,6 +332,19 @@ type Scheduling struct {
 	SlotMinutes int `json:"slot_minutes"`
 }
 
+// day is one local date's hours, closed flag and special-day note.
+func (s Schedule) day(local time.Time) Today {
+	hours, exc := s.DayHours(local)
+	d := Today{Date: local.Format(time.DateOnly), Hours: hours, Closed: s.HoursSet() && len(hours) == 0}
+	if exc != nil {
+		d.Note, d.Closed = exc.Note, exc.Closed || len(hours) == 0
+	}
+	if d.Hours == nil {
+		d.Hours = []tenancy.HoursRange{}
+	}
+	return d
+}
+
 // Compute is the status at now.
 func Compute(now time.Time, sch Schedule, st Settings, radiusM int) Status {
 	local := now.In(sch.zone())
@@ -341,13 +357,10 @@ func Compute(now time.Time, sch Schedule, st Settings, radiusM int) Status {
 		},
 		Scheduling: Scheduling{DaysAhead: st.ScheduleDays, SlotMinutes: SlotMinutes},
 	}
-	hours, exc := sch.DayHours(local)
-	out.Today = Today{Date: local.Format(time.DateOnly), Hours: hours, Closed: sch.HoursSet() && len(hours) == 0}
-	if exc != nil {
-		out.Today.Note, out.Today.Closed = exc.Note, exc.Closed || len(hours) == 0
-	}
-	if out.Today.Hours == nil {
-		out.Today.Hours = []tenancy.HoursRange{}
+	out.Today = sch.day(local)
+	out.Week = make([]Today, 7)
+	for i := range out.Week {
+		out.Week[i] = sch.day(local.AddDate(0, 0, i))
 	}
 	paused := st.Paused(now)
 	if paused {
