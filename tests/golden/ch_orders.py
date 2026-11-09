@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -16,6 +17,12 @@ from conftest import RUN_OFFSET, Store, online_attrs, SQS_QUEUE_URL
 from data import order_requests
 from golden.recorder import Rec
 from sse import SSEStream
+
+
+def _recent() -> str:
+    """An hour ago, for values main only reads inside a window around now."""
+    return (datetime.now(timezone.utc) - timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 T = ["2026-11-02T15:00:00Z", "2026-11-02T15:01:00Z", "2026-11-02T15:02:00Z", "2026-11-02T15:03:00Z",
      "2026-11-02T15:04:00Z", "2026-11-02T15:05:00Z", "2026-11-02T15:06:00Z", "2026-11-02T15:07:00Z"]
@@ -148,7 +155,9 @@ def _run(rec: Rec, admin: requests.Session, a: Store, sqs) -> None:
         rpc("floor roster + shift", "floor.events", {"events": [
             ev("drivers.roster", at=T[1], drivers=[{"id": drv, "name": "Sam", "position": 1, "status": "out"},
                                                    {"id": str(uuid.uuid4()), "name": "Ana", "position": 2, "status": "available"}]),
-            ev("driver.shift", shift_id=str(uuid.uuid4()), driver_id=drv, driver_name="Sam", clock_in=T[0], at=T[1])]})
+            # A recent clock-in: /me/floor lists the last 7 days of shifts, so a
+            # fixed date would drop out of the read below a week later (it did, 2026-11-09).
+            ev("driver.shift", shift_id=str(uuid.uuid4()), driver_id=drv, driver_name="Sam", clock_in=_recent(), at=T[1])]})
         rpc("floor run", "floor.events", {"events": [
             ev("delivery.run", at=T[4], batch_id=7, driver_id=drv, driver_name="Sam", plan_id=str(uuid.uuid4()),
                suggested_ids=[d], sent_ids=[d], stops=[{"order_id": d, "eta": T[5]}]),
