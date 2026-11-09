@@ -14,8 +14,10 @@ import (
 	"sync"
 
 	authSvc "quiccpos/main/internal/app/auth"
+	siteApp "quiccpos/main/internal/app/site"
 	channelDom "quiccpos/main/internal/domain/channel"
 	operatorDom "quiccpos/main/internal/domain/operator"
+	siteDom "quiccpos/main/internal/domain/site"
 	"quiccpos/main/internal/domain/tenancy"
 
 	"github.com/google/uuid"
@@ -56,6 +58,7 @@ type Service struct {
 	builtinMu sync.Mutex
 	builtins  map[builtinKey]uuid.UUID // a location's built-in channel of a kind
 	operators OperatorAuth
+	sites     SiteAuth
 	repo      channelDom.Repository
 	locs      LocationReader
 	views     ViewReader
@@ -321,4 +324,58 @@ func (s *Service) AuthenticateOperator(ctx context.Context, raw string, location
 		return nil, nil, fmt.Errorf("operator channel: %w", err)
 	}
 	return c, &channelDom.Operator{ID: op.ID, Username: op.Username, DisplayName: op.DisplayName}, nil
+}
+
+// --- the storefront (weborder stage 2) ----------------------------------------------
+
+// SiteAuth checks the storefront's platform key and resolves the host it is
+// serving (the site service).
+type SiteAuth interface {
+	Authenticate(ctx context.Context, key string) (siteDom.PlatformKey, error)
+	Resolve(ctx context.Context, host string) (siteDom.Domain, error)
+}
+
+// SetSites lets the storefront's platform key open /channel/v1.
+func (s *Service) SetSites(a SiteAuth) { s.sites = a }
+
+var (
+	ErrUnknownSite  = errors.New("no store is served on that host")
+	ErrHostRequired = errors.New("send the host the storefront is serving as X-Site-Host")
+)
+
+// WebChannelName is the name of a store's built-in web channel.
+const WebChannelName = "Website"
+
+// AuthenticateSite turns the storefront's platform key + the host it serves
+// into that store's built-in web channel.
+func (s *Service) AuthenticateSite(ctx context.Context, key, host string) (*channelDom.Channel, error) {
+	if s.sites == nil {
+		return nil, ErrInvalidKey
+	}
+	if _, err := s.sites.Authenticate(ctx, key); errors.Is(err, siteApp.ErrInvalidKey) {
+		return nil, ErrInvalidKey
+	} else if err != nil {
+		return nil, fmt.Errorf("platform key lookup: %w", err)
+	}
+	if strings.TrimSpace(host) == "" {
+		return nil, ErrHostRequired
+	}
+	d, err := s.sites.Resolve(ctx, host)
+	if errors.Is(err, siteApp.ErrUnknownSite) {
+		return nil, ErrUnknownSite
+	}
+	if err != nil {
+		return nil, fmt.Errorf("site lookup: %w", err)
+	}
+	c, err := s.builtin(ctx, d.TenantID, d.LocationID, channelDom.KindWeb, WebChannelName)
+	if err != nil {
+		return nil, fmt.Errorf("web channel: %w", err)
+	}
+	return c, nil
+}
+
+// EnsureBuiltinWeb creates the store's built-in web channel if it has none.
+func (s *Service) EnsureBuiltinWeb(ctx context.Context, tenantID, locationID uuid.UUID) error {
+	_, err := s.builtin(ctx, tenantID, locationID, channelDom.KindWeb, WebChannelName)
+	return err
 }

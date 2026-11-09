@@ -61,6 +61,31 @@ type AppRelease struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type CardHold struct {
+	OrderID            pgtype.UUID        `json:"order_id"`
+	TenantID           pgtype.UUID        `json:"tenant_id"`
+	LocationID         pgtype.UUID        `json:"location_id"`
+	Gateway            string             `json:"gateway"`
+	PaymentRef         string             `json:"payment_ref"`
+	AmountCents        int64              `json:"amount_cents"`
+	TipCents           int64              `json:"tip_cents"`
+	AddedTipCents      int64              `json:"added_tip_cents"`
+	Status             string             `json:"status"`
+	CaptureReason      string             `json:"capture_reason"`
+	DueAt              pgtype.Timestamptz `json:"due_at"`
+	CaptureRequestedAt pgtype.Timestamptz `json:"capture_requested_at"`
+	NextTryAt          pgtype.Timestamptz `json:"next_try_at"`
+	Attempts           int32              `json:"attempts"`
+	LastError          string             `json:"last_error"`
+	CapturedCents      int64              `json:"captured_cents"`
+	TipPaymentRef      string             `json:"tip_payment_ref"`
+	TipNote            string             `json:"tip_note"`
+	CapturedAt         pgtype.Timestamptz `json:"captured_at"`
+	CancelledAt        pgtype.Timestamptz `json:"cancelled_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Channel struct {
 	ID          pgtype.UUID        `json:"id"`
 	TenantID    pgtype.UUID        `json:"tenant_id"`
@@ -565,6 +590,16 @@ type Payment struct {
 	AuthCode    string             `json:"auth_code"`
 }
 
+type PlatformKey struct {
+	ID         pgtype.UUID        `json:"id"`
+	Name       string             `json:"name"`
+	KeyHash    string             `json:"key_hash"`
+	KeyPrefix  string             `json:"key_prefix"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type PricingSetting struct {
 	LocationID pgtype.UUID        `json:"location_id"`
 	TenantID   pgtype.UUID        `json:"tenant_id"`
@@ -595,6 +630,38 @@ type PrinterIpChange struct {
 	MAC        string             `json:"mac"`
 	Source     string             `json:"source"`
 	At         pgtype.Timestamptz `json:"at"`
+}
+
+type SiteDomain struct {
+	Host       string             `json:"host"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	IsPrimary  bool               `json:"is_primary"`
+	Verified   bool               `json:"verified"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type SiteSetting struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	Draft      []byte             `json:"draft"`
+	Published  []byte             `json:"published"`
+	Version    int64              `json:"version"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type SquareConnection struct {
+	LocationID       pgtype.UUID        `json:"location_id"`
+	TenantID         pgtype.UUID        `json:"tenant_id"`
+	MerchantID       string             `json:"merchant_id"`
+	SquareLocationID string             `json:"square_location_id"`
+	AccessTokenEnc   []byte             `json:"access_token_enc"`
+	RefreshTokenEnc  []byte             `json:"refresh_token_enc"`
+	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
+	RefreshedAt      pgtype.Timestamptz `json:"refreshed_at"`
+	Status           string             `json:"status"`
+	LastError        string             `json:"last_error"`
+	ConnectedAt      pgtype.Timestamptz `json:"connected_at"`
 }
 
 type StatusEvent struct {

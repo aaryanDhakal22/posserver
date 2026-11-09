@@ -55,6 +55,17 @@ services:
       GOOGLE_MAPS_API_KEY:
       GEO_CENSUS_URL:
       GEO_NOMINATIM_URL:
+      # weborder stage 2. SQUARE_ENV unset on dev = the in-process fake Square.
+      SITE_BASE_DOMAIN:
+      SQUARE_ENV:
+      SQUARE_APP_ID:
+      SQUARE_APP_SECRET:
+      SQUARE_TOKEN_KEY:
+      SQUARE_REDIRECT_URL:
+      SQUARE_APP_URL:
+      SQUARE_WEBHOOK_SIGNATURE_KEY:
+      SQUARE_WEBHOOK_URL:
+      SQUARE_BASE_URL:
       ORDER_REDELIVER_AFTER:
       # Dev only: the pytest suites fail logins on purpose and run back to back;
       # the global failed-login ceiling (30 per 10 min elsewhere) would trip.

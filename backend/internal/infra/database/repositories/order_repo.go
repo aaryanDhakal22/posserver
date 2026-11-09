@@ -106,6 +106,15 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 			}
 			return fmt.Errorf("create channel order: %w", err)
 		}
+		if h := ch.Hold; h != nil {
+			if err := q.InsertCardHold(ctx, models.InsertCardHoldParams{
+				OrderID: toPgUUID(uuid.UUID(o.ID())), TenantID: toPgUUID(uuid.UUID(o.TenantID())),
+				LocationID: toPgUUID(uuid.UUID(o.LocationID())), Gateway: h.Gateway, PaymentRef: h.Ref,
+				AmountCents: h.AmountCents, TipCents: h.TipCents, DueAt: pgtype.Timestamptz{Time: h.DueAt, Valid: true},
+			}); err != nil {
+				return fmt.Errorf("create card hold: %w", err)
+			}
+		}
 	}
 
 	for _, ev := range o.PullEvents() {

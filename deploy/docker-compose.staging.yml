@@ -58,6 +58,19 @@ services:
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
       GEO_CENSUS_URL: ${GEO_CENSUS_URL:-}
       GEO_NOMINATIM_URL: ${GEO_NOMINATIM_URL:-}
+      # weborder stage 2: store websites + Square. SQUARE_ENV unset = off
+      # (the test card); sandbox once the owner's Square app exists; fake = the
+      # in-process fake. Doppler main/stg holds the values.
+      SITE_BASE_DOMAIN: ${SITE_BASE_DOMAIN:-}
+      SQUARE_ENV: ${SQUARE_ENV:-}
+      SQUARE_APP_ID: ${SQUARE_APP_ID:-}
+      SQUARE_APP_SECRET: ${SQUARE_APP_SECRET:-}
+      SQUARE_TOKEN_KEY: ${SQUARE_TOKEN_KEY:-}
+      SQUARE_REDIRECT_URL: ${SQUARE_REDIRECT_URL:-}
+      SQUARE_APP_URL: ${SQUARE_APP_URL:-}
+      SQUARE_WEBHOOK_SIGNATURE_KEY: ${SQUARE_WEBHOOK_SIGNATURE_KEY:-}
+      SQUARE_WEBHOOK_URL: ${SQUARE_WEBHOOK_URL:-}
+      SQUARE_BASE_URL: ${SQUARE_BASE_URL:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
       OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME}

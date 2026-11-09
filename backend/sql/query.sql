@@ -1660,3 +1660,141 @@ SELECT COALESCE(MAX(id), 0)::bigint FROM channel_events WHERE channel_id = $1;
 
 -- name: RevokeOperatorToken :execrows
 UPDATE operator_tokens SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL;
+
+-- weborder stage 2: storefront platform keys, hosts, site settings.
+
+-- name: CreatePlatformKey :one
+INSERT INTO platform_keys (name, key_hash, key_prefix) VALUES ($1, $2, $3) RETURNING *;
+
+-- name: ListPlatformKeys :many
+SELECT * FROM platform_keys ORDER BY created_at;
+
+-- name: RevokePlatformKey :one
+UPDATE platform_keys SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1 RETURNING *;
+
+-- name: AuthenticatePlatformKey :one
+SELECT * FROM platform_keys WHERE key_hash = $1 AND revoked_at IS NULL;
+
+-- name: TouchPlatformKey :exec
+UPDATE platform_keys SET last_used_at = now() WHERE id = $1;
+
+-- name: InsertSiteDomain :one
+INSERT INTO site_domains (host, tenant_id, location_id, is_primary, verified)
+VALUES ($1, $2, $3, $4, $5) RETURNING *;
+
+-- name: ListSiteDomains :many
+SELECT * FROM site_domains WHERE location_id = $1 ORDER BY is_primary DESC, host;
+
+-- name: GetSiteDomain :one
+SELECT * FROM site_domains WHERE host = $1;
+
+-- name: DeleteSiteDomain :execrows
+DELETE FROM site_domains WHERE host = $1 AND location_id = $2;
+
+-- name: ClearSitePrimary :exec
+UPDATE site_domains SET is_primary = false WHERE location_id = $1 AND is_primary;
+
+-- name: SetSitePrimary :execrows
+UPDATE site_domains SET is_primary = true WHERE host = $1 AND location_id = $2;
+
+-- name: SetSiteDomainVerified :one
+UPDATE site_domains SET verified = $2 WHERE host = $1 RETURNING *;
+
+-- name: GetSiteSettings :one
+SELECT * FROM site_settings WHERE location_id = $1;
+
+-- weborder stage 2: Square connections + card holds.
+
+-- name: UpsertSquareConnection :one
+INSERT INTO square_connections (location_id, tenant_id, merchant_id, square_location_id, access_token_enc, refresh_token_enc, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (location_id) DO UPDATE SET merchant_id = EXCLUDED.merchant_id, square_location_id = EXCLUDED.square_location_id,
+    access_token_enc = EXCLUDED.access_token_enc, refresh_token_enc = EXCLUDED.refresh_token_enc, expires_at = EXCLUDED.expires_at,
+    refreshed_at = now(), status = 'connected', last_error = '', connected_at = now()
+RETURNING *;
+
+-- name: GetSquareConnection :one
+SELECT * FROM square_connections WHERE location_id = $1;
+
+-- name: SquareConnectionsByMerchant :many
+SELECT * FROM square_connections WHERE merchant_id = $1;
+
+-- name: SetSquareLocation :execrows
+UPDATE square_connections SET square_location_id = $2 WHERE location_id = $1;
+
+-- name: UpdateSquareTokens :exec
+UPDATE square_connections SET access_token_enc = $2, refresh_token_enc = $3, expires_at = $4, refreshed_at = now(),
+    status = 'connected', last_error = '' WHERE location_id = $1;
+
+-- name: SetSquareConnectionStatus :exec
+UPDATE square_connections SET status = $2, last_error = $3 WHERE location_id = $1;
+
+-- name: DeleteSquareConnection :execrows
+DELETE FROM square_connections WHERE location_id = $1;
+
+-- name: SquareConnectionsToRefresh :many
+SELECT * FROM square_connections WHERE status <> 'revoked' AND refreshed_at < $1 ORDER BY refreshed_at LIMIT 50;
+
+-- name: InsertCardHold :exec
+INSERT INTO card_holds (order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, due_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+
+-- name: GetCardHold :one
+SELECT * FROM card_holds WHERE order_id = $1;
+
+-- name: ListCardHolds :many
+SELECT * FROM card_holds WHERE location_id = $1 ORDER BY created_at DESC LIMIT $2;
+
+-- name: ClaimCardHolds :many
+-- Holds to capture now (asked for, or past their safety time), leased for
+-- two minutes so a slow capture isn't picked up twice.
+UPDATE card_holds SET next_try_at = now() + interval '2 minutes', updated_at = now()
+WHERE order_id IN (
+    SELECT h.order_id FROM card_holds h
+    WHERE h.status = 'held' AND h.next_try_at <= now() AND (h.due_at <= now() OR h.capture_requested_at IS NOT NULL)
+    ORDER BY h.next_try_at LIMIT $1 FOR UPDATE SKIP LOCKED)
+RETURNING *;
+
+-- name: RequestCardHoldCapture :execrows
+UPDATE card_holds SET capture_requested_at = COALESCE(capture_requested_at, now()),
+    capture_reason = CASE WHEN capture_reason = '' THEN $3 ELSE capture_reason END, next_try_at = LEAST(next_try_at, now()), updated_at = now()
+WHERE location_id = $1 AND order_id = ANY($2::uuid[]) AND status = 'held';
+
+-- name: RequestCardHoldCaptureForBatch :execrows
+UPDATE card_holds h SET capture_requested_at = COALESCE(h.capture_requested_at, now()),
+    capture_reason = CASE WHEN h.capture_reason = '' THEN 'batch_close' ELSE h.capture_reason END,
+    next_try_at = LEAST(h.next_try_at, now()), updated_at = now()
+FROM orders o
+WHERE o.id = h.order_id AND h.location_id = $1 AND h.status = 'held' AND o.agent_batch_id = $2;
+
+-- name: RequestCardHoldCaptureForDriver :execrows
+-- A driver clocked out: their deliveries sent between clock-in and clock-out.
+UPDATE card_holds h SET capture_requested_at = COALESCE(h.capture_requested_at, now()),
+    capture_reason = CASE WHEN h.capture_reason = '' THEN 'clock_out' ELSE h.capture_reason END,
+    next_try_at = LEAST(h.next_try_at, now()), updated_at = now()
+WHERE h.location_id = $1 AND h.status = 'held' AND h.order_id::text IN (
+    SELECT jsonb_array_elements_text(r.sent_ids) FROM delivery_runs r
+    WHERE r.location_id = $1 AND r.driver_id = $2 AND r.at >= $3 AND r.at <= $4);
+
+-- name: SetCardHoldAddedTip :execrows
+UPDATE card_holds SET added_tip_cents = $3, updated_at = now() WHERE location_id = $1 AND order_id = $2 AND status = 'held';
+
+-- name: CardHoldCaptured :exec
+UPDATE card_holds SET status = 'captured', captured_cents = $2, tip_payment_ref = $3, tip_note = $4, captured_at = now(),
+    last_error = '', updated_at = now() WHERE order_id = $1;
+
+-- name: CardHoldCancelled :exec
+UPDATE card_holds SET status = 'cancelled', cancelled_at = now(), last_error = $2, updated_at = now() WHERE order_id = $1;
+
+-- name: CardHoldRetry :exec
+UPDATE card_holds SET attempts = attempts + 1, next_try_at = $2, last_error = $3, updated_at = now() WHERE order_id = $1;
+
+-- name: CardHoldFailed :exec
+UPDATE card_holds SET status = 'failed', attempts = attempts + 1, last_error = $2, updated_at = now() WHERE order_id = $1;
+
+-- name: SetOrderCardPayment :exec
+-- The order's card payment row follows its hold (authorized → captured / refunded).
+UPDATE payments SET status = $2, amount_cents = $3, captured_at = $4 WHERE order_id = $1 AND processor = 'card';
+
+-- name: GetCardHoldByRef :one
+SELECT * FROM card_holds WHERE location_id = $1 AND payment_ref = $2;

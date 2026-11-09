@@ -31,6 +31,7 @@ import (
 
 	authAppSvc "quiccpos/main/internal/app/auth"
 	"quiccpos/main/internal/app/bankimport"
+	cardholdApp "quiccpos/main/internal/app/cardhold"
 	channelApp "quiccpos/main/internal/app/channel"
 	menuApp "quiccpos/main/internal/app/menu"
 	menuviewApp "quiccpos/main/internal/app/menuview"
@@ -38,12 +39,15 @@ import (
 	orderSvc "quiccpos/main/internal/app/order"
 	"quiccpos/main/internal/app/orderport"
 	pricingApp "quiccpos/main/internal/app/pricing"
+	siteApp "quiccpos/main/internal/app/site"
+	"quiccpos/main/internal/app/squarepay"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/app/tracking"
 	"quiccpos/main/internal/domain/notify"
 	"quiccpos/main/internal/domain/payment"
 	tenancyDomain "quiccpos/main/internal/domain/tenancy"
+	"quiccpos/main/internal/infra/square"
 
 	sqsconsumer "quiccpos/main/internal/infra/sqs"
 	sseBroker "quiccpos/main/internal/infra/sse"
@@ -330,9 +334,28 @@ func main() {
 	// The payment port: cash everywhere; the test card on dev and staging
 	// only — no card charging in prod until Square (the owner, 2026-11-02).
 	gateways := map[string]payment.Gateway{payment.MethodCash: payment.Cash{}}
+	var testCard payment.Gateway
 	if env := cfg.AppConfig.AppEnv; env == "dev" || env == "staging" {
-		gateways[payment.MethodCard] = payment.NewTestCard()
+		testCard = payment.NewTestCard()
+		gateways[payment.MethodCard] = testCard
 	}
+	// Square (weborder stage 2): a store with Square connected takes card
+	// orders as holds, captured at clock-out / Close batch / after 24 h.
+	sqCfg, sqFake := squarepay.FromEnv(cfg.AppConfig.AppEnv, lgr)
+	squareRepo := repositories.NewSquareRepository(pool)
+	squareService, err := squarepay.NewService(sqCfg, square.New(sqCfg.BaseURL, sqCfg.AppID, sqCfg.AppSecret, nil), squareRepo, tenancyService, lgr)
+	if err != nil {
+		lgr.Fatal().Err(err).Msg("square setup")
+	}
+	squareService.SetNotifier(notifier)
+	if squareService.Enabled() {
+		gateways[payment.MethodCard] = squareService.CardRouter(testCard)
+		go squareService.RunRefresh(ctx)
+	}
+	cardHolds := cardholdApp.NewService(squareRepo, map[string]payment.Holder{squarepay.GatewayName: squareService.Gateway()}, repo, lgr)
+	cardHolds.SetNotifier(notifier)
+	go cardHolds.Run(ctx)
+	floorService.OnCardHolds(cardHolds)
 	orderPortService := orderport.NewService(pricingService, storeStatusService, menuViewService, menuService, svc,
 		repositories.NewChannelOrderRepository(pool), gateways, lgr)
 	orderPortService.SetNotifier(notifier) // a failed refund pages the owner
@@ -343,6 +366,10 @@ func main() {
 	channelService := channelApp.NewService(repositories.NewChannelRepository(pool), tenancyService, lgr)
 	channelService.SetOperators(operatorService) // an operator's sign-in opens /channel/v1 as the store's Call center
 	channelService.SetViews(menuViewService)
+	// Store websites (weborder stage 2): the storefront's platform key + host → the store's web channel.
+	siteService := siteApp.NewService(repositories.NewSiteRepository(pool), tenancyService, os.Getenv("SITE_BASE_DOMAIN"), lgr)
+	siteService.SetWebChannels(channelService)
+	channelService.SetSites(siteService)
 
 	sqsClient, err := sqsconsumer.NewSQSClient(ctx, cfg, lgr)
 	if err != nil {
@@ -394,6 +421,10 @@ func main() {
 		FloorService:    floorService,
 		OperatorService: operatorService,
 		ChannelService:  channelService,
+		Site:            siteService,
+		Square:          squareService,
+		CardHolds:       cardHolds,
+		SquareFake:      sqFake,
 		MenuViewService: menuViewService,
 		BankImport:      bankImportService,
 		StoreStatus:     storeStatusService,

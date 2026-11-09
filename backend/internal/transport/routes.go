@@ -25,6 +25,7 @@ import (
 
 	"quiccpos/main/internal/app/agentsync"
 	"quiccpos/main/internal/app/bankimport"
+	cardholdApp "quiccpos/main/internal/app/cardhold"
 	channelApp "quiccpos/main/internal/app/channel"
 	diagApp "quiccpos/main/internal/app/diag"
 	geoApp "quiccpos/main/internal/app/geo"
@@ -35,6 +36,8 @@ import (
 	"quiccpos/main/internal/app/orderport"
 	pricingApp "quiccpos/main/internal/app/pricing"
 	"quiccpos/main/internal/app/printerstatus"
+	siteApp "quiccpos/main/internal/app/site"
+	"quiccpos/main/internal/app/squarepay"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/app/tracking"
@@ -112,6 +115,13 @@ type RouterDeps struct {
 	BankImport *bankimport.Service
 	// ChannelService backs sales channels and the /channel/v1 key (main 3.0).
 	ChannelService *channelApp.Service
+	// Site backs store websites: platform keys, hosts, /channel/v1/site.
+	Site *siteApp.Service
+	// Square connects stores to Square; CardHolds captures online card holds.
+	Square    *squarepay.Service
+	CardHolds *cardholdApp.Service
+	// SquareFake is the in-process fake Square (dev / staging with SQUARE_ENV=fake; nil otherwise).
+	SquareFake http.Handler
 	// AgentSync backs agent link / restore / backups / fleet health.
 	AgentSync *agentsync.Service
 	// Diag backs tablet diagnostics (report tokens, reports, admin view).
@@ -153,6 +163,10 @@ func AddRoutes(e *echo.Echo, d RouterDeps) {
 	for _, r := range defs {
 		e.Add(r.Method, r.Path, r.Handler, r.MW...)
 	}
+	if d.SquareFake != nil {
+		// The in-process fake Square (never in prod; not in /__routes).
+		e.Any("/__fake/square/*", echo.WrapHandler(d.SquareFake))
+	}
 
 	infos := make([]RouteInfo, 0, len(defs)+1)
 	for _, r := range defs {
@@ -192,6 +206,8 @@ func routeTable(d RouterDeps) []routeDef {
 	floorH := handler.NewFloorHandler(d.Service, d.FloorService, d.Logger)
 	operatorH := handler.NewOperatorHandler(d.OperatorService, d.MenuService, d.Meters, d.Logger)
 	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
+	siteH := handler.NewSiteHandler(d.Site, d.Logger)
+	squareH := handler.NewSquareHandler(d.Square, d.CardHolds, d.AppEnv, d.Logger)
 	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
 	bankDocH := handler.NewBankImportHandler(d.BankImport, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
@@ -291,6 +307,25 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", adminPrefix+"/channels/:id/rotate", "admin", "Issue a new key (old one stops) → key once", channelH.AdminRotate, admin),
 		def("POST", adminPrefix+"/channels/:id/revoke", "admin", "Revoke the channel's key", channelH.AdminRevoke, admin),
 		def("DELETE", adminPrefix+"/channels/:id", "admin", "Delete a channel", channelH.AdminDelete, admin),
+
+		// Store websites (weborder stage 2): the storefront's platform keys + each store's hosts.
+		def("GET", adminPrefix+"/platform-keys", "admin", "List the storefront's platform keys", siteH.AdminListKeys, admin),
+		def("POST", adminPrefix+"/platform-keys", "admin", "Issue a platform key {name} → key once", siteH.AdminCreateKey, admin),
+		def("POST", adminPrefix+"/platform-keys/:id/revoke", "admin", "Revoke a platform key", siteH.AdminRevokeKey, admin),
+		def("GET", adminPrefix+"/locations/:id/site-domains", "admin", "A store's website hosts", siteH.AdminDomains, admin),
+		def("POST", adminPrefix+"/locations/:id/site-domains", "admin", "Add a host {host, primary} (platform subdomains verified at once)", siteH.AdminAddDomain, admin),
+		def("DELETE", adminPrefix+"/locations/:id/site-domains/:host", "admin", "Remove a host", siteH.AdminRemoveDomain, admin),
+		def("PATCH", adminPrefix+"/site-domains/:host", "admin", "Mark a host verified {verified}", siteH.AdminVerifyDomain, admin),
+
+		// Online card holds (weborder stage 2).
+		def("GET", adminPrefix+"/card-holds/:order_id", "admin", "An order's card hold", squareH.AdminHold, admin),
+		def("POST", adminPrefix+"/card-holds/:order_id/capture", "admin", "Capture an order's card hold now", squareH.AdminCapture, admin),
+		def("POST", adminPrefix+"/card-holds/:order_id/due", "admin", "Dev only: make the hold's safety capture due and run the worker", squareH.AdminDue, admin),
+		def("POST", adminPrefix+"/card-holds/tick", "admin", "Dev only: run the capture worker once", squareH.AdminTick, admin),
+
+		// Square → main (weborder stage 2): the owner comes back from Square; Square's events.
+		def("GET", "/square/oauth/callback", "none", "Square OAuth callback (state-checked) → the SPA", squareH.OAuthCallback),
+		def("POST", "/square/webhook", "none", "Square webhooks (HMAC-signed)", squareH.Webhook),
 
 		// Web app (compiled SvelteKit SPA) — served under /app; /admin + /store
 		// redirect in for back-compat. Assets live under /app/_app/*.
@@ -414,6 +449,15 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/me/menu/views/:id/entries", "store-session", "Add an entry (item, merge, augment, map)", viewH.MeCreateEntry, storeSession),
 		def("PUT", storePrefix+"/me/menu/entries/:id", "store-session", "Replace an entry", viewH.MeUpdateEntry, storeSession),
 		def("DELETE", storePrefix+"/me/menu/entries/:id", "store-session", "Delete an entry", viewH.MeDeleteEntry, storeSession),
+		def("GET", storePrefix+"/me/square", "store-session", "Square: connection, locations, holds open", squareH.MeStatus, storeSession),
+		def("POST", storePrefix+"/me/square/connect", "store-session", "Square: the link to connect the account → {url}", squareH.MeConnect, storeSession),
+		def("PUT", storePrefix+"/me/square/location", "store-session", "Square: the location payments go to {square_location_id}", squareH.MeSetLocation, storeSession),
+		def("DELETE", storePrefix+"/me/square", "store-session", "Square: disconnect (refused while holds are open)", squareH.MeDisconnect, storeSession),
+		def("GET", storePrefix+"/me/card-holds", "store-session", "Recent online card holds (?limit=)", squareH.MeHolds, storeSession),
+		def("GET", storePrefix+"/me/site/domains", "store-session", "The website's hosts", siteH.MeDomains, storeSession),
+		def("POST", storePrefix+"/me/site/domains", "store-session", "Add the store's own domain {host, primary} (unverified until checked)", siteH.MeAddDomain, storeSession),
+		def("POST", storePrefix+"/me/site/domains/:host/primary", "store-session", "Make a host the primary one", siteH.MeSetPrimary, storeSession),
+		def("DELETE", storePrefix+"/me/site/domains/:host", "store-session", "Remove a host", siteH.MeRemoveDomain, storeSession),
 		def("GET", storePrefix+"/me/menu/vendor", "store-session", "The vendor view (Brygid): mappings + names nothing routes", viewH.MeVendor, storeSession),
 		def("POST", storePrefix+"/me/menu/vendor/maps", "store-session", "Map a vendor item name to a bank item {vendor_name, item_id}", viewH.MeVendorMap, storeSession),
 
@@ -440,6 +484,8 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", channelPrefix+"/store", "channel", "The store's status: open/paused/closed, order types + ETAs, sold out", statusH.ChannelStore, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/store/times", "channel", "Times an order can be promised for (?type=pickup|delivery&date=YYYY-MM-DD)", statusH.ChannelTimes, channelAuth, channelGzip),
 		def("POST", channelPrefix+"/store/delivery-check", "channel", "Does the store deliver to this address {line1, city, state, zip}", statusH.ChannelDeliveryCheck, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/payments", "channel", "How this channel takes payments (methods + the card SDK's setup)", squareH.ChannelPayments, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/site", "channel", "The store's website: published look + texts, hosts (ETag)", siteH.ChannelSite, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/menu/version", "channel", "The menu version (?since=N → changed)", viewH.ChannelMenuVersion, channelAuth, channelGzip),
 
 		def("GET", storeUIPath, "none", "Redirect → /app/store", redirectTo("/app/store")),

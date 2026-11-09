@@ -104,6 +104,10 @@ func NewService(p Pricing, st Status, b Bank, r Router, o Orders, l Links, gatew
 		logger: lg.With().Str("module", "orderport").Logger(), now: time.Now}
 }
 
+// HoldFor is how long an online card hold waits for the driver's clock-out
+// or Close batch before main captures it by itself (owner, 2026-11-09).
+var HoldFor = 24 * time.Hour
+
 // Request is a channel's order.
 type Request struct {
 	ClientOrderID string         `json:"client_order_id"`
@@ -114,8 +118,9 @@ type Request struct {
 	TipPct        *int           `json:"tip_pct"`
 	FirstOrder    *bool          `json:"first_order"`
 	Payment       struct {
-		Method string `json:"method"` // cash | card
-		Token  string `json:"token"`
+		Method            string `json:"method"` // cash | card
+		Token             string `json:"token"`
+		VerificationToken string `json:"verification_token"` // the buyer's 3-D Secure answer (Square verifyBuyer)
 	} `json:"payment"`
 	Customer struct {
 		Name  string `json:"name"`
@@ -293,13 +298,19 @@ func (s *Service) Place(ctx context.Context, ch channelDom.Channel, req Request)
 	if _, err := s.build(ctx, ch, req, pctx, q, nil, token); err != nil {
 		return nil, false, err
 	}
-	res, err := gw.Charge(ctx, payment.Charge{AmountCents: q.TotalCents, Token: req.Payment.Token,
-		IdempotencyKey: ch.ID.String() + ":" + req.ClientOrderID})
+	res, err := gw.Charge(ctx, payment.Charge{LocationID: ch.LocationID, AmountCents: q.TotalCents, TipCents: q.TipCents,
+		Token: req.Payment.Token, VerificationToken: req.Payment.VerificationToken,
+		IdempotencyKey: ch.ID.String() + ":" + req.ClientOrderID, ReferenceID: req.ClientOrderID,
+		Note: ch.Name + " order", BuyerEmail: strings.TrimSpace(req.Customer.Email)})
 	switch {
 	case errors.Is(err, payment.ErrDeclined):
 		return nil, false, refuse(http.StatusPaymentRequired, "payment_declined", "The card was declined.")
+	case errors.Is(err, payment.ErrVerify):
+		return nil, false, refuse(http.StatusPaymentRequired, "verification_required", "Your bank needs you to verify this card — try again.")
 	case errors.Is(err, payment.ErrBadToken):
 		return nil, false, refuse(http.StatusPaymentRequired, "payment_declined", "The card couldn't be used.")
+	case errors.Is(err, payment.ErrNotConnected):
+		return nil, false, refuse(http.StatusConflict, "payment_unavailable", "Card payments aren't available right now — pay with cash.")
 	case err != nil:
 		return nil, false, err
 	}
@@ -341,7 +352,7 @@ func (s *Service) refund(ctx context.Context, ch channelDom.Channel, gw payment.
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
-	if err := gw.Refund(ctx, res.Ref, amount); err != nil {
+	if err := gw.Refund(ctx, ch.LocationID, res.Ref, amount); err != nil {
 		s.logger.Error().Ctx(ctx).Err(err).Str("gateway", res.Gateway).Msg("REFUND FAILED after a failed save — refund it by hand")
 		if s.notifier != nil {
 			_ = s.notifier.Notify(ctx, notify.Notice{LocationID: ch.LocationID, Kind: notify.KindRefundFailed, Title: "Refund failed",
@@ -505,10 +516,13 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 	payRef := []byte("{}")
 	if res != nil {
 		p := order.Payment{ID: uuid.Must(uuid.NewV7()), Processor: req.Payment.Method, Amount: order.Money(q.TotalCents)}
-		if res.Status == "captured" {
+		switch res.Status {
+		case payment.StatusCaptured:
 			now := s.now().UTC()
 			p.Status, p.Last4, p.AuthCode, p.CapturedAt = order.PaymentCaptured, res.Last4, res.AuthCode, &now
-		} else {
+		case payment.StatusAuthorized: // a hold: captured at clock-out / Close batch / HoldFor
+			p.Status, p.Last4, p.AuthCode = order.PaymentAuthorized, res.Last4, res.AuthCode
+		default:
 			p.Status = order.PaymentPending // cash: collected at the store / by the driver
 		}
 		pays = []order.Payment{p}
@@ -517,7 +531,7 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 	// The channel's request is the raw payload (as the vendor's JSON is for
 	// Brygid's orders) — without the card token.
 	rawReq := req
-	rawReq.Payment.Token = ""
+	rawReq.Payment.Token, rawReq.Payment.VerificationToken = "", ""
 	raw, err := json.Marshal(rawReq)
 	if err != nil {
 		return nil, err
@@ -525,6 +539,10 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 	meta := map[string]any{"channel": map[string]any{"id": ch.ID.String(), "kind": string(ch.Kind), "name": ch.Name},
 		"client_order_id": req.ClientOrderID}
 	ref := &order.ChannelRef{ID: ch.ID, ClientOrderID: req.ClientOrderID, Payment: payRef, TrackToken: token}
+	if res != nil && res.Status == payment.StatusAuthorized {
+		ref.Hold = &order.CardHold{Gateway: res.Gateway, Ref: res.Ref, AmountCents: q.TotalCents - q.TipCents, TipCents: q.TipCents,
+			DueAt: s.now().Add(HoldFor)}
+	}
 	if op := req.TakenBy; op != nil {
 		meta["operator"] = map[string]any{"id": op.ID.String(), "display_name": op.DisplayName}
 		id := op.ID

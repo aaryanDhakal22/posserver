@@ -16,6 +16,7 @@ import (
 const (
 	KindOrderNotAccepted = "order_not_accepted" // a channel order the Pi hasn't accepted in time
 	KindRefundFailed     = "refund_failed"      // a charge couldn't be refunded after a failed save
+	KindPaymentProblem   = "payment_problem"    // Square: a capture / tip charge failed, access revoked, a dispute
 )
 
 // Notice is one message about a store.

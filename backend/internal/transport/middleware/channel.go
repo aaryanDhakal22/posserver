@@ -9,6 +9,7 @@ import (
 	channelApp "quiccpos/main/internal/app/channel"
 	operatorApp "quiccpos/main/internal/app/operator"
 	channelDom "quiccpos/main/internal/domain/channel"
+	siteDom "quiccpos/main/internal/domain/site"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
@@ -25,7 +26,9 @@ const (
 	channelOperatorKey
 )
 
-// ChannelAuth gates /channel/v1 with the channel's bearer key (qch_…). No
+// ChannelAuth gates /channel/v1 with the channel's bearer key (qch_…), an
+// operator's sign-in (qops_… + X-Location-ID) or the storefront's platform
+// key (qpk_… + X-Site-Host → the store's built-in web channel). No
 // caching: a revoke or a new key takes effect on the next request. Errors are
 // {error, code} like every /channel/v1 answer.
 func ChannelAuth(svc *channelApp.Service) echo.MiddlewareFunc {
@@ -48,6 +51,16 @@ func ChannelAuth(svc *channelApp.Service) echo.MiddlewareFunc {
 				ch, op, err = svc.AuthenticateOperator(c.Request().Context(), key, loc)
 				if errors.Is(err, channelApp.ErrLocationNotAllowed) {
 					return c.JSON(http.StatusForbidden, map[string]string{"error": err.Error(), "code": "location_not_allowed"})
+				}
+			} else if strings.HasPrefix(key, siteDom.KeyPrefix) {
+				// The storefront's platform key + the host it serves →
+				// that store's built-in web channel (weborder stage 2).
+				ch, err = svc.AuthenticateSite(c.Request().Context(), key, c.Request().Header.Get("X-Site-Host"))
+				switch {
+				case errors.Is(err, channelApp.ErrHostRequired):
+					return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "host_required"})
+				case errors.Is(err, channelApp.ErrUnknownSite):
+					return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error(), "code": "unknown_site"})
 				}
 			} else {
 				ch, err = svc.Authenticate(c.Request().Context(), key)

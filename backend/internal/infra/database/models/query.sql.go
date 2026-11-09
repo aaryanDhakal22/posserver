@@ -77,6 +77,25 @@ func (q *Queries) AuthenticateChannel(ctx context.Context, keyHash pgtype.Text) 
 	return i, err
 }
 
+const authenticatePlatformKey = `-- name: AuthenticatePlatformKey :one
+SELECT id, name, key_hash, key_prefix, revoked_at, last_used_at, created_at FROM platform_keys WHERE key_hash = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) AuthenticatePlatformKey(ctx context.Context, keyHash string) (PlatformKey, error) {
+	row := q.db.QueryRow(ctx, authenticatePlatformKey, keyHash)
+	var i PlatformKey
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const builtinChannel = `-- name: BuiltinChannel :one
 SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id FROM channels WHERE location_id = $1 AND builtin AND kind = $2 ORDER BY created_at LIMIT 1
 `
@@ -106,6 +125,71 @@ func (q *Queries) BuiltinChannel(ctx context.Context, arg BuiltinChannelParams) 
 		&i.ViewID,
 	)
 	return i, err
+}
+
+const cardHoldCancelled = `-- name: CardHoldCancelled :exec
+UPDATE card_holds SET status = 'cancelled', cancelled_at = now(), last_error = $2, updated_at = now() WHERE order_id = $1
+`
+
+type CardHoldCancelledParams struct {
+	OrderID   pgtype.UUID `json:"order_id"`
+	LastError string      `json:"last_error"`
+}
+
+func (q *Queries) CardHoldCancelled(ctx context.Context, arg CardHoldCancelledParams) error {
+	_, err := q.db.Exec(ctx, cardHoldCancelled, arg.OrderID, arg.LastError)
+	return err
+}
+
+const cardHoldCaptured = `-- name: CardHoldCaptured :exec
+UPDATE card_holds SET status = 'captured', captured_cents = $2, tip_payment_ref = $3, tip_note = $4, captured_at = now(),
+    last_error = '', updated_at = now() WHERE order_id = $1
+`
+
+type CardHoldCapturedParams struct {
+	OrderID       pgtype.UUID `json:"order_id"`
+	CapturedCents int64       `json:"captured_cents"`
+	TipPaymentRef string      `json:"tip_payment_ref"`
+	TipNote       string      `json:"tip_note"`
+}
+
+func (q *Queries) CardHoldCaptured(ctx context.Context, arg CardHoldCapturedParams) error {
+	_, err := q.db.Exec(ctx, cardHoldCaptured,
+		arg.OrderID,
+		arg.CapturedCents,
+		arg.TipPaymentRef,
+		arg.TipNote,
+	)
+	return err
+}
+
+const cardHoldFailed = `-- name: CardHoldFailed :exec
+UPDATE card_holds SET status = 'failed', attempts = attempts + 1, last_error = $2, updated_at = now() WHERE order_id = $1
+`
+
+type CardHoldFailedParams struct {
+	OrderID   pgtype.UUID `json:"order_id"`
+	LastError string      `json:"last_error"`
+}
+
+func (q *Queries) CardHoldFailed(ctx context.Context, arg CardHoldFailedParams) error {
+	_, err := q.db.Exec(ctx, cardHoldFailed, arg.OrderID, arg.LastError)
+	return err
+}
+
+const cardHoldRetry = `-- name: CardHoldRetry :exec
+UPDATE card_holds SET attempts = attempts + 1, next_try_at = $2, last_error = $3, updated_at = now() WHERE order_id = $1
+`
+
+type CardHoldRetryParams struct {
+	OrderID   pgtype.UUID        `json:"order_id"`
+	NextTryAt pgtype.Timestamptz `json:"next_try_at"`
+	LastError string             `json:"last_error"`
+}
+
+func (q *Queries) CardHoldRetry(ctx context.Context, arg CardHoldRetryParams) error {
+	_, err := q.db.Exec(ctx, cardHoldRetry, arg.OrderID, arg.NextTryAt, arg.LastError)
+	return err
 }
 
 const channelEventExists = `-- name: ChannelEventExists :one
@@ -214,6 +298,60 @@ func (q *Queries) ChannelOrdersToAlert(ctx context.Context, arg ChannelOrdersToA
 	return items, nil
 }
 
+const claimCardHolds = `-- name: ClaimCardHolds :many
+UPDATE card_holds SET next_try_at = now() + interval '2 minutes', updated_at = now()
+WHERE order_id IN (
+    SELECT h.order_id FROM card_holds h
+    WHERE h.status = 'held' AND h.next_try_at <= now() AND (h.due_at <= now() OR h.capture_requested_at IS NOT NULL)
+    ORDER BY h.next_try_at LIMIT $1 FOR UPDATE SKIP LOCKED)
+RETURNING order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at
+`
+
+// Holds to capture now (asked for, or past their safety time), leased for
+// two minutes so a slow capture isn't picked up twice.
+func (q *Queries) ClaimCardHolds(ctx context.Context, limit int32) ([]CardHold, error) {
+	rows, err := q.db.Query(ctx, claimCardHolds, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CardHold
+	for rows.Next() {
+		var i CardHold
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Gateway,
+			&i.PaymentRef,
+			&i.AmountCents,
+			&i.TipCents,
+			&i.AddedTipCents,
+			&i.Status,
+			&i.CaptureReason,
+			&i.DueAt,
+			&i.CaptureRequestedAt,
+			&i.NextTryAt,
+			&i.Attempts,
+			&i.LastError,
+			&i.CapturedCents,
+			&i.TipPaymentRef,
+			&i.TipNote,
+			&i.CapturedAt,
+			&i.CancelledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const clearReceiptPrinter = `-- name: ClearReceiptPrinter :exec
 UPDATE printers SET is_receipt = false, updated_at = now()
 WHERE location_id = $1 AND is_receipt
@@ -222,6 +360,15 @@ WHERE location_id = $1 AND is_receipt
 // Unflag the location's current receipt printer (one per location).
 func (q *Queries) ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, clearReceiptPrinter, locationID)
+	return err
+}
+
+const clearSitePrimary = `-- name: ClearSitePrimary :exec
+UPDATE site_domains SET is_primary = false WHERE location_id = $1 AND is_primary
+`
+
+func (q *Queries) ClearSitePrimary(ctx context.Context, locationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearSitePrimary, locationID)
 	return err
 }
 
@@ -1208,6 +1355,33 @@ func (q *Queries) CreatePayment(ctx context.Context, arg CreatePaymentParams) er
 	return err
 }
 
+const createPlatformKey = `-- name: CreatePlatformKey :one
+
+INSERT INTO platform_keys (name, key_hash, key_prefix) VALUES ($1, $2, $3) RETURNING id, name, key_hash, key_prefix, revoked_at, last_used_at, created_at
+`
+
+type CreatePlatformKeyParams struct {
+	Name      string `json:"name"`
+	KeyHash   string `json:"key_hash"`
+	KeyPrefix string `json:"key_prefix"`
+}
+
+// weborder stage 2: storefront platform keys, hosts, site settings.
+func (q *Queries) CreatePlatformKey(ctx context.Context, arg CreatePlatformKeyParams) (PlatformKey, error) {
+	row := q.db.QueryRow(ctx, createPlatformKey, arg.Name, arg.KeyHash, arg.KeyPrefix)
+	var i PlatformKey
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createPrinter = `-- name: CreatePrinter :one
 
 INSERT INTO printers (tenant_id, location_id, name, ip, mac)
@@ -1692,6 +1866,35 @@ func (q *Queries) DeletePrintersByLocation(ctx context.Context, locationID pgtyp
 	return err
 }
 
+const deleteSiteDomain = `-- name: DeleteSiteDomain :execrows
+DELETE FROM site_domains WHERE host = $1 AND location_id = $2
+`
+
+type DeleteSiteDomainParams struct {
+	Host       string      `json:"host"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+func (q *Queries) DeleteSiteDomain(ctx context.Context, arg DeleteSiteDomainParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSiteDomain, arg.Host, arg.LocationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteSquareConnection = `-- name: DeleteSquareConnection :execrows
+DELETE FROM square_connections WHERE location_id = $1
+`
+
+func (q *Queries) DeleteSquareConnection(ctx context.Context, locationID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSquareConnection, locationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteStoreHoursException = `-- name: DeleteStoreHoursException :execrows
 DELETE FROM store_hours_exceptions WHERE id = $1 AND location_id = $2
 `
@@ -2060,6 +2263,79 @@ func (q *Queries) GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKPara
 	var apk []byte
 	err := row.Scan(&apk)
 	return apk, err
+}
+
+const getCardHold = `-- name: GetCardHold :one
+SELECT order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at FROM card_holds WHERE order_id = $1
+`
+
+func (q *Queries) GetCardHold(ctx context.Context, orderID pgtype.UUID) (CardHold, error) {
+	row := q.db.QueryRow(ctx, getCardHold, orderID)
+	var i CardHold
+	err := row.Scan(
+		&i.OrderID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Gateway,
+		&i.PaymentRef,
+		&i.AmountCents,
+		&i.TipCents,
+		&i.AddedTipCents,
+		&i.Status,
+		&i.CaptureReason,
+		&i.DueAt,
+		&i.CaptureRequestedAt,
+		&i.NextTryAt,
+		&i.Attempts,
+		&i.LastError,
+		&i.CapturedCents,
+		&i.TipPaymentRef,
+		&i.TipNote,
+		&i.CapturedAt,
+		&i.CancelledAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getCardHoldByRef = `-- name: GetCardHoldByRef :one
+SELECT order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at FROM card_holds WHERE location_id = $1 AND payment_ref = $2
+`
+
+type GetCardHoldByRefParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	PaymentRef string      `json:"payment_ref"`
+}
+
+func (q *Queries) GetCardHoldByRef(ctx context.Context, arg GetCardHoldByRefParams) (CardHold, error) {
+	row := q.db.QueryRow(ctx, getCardHoldByRef, arg.LocationID, arg.PaymentRef)
+	var i CardHold
+	err := row.Scan(
+		&i.OrderID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Gateway,
+		&i.PaymentRef,
+		&i.AmountCents,
+		&i.TipCents,
+		&i.AddedTipCents,
+		&i.Status,
+		&i.CaptureReason,
+		&i.DueAt,
+		&i.CaptureRequestedAt,
+		&i.NextTryAt,
+		&i.Attempts,
+		&i.LastError,
+		&i.CapturedCents,
+		&i.TipPaymentRef,
+		&i.TipNote,
+		&i.CapturedAt,
+		&i.CancelledAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const getChannel = `-- name: GetChannel :one
@@ -3186,6 +3462,65 @@ func (q *Queries) GetPrinterByID(ctx context.Context, id pgtype.UUID) (Printer, 
 	return i, err
 }
 
+const getSiteDomain = `-- name: GetSiteDomain :one
+SELECT host, tenant_id, location_id, is_primary, verified, created_at FROM site_domains WHERE host = $1
+`
+
+func (q *Queries) GetSiteDomain(ctx context.Context, host string) (SiteDomain, error) {
+	row := q.db.QueryRow(ctx, getSiteDomain, host)
+	var i SiteDomain
+	err := row.Scan(
+		&i.Host,
+		&i.TenantID,
+		&i.LocationID,
+		&i.IsPrimary,
+		&i.Verified,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getSiteSettings = `-- name: GetSiteSettings :one
+SELECT location_id, tenant_id, draft, published, version, updated_at FROM site_settings WHERE location_id = $1
+`
+
+func (q *Queries) GetSiteSettings(ctx context.Context, locationID pgtype.UUID) (SiteSetting, error) {
+	row := q.db.QueryRow(ctx, getSiteSettings, locationID)
+	var i SiteSetting
+	err := row.Scan(
+		&i.LocationID,
+		&i.TenantID,
+		&i.Draft,
+		&i.Published,
+		&i.Version,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getSquareConnection = `-- name: GetSquareConnection :one
+SELECT location_id, tenant_id, merchant_id, square_location_id, access_token_enc, refresh_token_enc, expires_at, refreshed_at, status, last_error, connected_at FROM square_connections WHERE location_id = $1
+`
+
+func (q *Queries) GetSquareConnection(ctx context.Context, locationID pgtype.UUID) (SquareConnection, error) {
+	row := q.db.QueryRow(ctx, getSquareConnection, locationID)
+	var i SquareConnection
+	err := row.Scan(
+		&i.LocationID,
+		&i.TenantID,
+		&i.MerchantID,
+		&i.SquareLocationID,
+		&i.AccessTokenEnc,
+		&i.RefreshTokenEnc,
+		&i.ExpiresAt,
+		&i.RefreshedAt,
+		&i.Status,
+		&i.LastError,
+		&i.ConnectedAt,
+	)
+	return i, err
+}
+
 const getStatusEventsByOrderID = `-- name: GetStatusEventsByOrderID :many
 SELECT order_id, position, from_status, to_status, at, actor, actor_id, reason
 FROM status_events WHERE order_id = $1 ORDER BY position
@@ -3403,6 +3738,36 @@ func (q *Queries) InsertAgentUpdate(ctx context.Context, arg InsertAgentUpdatePa
 		arg.Action,
 		arg.RequestedBy,
 		arg.Force,
+	)
+	return err
+}
+
+const insertCardHold = `-- name: InsertCardHold :exec
+INSERT INTO card_holds (order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, due_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+`
+
+type InsertCardHoldParams struct {
+	OrderID     pgtype.UUID        `json:"order_id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	Gateway     string             `json:"gateway"`
+	PaymentRef  string             `json:"payment_ref"`
+	AmountCents int64              `json:"amount_cents"`
+	TipCents    int64              `json:"tip_cents"`
+	DueAt       pgtype.Timestamptz `json:"due_at"`
+}
+
+func (q *Queries) InsertCardHold(ctx context.Context, arg InsertCardHoldParams) error {
+	_, err := q.db.Exec(ctx, insertCardHold,
+		arg.OrderID,
+		arg.TenantID,
+		arg.LocationID,
+		arg.Gateway,
+		arg.PaymentRef,
+		arg.AmountCents,
+		arg.TipCents,
+		arg.DueAt,
 	)
 	return err
 }
@@ -3735,6 +4100,39 @@ func (q *Queries) InsertPrinterIPChange(ctx context.Context, arg InsertPrinterIP
 	return err
 }
 
+const insertSiteDomain = `-- name: InsertSiteDomain :one
+INSERT INTO site_domains (host, tenant_id, location_id, is_primary, verified)
+VALUES ($1, $2, $3, $4, $5) RETURNING host, tenant_id, location_id, is_primary, verified, created_at
+`
+
+type InsertSiteDomainParams struct {
+	Host       string      `json:"host"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	IsPrimary  bool        `json:"is_primary"`
+	Verified   bool        `json:"verified"`
+}
+
+func (q *Queries) InsertSiteDomain(ctx context.Context, arg InsertSiteDomainParams) (SiteDomain, error) {
+	row := q.db.QueryRow(ctx, insertSiteDomain,
+		arg.Host,
+		arg.TenantID,
+		arg.LocationID,
+		arg.IsPrimary,
+		arg.Verified,
+	)
+	var i SiteDomain
+	err := row.Scan(
+		&i.Host,
+		&i.TenantID,
+		&i.LocationID,
+		&i.IsPrimary,
+		&i.Verified,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const insertTabletReportToken = `-- name: InsertTabletReportToken :one
 INSERT INTO tablet_report_tokens (tenant_id, location_id, tablet_id, tablet_name, token_hash, key_prefix)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -4063,6 +4461,58 @@ func (q *Queries) ListAppReleases(ctx context.Context, app string) ([]ListAppRel
 			&i.Sha256,
 			&i.Size,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCardHolds = `-- name: ListCardHolds :many
+SELECT order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at FROM card_holds WHERE location_id = $1 ORDER BY created_at DESC LIMIT $2
+`
+
+type ListCardHoldsParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Limit      int32       `json:"limit"`
+}
+
+func (q *Queries) ListCardHolds(ctx context.Context, arg ListCardHoldsParams) ([]CardHold, error) {
+	rows, err := q.db.Query(ctx, listCardHolds, arg.LocationID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CardHold
+	for rows.Next() {
+		var i CardHold
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Gateway,
+			&i.PaymentRef,
+			&i.AmountCents,
+			&i.TipCents,
+			&i.AddedTipCents,
+			&i.Status,
+			&i.CaptureReason,
+			&i.DueAt,
+			&i.CaptureRequestedAt,
+			&i.NextTryAt,
+			&i.Attempts,
+			&i.LastError,
+			&i.CapturedCents,
+			&i.TipPaymentRef,
+			&i.TipNote,
+			&i.CapturedAt,
+			&i.CancelledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -5584,6 +6034,38 @@ func (q *Queries) ListOrderGeoByIDs(ctx context.Context, arg ListOrderGeoByIDsPa
 	return items, nil
 }
 
+const listPlatformKeys = `-- name: ListPlatformKeys :many
+SELECT id, name, key_hash, key_prefix, revoked_at, last_used_at, created_at FROM platform_keys ORDER BY created_at
+`
+
+func (q *Queries) ListPlatformKeys(ctx context.Context) ([]PlatformKey, error) {
+	rows, err := q.db.Query(ctx, listPlatformKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PlatformKey
+	for rows.Next() {
+		var i PlatformKey
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.KeyHash,
+			&i.KeyPrefix,
+			&i.RevokedAt,
+			&i.LastUsedAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPricingSettings = `-- name: ListPricingSettings :many
 
 SELECT location_id, tenant_id, kind, settings, updated_at FROM pricing_settings WHERE location_id = $1 ORDER BY kind
@@ -5822,6 +6304,37 @@ func (q *Queries) ListRoutingByLocation(ctx context.Context, locationID pgtype.U
 	for rows.Next() {
 		var i ListRoutingByLocationRow
 		if err := rows.Scan(&i.ItemID, &i.ItemName, &i.PrinterID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSiteDomains = `-- name: ListSiteDomains :many
+SELECT host, tenant_id, location_id, is_primary, verified, created_at FROM site_domains WHERE location_id = $1 ORDER BY is_primary DESC, host
+`
+
+func (q *Queries) ListSiteDomains(ctx context.Context, locationID pgtype.UUID) ([]SiteDomain, error) {
+	rows, err := q.db.Query(ctx, listSiteDomains, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SiteDomain
+	for rows.Next() {
+		var i SiteDomain
+		if err := rows.Scan(
+			&i.Host,
+			&i.TenantID,
+			&i.LocationID,
+			&i.IsPrimary,
+			&i.Verified,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -6452,6 +6965,77 @@ func (q *Queries) PruneExternalWork(ctx context.Context, now pgtype.Timestamptz)
 	return result.RowsAffected(), nil
 }
 
+const requestCardHoldCapture = `-- name: RequestCardHoldCapture :execrows
+UPDATE card_holds SET capture_requested_at = COALESCE(capture_requested_at, now()),
+    capture_reason = CASE WHEN capture_reason = '' THEN $3 ELSE capture_reason END, next_try_at = LEAST(next_try_at, now()), updated_at = now()
+WHERE location_id = $1 AND order_id = ANY($2::uuid[]) AND status = 'held'
+`
+
+type RequestCardHoldCaptureParams struct {
+	LocationID    pgtype.UUID   `json:"location_id"`
+	Column2       []pgtype.UUID `json:"column_2"`
+	CaptureReason string        `json:"capture_reason"`
+}
+
+func (q *Queries) RequestCardHoldCapture(ctx context.Context, arg RequestCardHoldCaptureParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requestCardHoldCapture, arg.LocationID, arg.Column2, arg.CaptureReason)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const requestCardHoldCaptureForBatch = `-- name: RequestCardHoldCaptureForBatch :execrows
+UPDATE card_holds h SET capture_requested_at = COALESCE(h.capture_requested_at, now()),
+    capture_reason = CASE WHEN h.capture_reason = '' THEN 'batch_close' ELSE h.capture_reason END,
+    next_try_at = LEAST(h.next_try_at, now()), updated_at = now()
+FROM orders o
+WHERE o.id = h.order_id AND h.location_id = $1 AND h.status = 'held' AND o.agent_batch_id = $2
+`
+
+type RequestCardHoldCaptureForBatchParams struct {
+	LocationID   pgtype.UUID `json:"location_id"`
+	AgentBatchID pgtype.Int8 `json:"agent_batch_id"`
+}
+
+func (q *Queries) RequestCardHoldCaptureForBatch(ctx context.Context, arg RequestCardHoldCaptureForBatchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requestCardHoldCaptureForBatch, arg.LocationID, arg.AgentBatchID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const requestCardHoldCaptureForDriver = `-- name: RequestCardHoldCaptureForDriver :execrows
+UPDATE card_holds h SET capture_requested_at = COALESCE(h.capture_requested_at, now()),
+    capture_reason = CASE WHEN h.capture_reason = '' THEN 'clock_out' ELSE h.capture_reason END,
+    next_try_at = LEAST(h.next_try_at, now()), updated_at = now()
+WHERE h.location_id = $1 AND h.status = 'held' AND h.order_id::text IN (
+    SELECT jsonb_array_elements_text(r.sent_ids) FROM delivery_runs r
+    WHERE r.location_id = $1 AND r.driver_id = $2 AND r.at >= $3 AND r.at <= $4)
+`
+
+type RequestCardHoldCaptureForDriverParams struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	DriverID   string             `json:"driver_id"`
+	At         pgtype.Timestamptz `json:"at"`
+	At_2       pgtype.Timestamptz `json:"at_2"`
+}
+
+// A driver clocked out: their deliveries sent between clock-in and clock-out.
+func (q *Queries) RequestCardHoldCaptureForDriver(ctx context.Context, arg RequestCardHoldCaptureForDriverParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requestCardHoldCaptureForDriver,
+		arg.LocationID,
+		arg.DriverID,
+		arg.At,
+		arg.At_2,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const requeueLocationExternalStops = `-- name: RequeueLocationExternalStops :execrows
 UPDATE geo_external_stops SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL,
     confirmed = false, updated_at = now()
@@ -6662,6 +7246,25 @@ func (q *Queries) RevokeOperatorToken(ctx context.Context, tokenHash string) (in
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const revokePlatformKey = `-- name: RevokePlatformKey :one
+UPDATE platform_keys SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1 RETURNING id, name, key_hash, key_prefix, revoked_at, last_used_at, created_at
+`
+
+func (q *Queries) RevokePlatformKey(ctx context.Context, id pgtype.UUID) (PlatformKey, error) {
+	row := q.db.QueryRow(ctx, revokePlatformKey, id)
+	var i PlatformKey
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const revokeTabletTokenByID = `-- name: RevokeTabletTokenByID :execrows
@@ -7039,6 +7642,24 @@ func (q *Queries) SearchOrdersInScope(ctx context.Context, arg SearchOrdersInSco
 		return nil, err
 	}
 	return items, nil
+}
+
+const setCardHoldAddedTip = `-- name: SetCardHoldAddedTip :execrows
+UPDATE card_holds SET added_tip_cents = $3, updated_at = now() WHERE location_id = $1 AND order_id = $2 AND status = 'held'
+`
+
+type SetCardHoldAddedTipParams struct {
+	LocationID    pgtype.UUID `json:"location_id"`
+	OrderID       pgtype.UUID `json:"order_id"`
+	AddedTipCents int64       `json:"added_tip_cents"`
+}
+
+func (q *Queries) SetCardHoldAddedTip(ctx context.Context, arg SetCardHoldAddedTipParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setCardHoldAddedTip, arg.LocationID, arg.OrderID, arg.AddedTipCents)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setCategoryPosition = `-- name: SetCategoryPosition :exec
@@ -7560,6 +8181,28 @@ func (q *Queries) SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStat
 	return result.RowsAffected(), nil
 }
 
+const setOrderCardPayment = `-- name: SetOrderCardPayment :exec
+UPDATE payments SET status = $2, amount_cents = $3, captured_at = $4 WHERE order_id = $1 AND processor = 'card'
+`
+
+type SetOrderCardPaymentParams struct {
+	OrderID     pgtype.UUID        `json:"order_id"`
+	Status      string             `json:"status"`
+	AmountCents int64              `json:"amount_cents"`
+	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
+}
+
+// The order's card payment row follows its hold (authorized → captured / refunded).
+func (q *Queries) SetOrderCardPayment(ctx context.Context, arg SetOrderCardPaymentParams) error {
+	_, err := q.db.Exec(ctx, setOrderCardPayment,
+		arg.OrderID,
+		arg.Status,
+		arg.AmountCents,
+		arg.CapturedAt,
+	)
+	return err
+}
+
 const setOrderGeoOutsideArea = `-- name: SetOrderGeoOutsideArea :execrows
 UPDATE order_geo SET outside_area = $1, pushed_at = NULL, next_try_at = now(), updated_at = now()
 WHERE order_id = $2 AND state = 'located' AND outside_area <> $1
@@ -7619,6 +8262,78 @@ func (q *Queries) SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptPa
 		&i.MAC,
 	)
 	return i, err
+}
+
+const setSiteDomainVerified = `-- name: SetSiteDomainVerified :one
+UPDATE site_domains SET verified = $2 WHERE host = $1 RETURNING host, tenant_id, location_id, is_primary, verified, created_at
+`
+
+type SetSiteDomainVerifiedParams struct {
+	Host     string `json:"host"`
+	Verified bool   `json:"verified"`
+}
+
+func (q *Queries) SetSiteDomainVerified(ctx context.Context, arg SetSiteDomainVerifiedParams) (SiteDomain, error) {
+	row := q.db.QueryRow(ctx, setSiteDomainVerified, arg.Host, arg.Verified)
+	var i SiteDomain
+	err := row.Scan(
+		&i.Host,
+		&i.TenantID,
+		&i.LocationID,
+		&i.IsPrimary,
+		&i.Verified,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const setSitePrimary = `-- name: SetSitePrimary :execrows
+UPDATE site_domains SET is_primary = true WHERE host = $1 AND location_id = $2
+`
+
+type SetSitePrimaryParams struct {
+	Host       string      `json:"host"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+func (q *Queries) SetSitePrimary(ctx context.Context, arg SetSitePrimaryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSitePrimary, arg.Host, arg.LocationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setSquareConnectionStatus = `-- name: SetSquareConnectionStatus :exec
+UPDATE square_connections SET status = $2, last_error = $3 WHERE location_id = $1
+`
+
+type SetSquareConnectionStatusParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Status     string      `json:"status"`
+	LastError  string      `json:"last_error"`
+}
+
+func (q *Queries) SetSquareConnectionStatus(ctx context.Context, arg SetSquareConnectionStatusParams) error {
+	_, err := q.db.Exec(ctx, setSquareConnectionStatus, arg.LocationID, arg.Status, arg.LastError)
+	return err
+}
+
+const setSquareLocation = `-- name: SetSquareLocation :execrows
+UPDATE square_connections SET square_location_id = $2 WHERE location_id = $1
+`
+
+type SetSquareLocationParams struct {
+	LocationID       pgtype.UUID `json:"location_id"`
+	SquareLocationID string      `json:"square_location_id"`
+}
+
+func (q *Queries) SetSquareLocation(ctx context.Context, arg SetSquareLocationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSquareLocation, arg.LocationID, arg.SquareLocationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setStorePause = `-- name: SetStorePause :one
@@ -7738,6 +8453,78 @@ func (q *Queries) SettleAgentUpdateRequest(ctx context.Context, arg SettleAgentU
 	return result.RowsAffected(), nil
 }
 
+const squareConnectionsByMerchant = `-- name: SquareConnectionsByMerchant :many
+SELECT location_id, tenant_id, merchant_id, square_location_id, access_token_enc, refresh_token_enc, expires_at, refreshed_at, status, last_error, connected_at FROM square_connections WHERE merchant_id = $1
+`
+
+func (q *Queries) SquareConnectionsByMerchant(ctx context.Context, merchantID string) ([]SquareConnection, error) {
+	rows, err := q.db.Query(ctx, squareConnectionsByMerchant, merchantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SquareConnection
+	for rows.Next() {
+		var i SquareConnection
+		if err := rows.Scan(
+			&i.LocationID,
+			&i.TenantID,
+			&i.MerchantID,
+			&i.SquareLocationID,
+			&i.AccessTokenEnc,
+			&i.RefreshTokenEnc,
+			&i.ExpiresAt,
+			&i.RefreshedAt,
+			&i.Status,
+			&i.LastError,
+			&i.ConnectedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const squareConnectionsToRefresh = `-- name: SquareConnectionsToRefresh :many
+SELECT location_id, tenant_id, merchant_id, square_location_id, access_token_enc, refresh_token_enc, expires_at, refreshed_at, status, last_error, connected_at FROM square_connections WHERE status <> 'revoked' AND refreshed_at < $1 ORDER BY refreshed_at LIMIT 50
+`
+
+func (q *Queries) SquareConnectionsToRefresh(ctx context.Context, refreshedAt pgtype.Timestamptz) ([]SquareConnection, error) {
+	rows, err := q.db.Query(ctx, squareConnectionsToRefresh, refreshedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SquareConnection
+	for rows.Next() {
+		var i SquareConnection
+		if err := rows.Scan(
+			&i.LocationID,
+			&i.TenantID,
+			&i.MerchantID,
+			&i.SquareLocationID,
+			&i.AccessTokenEnc,
+			&i.RefreshTokenEnc,
+			&i.ExpiresAt,
+			&i.RefreshedAt,
+			&i.Status,
+			&i.LastError,
+			&i.ConnectedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const touchChannel = `-- name: TouchChannel :exec
 UPDATE channels SET last_used_at = now()
 WHERE id = $1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')
@@ -7763,6 +8550,15 @@ UPDATE operator_tokens SET last_used_at = now() WHERE id = $1
 
 func (q *Queries) TouchOperatorToken(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, touchOperatorToken, id)
+	return err
+}
+
+const touchPlatformKey = `-- name: TouchPlatformKey :exec
+UPDATE platform_keys SET last_used_at = now() WHERE id = $1
+`
+
+func (q *Queries) TouchPlatformKey(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, touchPlatformKey, id)
 	return err
 }
 
@@ -8378,6 +9174,28 @@ func (q *Queries) UpdatePrinter(ctx context.Context, arg UpdatePrinterParams) (P
 	return i, err
 }
 
+const updateSquareTokens = `-- name: UpdateSquareTokens :exec
+UPDATE square_connections SET access_token_enc = $2, refresh_token_enc = $3, expires_at = $4, refreshed_at = now(),
+    status = 'connected', last_error = '' WHERE location_id = $1
+`
+
+type UpdateSquareTokensParams struct {
+	LocationID      pgtype.UUID        `json:"location_id"`
+	AccessTokenEnc  []byte             `json:"access_token_enc"`
+	RefreshTokenEnc []byte             `json:"refresh_token_enc"`
+	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) UpdateSquareTokens(ctx context.Context, arg UpdateSquareTokensParams) error {
+	_, err := q.db.Exec(ctx, updateSquareTokens,
+		arg.LocationID,
+		arg.AccessTokenEnc,
+		arg.RefreshTokenEnc,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
 const updateStoreOrdering = `-- name: UpdateStoreOrdering :one
 UPDATE store_ordering SET pickup_enabled = $2, delivery_enabled = $3, pickup_eta_minutes = $4,
        delivery_eta_minutes = $5, schedule_days = $6, updated_at = now()
@@ -8732,6 +9550,54 @@ func (q *Queries) UpsertPricingSettings(ctx context.Context, arg UpsertPricingSe
 		arg.Settings,
 	)
 	return err
+}
+
+const upsertSquareConnection = `-- name: UpsertSquareConnection :one
+
+INSERT INTO square_connections (location_id, tenant_id, merchant_id, square_location_id, access_token_enc, refresh_token_enc, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (location_id) DO UPDATE SET merchant_id = EXCLUDED.merchant_id, square_location_id = EXCLUDED.square_location_id,
+    access_token_enc = EXCLUDED.access_token_enc, refresh_token_enc = EXCLUDED.refresh_token_enc, expires_at = EXCLUDED.expires_at,
+    refreshed_at = now(), status = 'connected', last_error = '', connected_at = now()
+RETURNING location_id, tenant_id, merchant_id, square_location_id, access_token_enc, refresh_token_enc, expires_at, refreshed_at, status, last_error, connected_at
+`
+
+type UpsertSquareConnectionParams struct {
+	LocationID       pgtype.UUID        `json:"location_id"`
+	TenantID         pgtype.UUID        `json:"tenant_id"`
+	MerchantID       string             `json:"merchant_id"`
+	SquareLocationID string             `json:"square_location_id"`
+	AccessTokenEnc   []byte             `json:"access_token_enc"`
+	RefreshTokenEnc  []byte             `json:"refresh_token_enc"`
+	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
+}
+
+// weborder stage 2: Square connections + card holds.
+func (q *Queries) UpsertSquareConnection(ctx context.Context, arg UpsertSquareConnectionParams) (SquareConnection, error) {
+	row := q.db.QueryRow(ctx, upsertSquareConnection,
+		arg.LocationID,
+		arg.TenantID,
+		arg.MerchantID,
+		arg.SquareLocationID,
+		arg.AccessTokenEnc,
+		arg.RefreshTokenEnc,
+		arg.ExpiresAt,
+	)
+	var i SquareConnection
+	err := row.Scan(
+		&i.LocationID,
+		&i.TenantID,
+		&i.MerchantID,
+		&i.SquareLocationID,
+		&i.AccessTokenEnc,
+		&i.RefreshTokenEnc,
+		&i.ExpiresAt,
+		&i.RefreshedAt,
+		&i.Status,
+		&i.LastError,
+		&i.ConnectedAt,
+	)
+	return i, err
 }
 
 const upsertStoreHoursException = `-- name: UpsertStoreHoursException :one

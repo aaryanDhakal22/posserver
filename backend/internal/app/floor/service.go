@@ -53,6 +53,8 @@ type event struct {
 	ClockOut *time.Time `json:"clock_out"`
 	// order.not_delivered (2.2.1): retry | cancel
 	Action string `json:"action"`
+	// order.tip (weborder stage 2): the whole tip added after the order, in cents
+	TipCents *int64 `json:"tip_cents"`
 	// delivery.run (2.0.9)
 	PlanID       string          `json:"plan_id"`
 	SuggestedIDs []string        `json:"suggested_ids"`
@@ -82,9 +84,27 @@ type Service struct {
 	orders OrderLoader
 	repo   order.FloorRepository
 	runs   DeliveryRunStore
+	holds  CardHolds
 	logger zerolog.Logger
 	meters observability.Meters
 }
+
+// CardHolds captures / voids online card holds as the floor moves (the
+// cardhold service, weborder stage 2).
+type CardHolds interface {
+	DriverClockedOut(ctx context.Context, locationID uuid.UUID, driverID string, clockIn, clockOut time.Time)
+	BatchClosed(ctx context.Context, locationID uuid.UUID, batchID int64)
+	// SetTip sets the tip added after the order (false = no open card hold).
+	SetTip(ctx context.Context, locationID, orderID uuid.UUID, cents int64) (bool, error)
+	OrderCancelled(ctx context.Context, locationID, orderID uuid.UUID)
+}
+
+// OnCardHolds plugs in the card holds (nil = order.tip / batch.closed are
+// answered invalid).
+func (s *Service) OnCardHolds(h CardHolds) { s.holds = h }
+
+// MaxTipCents bounds an added tip ($500).
+const MaxTipCents = 50000
 
 // OnDeliveryRun sets where delivery.run events are stored (nil = answered
 // invalid, as before 2.0.9).
@@ -162,8 +182,36 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 		if err1 != nil || err2 != nil || ev.ClockIn.IsZero() {
 			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 		}
-		return s.repo.SaveDriverShift(ctx, sc, eid, order.DriverShift{ID: sid, DriverID: did, DriverName: ev.DriverName,
+		res, err := s.repo.SaveDriverShift(ctx, sc, eid, order.DriverShift{ID: sid, DriverID: did, DriverName: ev.DriverName,
 			ClockIn: ev.ClockIn, ClockOut: ev.ClockOut, AutoOut: ev.Auto})
+		if err == nil && res == order.FloorApplied && ev.ClockOut != nil && s.holds != nil {
+			// The driver's card deliveries of this shift are captured now.
+			s.holds.DriverClockedOut(ctx, uuid.UUID(sc.LocationID), did.String(), ev.ClockIn, *ev.ClockOut)
+		}
+		return res, err
+	case "order.tip":
+		oid, err := uuid.Parse(ev.OrderID)
+		if s.holds == nil || err != nil || ev.TipCents == nil || *ev.TipCents < 0 || *ev.TipCents > MaxTipCents {
+			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
+		}
+		// Absolute (the whole added tip), so a replay is harmless: set it, then mark the event seen.
+		ok, err := s.holds.SetTip(ctx, uuid.UUID(sc.LocationID), oid, *ev.TipCents)
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return s.seen(ctx, sc, eid, &oid, ev.Type, order.FloorStale) // captured already / not a card order
+		}
+		return s.seen(ctx, sc, eid, &oid, ev.Type, order.FloorApplied)
+	case "batch.closed":
+		if s.holds == nil || ev.BatchID == nil {
+			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
+		}
+		res, err := s.seen(ctx, sc, eid, nil, ev.Type, order.FloorApplied)
+		if err == nil && res == order.FloorApplied {
+			s.holds.BatchClosed(ctx, uuid.UUID(sc.LocationID), *ev.BatchID)
+		}
+		return res, err
 	case "delivery.run":
 		// POS stops (2.1.0) are anonymous ({opaque_id, source:"pos", …}) and
 		// stored as sent — no order lookup. A POS-only run has no sent_ids.
@@ -208,6 +256,7 @@ func (s *Service) applyStatus(ctx context.Context, sc order.Scope, eid uuid.UUID
 	}
 	if out == order.FloorApplied {
 		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Str("status", string(newStatus)).Msg("floor update applied")
+		s.cancelled(ctx, sc, oid, newStatus)
 	}
 	return out, s.keepAgentStatus(ctx, sc, oid, ev)
 }
@@ -245,6 +294,7 @@ func (s *Service) applyNotDelivered(ctx context.Context, sc order.Scope, eid uui
 	if out == order.FloorApplied {
 		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Str("action", ev.Action).Str("status", string(newStatus)).
 			Msg("not delivered applied")
+		s.cancelled(ctx, sc, oid, newStatus)
 	}
 	return out, s.keepAgentStatus(ctx, sc, oid, ev)
 }
@@ -281,4 +331,13 @@ func (s *Service) DeliveryRuns(ctx context.Context, sc order.Scope, limit int) (
 		return []order.DeliveryRun{}, nil
 	}
 	return s.runs.ListDeliveryRuns(ctx, sc, limit)
+}
+
+// cancelled releases a cancelled order's card hold (in the background: it
+// talks to the processor and must not hold up the agent's sync).
+func (s *Service) cancelled(ctx context.Context, sc order.Scope, oid uuid.UUID, st order.Status) {
+	if s.holds == nil || st != order.StatusCancelled {
+		return
+	}
+	go s.holds.OrderCancelled(context.WithoutCancel(ctx), uuid.UUID(sc.LocationID), oid)
 }

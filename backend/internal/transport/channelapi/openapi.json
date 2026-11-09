@@ -312,7 +312,7 @@
             "$ref": "#/components/responses/Unauthorized"
           },
           "402": {
-            "description": "payment_declined",
+            "description": "payment_declined, or verification_required (verify the buyer, then send verification_token)",
             "content": {
               "application/json": {
                 "schema": {
@@ -835,6 +835,71 @@
         }
       }
     },
+    "/channel/v1/site": {
+      "get": {
+        "operationId": "getSite",
+        "summary": "The store's website: published look + texts and hosts",
+        "description": "ETag = a hash of the answer; send If-None-Match to get a 304 while nothing changed. The storefront polls this (and /menu/version) to know when to re-render.",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Site"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not changed since the ETag you sent"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/channel/v1/payments": {
+      "get": {
+        "operationId": "getPayments",
+        "summary": "How this channel takes payments: methods and the card SDK's setup",
+        "responses": {
+          "200": {
+            "description": "The payment setup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payments"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
     "/channel/v1/openapi.json": {
       "get": {
         "operationId": "getSpec",
@@ -860,7 +925,7 @@
       "channelKey": {
         "type": "http",
         "scheme": "bearer",
-        "description": "The channel's key: Authorization: Bearer qch_… — or an operator's sign-in (Bearer qops_… from /channel/v1/operator/login) with X-Location-ID: the store; without it 400 location_required, a store the operator may not work on 403 location_not_allowed."
+        "description": "The channel's key: Authorization: Bearer qch_… — or an operator's sign-in (Bearer qops_… from /channel/v1/operator/login) with X-Location-ID: the store; without it 400 location_required, a store the operator may not work on 403 location_not_allowed. — or the storefront's platform key (Bearer qpk_…, one per storefront server) with X-Site-Host: the host it is serving; the store behind a verified host answers as its built-in web channel. Without the header 400 host_required; a host no store is served on (or not verified yet) 404 unknown_site."
       }
     },
     "responses": {
@@ -2476,7 +2541,11 @@
               },
               "token": {
                 "type": "string",
-                "description": "The card processor's token (card)"
+                "description": "The card processor's one-time token (card): Square Web Payments SDK tokenize() — card data never reaches main"
+              },
+              "verification_token": {
+                "type": "string",
+                "description": "Square verifyBuyer()'s token when the bank asks for 3-D Secure (402 verification_required)"
               }
             },
             "additionalProperties": false
@@ -3166,6 +3235,99 @@
           }
         },
         "additionalProperties": false
+      },
+      "Site": {
+        "type": "object",
+        "required": [
+          "version",
+          "primary_host",
+          "hosts",
+          "settings"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "description": "The settings' version (0 = never saved)"
+          },
+          "primary_host": {
+            "type": "string",
+            "description": "The host links should use (\"\" = none yet)"
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every verified host the store is served on"
+          },
+          "settings": {
+            "type": "object",
+            "description": "The published look and texts from Store › Website ({} until published); its shape is versioned with the Website page"
+          }
+        }
+      },
+      "Payments": {
+        "type": "object",
+        "required": [
+          "methods",
+          "card",
+          "hold_hours"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "methods": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "cash",
+                "card"
+              ]
+            },
+            "description": "What an order through this channel may be paid with"
+          },
+          "card": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "provider",
+                  "env",
+                  "app_id",
+                  "location_id"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "const": "square"
+                  },
+                  "env": {
+                    "enum": [
+                      "production",
+                      "sandbox",
+                      "fake"
+                    ]
+                  },
+                  "app_id": {
+                    "type": "string",
+                    "description": "Square application id for the Web Payments SDK"
+                  },
+                  "location_id": {
+                    "type": "string",
+                    "description": "The store's Square location id for the Web Payments SDK"
+                  }
+                }
+              }
+            ],
+            "description": "How to take a card: null when the store has no card processor connected (card orders then go to the test card on dev / staging, or are refused with 409 payment_unavailable)"
+          },
+          "hold_hours": {
+            "type": "integer",
+            "description": "A card is authorized at checkout and captured later (the driver's clock-out, Close batch, or after this many hours)"
+          }
+        }
       }
     }
   }

@@ -834,3 +834,79 @@ CREATE TABLE channel_events (
 );
 CREATE INDEX idx_channel_events_channel ON channel_events (channel_id, id);
 CREATE INDEX idx_channel_events_created ON channel_events (created_at);
+
+-- 00025_site (weborder stage 2): storefront platform keys, hosts → stores, the Website page's settings.
+CREATE TABLE platform_keys (
+    id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    name         text        NOT NULL,
+    key_hash     text        NOT NULL UNIQUE,
+    key_prefix   text        NOT NULL,
+    revoked_at   timestamptz,
+    last_used_at timestamptz,
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE site_domains (
+    host        text        PRIMARY KEY,
+    tenant_id   uuid        NOT NULL,
+    location_id uuid        NOT NULL,
+    is_primary  boolean     NOT NULL DEFAULT false,
+    verified    boolean     NOT NULL DEFAULT false,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_site_domains_location ON site_domains (location_id);
+CREATE UNIQUE INDEX idx_site_domains_primary ON site_domains (location_id) WHERE is_primary;
+CREATE TABLE site_settings (
+    location_id uuid        PRIMARY KEY,
+    tenant_id   uuid        NOT NULL,
+    draft       jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    published   jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    version     bigint      NOT NULL DEFAULT 1,
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+
+-- 00026_square (weborder stage 2): Square connections (encrypted tokens) + card holds.
+CREATE TABLE square_connections (
+    location_id        uuid        PRIMARY KEY,
+    tenant_id          uuid        NOT NULL,
+    merchant_id        text        NOT NULL,
+    square_location_id text        NOT NULL DEFAULT '',
+    access_token_enc   bytea       NOT NULL,
+    refresh_token_enc  bytea       NOT NULL,
+    expires_at         timestamptz NOT NULL,
+    refreshed_at       timestamptz NOT NULL DEFAULT now(),
+    status             text        NOT NULL DEFAULT 'connected' CHECK (status IN ('connected', 'revoked', 'error')),
+    last_error         text        NOT NULL DEFAULT '',
+    connected_at       timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_square_connections_merchant ON square_connections (merchant_id);
+
+CREATE TABLE card_holds (
+    order_id             uuid        PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+    tenant_id            uuid        NOT NULL,
+    location_id          uuid        NOT NULL,
+    gateway              text        NOT NULL,
+    payment_ref          text        NOT NULL,
+    amount_cents         bigint      NOT NULL,
+    tip_cents            bigint      NOT NULL DEFAULT 0,
+    added_tip_cents      bigint      NOT NULL DEFAULT 0,
+    status               text        NOT NULL DEFAULT 'held' CHECK (status IN ('held', 'captured', 'cancelled', 'failed')),
+    capture_reason       text        NOT NULL DEFAULT '',
+    due_at               timestamptz NOT NULL,
+    capture_requested_at timestamptz,
+    next_try_at          timestamptz NOT NULL DEFAULT now(),
+    attempts             integer     NOT NULL DEFAULT 0,
+    last_error           text        NOT NULL DEFAULT '',
+    captured_cents       bigint      NOT NULL DEFAULT 0,
+    tip_payment_ref      text        NOT NULL DEFAULT '',
+    tip_note             text        NOT NULL DEFAULT '',
+    captured_at          timestamptz,
+    cancelled_at         timestamptz,
+    created_at           timestamptz NOT NULL DEFAULT now(),
+    updated_at           timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_card_holds_work ON card_holds (next_try_at) WHERE status = 'held';
+CREATE INDEX idx_card_holds_location ON card_holds (location_id, created_at DESC);

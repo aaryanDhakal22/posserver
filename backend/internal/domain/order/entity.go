@@ -294,6 +294,17 @@ type ChannelRef struct {
 	Payment       []byte
 	TrackToken    string     // the public tracking link's token ("" = none)
 	OperatorID    *uuid.UUID // the call-center operator who took it (main 3.0)
+	Hold          *CardHold  // an online card hold to capture later (weborder stage 2)
+}
+
+// CardHold is an authorized card payment the order's channel took: main
+// captures it later (the driver's clock-out, Close batch, or DueAt).
+type CardHold struct {
+	Gateway     string
+	Ref         string
+	AmountCents int64 // without the tip
+	TipCents    int64
+	DueAt       time.Time
 }
 
 var (

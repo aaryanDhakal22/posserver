@@ -14,14 +14,23 @@ type Querier interface {
 	AddOperatorLocation(ctx context.Context, arg AddOperatorLocationParams) error
 	AttachModifierGroup(ctx context.Context, arg AttachModifierGroupParams) error
 	AuthenticateChannel(ctx context.Context, keyHash pgtype.Text) (Channel, error)
+	AuthenticatePlatformKey(ctx context.Context, keyHash string) (PlatformKey, error)
 	BuiltinChannel(ctx context.Context, arg BuiltinChannelParams) (Channel, error)
+	CardHoldCancelled(ctx context.Context, arg CardHoldCancelledParams) error
+	CardHoldCaptured(ctx context.Context, arg CardHoldCapturedParams) error
+	CardHoldFailed(ctx context.Context, arg CardHoldFailedParams) error
+	CardHoldRetry(ctx context.Context, arg CardHoldRetryParams) error
 	ChannelEventExists(ctx context.Context, arg ChannelEventExistsParams) (bool, error)
 	ChannelEventsAfter(ctx context.Context, arg ChannelEventsAfterParams) ([]ChannelEvent, error)
 	// Channel orders (not the vendor feed's) the Pi hasn't accepted N minutes
 	// after they were placed (ASAP, or due within the window), not paged yet.
 	ChannelOrdersToAlert(ctx context.Context, arg ChannelOrdersToAlertParams) ([]ChannelOrdersToAlertRow, error)
+	// Holds to capture now (asked for, or past their safety time), leased for
+	// two minutes so a slow capture isn't picked up twice.
+	ClaimCardHolds(ctx context.Context, limit int32) ([]CardHold, error)
 	// Unflag the location's current receipt printer (one per location).
 	ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error
+	ClearSitePrimary(ctx context.Context, locationID pgtype.UUID) error
 	ClearStorePause(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error)
 	CountItemsForGroup(ctx context.Context, arg CountItemsForGroupParams) (int64, error)
 	// outbox.events.pending per store: one row per tenant (0 when drained), so a
@@ -63,6 +72,8 @@ type Querier interface {
 	// ───────────────────────────────────────────────────────────────────────────
 	CreateOrder(ctx context.Context, arg CreateOrderParams) error
 	CreatePayment(ctx context.Context, arg CreatePaymentParams) error
+	// weborder stage 2: storefront platform keys, hosts, site settings.
+	CreatePlatformKey(ctx context.Context, arg CreatePlatformKeyParams) (PlatformKey, error)
 	// ───────────────────────────────────────────────────────────────────────────
 	// Printers
 	// ───────────────────────────────────────────────────────────────────────────
@@ -110,6 +121,8 @@ type Querier interface {
 	DeletePrinter(ctx context.Context, id pgtype.UUID) error
 	// Used by the store-config editor's replace-all reconciliation.
 	DeletePrintersByLocation(ctx context.Context, locationID pgtype.UUID) error
+	DeleteSiteDomain(ctx context.Context, arg DeleteSiteDomainParams) (int64, error)
+	DeleteSquareConnection(ctx context.Context, locationID pgtype.UUID) (int64, error)
 	DeleteStoreHoursException(ctx context.Context, arg DeleteStoreHoursExceptionParams) (int64, error)
 	DeleteTenant(ctx context.Context, id pgtype.UUID) error
 	DeleteTenantDevices(ctx context.Context, tenantID pgtype.UUID) error
@@ -139,6 +152,8 @@ type Querier interface {
 	GetAgentState(ctx context.Context, locationID pgtype.UUID) (AgentState, error)
 	GetAgentUpdate(ctx context.Context, id pgtype.UUID) (AgentUpdate, error)
 	GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKParams) ([]byte, error)
+	GetCardHold(ctx context.Context, orderID pgtype.UUID) (CardHold, error)
+	GetCardHoldByRef(ctx context.Context, arg GetCardHoldByRefParams) (CardHold, error)
 	GetChannel(ctx context.Context, id pgtype.UUID) (Channel, error)
 	GetChannelOrder(ctx context.Context, orderID pgtype.UUID) (ChannelOrder, error)
 	GetChannelOrderByClient(ctx context.Context, arg GetChannelOrderByClientParams) (ChannelOrder, error)
@@ -182,6 +197,9 @@ type Querier interface {
 	GetOrdersPageInScope(ctx context.Context, arg GetOrdersPageInScopeParams) ([]Order, error)
 	GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error)
 	GetPrinterByID(ctx context.Context, id pgtype.UUID) (Printer, error)
+	GetSiteDomain(ctx context.Context, host string) (SiteDomain, error)
+	GetSiteSettings(ctx context.Context, locationID pgtype.UUID) (SiteSetting, error)
+	GetSquareConnection(ctx context.Context, locationID pgtype.UUID) (SquareConnection, error)
 	GetStatusEventsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]StatusEvent, error)
 	GetStoreOrdering(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error)
 	// Metric labels (observability.StoreLabels): tenant + location slug by a
@@ -197,6 +215,7 @@ type Querier interface {
 	// 00012: Pi updates (agent_updates)
 	// ---------------------------------------------------------------------------
 	InsertAgentUpdate(ctx context.Context, arg InsertAgentUpdateParams) error
+	InsertCardHold(ctx context.Context, arg InsertCardHoldParams) error
 	InsertChannelEvent(ctx context.Context, arg InsertChannelEventParams) (int64, error)
 	// ─── Channel orders (main 3.0 step 5) ───────────────────────────────────────
 	InsertChannelOrder(ctx context.Context, arg InsertChannelOrderParams) error
@@ -212,6 +231,7 @@ type Querier interface {
 	// ───────────────────────────────────────────────────────────────────────────
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) error
 	InsertPrinterIPChange(ctx context.Context, arg InsertPrinterIPChangeParams) error
+	InsertSiteDomain(ctx context.Context, arg InsertSiteDomainParams) (SiteDomain, error)
 	InsertTabletReportToken(ctx context.Context, arg InsertTabletReportTokenParams) (pgtype.UUID, error)
 	// When this (location, scenario, outcome) last paged the owner (throttle).
 	LastDiagPage(ctx context.Context, arg LastDiagPageParams) (pgtype.Timestamptz, error)
@@ -223,6 +243,7 @@ type Querier interface {
 	ListAllDevices(ctx context.Context) ([]Device, error)
 	ListAllLocations(ctx context.Context) ([]Location, error)
 	ListAppReleases(ctx context.Context, app string) ([]ListAppReleasesRow, error)
+	ListCardHolds(ctx context.Context, arg ListCardHoldsParams) ([]CardHold, error)
 	ListCategoriesByLocation(ctx context.Context, locationID pgtype.UUID) ([]MenuCategory, error)
 	ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) ([]MenuCategory, error)
 	ListChannelOrders(ctx context.Context, arg ListChannelOrdersParams) ([]ChannelOrder, error)
@@ -265,6 +286,7 @@ type Querier interface {
 	ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) ([]ModifierOption, error)
 	ListOptionsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ModifierOption, error)
 	ListOrderGeoByIDs(ctx context.Context, arg ListOrderGeoByIDsParams) ([]ListOrderGeoByIDsRow, error)
+	ListPlatformKeys(ctx context.Context) ([]PlatformKey, error)
 	// ─── Pricing + deals (main 3.0 step 4) ──────────────────────────────────────
 	ListPricingSettings(ctx context.Context, locationID pgtype.UUID) ([]PricingSetting, error)
 	ListPrinterIPChanges(ctx context.Context, arg ListPrinterIPChangesParams) ([]ListPrinterIPChangesRow, error)
@@ -280,6 +302,7 @@ type Querier interface {
 	// best candidate first — available menus/categories first, then menu,
 	// category and item position. The router keeps the first row per name.
 	ListRoutingByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListRoutingByLocationRow, error)
+	ListSiteDomains(ctx context.Context, locationID pgtype.UUID) ([]SiteDomain, error)
 	ListSoldOutItems(ctx context.Context, locationID pgtype.UUID) ([]ListSoldOutItemsRow, error)
 	ListStoreHoursExceptions(ctx context.Context, arg ListStoreHoursExceptionsParams) ([]StoreHoursException, error)
 	// Every ordering row with what the restock loop needs to find its reset time.
@@ -316,6 +339,10 @@ type Querier interface {
 	PruneDiagReports(ctx context.Context, receivedAt pgtype.Timestamptz) (int64, error)
 	PruneExternalStops(ctx context.Context, now pgtype.Timestamptz) (int64, error)
 	PruneExternalWork(ctx context.Context, now pgtype.Timestamptz) (int64, error)
+	RequestCardHoldCapture(ctx context.Context, arg RequestCardHoldCaptureParams) (int64, error)
+	RequestCardHoldCaptureForBatch(ctx context.Context, arg RequestCardHoldCaptureForBatchParams) (int64, error)
+	// A driver clocked out: their deliveries sent between clock-in and clock-out.
+	RequestCardHoldCaptureForDriver(ctx context.Context, arg RequestCardHoldCaptureForDriverParams) (int64, error)
 	// The store moved: re-route the located stops from their own point.
 	RequeueLocationExternalStops(ctx context.Context, arg RequeueLocationExternalStopsParams) (int64, error)
 	// The store moved: re-work the open deliveries (addresses are cached, so
@@ -339,6 +366,7 @@ type Querier interface {
 	// Keep the newest `keep` active tokens of a location; revoke the rest.
 	RevokeExcessTabletTokens(ctx context.Context, arg RevokeExcessTabletTokensParams) (int64, error)
 	RevokeOperatorToken(ctx context.Context, tokenHash string) (int64, error)
+	RevokePlatformKey(ctx context.Context, id pgtype.UUID) (PlatformKey, error)
 	RevokeTabletTokenByID(ctx context.Context, id pgtype.UUID) (int64, error)
 	// ---------------------------------------------------------------------------
 	// 00010_diagnostics: tablet report tokens + troubleshooting reports
@@ -367,6 +395,7 @@ type Querier interface {
 	// Column list is identical to GetOrdersPageInScope so sqlc returns []Order and
 	// the repo's assemble() is reused unchanged.
 	SearchOrdersInScope(ctx context.Context, arg SearchOrdersInScopeParams) ([]Order, error)
+	SetCardHoldAddedTip(ctx context.Context, arg SetCardHoldAddedTipParams) (int64, error)
 	SetCategoryPosition(ctx context.Context, arg SetCategoryPositionParams) error
 	SetChannelKey(ctx context.Context, arg SetChannelKeyParams) (Channel, error)
 	SetChannelView(ctx context.Context, arg SetChannelViewParams) (Channel, error)
@@ -396,10 +425,16 @@ type Querier interface {
 	SetOptionBank(ctx context.Context, arg SetOptionBankParams) (int64, error)
 	SetOptionPosition(ctx context.Context, arg SetOptionPositionParams) error
 	SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStatusParams) (int64, error)
+	// The order's card payment row follows its hold (authorized → captured / refunded).
+	SetOrderCardPayment(ctx context.Context, arg SetOrderCardPaymentParams) error
 	// A new radius flipped the flag: re-push the row (the worker sends order.geo).
 	SetOrderGeoOutsideArea(ctx context.Context, arg SetOrderGeoOutsideAreaParams) (int64, error)
 	SetPrinterMAC(ctx context.Context, arg SetPrinterMACParams) error
 	SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptParams) (Printer, error)
+	SetSiteDomainVerified(ctx context.Context, arg SetSiteDomainVerifiedParams) (SiteDomain, error)
+	SetSitePrimary(ctx context.Context, arg SetSitePrimaryParams) (int64, error)
+	SetSquareConnectionStatus(ctx context.Context, arg SetSquareConnectionStatusParams) error
+	SetSquareLocation(ctx context.Context, arg SetSquareLocationParams) (int64, error)
 	SetStorePause(ctx context.Context, arg SetStorePauseParams) (StoreOrdering, error)
 	SetStoreRestocked(ctx context.Context, arg SetStoreRestockedParams) error
 	// Set/rotate a tenant's store-manager login (username + already-hashed password).
@@ -410,9 +445,12 @@ type Querier interface {
 	// reply). Only while the row is still 'requested' — a status report the agent
 	// already sent is newer and wins.
 	SettleAgentUpdateRequest(ctx context.Context, arg SettleAgentUpdateRequestParams) (int64, error)
+	SquareConnectionsByMerchant(ctx context.Context, merchantID string) ([]SquareConnection, error)
+	SquareConnectionsToRefresh(ctx context.Context, refreshedAt pgtype.Timestamptz) ([]SquareConnection, error)
 	TouchChannel(ctx context.Context, id pgtype.UUID) error
 	TouchDevice(ctx context.Context, id pgtype.UUID) error
 	TouchOperatorToken(ctx context.Context, id pgtype.UUID) error
+	TouchPlatformKey(ctx context.Context, id pgtype.UUID) error
 	TouchTabletToken(ctx context.Context, id pgtype.UUID) error
 	// ─── Channel tracking (main 3.0 step 6) ─────────────────────────────────────
 	// An order's channel link, unless its channel is the built-in vendor feed
@@ -436,6 +474,7 @@ type Querier interface {
 	// Applies an agent floor update (status + mirrored floor fields).
 	UpdateOrderFloor(ctx context.Context, arg UpdateOrderFloorParams) error
 	UpdatePrinter(ctx context.Context, arg UpdatePrinterParams) (Printer, error)
+	UpdateSquareTokens(ctx context.Context, arg UpdateSquareTokensParams) error
 	UpdateStoreOrdering(ctx context.Context, arg UpdateStoreOrderingParams) (StoreOrdering, error)
 	UpdateTenantConfig(ctx context.Context, arg UpdateTenantConfigParams) (Tenant, error)
 	UpsertAgentHealth(ctx context.Context, arg UpsertAgentHealthParams) error
@@ -462,6 +501,8 @@ type Querier interface {
 	UpsertGeoCacheGeocoded(ctx context.Context, arg UpsertGeoCacheGeocodedParams) error
 	UpsertGeoCachePinned(ctx context.Context, arg UpsertGeoCachePinnedParams) error
 	UpsertPricingSettings(ctx context.Context, arg UpsertPricingSettingsParams) error
+	// weborder stage 2: Square connections + card holds.
+	UpsertSquareConnection(ctx context.Context, arg UpsertSquareConnectionParams) (SquareConnection, error)
 	UpsertStoreHoursException(ctx context.Context, arg UpsertStoreHoursExceptionParams) (StoreHoursException, error)
 	WakeLocationExternalStops(ctx context.Context, arg WakeLocationExternalStopsParams) (int64, error)
 	// The location's agent (re)connected: push everything it has not acked now.
