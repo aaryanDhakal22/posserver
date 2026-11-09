@@ -36,6 +36,7 @@ import (
 	"quiccpos/main/internal/app/customers"
 	menuApp "quiccpos/main/internal/app/menu"
 	menuviewApp "quiccpos/main/internal/app/menuview"
+	"quiccpos/main/internal/app/onlinectl"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
 	"quiccpos/main/internal/app/orderport"
@@ -332,6 +333,13 @@ func main() {
 	// delivery check, and 86'd items back at each location's reset hour.
 	storeStatusService := storestatusApp.NewService(repositories.NewStoreStatusRepository(pool), tenancyService, geoService, lgr)
 	go storeStatusService.RunRestock(ctx)
+	// Quibase's online-ordering controls through the Pi (weborder stage 3): pause + sold out.
+	onlineCtl := onlinectl.NewService(storeStatusService, repositories.NewStockRepository(pool), lgr)
+	requester.RegisterInbound(onlinectl.MsgOnlineStatus, onlineCtl.HandleStatus)
+	requester.RegisterInbound(onlinectl.MsgOnlinePause, onlineCtl.HandlePause)
+	requester.RegisterInbound(onlinectl.MsgOnlineResume, onlineCtl.HandleResume)
+	requester.RegisterInbound(onlinectl.MsgMenuStock, onlineCtl.HandleStock)
+	requester.RegisterInbound(onlinectl.MsgMenuStockSet, onlineCtl.HandleStockSet)
 	pricingService := pricingApp.NewService(repositories.NewPricingRepository(pool), menuViewService, storeStatusService, tenancyService, lgr)
 	// The payment port: cash everywhere; the test card on dev and staging
 	// only — no card charging in prod until Square (the owner, 2026-11-02).

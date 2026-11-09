@@ -545,24 +545,25 @@ DELETE FROM menu_categories WHERE id = $1 AND tenant_id = $2;
 -- name: CreateMenuItem :one
 INSERT INTO menu_items (tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku;
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold;
 
 -- name: GetMenuItemByID :one
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
 FROM menu_items WHERE id = $1 AND tenant_id = $2;
 
 -- name: ListItemsByCategory :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
 FROM menu_items WHERE category_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: ListItemsByLocation :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
 FROM menu_items WHERE location_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: UpdateMenuItem :one
-UPDATE menu_items SET name = $3, description = $4, price_cents = $5, tax_rate_bps = $6, in_stock = $7, out_until = $8, tags = $9, attributes = $10, updated_at = now()
+UPDATE menu_items SET name = $3, description = $4, price_cents = $5, tax_rate_bps = $6, in_stock = $7, out_until = $8, tags = $9, attributes = $10, updated_at = now(),
+    out_hold = CASE WHEN $7 THEN false ELSE out_hold END
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku;
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold;
 
 -- name: ListRecentItemNames :many
 -- Top-level item names ordered at a location since a time, with counts — the
@@ -631,20 +632,21 @@ DELETE FROM item_modifier_groups WHERE group_id = $1 AND tenant_id = $2;
 -- name: CreateModifierOption :one
 INSERT INTO modifier_options (tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name;
+RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold;
 
 -- name: ListOptionsByGroup :many
-SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
+SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold
 FROM modifier_options WHERE group_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: ListOptionsByLocation :many
-SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
+SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold
 FROM modifier_options WHERE location_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: UpdateModifierOption :one
-UPDATE modifier_options SET name = $3, price_delta_cents = $4, in_stock = $5, updated_at = now()
+UPDATE modifier_options SET name = $3, price_delta_cents = $4, in_stock = $5, updated_at = now(),
+    out_hold = CASE WHEN $5 THEN false ELSE out_hold END
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name;
+RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold;
 
 -- name: SetOptionPosition :exec
 UPDATE modifier_options SET position = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
@@ -1535,11 +1537,11 @@ UPDATE store_ordering SET restocked_at = $2 WHERE location_id = $1;
 -- The daily restock: every 86'd item of the location without a later
 -- out_until comes back.
 UPDATE menu_items SET in_stock = true, out_until = NULL, updated_at = now()
-WHERE location_id = $1 AND NOT in_stock AND (out_until IS NULL OR out_until <= now());
+WHERE location_id = $1 AND NOT in_stock AND NOT out_hold AND (out_until IS NULL OR out_until <= now());
 
 -- name: RestockOptions :execrows
 UPDATE modifier_options SET in_stock = true, updated_at = now()
-WHERE location_id = $1 AND NOT in_stock;
+WHERE location_id = $1 AND NOT in_stock AND NOT out_hold;
 
 -- name: ExpireOutUntil :execrows
 -- An item 86'd until a time comes back at that time (any location).
@@ -1927,3 +1929,26 @@ SELECT * FROM email_receipts WHERE order_id = $1 ORDER BY created_at;
 INSERT INTO email_receipts (order_id, kind, location_id)
 SELECT r.order_id, 'final', r.location_id FROM email_receipts r WHERE r.order_id = $1 AND r.kind = 'placed'
 ON CONFLICT DO NOTHING;
+
+
+-- weborder stage 3: sold out from Quibase (through the Pi).
+
+-- name: ListStockItems :many
+SELECT i.id, i.name, c.name AS category, i.in_stock, i.out_until, i.out_hold
+FROM menu_items i JOIN menu_categories c ON c.id = i.category_id
+WHERE i.location_id = $1 ORDER BY c.position, c.name, i.position, i.name;
+
+-- name: ListStockOptions :many
+SELECT g.id AS group_id, g.name AS group_name, o.id, o.name, o.in_stock, o.out_hold
+FROM modifier_groups g JOIN modifier_options o ON o.group_id = g.id
+WHERE g.location_id = $1 ORDER BY g.name, o.position, o.name;
+
+-- name: SetItemStock :one
+UPDATE menu_items SET in_stock = $3, out_hold = (NOT $3::boolean AND $4::boolean), out_until = NULL, updated_at = now()
+WHERE id = $1 AND location_id = $2
+RETURNING id, name, in_stock, out_until, out_hold;
+
+-- name: SetOptionStock :one
+UPDATE modifier_options SET in_stock = $3, out_hold = (NOT $3::boolean AND $4::boolean), updated_at = now()
+WHERE id = $1 AND location_id = $2
+RETURNING id, name, in_stock, out_hold;

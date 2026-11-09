@@ -331,6 +331,9 @@ type Querier interface {
 	ListRoutingByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListRoutingByLocationRow, error)
 	ListSiteDomains(ctx context.Context, locationID pgtype.UUID) ([]SiteDomain, error)
 	ListSoldOutItems(ctx context.Context, locationID pgtype.UUID) ([]ListSoldOutItemsRow, error)
+	// weborder stage 3: sold out from Quibase (through the Pi).
+	ListStockItems(ctx context.Context, locationID pgtype.UUID) ([]ListStockItemsRow, error)
+	ListStockOptions(ctx context.Context, locationID pgtype.UUID) ([]ListStockOptionsRow, error)
 	ListStoreHoursExceptions(ctx context.Context, arg ListStoreHoursExceptionsParams) ([]StoreHoursException, error)
 	// Every ordering row with what the restock loop needs to find its reset time.
 	ListStoreOrderingForRestock(ctx context.Context) ([]ListStoreOrderingForRestockRow, error)
@@ -444,6 +447,7 @@ type Querier interface {
 	SetItemBank(ctx context.Context, arg SetItemBankParams) (int64, error)
 	SetItemPosition(ctx context.Context, arg SetItemPositionParams) error
 	SetItemPrinter(ctx context.Context, arg SetItemPrinterParams) error
+	SetItemStock(ctx context.Context, arg SetItemStockParams) (SetItemStockRow, error)
 	// 2.2.0 location.radius: the Pi (tablet settings) sets the delivery radius.
 	SetLocationDeliveryRadius(ctx context.Context, arg SetLocationDeliveryRadiusParams) (int64, error)
 	// The store address was geocoded. Never overrides a manual pin.
@@ -456,6 +460,7 @@ type Querier interface {
 	SetOperatorPassword(ctx context.Context, arg SetOperatorPasswordParams) error
 	SetOptionBank(ctx context.Context, arg SetOptionBankParams) (int64, error)
 	SetOptionPosition(ctx context.Context, arg SetOptionPositionParams) error
+	SetOptionStock(ctx context.Context, arg SetOptionStockParams) (SetOptionStockRow, error)
 	SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStatusParams) (int64, error)
 	// The order's card payment row follows its hold (authorized → captured / refunded).
 	SetOrderCardPayment(ctx context.Context, arg SetOrderCardPaymentParams) error

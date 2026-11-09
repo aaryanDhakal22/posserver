@@ -55,6 +55,8 @@ type event struct {
 	Action string `json:"action"`
 	// order.tip (weborder stage 2): the whole tip added after the order, in cents
 	TipCents *int64 `json:"tip_cents"`
+	// order.status cancelled by hand (weborder stage 3): customer_asked | couldnt_deliver | other
+	Reason string `json:"reason"`
 	// delivery.run (2.0.9)
 	PlanID       string          `json:"plan_id"`
 	SuggestedIDs []string        `json:"suggested_ids"`
@@ -247,7 +249,7 @@ func (s *Service) applyStatus(ctx context.Context, sc order.Scope, eid uuid.UUID
 	out, err := s.repo.ApplyFloorUpdate(ctx, sc, order.ID(oid), eid, ev.Type, func(o *order.Order) string {
 		res := o.ApplyFloorUpdate(order.FloorUpdate{
 			Status: status, KitchenNumber: ev.KitchenNumber, EstimatedReadyAt: ev.EstimatedReadyAt,
-			DriverName: ev.DriverName, At: ev.At, Auto: ev.Auto,
+			DriverName: ev.DriverName, At: ev.At, Auto: ev.Auto, Reason: ev.Reason,
 		})
 		newStatus = o.Status()
 		return res

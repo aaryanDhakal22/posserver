@@ -423,6 +423,7 @@ type MenuItem struct {
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	KitchenName string             `json:"kitchen_name"`
 	Sku         string             `json:"sku"`
+	OutHold     bool               `json:"out_hold"`
 }
 
 type MenuItemSize struct {
@@ -516,6 +517,7 @@ type ModifierOption struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 	IsDefault       bool               `json:"is_default"`
 	KitchenName     string             `json:"kitchen_name"`
+	OutHold         bool               `json:"out_hold"`
 }
 
 type ModifierOptionPrice struct {

@@ -255,6 +255,7 @@ CREATE TABLE menu_items (
     updated_at    timestamptz NOT NULL DEFAULT now(),
     kitchen_name  text        NOT NULL DEFAULT '',
     sku           text        NOT NULL DEFAULT '',
+    out_hold      boolean     NOT NULL DEFAULT false, -- 00028
     FOREIGN KEY (category_id, tenant_id) REFERENCES menu_categories(id, tenant_id) ON DELETE CASCADE,
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id)       ON DELETE CASCADE,
     FOREIGN KEY (printer_id)             REFERENCES printers(id)                   ON DELETE SET NULL,
@@ -292,6 +293,7 @@ CREATE TABLE modifier_options (
     updated_at        timestamptz NOT NULL DEFAULT now(),
     is_default        boolean     NOT NULL DEFAULT false,
     kitchen_name      text        NOT NULL DEFAULT '',
+    out_hold          boolean     NOT NULL DEFAULT false, -- 00028
     FOREIGN KEY (group_id, tenant_id) REFERENCES modifier_groups(id, tenant_id) ON DELETE CASCADE,
     UNIQUE (id, tenant_id)
 );

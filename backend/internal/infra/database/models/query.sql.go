@@ -934,7 +934,7 @@ func (q *Queries) CreateMenuCategory(ctx context.Context, arg CreateMenuCategory
 const createMenuItem = `-- name: CreateMenuItem :one
 INSERT INTO menu_items (tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
 `
 
 type CreateMenuItemParams struct {
@@ -989,6 +989,7 @@ func (q *Queries) CreateMenuItem(ctx context.Context, arg CreateMenuItemParams) 
 		&i.UpdatedAt,
 		&i.KitchenName,
 		&i.Sku,
+		&i.OutHold,
 	)
 	return i, err
 }
@@ -1176,7 +1177,7 @@ func (q *Queries) CreateModifierGroup(ctx context.Context, arg CreateModifierGro
 const createModifierOption = `-- name: CreateModifierOption :one
 INSERT INTO modifier_options (tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
+RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold
 `
 
 type CreateModifierOptionParams struct {
@@ -1213,6 +1214,7 @@ func (q *Queries) CreateModifierOption(ctx context.Context, arg CreateModifierOp
 		&i.UpdatedAt,
 		&i.IsDefault,
 		&i.KitchenName,
+		&i.OutHold,
 	)
 	return i, err
 }
@@ -3071,7 +3073,7 @@ func (q *Queries) GetMenuCategoryByID(ctx context.Context, arg GetMenuCategoryBy
 }
 
 const getMenuItemByID = `-- name: GetMenuItemByID :one
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
 FROM menu_items WHERE id = $1 AND tenant_id = $2
 `
 
@@ -3102,6 +3104,7 @@ func (q *Queries) GetMenuItemByID(ctx context.Context, arg GetMenuItemByIDParams
 		&i.UpdatedAt,
 		&i.KitchenName,
 		&i.Sku,
+		&i.OutHold,
 	)
 	return i, err
 }
@@ -5916,7 +5919,7 @@ func (q *Queries) ListItemSizesByLocation(ctx context.Context, locationID pgtype
 }
 
 const listItemsByCategory = `-- name: ListItemsByCategory :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
 FROM menu_items WHERE category_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -5948,6 +5951,7 @@ func (q *Queries) ListItemsByCategory(ctx context.Context, categoryID pgtype.UUI
 			&i.UpdatedAt,
 			&i.KitchenName,
 			&i.Sku,
+			&i.OutHold,
 		); err != nil {
 			return nil, err
 		}
@@ -5960,7 +5964,7 @@ func (q *Queries) ListItemsByCategory(ctx context.Context, categoryID pgtype.UUI
 }
 
 const listItemsByLocation = `-- name: ListItemsByLocation :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
 FROM menu_items WHERE location_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -5992,6 +5996,7 @@ func (q *Queries) ListItemsByLocation(ctx context.Context, locationID pgtype.UUI
 			&i.UpdatedAt,
 			&i.KitchenName,
 			&i.Sku,
+			&i.OutHold,
 		); err != nil {
 			return nil, err
 		}
@@ -6585,7 +6590,7 @@ func (q *Queries) ListOptionPricesByLocation(ctx context.Context, locationID pgt
 }
 
 const listOptionsByGroup = `-- name: ListOptionsByGroup :many
-SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
+SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold
 FROM modifier_options WHERE group_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -6611,6 +6616,7 @@ func (q *Queries) ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) (
 			&i.UpdatedAt,
 			&i.IsDefault,
 			&i.KitchenName,
+			&i.OutHold,
 		); err != nil {
 			return nil, err
 		}
@@ -6623,7 +6629,7 @@ func (q *Queries) ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) (
 }
 
 const listOptionsByLocation = `-- name: ListOptionsByLocation :many
-SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
+SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold
 FROM modifier_options WHERE location_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -6649,6 +6655,7 @@ func (q *Queries) ListOptionsByLocation(ctx context.Context, locationID pgtype.U
 			&i.UpdatedAt,
 			&i.IsDefault,
 			&i.KitchenName,
+			&i.OutHold,
 		); err != nil {
 			return nil, err
 		}
@@ -7036,6 +7043,92 @@ func (q *Queries) ListSoldOutItems(ctx context.Context, locationID pgtype.UUID) 
 	for rows.Next() {
 		var i ListSoldOutItemsRow
 		if err := rows.Scan(&i.ID, &i.Name, &i.OutUntil); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStockItems = `-- name: ListStockItems :many
+
+SELECT i.id, i.name, c.name AS category, i.in_stock, i.out_until, i.out_hold
+FROM menu_items i JOIN menu_categories c ON c.id = i.category_id
+WHERE i.location_id = $1 ORDER BY c.position, c.name, i.position, i.name
+`
+
+type ListStockItemsRow struct {
+	ID       pgtype.UUID        `json:"id"`
+	Name     string             `json:"name"`
+	Category string             `json:"category"`
+	InStock  bool               `json:"in_stock"`
+	OutUntil pgtype.Timestamptz `json:"out_until"`
+	OutHold  bool               `json:"out_hold"`
+}
+
+// weborder stage 3: sold out from Quibase (through the Pi).
+func (q *Queries) ListStockItems(ctx context.Context, locationID pgtype.UUID) ([]ListStockItemsRow, error) {
+	rows, err := q.db.Query(ctx, listStockItems, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStockItemsRow
+	for rows.Next() {
+		var i ListStockItemsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Category,
+			&i.InStock,
+			&i.OutUntil,
+			&i.OutHold,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStockOptions = `-- name: ListStockOptions :many
+SELECT g.id AS group_id, g.name AS group_name, o.id, o.name, o.in_stock, o.out_hold
+FROM modifier_groups g JOIN modifier_options o ON o.group_id = g.id
+WHERE g.location_id = $1 ORDER BY g.name, o.position, o.name
+`
+
+type ListStockOptionsRow struct {
+	GroupID   pgtype.UUID `json:"group_id"`
+	GroupName string      `json:"group_name"`
+	ID        pgtype.UUID `json:"id"`
+	Name      string      `json:"name"`
+	InStock   bool        `json:"in_stock"`
+	OutHold   bool        `json:"out_hold"`
+}
+
+func (q *Queries) ListStockOptions(ctx context.Context, locationID pgtype.UUID) ([]ListStockOptionsRow, error) {
+	rows, err := q.db.Query(ctx, listStockOptions, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStockOptionsRow
+	for rows.Next() {
+		var i ListStockOptionsRow
+		if err := rows.Scan(
+			&i.GroupID,
+			&i.GroupName,
+			&i.ID,
+			&i.Name,
+			&i.InStock,
+			&i.OutHold,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -7836,7 +7929,7 @@ func (q *Queries) ResetOrderGeoForPin(ctx context.Context, orderID pgtype.UUID) 
 
 const restockItems = `-- name: RestockItems :execrows
 UPDATE menu_items SET in_stock = true, out_until = NULL, updated_at = now()
-WHERE location_id = $1 AND NOT in_stock AND (out_until IS NULL OR out_until <= now())
+WHERE location_id = $1 AND NOT in_stock AND NOT out_hold AND (out_until IS NULL OR out_until <= now())
 `
 
 // The daily restock: every 86'd item of the location without a later
@@ -7851,7 +7944,7 @@ func (q *Queries) RestockItems(ctx context.Context, locationID pgtype.UUID) (int
 
 const restockOptions = `-- name: RestockOptions :execrows
 UPDATE modifier_options SET in_stock = true, updated_at = now()
-WHERE location_id = $1 AND NOT in_stock
+WHERE location_id = $1 AND NOT in_stock AND NOT out_hold
 `
 
 func (q *Queries) RestockOptions(ctx context.Context, locationID pgtype.UUID) (int64, error) {
@@ -8653,6 +8746,45 @@ func (q *Queries) SetItemPrinter(ctx context.Context, arg SetItemPrinterParams) 
 	return err
 }
 
+const setItemStock = `-- name: SetItemStock :one
+UPDATE menu_items SET in_stock = $3, out_hold = (NOT $3::boolean AND $4::boolean), out_until = NULL, updated_at = now()
+WHERE id = $1 AND location_id = $2
+RETURNING id, name, in_stock, out_until, out_hold
+`
+
+type SetItemStockParams struct {
+	ID         pgtype.UUID `json:"id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	InStock    bool        `json:"in_stock"`
+	Column4    bool        `json:"column_4"`
+}
+
+type SetItemStockRow struct {
+	ID       pgtype.UUID        `json:"id"`
+	Name     string             `json:"name"`
+	InStock  bool               `json:"in_stock"`
+	OutUntil pgtype.Timestamptz `json:"out_until"`
+	OutHold  bool               `json:"out_hold"`
+}
+
+func (q *Queries) SetItemStock(ctx context.Context, arg SetItemStockParams) (SetItemStockRow, error) {
+	row := q.db.QueryRow(ctx, setItemStock,
+		arg.ID,
+		arg.LocationID,
+		arg.InStock,
+		arg.Column4,
+	)
+	var i SetItemStockRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.InStock,
+		&i.OutUntil,
+		&i.OutHold,
+	)
+	return i, err
+}
+
 const setLocationDeliveryRadius = `-- name: SetLocationDeliveryRadius :execrows
 UPDATE locations SET delivery_radius_m = $1
 WHERE id = $2 AND tenant_id = $3
@@ -8870,6 +9002,43 @@ type SetOptionPositionParams struct {
 func (q *Queries) SetOptionPosition(ctx context.Context, arg SetOptionPositionParams) error {
 	_, err := q.db.Exec(ctx, setOptionPosition, arg.ID, arg.TenantID, arg.Position)
 	return err
+}
+
+const setOptionStock = `-- name: SetOptionStock :one
+UPDATE modifier_options SET in_stock = $3, out_hold = (NOT $3::boolean AND $4::boolean), updated_at = now()
+WHERE id = $1 AND location_id = $2
+RETURNING id, name, in_stock, out_hold
+`
+
+type SetOptionStockParams struct {
+	ID         pgtype.UUID `json:"id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	InStock    bool        `json:"in_stock"`
+	Column4    bool        `json:"column_4"`
+}
+
+type SetOptionStockRow struct {
+	ID      pgtype.UUID `json:"id"`
+	Name    string      `json:"name"`
+	InStock bool        `json:"in_stock"`
+	OutHold bool        `json:"out_hold"`
+}
+
+func (q *Queries) SetOptionStock(ctx context.Context, arg SetOptionStockParams) (SetOptionStockRow, error) {
+	row := q.db.QueryRow(ctx, setOptionStock,
+		arg.ID,
+		arg.LocationID,
+		arg.InStock,
+		arg.Column4,
+	)
+	var i SetOptionStockRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.InStock,
+		&i.OutHold,
+	)
+	return i, err
 }
 
 const setOrderAgentStatus = `-- name: SetOrderAgentStatus :execrows
@@ -9644,9 +9813,10 @@ func (q *Queries) UpdateMenuCategory(ctx context.Context, arg UpdateMenuCategory
 }
 
 const updateMenuItem = `-- name: UpdateMenuItem :one
-UPDATE menu_items SET name = $3, description = $4, price_cents = $5, tax_rate_bps = $6, in_stock = $7, out_until = $8, tags = $9, attributes = $10, updated_at = now()
+UPDATE menu_items SET name = $3, description = $4, price_cents = $5, tax_rate_bps = $6, in_stock = $7, out_until = $8, tags = $9, attributes = $10, updated_at = now(),
+    out_hold = CASE WHEN $7 THEN false ELSE out_hold END
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
 `
 
 type UpdateMenuItemParams struct {
@@ -9695,6 +9865,7 @@ func (q *Queries) UpdateMenuItem(ctx context.Context, arg UpdateMenuItemParams) 
 		&i.UpdatedAt,
 		&i.KitchenName,
 		&i.Sku,
+		&i.OutHold,
 	)
 	return i, err
 }
@@ -9860,9 +10031,10 @@ func (q *Queries) UpdateModifierGroup(ctx context.Context, arg UpdateModifierGro
 }
 
 const updateModifierOption = `-- name: UpdateModifierOption :one
-UPDATE modifier_options SET name = $3, price_delta_cents = $4, in_stock = $5, updated_at = now()
+UPDATE modifier_options SET name = $3, price_delta_cents = $4, in_stock = $5, updated_at = now(),
+    out_hold = CASE WHEN $5 THEN false ELSE out_hold END
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
+RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold
 `
 
 type UpdateModifierOptionParams struct {
@@ -9895,6 +10067,7 @@ func (q *Queries) UpdateModifierOption(ctx context.Context, arg UpdateModifierOp
 		&i.UpdatedAt,
 		&i.IsDefault,
 		&i.KitchenName,
+		&i.OutHold,
 	)
 	return i, err
 }

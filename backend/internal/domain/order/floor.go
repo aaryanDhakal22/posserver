@@ -63,6 +63,17 @@ type FloorUpdate struct {
 	DriverName       string
 	At               time.Time
 	Auto             bool // close-batch auto-finish
+	// Reason marks a manual cancel from the floor (weborder stage 3: a
+	// website order cancelled on Quibase, even after it was accepted):
+	// customer_asked | couldnt_deliver | other.
+	Reason string
+}
+
+// CancelReasons are the manual cancel reasons the floor may send.
+var CancelReasons = map[string]string{
+	"customer_asked":  "cancelled on the floor: the customer asked",
+	"couldnt_deliver": "cancelled on the floor: couldn't deliver",
+	"other":           "cancelled on the floor",
 }
 
 // ApplyFloorUpdate moves the order forward to u.Status (skipping steps is
@@ -141,7 +152,14 @@ func (o *Order) ApplyFloorUpdate(u FloorUpdate) string {
 // scheduled future order) can be cancelled this way; anything further along
 // (or already terminal) is stale.
 func (o *Order) applyFloorCancel(u FloorUpdate) string {
-	if o.status != StatusReceived && o.status != StatusValidated && o.status != StatusScheduled {
+	manual, isManual := CancelReasons[u.Reason]
+	switch {
+	case isManual:
+		// A manual cancel works until the order is finished.
+		if o.status == StatusCompleted || o.status == StatusCancelled || o.status == StatusRejected {
+			return FloorStale
+		}
+	case o.status != StatusReceived && o.status != StatusValidated && o.status != StatusScheduled:
 		return FloorStale
 	}
 	at := u.At.UTC()
@@ -150,6 +168,9 @@ func (o *Order) applyFloorCancel(u FloorUpdate) string {
 	}
 	from := o.status
 	reason := "not accepted before the batch was closed"
+	if isManual {
+		reason = manual
+	}
 	o.statusHistory = append(o.statusHistory, StatusEvent{From: from, To: StatusCancelled, At: at, Actor: "agent", Reason: reason})
 	o.status = StatusCancelled
 	o.updatedAt = time.Now().UTC()
