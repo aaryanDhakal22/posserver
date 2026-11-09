@@ -66,6 +66,15 @@ services:
       SQUARE_WEBHOOK_SIGNATURE_KEY:
       SQUARE_WEBHOOK_URL:
       SQUARE_BASE_URL:
+      SIGNIN_CODES:
+      TWILIO_ACCOUNT_SID:
+      TWILIO_AUTH_TOKEN:
+      TWILIO_VERIFY_SERVICE_SID:
+      TWILIO_BASE_URL:
+      MAIL_ENV:
+      MAIL_FROM_ADDRESS:
+      SES_REGION:
+      SES_ENDPOINT:
       ORDER_REDELIVER_AFTER:
       # Dev only: the pytest suites fail logins on purpose and run back to back;
       # the global failed-login ceiling (30 per 10 min elsewhere) would trip.

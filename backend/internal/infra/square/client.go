@@ -502,16 +502,22 @@ type Card struct {
 	CustomerID string `json:"customer_id"`
 	Last4      string `json:"last_4"`
 	CardBrand  string `json:"card_brand"`
+	ExpMonth   int    `json:"exp_month"`
+	ExpYear    int    `json:"exp_year"`
 	Enabled    bool   `json:"enabled"`
 }
 
-// CreateCard saves the card behind sourceID (a payment id or a token) for a customer.
-func (c *Client) CreateCard(ctx context.Context, token, idempotencyKey, sourceID, customerID string) (*Card, error) {
+// CreateCard saves the card behind sourceID (a payment id or a token) for a
+// customer; verification is verifyBuyer's token for a STORE intent, if any.
+func (c *Client) CreateCard(ctx context.Context, token, idempotencyKey, sourceID, customerID, verification string) (*Card, error) {
 	var out struct {
 		Card *Card `json:"card"`
 	}
-	err := c.do(ctx, http.MethodPost, "/v2/cards", bearer(token),
-		map[string]any{"idempotency_key": idempotencyKey, "source_id": sourceID, "card": map[string]string{"customer_id": customerID}}, &out)
+	body := map[string]any{"idempotency_key": idempotencyKey, "source_id": sourceID, "card": map[string]string{"customer_id": customerID}}
+	if verification != "" {
+		body["verification_token"] = verification
+	}
+	err := c.do(ctx, http.MethodPost, "/v2/cards", bearer(token), body, &out)
 	if err != nil {
 		return nil, err
 	}

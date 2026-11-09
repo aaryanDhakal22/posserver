@@ -59,7 +59,12 @@ type Service struct {
 	logger   zerolog.Logger
 	now      func() time.Time
 	kick     chan struct{} // wakes the worker (a clock-out / Close batch asked for captures)
+	final    func(ctx context.Context, orderID uuid.UUID)
 }
+
+// OnAmountChanged is told when a capture charged more than the hold showed
+// (a late tip), so the customer gets a final receipt.
+func (s *Service) OnAmountChanged(f func(ctx context.Context, orderID uuid.UUID)) { s.final = f }
 
 func NewService(repo Repo, holders map[string]payment.Holder, orders Orders, lg zerolog.Logger) *Service {
 	return &Service{repo: repo, holders: holders, orders: orders, logger: lg.With().Str("module", "cardhold").Logger(), now: time.Now,
@@ -334,6 +339,9 @@ func (s *Service) capture(ctx context.Context, h repositories.CardHold) {
 		return
 	}
 	s.logger.Info().Str("order_id", h.OrderID.String()).Int64("cents", cents).Str("reason", reasonOr(h.CaptureReason, "safety")).Msg("card hold captured")
+	if s.final != nil && cents != h.AmountCents+h.TipCents {
+		s.final(ctx, h.OrderID)
+	}
 }
 
 func reasonOr(r, d string) string {

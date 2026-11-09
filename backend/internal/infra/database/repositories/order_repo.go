@@ -98,7 +98,7 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 			TenantID: toPgUUID(uuid.UUID(o.TenantID())), LocationID: toPgUUID(uuid.UUID(o.LocationID())),
 			ClientOrderID: ch.ClientOrderID, Payment: pay,
 			TrackToken: pgtype.Text{String: ch.TrackToken, Valid: ch.TrackToken != ""},
-			OperatorID: pgIDPtr(ch.OperatorID),
+			OperatorID: pgIDPtr(ch.OperatorID), CustomerID: pgIDPtr(ch.CustomerID),
 		}); err != nil {
 			if isUniqueViolation(err) {
 				log.Info().Msg("duplicate channel order; skipping")
@@ -113,6 +113,12 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 				AmountCents: h.AmountCents, TipCents: h.TipCents, DueAt: pgtype.Timestamptz{Time: h.DueAt, Valid: true},
 			}); err != nil {
 				return fmt.Errorf("create card hold: %w", err)
+			}
+		}
+		if ch.Receipt {
+			if err := q.InsertEmailReceipt(ctx, models.InsertEmailReceiptParams{OrderID: toPgUUID(uuid.UUID(o.ID())),
+				Kind: "placed", LocationID: toPgUUID(uuid.UUID(o.LocationID()))}); err != nil {
+				return fmt.Errorf("queue email receipt: %w", err)
 			}
 		}
 	}

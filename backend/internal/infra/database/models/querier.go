@@ -28,10 +28,13 @@ type Querier interface {
 	// Holds to capture now (asked for, or past their safety time), leased for
 	// two minutes so a slow capture isn't picked up twice.
 	ClaimCardHolds(ctx context.Context, limit int32) ([]CardHold, error)
+	ClaimEmailReceipts(ctx context.Context, limit int32) ([]EmailReceipt, error)
+	ClearCustomerDefaultAddress(ctx context.Context, customerID pgtype.UUID) error
 	// Unflag the location's current receipt printer (one per location).
 	ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error
 	ClearSitePrimary(ctx context.Context, locationID pgtype.UUID) error
 	ClearStorePause(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error)
+	CountCustomerAddresses(ctx context.Context, customerID pgtype.UUID) (int64, error)
 	CountItemsForGroup(ctx context.Context, arg CountItemsForGroupParams) (int64, error)
 	// outbox.events.pending per store: one row per tenant (0 when drained), so a
 	// store's series never goes stale while it exists.
@@ -86,10 +89,16 @@ type Querier interface {
 	// can still create credential-less tenants. Full-column RETURNING keeps sqlc
 	// mapping to the models.Tenant table struct (see toDomainTenant).
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
+	// A live session's customer; the session is renewed (90 days from now) as it is read.
+	CustomerBySession(ctx context.Context, arg CustomerBySessionParams) (Customer, error)
 	DeferExternalStopPush(ctx context.Context, arg DeferExternalStopPushParams) error
 	DeferOrderGeoPush(ctx context.Context, arg DeferOrderGeoPushParams) error
 	DeleteAppRelease(ctx context.Context, arg DeleteAppReleaseParams) (int64, error)
 	DeleteChannel(ctx context.Context, id pgtype.UUID) (int64, error)
+	DeleteCustomer(ctx context.Context, id pgtype.UUID) (int64, error)
+	DeleteCustomerAddress(ctx context.Context, arg DeleteCustomerAddressParams) (int64, error)
+	DeleteCustomerCard(ctx context.Context, arg DeleteCustomerCardParams) (int64, error)
+	DeleteCustomerSession(ctx context.Context, tokenHash string) error
 	DeleteDeal(ctx context.Context, arg DeleteDealParams) (int64, error)
 	DeleteDevice(ctx context.Context, id pgtype.UUID) error
 	DeleteExternalStop(ctx context.Context, arg DeleteExternalStopParams) (int64, error)
@@ -133,6 +142,8 @@ type Querier interface {
 	DetachGroupFromAllItems(ctx context.Context, arg DetachGroupFromAllItemsParams) error
 	DetachModifierGroup(ctx context.Context, arg DetachModifierGroupParams) error
 	DiagReportExists(ctx context.Context, id pgtype.UUID) (bool, error)
+	EmailReceiptDone(ctx context.Context, arg EmailReceiptDoneParams) error
+	EmailReceiptRetry(ctx context.Context, arg EmailReceiptRetryParams) error
 	// Safety net for the after-ingest enqueue: recent delivery orders that have
 	// no order_geo row yet.
 	EnqueueMissingOrderGeo(ctx context.Context, since pgtype.Timestamptz) (int64, error)
@@ -158,6 +169,9 @@ type Querier interface {
 	GetChannelOrder(ctx context.Context, orderID pgtype.UUID) (ChannelOrder, error)
 	GetChannelOrderByClient(ctx context.Context, arg GetChannelOrderByClientParams) (ChannelOrder, error)
 	GetChannelOrderByToken(ctx context.Context, trackToken pgtype.Text) (ChannelOrder, error)
+	GetChannelOrderForCustomer(ctx context.Context, arg GetChannelOrderForCustomerParams) (ChannelOrder, error)
+	GetCustomer(ctx context.Context, id pgtype.UUID) (Customer, error)
+	GetCustomerCard(ctx context.Context, arg GetCustomerCardParams) (CustomerCard, error)
 	GetDeal(ctx context.Context, arg GetDealParams) (Deal, error)
 	GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagReportRow, error)
 	GetExternalStop(ctx context.Context, arg GetExternalStopParams) (GeoExternalStop, error)
@@ -198,6 +212,7 @@ type Querier interface {
 	GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error)
 	GetPrinterByID(ctx context.Context, id pgtype.UUID) (Printer, error)
 	GetSiteDomain(ctx context.Context, host string) (SiteDomain, error)
+	GetSiteReplyEmail(ctx context.Context, locationID pgtype.UUID) (string, error)
 	GetSiteSettings(ctx context.Context, locationID pgtype.UUID) (SiteSetting, error)
 	GetSquareConnection(ctx context.Context, locationID pgtype.UUID) (SquareConnection, error)
 	GetStatusEventsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]StatusEvent, error)
@@ -219,9 +234,13 @@ type Querier interface {
 	InsertChannelEvent(ctx context.Context, arg InsertChannelEventParams) (int64, error)
 	// ─── Channel orders (main 3.0 step 5) ───────────────────────────────────────
 	InsertChannelOrder(ctx context.Context, arg InsertChannelOrderParams) error
+	InsertCustomerAddress(ctx context.Context, arg InsertCustomerAddressParams) (CustomerAddress, error)
+	InsertCustomerCard(ctx context.Context, arg InsertCustomerCardParams) (CustomerCard, error)
+	InsertCustomerSession(ctx context.Context, arg InsertCustomerSessionParams) error
 	InsertDeliveryRun(ctx context.Context, arg InsertDeliveryRunParams) (int64, error)
 	InsertDiagReport(ctx context.Context, arg InsertDiagReportParams) (int64, error)
 	InsertDriver(ctx context.Context, arg InsertDriverParams) error
+	InsertEmailReceipt(ctx context.Context, arg InsertEmailReceiptParams) error
 	InsertItemSize(ctx context.Context, arg InsertItemSizeParams) error
 	InsertOptionPrice(ctx context.Context, arg InsertOptionPriceParams) error
 	InsertOrderGeo(ctx context.Context, arg InsertOrderGeoParams) (int64, error)
@@ -233,6 +252,8 @@ type Querier interface {
 	InsertPrinterIPChange(ctx context.Context, arg InsertPrinterIPChangeParams) error
 	InsertSiteDomain(ctx context.Context, arg InsertSiteDomainParams) (SiteDomain, error)
 	InsertTabletReportToken(ctx context.Context, arg InsertTabletReportTokenParams) (pgtype.UUID, error)
+	// A verified phone takes over that number's guest web orders at the store.
+	JoinGuestOrders(ctx context.Context, arg JoinGuestOrdersParams) (int64, error)
 	// When this (location, scenario, outcome) last paged the owner (throttle).
 	LastDiagPage(ctx context.Context, arg LastDiagPageParams) (pgtype.Timestamptz, error)
 	LastFloorEventAt(ctx context.Context, arg LastFloorEventAtParams) (pgtype.Timestamptz, error)
@@ -249,6 +270,9 @@ type Querier interface {
 	ListChannelOrders(ctx context.Context, arg ListChannelOrdersParams) ([]ChannelOrder, error)
 	ListChannels(ctx context.Context) ([]Channel, error)
 	ListChannelsByLocation(ctx context.Context, locationID pgtype.UUID) ([]Channel, error)
+	ListCustomerAddresses(ctx context.Context, customerID pgtype.UUID) ([]CustomerAddress, error)
+	ListCustomerCards(ctx context.Context, customerID pgtype.UUID) ([]CustomerCard, error)
+	ListCustomerOrders(ctx context.Context, arg ListCustomerOrdersParams) ([]ChannelOrder, error)
 	ListDeals(ctx context.Context, locationID pgtype.UUID) ([]Deal, error)
 	ListDeliveryRuns(ctx context.Context, arg ListDeliveryRunsParams) ([]DeliveryRun, error)
 	ListDevicesByLocation(ctx context.Context, locationID pgtype.UUID) ([]Device, error)
@@ -256,6 +280,7 @@ type Querier interface {
 	ListDriverShifts(ctx context.Context, arg ListDriverShiftsParams) ([]DriverShift, error)
 	ListDueExternalStops(ctx context.Context, arg ListDueExternalStopsParams) ([]ListDueExternalStopsRow, error)
 	ListDueOrderGeo(ctx context.Context, arg ListDueOrderGeoParams) ([]ListDueOrderGeoRow, error)
+	ListEmailReceipts(ctx context.Context, orderID pgtype.UUID) ([]EmailReceipt, error)
 	ListExternalStopsByIDs(ctx context.Context, arg ListExternalStopsByIDsParams) ([]ListExternalStopsByIDsRow, error)
 	ListGroupsForItem(ctx context.Context, arg ListGroupsForItemParams) ([]ListGroupsForItemRow, error)
 	ListItemModifierGroupsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListItemModifierGroupsByLocationRow, error)
@@ -336,9 +361,12 @@ type Querier interface {
 	PruneAgentBackups(ctx context.Context, locationID pgtype.UUID) error
 	PruneAppReleases(ctx context.Context, arg PruneAppReleasesParams) error
 	PruneChannelEvents(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error)
+	PruneCustomerSessions(ctx context.Context) (int64, error)
 	PruneDiagReports(ctx context.Context, receivedAt pgtype.Timestamptz) (int64, error)
 	PruneExternalStops(ctx context.Context, now pgtype.Timestamptz) (int64, error)
 	PruneExternalWork(ctx context.Context, now pgtype.Timestamptz) (int64, error)
+	// A final receipt only for an order that got a receipt when it was placed.
+	QueueFinalReceipt(ctx context.Context, orderID pgtype.UUID) (int64, error)
 	RequestCardHoldCapture(ctx context.Context, arg RequestCardHoldCaptureParams) (int64, error)
 	RequestCardHoldCaptureForBatch(ctx context.Context, arg RequestCardHoldCaptureForBatchParams) (int64, error)
 	// A driver clocked out: their deliveries sent between clock-in and clock-out.
@@ -398,7 +426,9 @@ type Querier interface {
 	SetCardHoldAddedTip(ctx context.Context, arg SetCardHoldAddedTipParams) (int64, error)
 	SetCategoryPosition(ctx context.Context, arg SetCategoryPositionParams) error
 	SetChannelKey(ctx context.Context, arg SetChannelKeyParams) (Channel, error)
+	SetChannelOrderCustomer(ctx context.Context, arg SetChannelOrderCustomerParams) error
 	SetChannelView(ctx context.Context, arg SetChannelViewParams) (Channel, error)
+	SetCustomerSquareID(ctx context.Context, arg SetCustomerSquareIDParams) error
 	SetDiagReportResolved(ctx context.Context, arg SetDiagReportResolvedParams) (int64, error)
 	SetExternalStopOutsideArea(ctx context.Context, arg SetExternalStopOutsideAreaParams) (int64, error)
 	// A pin or a chosen candidate: re-route from this point and push it again,
@@ -433,6 +463,7 @@ type Querier interface {
 	SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptParams) (Printer, error)
 	SetSiteDomainVerified(ctx context.Context, arg SetSiteDomainVerifiedParams) (SiteDomain, error)
 	SetSitePrimary(ctx context.Context, arg SetSitePrimaryParams) (int64, error)
+	SetSiteReplyEmail(ctx context.Context, arg SetSiteReplyEmailParams) error
 	SetSquareConnectionStatus(ctx context.Context, arg SetSquareConnectionStatusParams) error
 	SetSquareLocation(ctx context.Context, arg SetSquareLocationParams) (int64, error)
 	SetStorePause(ctx context.Context, arg SetStorePauseParams) (StoreOrdering, error)
@@ -458,6 +489,8 @@ type Querier interface {
 	// built-in Call center follows its orders like a keyed channel.
 	TrackingLink(ctx context.Context, orderID pgtype.UUID) (TrackingLinkRow, error)
 	UpdateChannel(ctx context.Context, arg UpdateChannelParams) (Channel, error)
+	UpdateCustomerAddress(ctx context.Context, arg UpdateCustomerAddressParams) (CustomerAddress, error)
+	UpdateCustomerProfile(ctx context.Context, arg UpdateCustomerProfileParams) (Customer, error)
 	UpdateDeal(ctx context.Context, arg UpdateDealParams) (Deal, error)
 	// Updates the editable surface of a location in one shot. Pass current values
 	// for fields you don't want to change — there's no partial-update semantics.
@@ -482,6 +515,8 @@ type Querier interface {
 	// The agent's agent.update.status report. Inserted when unknown (an update
 	// started on the Pi itself); only the reporting location's row is touched.
 	UpsertAgentUpdateStatus(ctx context.Context, arg UpsertAgentUpdateStatusParams) error
+	// weborder stage 2: customer accounts + email receipts.
+	UpsertCustomerByPhone(ctx context.Context, arg UpsertCustomerByPhoneParams) (UpsertCustomerByPhoneRow, error)
 	// A driver.shift event (clock-in, then the clock-out for the same shift id),
 	// keyed per location.
 	UpsertDriverShift(ctx context.Context, arg UpsertDriverShiftParams) error

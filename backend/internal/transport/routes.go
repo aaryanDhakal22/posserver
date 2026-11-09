@@ -27,6 +27,7 @@ import (
 	"quiccpos/main/internal/app/bankimport"
 	cardholdApp "quiccpos/main/internal/app/cardhold"
 	channelApp "quiccpos/main/internal/app/channel"
+	"quiccpos/main/internal/app/customers"
 	diagApp "quiccpos/main/internal/app/diag"
 	geoApp "quiccpos/main/internal/app/geo"
 	menuApp "quiccpos/main/internal/app/menu"
@@ -36,11 +37,13 @@ import (
 	"quiccpos/main/internal/app/orderport"
 	pricingApp "quiccpos/main/internal/app/pricing"
 	"quiccpos/main/internal/app/printerstatus"
+	"quiccpos/main/internal/app/receipts"
 	siteApp "quiccpos/main/internal/app/site"
 	"quiccpos/main/internal/app/squarepay"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/app/tracking"
+	"quiccpos/main/internal/infra/mail"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
 	"quiccpos/main/internal/transport/handler"
@@ -120,6 +123,11 @@ type RouterDeps struct {
 	// Square connects stores to Square; CardHolds captures online card holds.
 	Square    *squarepay.Service
 	CardHolds *cardholdApp.Service
+	// Customers backs website accounts; Receipts emails web order receipts.
+	Customers *customers.Service
+	Receipts  *receipts.Service
+	FakeCodes *customers.FakeCodes // dev / staging fake sign-in codes (nil otherwise)
+	FakeMail  *mail.Fake           // dev / staging fake mail (nil otherwise)
 	// SquareFake is the in-process fake Square (dev / staging with SQUARE_ENV=fake; nil otherwise).
 	SquareFake http.Handler
 	// AgentSync backs agent link / restore / backups / fleet health.
@@ -208,6 +216,9 @@ func routeTable(d RouterDeps) []routeDef {
 	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
 	siteH := handler.NewSiteHandler(d.Site, d.Logger)
 	squareH := handler.NewSquareHandler(d.Square, d.CardHolds, d.AppEnv, d.Logger)
+	accountH := handler.NewAccountHandler(d.Customers, d.OrderPort, d.Receipts, d.FakeCodes, d.FakeMail, d.AppEnv, d.Logger)
+	guest := appMiddleware.CustomerAuth(d.Customers.Authenticate, false)
+	member := appMiddleware.CustomerAuth(d.Customers.Authenticate, true)
 	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
 	bankDocH := handler.NewBankImportHandler(d.BankImport, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
@@ -322,6 +333,10 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", adminPrefix+"/card-holds/:order_id/capture", "admin", "Capture an order's card hold now", squareH.AdminCapture, admin),
 		def("POST", adminPrefix+"/card-holds/:order_id/due", "admin", "Dev only: make the hold's safety capture due and run the worker", squareH.AdminDue, admin),
 		def("POST", adminPrefix+"/card-holds/tick", "admin", "Dev only: run the capture worker once", squareH.AdminTick, admin),
+		def("GET", adminPrefix+"/orders/:id/receipts", "admin", "An order's email receipts", accountH.AdminReceipts, admin),
+		def("GET", adminPrefix+"/dev/signin-code", "admin", "Dev only: the fake sign-in code for ?phone=", accountH.DevCode, admin),
+		def("GET", adminPrefix+"/dev/mail", "admin", "Dev only: fake mail sent ?to=", accountH.DevMail, admin),
+		def("POST", adminPrefix+"/dev/receipts/tick", "admin", "Dev only: send queued receipts now", accountH.DevReceiptsTick, admin),
 
 		// Square → main (weborder stage 2): the owner comes back from Square; Square's events.
 		def("GET", "/square/oauth/callback", "none", "Square OAuth callback (state-checked) → the SPA", squareH.OAuthCallback),
@@ -454,6 +469,8 @@ func routeTable(d RouterDeps) []routeDef {
 		def("PUT", storePrefix+"/me/square/location", "store-session", "Square: the location payments go to {square_location_id}", squareH.MeSetLocation, storeSession),
 		def("DELETE", storePrefix+"/me/square", "store-session", "Square: disconnect (refused while holds are open)", squareH.MeDisconnect, storeSession),
 		def("GET", storePrefix+"/me/card-holds", "store-session", "Recent online card holds (?limit=)", squareH.MeHolds, storeSession),
+		def("GET", storePrefix+"/me/site/contact", "store-session", "The store's email for receipt replies", accountH.MeContact, storeSession),
+		def("PUT", storePrefix+"/me/site/contact", "store-session", "Set the receipt reply-to email {reply_email}", accountH.MePutContact, storeSession),
 		def("GET", storePrefix+"/me/site/domains", "store-session", "The website's hosts", siteH.MeDomains, storeSession),
 		def("POST", storePrefix+"/me/site/domains", "store-session", "Add the store's own domain {host, primary} (unverified until checked)", siteH.MeAddDomain, storeSession),
 		def("POST", storePrefix+"/me/site/domains/:host/primary", "store-session", "Make a host the primary one", siteH.MeSetPrimary, storeSession),
@@ -472,7 +489,20 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", channelPrefix+"/operator/logout", "none", "An operator signs out (Bearer the sign-in)", operatorH.ChannelLogout),
 		def("GET", channelPrefix+"/me", "channel", "The channel behind the key and its store", channelH.Me, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/menu", "channel", "The channel's menu (ETag = menu version)", viewH.ChannelMenu, channelAuth, channelGzip),
-		def("POST", channelPrefix+"/orders", "channel", "Place an order (orders permission; idempotent on client_order_id)", orderPortH.Place, channelAuth, channelGzip),
+		def("POST", channelPrefix+"/orders", "channel", "Place an order (orders permission; idempotent on client_order_id)", orderPortH.Place, channelAuth, guest, channelGzip),
+		// Website customer accounts (weborder stage 2): X-Customer-Session from /account/verify.
+		def("POST", channelPrefix+"/account/code", "channel", "Text (or call) a sign-in code {phone, channel sms|call}", accountH.SendCode, channelAuth, channelGzip),
+		def("POST", channelPrefix+"/account/verify", "channel", "Check the code → a customer session {phone, code, name?}", accountH.Verify, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/account", "channel+customer", "The signed-in customer: profile, addresses, saved cards", accountH.Get, channelAuth, member, channelGzip),
+		def("PATCH", channelPrefix+"/account", "channel+customer", "Set name / email", accountH.Update, channelAuth, member, channelGzip),
+		def("DELETE", channelPrefix+"/account", "channel+customer", "Delete the account (saved cards removed from Square; orders stay)", accountH.Delete, channelAuth, member),
+		def("POST", channelPrefix+"/account/logout", "channel+customer", "End this session", accountH.Logout, channelAuth, member),
+		def("POST", channelPrefix+"/account/addresses", "channel+customer", "Save an address", accountH.AddAddress, channelAuth, member, channelGzip),
+		def("PUT", channelPrefix+"/account/addresses/:id", "channel+customer", "Replace an address", accountH.PutAddress, channelAuth, member, channelGzip),
+		def("DELETE", channelPrefix+"/account/addresses/:id", "channel+customer", "Delete an address", accountH.DeleteAddress, channelAuth, member),
+		def("DELETE", channelPrefix+"/account/cards/:id", "channel+customer", "Forget a saved card", accountH.DeleteCard, channelAuth, member),
+		def("GET", channelPrefix+"/account/orders", "channel+customer", "The account's orders, newest first (?before=&limit=)", accountH.Orders, channelAuth, member, channelGzip),
+		def("POST", channelPrefix+"/account/orders/:id/reorder", "channel+customer", "A past order as a new cart, priced today {type?}", accountH.Reorder, channelAuth, member, channelGzip),
 		def("GET", channelPrefix+"/orders", "channel", "This channel's orders, newest first (?before=&limit=)", orderPortH.List, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/orders/:id", "channel", "One of this channel's orders", orderPortH.Get, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/orders/:id/status", "channel", "One of this channel's orders: its tracking state (track permission)", trackingH.Status, channelAuth, channelGzip),

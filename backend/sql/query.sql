@@ -1597,8 +1597,8 @@ DELETE FROM deals WHERE id = $1 AND location_id = $2;
 -- ─── Channel orders (main 3.0 step 5) ───────────────────────────────────────
 
 -- name: InsertChannelOrder :exec
-INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment, track_token, operator_id)
-VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg(track_token), sqlc.narg(operator_id));
+INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment, track_token, operator_id, customer_id)
+VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg(track_token), sqlc.narg(operator_id), sqlc.narg(customer_id));
 
 -- name: GetChannelOrderByClient :one
 SELECT * FROM channel_orders WHERE channel_id = $1 AND client_order_id = $2;
@@ -1798,3 +1798,125 @@ UPDATE payments SET status = $2, amount_cents = $3, captured_at = $4 WHERE order
 
 -- name: GetCardHoldByRef :one
 SELECT * FROM card_holds WHERE location_id = $1 AND payment_ref = $2;
+
+-- weborder stage 2: customer accounts + email receipts.
+
+-- name: UpsertCustomerByPhone :one
+INSERT INTO customers (tenant_id, location_id, phone, name)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (location_id, phone) DO UPDATE SET last_seen_at = now(),
+    name = CASE WHEN customers.name = '' THEN EXCLUDED.name ELSE customers.name END
+RETURNING *, (xmax = 0) AS created;
+
+-- name: GetCustomer :one
+SELECT * FROM customers WHERE id = $1;
+
+-- name: UpdateCustomerProfile :one
+UPDATE customers SET name = $2, email = $3, updated_at = now() WHERE id = $1 RETURNING *;
+
+-- name: SetCustomerSquareID :exec
+UPDATE customers SET square_customer_id = $2, updated_at = now() WHERE id = $1;
+
+-- name: DeleteCustomer :execrows
+DELETE FROM customers WHERE id = $1;
+
+-- name: InsertCustomerSession :exec
+INSERT INTO customer_sessions (token_hash, customer_id, location_id, expires_at) VALUES ($1, $2, $3, $4);
+
+-- name: CustomerBySession :one
+-- A live session's customer; the session is renewed (90 days from now) as it is read.
+UPDATE customer_sessions s SET last_used_at = now(), expires_at = GREATEST(s.expires_at, $3::timestamptz)
+FROM customers c
+WHERE s.token_hash = $1 AND s.location_id = $2 AND s.expires_at > now() AND c.id = s.customer_id
+RETURNING c.*;
+
+-- name: DeleteCustomerSession :exec
+DELETE FROM customer_sessions WHERE token_hash = $1;
+
+-- name: PruneCustomerSessions :execrows
+DELETE FROM customer_sessions WHERE expires_at < now();
+
+-- name: ListCustomerAddresses :many
+SELECT * FROM customer_addresses WHERE customer_id = $1 ORDER BY is_default DESC, created_at;
+
+-- name: InsertCustomerAddress :one
+INSERT INTO customer_addresses (customer_id, label, line1, line2, city, state, zip, notes, is_default)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *;
+
+-- name: UpdateCustomerAddress :one
+UPDATE customer_addresses SET label = $3, line1 = $4, line2 = $5, city = $6, state = $7, zip = $8, notes = $9, is_default = $10
+WHERE id = $1 AND customer_id = $2 RETURNING *;
+
+-- name: ClearCustomerDefaultAddress :exec
+UPDATE customer_addresses SET is_default = false WHERE customer_id = $1 AND is_default;
+
+-- name: DeleteCustomerAddress :execrows
+DELETE FROM customer_addresses WHERE id = $1 AND customer_id = $2;
+
+-- name: CountCustomerAddresses :one
+SELECT count(*) FROM customer_addresses WHERE customer_id = $1;
+
+-- name: ListCustomerCards :many
+SELECT * FROM customer_cards WHERE customer_id = $1 ORDER BY created_at DESC;
+
+-- name: InsertCustomerCard :one
+INSERT INTO customer_cards (customer_id, gateway, card_ref, brand, last4, exp_month, exp_year)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (customer_id, card_ref) DO UPDATE SET brand = EXCLUDED.brand
+RETURNING *;
+
+-- name: GetCustomerCard :one
+SELECT * FROM customer_cards WHERE id = $1 AND customer_id = $2;
+
+-- name: DeleteCustomerCard :execrows
+DELETE FROM customer_cards WHERE id = $1 AND customer_id = $2;
+
+-- name: JoinGuestOrders :execrows
+-- A verified phone takes over that number's guest web orders at the store.
+UPDATE channel_orders co SET customer_id = $3
+FROM orders o, channels ch
+WHERE co.order_id = o.id AND ch.id = co.channel_id AND co.location_id = $1 AND co.customer_id IS NULL
+  AND ch.kind = 'web' AND o.customer_phone = $2;
+
+-- name: ListCustomerOrders :many
+SELECT * FROM channel_orders WHERE customer_id = $1 AND created_at < $2 ORDER BY created_at DESC LIMIT $3;
+
+-- name: GetChannelOrderForCustomer :one
+SELECT * FROM channel_orders WHERE order_id = $1 AND customer_id = $2;
+
+-- name: SetChannelOrderCustomer :exec
+UPDATE channel_orders SET customer_id = $2 WHERE order_id = $1;
+
+-- name: GetSiteReplyEmail :one
+SELECT reply_email FROM site_settings WHERE location_id = $1;
+
+-- name: SetSiteReplyEmail :exec
+INSERT INTO site_settings (location_id, tenant_id, reply_email) VALUES ($1, $2, $3)
+ON CONFLICT (location_id) DO UPDATE SET reply_email = EXCLUDED.reply_email, updated_at = now();
+
+-- name: InsertEmailReceipt :exec
+INSERT INTO email_receipts (order_id, kind, location_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;
+
+-- name: ClaimEmailReceipts :many
+UPDATE email_receipts SET next_try_at = now() + interval '2 minutes'
+WHERE (order_id, kind) IN (
+    SELECT r.order_id, r.kind FROM email_receipts r WHERE r.status = 'pending' AND r.next_try_at <= now()
+    ORDER BY r.next_try_at LIMIT $1 FOR UPDATE SKIP LOCKED)
+RETURNING *;
+
+-- name: EmailReceiptDone :exec
+UPDATE email_receipts SET status = $3, message_id = $4, last_error = $5, attempts = attempts + 1,
+    sent_at = CASE WHEN $3 = 'sent' THEN now() ELSE sent_at END
+WHERE order_id = $1 AND kind = $2;
+
+-- name: EmailReceiptRetry :exec
+UPDATE email_receipts SET attempts = attempts + 1, next_try_at = $3, last_error = $4 WHERE order_id = $1 AND kind = $2;
+
+-- name: ListEmailReceipts :many
+SELECT * FROM email_receipts WHERE order_id = $1 ORDER BY created_at;
+
+-- name: QueueFinalReceipt :execrows
+-- A final receipt only for an order that got a receipt when it was placed.
+INSERT INTO email_receipts (order_id, kind, location_id)
+SELECT r.order_id, 'final', r.location_id FROM email_receipts r WHERE r.order_id = $1 AND r.kind = 'placed'
+ON CONFLICT DO NOTHING;

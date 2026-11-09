@@ -22,6 +22,7 @@ import (
 	"quiccpos/main/internal/app/geo"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	channelDom "quiccpos/main/internal/domain/channel"
+	"quiccpos/main/internal/domain/customer"
 	"quiccpos/main/internal/domain/menu"
 	"quiccpos/main/internal/domain/notify"
 	"quiccpos/main/internal/domain/order"
@@ -93,6 +94,7 @@ type Service struct {
 	links    Links
 	gateways map[string]payment.Gateway
 	notifier notify.Notifier // problems → the owner (nil = log only)
+	accounts Accounts
 	logger   zerolog.Logger
 	now      func() time.Time
 }
@@ -121,6 +123,8 @@ type Request struct {
 		Method            string `json:"method"` // cash | card
 		Token             string `json:"token"`
 		VerificationToken string `json:"verification_token"` // the buyer's 3-D Secure answer (Square verifyBuyer)
+		CardID            string `json:"card_id"`            // a saved card of the signed-in customer (instead of token)
+		SaveCard          bool   `json:"save_card"`          // keep this card for next time (signed-in customers)
 	} `json:"payment"`
 	Customer struct {
 		Name  string `json:"name"`
@@ -142,7 +146,19 @@ type Request struct {
 	// TakenBy is the operator signed in to an operator channel (set by the
 	// handler from the sign-in, never from the body).
 	TakenBy *channelDom.Operator `json:"-"`
+	// Account is the signed-in customer (X-Customer-Session; set by the
+	// handler, never from the body).
+	Account *customer.Customer `json:"-"`
 }
+
+// Accounts reads and keeps signed-in customers' saved cards (the customers service).
+type Accounts interface {
+	Card(ctx context.Context, c customer.Customer, id uuid.UUID) (customer.Card, error)
+	RememberCard(ctx context.Context, customerID uuid.UUID, processorCustomerID string, card customer.Card) error
+}
+
+// SetAccounts plugs in customer accounts (saved cards).
+func (s *Service) SetAccounts(a Accounts) { s.accounts = a }
 
 var (
 	clientIDRe = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,64}$`)
@@ -195,6 +211,14 @@ func (r *Request) validate() *Error {
 	}
 	if len([]rune(r.Notes)) > 500 {
 		return bad("notes are limited to 500 characters")
+	}
+	if (r.Payment.CardID != "" || r.Payment.SaveCard) && (r.Payment.Method != payment.MethodCard || r.Account == nil) {
+		return bad("payment.card_id / save_card need a card payment by a signed-in customer")
+	}
+	if r.Payment.CardID != "" {
+		if _, err := uuid.Parse(r.Payment.CardID); err != nil {
+			return bad("payment.card_id isn't a saved card")
+		}
 	}
 	if r.Payment.Method != payment.MethodCash && r.Payment.Method != payment.MethodCard {
 		return bad("payment.method must be cash or card")
@@ -298,10 +322,24 @@ func (s *Service) Place(ctx context.Context, ch channelDom.Channel, req Request)
 	if _, err := s.build(ctx, ch, req, pctx, q, nil, token); err != nil {
 		return nil, false, err
 	}
-	res, err := gw.Charge(ctx, payment.Charge{LocationID: ch.LocationID, AmountCents: q.TotalCents, TipCents: q.TipCents,
+	charge := payment.Charge{LocationID: ch.LocationID, AmountCents: q.TotalCents, TipCents: q.TipCents,
 		Token: req.Payment.Token, VerificationToken: req.Payment.VerificationToken,
 		IdempotencyKey: ch.ID.String() + ":" + req.ClientOrderID, ReferenceID: req.ClientOrderID,
-		Note: ch.Name + " order", BuyerEmail: strings.TrimSpace(req.Customer.Email)})
+		Note: ch.Name + " order", BuyerEmail: strings.TrimSpace(req.Customer.Email)}
+	if a := req.Account; a != nil && req.Payment.Method == payment.MethodCard {
+		charge.CustomerRef = a.SquareCustomerID
+		charge.Buyer = payment.Buyer{Name: req.Customer.Name, Phone: req.Customer.Phone, Email: req.Customer.Email}
+		if req.Payment.CardID != "" {
+			card, err := s.savedCard(ctx, *a, req.Payment.CardID)
+			if err != nil {
+				return nil, false, refuse(http.StatusUnprocessableEntity, "card_not_found", "That saved card isn't on your account any more — pick another.")
+			}
+			charge.CardRef, charge.Token = card.Ref, ""
+		} else {
+			charge.SaveCard = req.Payment.SaveCard
+		}
+	}
+	res, err := gw.Charge(ctx, charge)
 	switch {
 	case errors.Is(err, payment.ErrDeclined):
 		return nil, false, refuse(http.StatusPaymentRequired, "payment_declined", "The card was declined.")
@@ -330,6 +368,13 @@ func (s *Service) Place(ctx context.Context, ch channelDom.Channel, req Request)
 		}
 		s.refund(ctx, ch, gw, res, q.TotalCents)
 		return nil, false, err
+	}
+	if res.Saved != nil && req.Account != nil && s.accounts != nil {
+		card := customer.Card{Gateway: res.Gateway, Ref: res.Saved.Ref, Brand: res.Saved.Brand, Last4: res.Saved.Last4,
+			ExpMonth: res.Saved.ExpMonth, ExpYear: res.Saved.ExpYear}
+		if err := s.accounts.RememberCard(context.WithoutCancel(ctx), req.Account.ID, res.CustomerRef, card); err != nil {
+			s.logger.Warn().Err(err).Msg("saved card not remembered on the account (it stays on the processor)")
+		}
 	}
 	s.logger.Info().Ctx(ctx).Str("order_id", uuid.UUID(o.ID()).String()).Str("channel", string(ch.Kind)).Msg("channel order placed")
 	return viewOf(o, req.ClientOrderID, token), true, nil
@@ -538,7 +583,12 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 	}
 	meta := map[string]any{"channel": map[string]any{"id": ch.ID.String(), "kind": string(ch.Kind), "name": ch.Name},
 		"client_order_id": req.ClientOrderID}
-	ref := &order.ChannelRef{ID: ch.ID, ClientOrderID: req.ClientOrderID, Payment: payRef, TrackToken: token}
+	ref := &order.ChannelRef{ID: ch.ID, ClientOrderID: req.ClientOrderID, Payment: payRef, TrackToken: token,
+		Receipt: ch.Kind == channelDom.KindWeb && strings.TrimSpace(req.Customer.Email) != ""}
+	if req.Account != nil {
+		id := req.Account.ID
+		ref.CustomerID = &id
+	}
 	if res != nil && res.Status == payment.StatusAuthorized {
 		ref.Hold = &order.CardHold{Gateway: res.Gateway, Ref: res.Ref, AmountCents: q.TotalCents - q.TipCents, TipCents: q.TipCents,
 			DueAt: s.now().Add(HoldFor)}
@@ -699,6 +749,83 @@ func (s *Service) List(ctx context.Context, ch channelDom.Channel, before time.T
 			continue // deleted meanwhile
 		}
 		out = append(out, viewOf(o, l.ClientOrderID, l.TrackToken))
+	}
+	return out, nil
+}
+
+func (s *Service) savedCard(ctx context.Context, a customer.Customer, id string) (customer.Card, error) {
+	cid, err := uuid.Parse(id)
+	if err != nil || s.accounts == nil {
+		return customer.Card{}, customer.ErrNotFound
+	}
+	return s.accounts.Card(ctx, a, cid)
+}
+
+// --- a customer's orders (weborder stage 2) ---------------------------------------------
+
+// ForLinks turns an account's order links into views (gone orders skipped).
+func (s *Service) ForLinks(ctx context.Context, ch channelDom.Channel, links []repositories.ChannelOrder) []*View {
+	out := make([]*View, 0, len(links))
+	scope := order.Scope{TenantID: order.TenantID(ch.TenantID), LocationID: order.LocationID(ch.LocationID)}
+	for _, l := range links {
+		o, err := s.orders.GetByID(ctx, scope, order.ID(l.OrderID))
+		if err != nil {
+			continue
+		}
+		out = append(out, viewOf(o, l.ClientOrderID, l.TrackToken))
+	}
+	return out
+}
+
+// ReorderResult is a past order's lines for a new cart: what is still on
+// the channel's menu, priced today (the quote), and what isn't any more.
+type ReorderResult struct {
+	Lines   []pricing.Line  `json:"lines"`
+	Dropped []string        `json:"dropped"` // names no longer orderable
+	Quote   *pricing.Quote  `json:"quote"`
+	Issues  []pricing.Issue `json:"issues"`
+}
+
+// Reorder builds a cart from one of the account's past orders.
+func (s *Service) Reorder(ctx context.Context, ch channelDom.Channel, link repositories.ChannelOrder, typ string) (*ReorderResult, error) {
+	o, err := s.orders.GetByID(ctx, order.Scope{TenantID: order.TenantID(ch.TenantID), LocationID: order.LocationID(ch.LocationID)}, order.ID(link.OrderID))
+	if err != nil {
+		return nil, ErrNotFound
+	}
+	var past Request
+	if err := json.Unmarshal(o.RawPayload(), &past); err != nil || len(past.Lines) == 0 {
+		return nil, ErrNotFound
+	}
+	if typ != "pickup" && typ != "delivery" {
+		typ = past.Type
+	}
+	pctx, _, err := s.pricing.Context(ctx, ch.TenantID, ch.LocationID, string(ch.Kind), ch.ViewID)
+	if err != nil {
+		return nil, err
+	}
+	out := &ReorderResult{Lines: []pricing.Line{}, Dropped: []string{}, Issues: []pricing.Issue{}}
+	// Price each line alone: a line the menu can't take any more is dropped.
+	names := map[int]string{} // the kitchen lines match the cart lines one to one unless a deal split them
+	if items := o.Items(); len(items) == len(past.Lines) {
+		for i, it := range items {
+			names[i] = it.Name
+		}
+	}
+	for i, l := range past.Lines {
+		q := pricing.Price(*pctx, pricing.Cart{Type: typ, Payment: payment.MethodCard, Lines: []pricing.Line{l}}, s.now())
+		if len(q.Errors) > 0 {
+			name := names[i]
+			if name == "" {
+				name = fmt.Sprintf("item %d", i+1)
+			}
+			out.Dropped = append(out.Dropped, name)
+			continue
+		}
+		out.Lines = append(out.Lines, l)
+	}
+	if len(out.Lines) > 0 {
+		q := pricing.Price(*pctx, pricing.Cart{Type: typ, Payment: payment.MethodCard, Lines: out.Lines}, s.now())
+		out.Quote, out.Issues = &q, q.Errors
 	}
 	return out, nil
 }

@@ -81,12 +81,13 @@ type DeliveryRunStore interface {
 }
 
 type Service struct {
-	orders OrderLoader
-	repo   order.FloorRepository
-	runs   DeliveryRunStore
-	holds  CardHolds
-	logger zerolog.Logger
-	meters observability.Meters
+	orders   OrderLoader
+	repo     order.FloorRepository
+	runs     DeliveryRunStore
+	holds    CardHolds
+	onCancel func(ctx context.Context, orderID uuid.UUID)
+	logger   zerolog.Logger
+	meters   observability.Meters
 }
 
 // CardHolds captures / voids online card holds as the floor moves (the
@@ -102,6 +103,10 @@ type CardHolds interface {
 // OnCardHolds plugs in the card holds (nil = order.tip / batch.closed are
 // answered invalid).
 func (s *Service) OnCardHolds(h CardHolds) { s.holds = h }
+
+// OnCancelled is told after a cancelled order's card hold was dealt with
+// (the customer's final receipt).
+func (s *Service) OnCancelled(f func(ctx context.Context, orderID uuid.UUID)) { s.onCancel = f }
 
 // MaxTipCents bounds an added tip ($500).
 const MaxTipCents = 50000
@@ -336,8 +341,16 @@ func (s *Service) DeliveryRuns(ctx context.Context, sc order.Scope, limit int) (
 // cancelled releases a cancelled order's card hold (in the background: it
 // talks to the processor and must not hold up the agent's sync).
 func (s *Service) cancelled(ctx context.Context, sc order.Scope, oid uuid.UUID, st order.Status) {
-	if s.holds == nil || st != order.StatusCancelled {
+	if st != order.StatusCancelled || (s.holds == nil && s.onCancel == nil) {
 		return
 	}
-	go s.holds.OrderCancelled(context.WithoutCancel(ctx), uuid.UUID(sc.LocationID), oid)
+	ctx = context.WithoutCancel(ctx)
+	go func() {
+		if s.holds != nil {
+			s.holds.OrderCancelled(ctx, uuid.UUID(sc.LocationID), oid)
+		}
+		if s.onCancel != nil {
+			s.onCancel(ctx, oid)
+		}
+	}()
 }

@@ -324,6 +324,7 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 				return
 			}
 			card = b.SourceID
+			canEdit = c["source"] == "cnon:card-nonce-ok"
 		default:
 			sqErr(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "INVALID_CARD_DATA", "unknown source_id")
 			return
@@ -513,11 +514,31 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 			sqErr(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "NOT_FOUND", "no customer")
 			return
 		}
-		if pay, ok := f.payments[b.SourceID]; !ok || pay.Status != "COMPLETED" {
-			sqErr(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "INVALID_CARD", "source must be a completed payment")
-			return
+		source := "cnon:card-nonce-no-edit"
+		switch {
+		case strings.HasPrefix(b.SourceID, "cnon:"):
+			// A card token: the same outcomes as paying with it.
+			switch b.SourceID {
+			case "cnon:card-nonce-ok", "cnon:card-nonce-no-edit", "cnon:card-edit-tip-failure", "cnon:card-edit-failure":
+				source = b.SourceID
+			case "cnon:card-nonce-declined":
+				sqErr(w, http.StatusBadRequest, "PAYMENT_METHOD_ERROR", "GENERIC_DECLINE", "Authorization error: 'GENERIC_DECLINE'")
+				return
+			case "cnon:card-nonce-verification":
+				sqErr(w, http.StatusPaymentRequired, "PAYMENT_METHOD_ERROR", "CARD_DECLINED_VERIFICATION_REQUIRED", "verification required")
+				return
+			default:
+				sqErr(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "INVALID_CARD_DATA", "unknown source_id")
+				return
+			}
+		default:
+			if pay, ok := f.payments[b.SourceID]; !ok || pay.Status != "COMPLETED" {
+				sqErr(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "INVALID_CARD", "source must be a completed payment or a card token")
+				return
+			}
 		}
-		c := map[string]any{"id": id("ccof:"), "customer_id": b.Card["customer_id"], "last_4": "1111", "card_brand": "VISA", "enabled": true}
+		c := map[string]any{"id": id("ccof:"), "customer_id": b.Card["customer_id"], "last_4": "1111", "card_brand": "VISA", "enabled": true,
+			"exp_month": 12, "exp_year": 2030, "source": source}
 		f.cards[c["id"].(string)] = c
 		f.byKey["card:"+b.IdempotencyKey] = c["id"].(string)
 		writeJSON(w, http.StatusOK, map[string]any{"card": c})

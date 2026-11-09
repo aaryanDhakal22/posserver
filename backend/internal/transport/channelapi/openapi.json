@@ -309,7 +309,14 @@
             }
           },
           "401": {
-            "$ref": "#/components/responses/Unauthorized"
+            "description": "Bad channel key, or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "402": {
             "description": "payment_declined, or verification_required (verify the buyer, then send verification_token)",
@@ -342,7 +349,7 @@
             }
           },
           "422": {
-            "description": "cart_invalid (issues), outside_area, address_unknown",
+            "description": "cart_invalid (issues), outside_area, address_unknown; card_not_found (a saved card no longer on the account)",
             "content": {
               "application/json": {
                 "schema": {
@@ -361,7 +368,18 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Signed-in website customer: the order joins their account; needed for payment.card_id / save_card"
+          }
+        ]
       },
       "get": {
         "operationId": "listOrders",
@@ -900,6 +918,896 @@
         }
       }
     },
+    "/channel/v1/account/code": {
+      "post": {
+        "operationId": "sendSignInCode",
+        "summary": "Text (or call) a sign-in code",
+        "responses": {
+          "202": {
+            "description": "Sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeSent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "400": {
+            "description": "bad_phone / bad_request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too_many (3 per phone per 10 min, 8 a day) / call_too_soon (30 s after a text)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "send_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "phone"
+                ],
+                "properties": {
+                  "phone": {
+                    "type": "string"
+                  },
+                  "channel": {
+                    "enum": [
+                      "sms",
+                      "call"
+                    ],
+                    "default": "sms"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channel/v1/account/verify": {
+      "post": {
+        "operationId": "verifySignInCode",
+        "summary": "Check the code → a customer session (creates the account the first time)",
+        "responses": {
+          "200": {
+            "description": "Signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "400": {
+            "description": "bad_phone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "bad_code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too_many",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "phone",
+                  "code"
+                ],
+                "properties": {
+                  "phone": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "For a new account"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channel/v1/account": {
+      "get": {
+        "operationId": "getAccount",
+        "summary": "The signed-in customer: profile, addresses, saved cards",
+        "responses": {
+          "200": {
+            "description": "The account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateAccount",
+        "summary": "Set name and/or email",
+        "responses": {
+          "200": {
+            "description": "The account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "400": {
+            "description": "bad_request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "email": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAccount",
+        "summary": "Delete the account: addresses and saved cards (removed from Square too); past orders stay, unlinked",
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          }
+        ]
+      }
+    },
+    "/channel/v1/account/logout": {
+      "post": {
+        "operationId": "signOut",
+        "summary": "End this session",
+        "responses": {
+          "204": {
+            "description": "Signed out"
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          }
+        ]
+      }
+    },
+    "/channel/v1/account/addresses": {
+      "post": {
+        "operationId": "addAddress",
+        "summary": "Save an address",
+        "responses": {
+          "201": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Address"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "400": {
+            "description": "bad_request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "too_many_addresses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddressRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channel/v1/account/addresses/{id}": {
+      "put": {
+        "operationId": "putAddress",
+        "summary": "Replace an address",
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Address"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "400": {
+            "description": "bad_request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddressRequest"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAddress",
+        "summary": "Delete an address",
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/channel/v1/account/cards/{id}": {
+      "delete": {
+        "operationId": "deleteSavedCard",
+        "summary": "Forget a saved card (turned off at Square)",
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/channel/v1/account/orders": {
+      "get": {
+        "operationId": "listAccountOrders",
+        "summary": "The account's orders at this store, newest first (guest orders with the same phone included)",
+        "responses": {
+          "200": {
+            "description": "Orders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "orders"
+                  ],
+                  "properties": {
+                    "orders": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Order"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "400": {
+            "description": "bad_request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ]
+      }
+    },
+    "/channel/v1/account/orders/{id}/reorder": {
+      "post": {
+        "operationId": "reorder",
+        "summary": "A past order as a new cart, priced today",
+        "responses": {
+          "200": {
+            "description": "The cart",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reorder"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "pickup",
+                      "delivery"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/channel/v1/openapi.json": {
       "get": {
         "operationId": "getSpec",
@@ -925,7 +1833,7 @@
       "channelKey": {
         "type": "http",
         "scheme": "bearer",
-        "description": "The channel's key: Authorization: Bearer qch_… — or an operator's sign-in (Bearer qops_… from /channel/v1/operator/login) with X-Location-ID: the store; without it 400 location_required, a store the operator may not work on 403 location_not_allowed. — or the storefront's platform key (Bearer qpk_…, one per storefront server) with X-Site-Host: the host it is serving; the store behind a verified host answers as its built-in web channel. Without the header 400 host_required; a host no store is served on (or not verified yet) 404 unknown_site."
+        "description": "The channel's key: Authorization: Bearer qch_… — or an operator's sign-in (Bearer qops_… from /channel/v1/operator/login) with X-Location-ID: the store; without it 400 location_required, a store the operator may not work on 403 location_not_allowed. — or the storefront's platform key (Bearer qpk_…, one per storefront server) with X-Site-Host: the host it is serving; the store behind a verified host answers as its built-in web channel. Without the header 400 host_required; a host no store is served on (or not verified yet) 404 unknown_site. Website customers: X-Customer-Session: qcs_… (from POST /channel/v1/account/verify, 90 days, renewed on use) on /account/* and POST /orders — 401 sign_in without it where required, 401 session_invalid when bad or expired; only the store's web channel takes it (403 otherwise). The storefront forwards the customer's IP as X-Customer-IP (sign-in limits)."
       }
     },
     "responses": {
@@ -2546,6 +3454,15 @@
               "verification_token": {
                 "type": "string",
                 "description": "Square verifyBuyer()'s token when the bank asks for 3-D Secure (402 verification_required)"
+              },
+              "card_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "A saved card of the signed-in customer (instead of token)"
+              },
+              "save_card": {
+                "type": "boolean",
+                "description": "Keep this card for next time (signed-in customers; an unticked box at checkout)"
               }
             },
             "additionalProperties": false
@@ -3326,6 +4243,280 @@
           "hold_hours": {
             "type": "integer",
             "description": "A card is authorized at checkout and captured later (the driver's clock-out, Close batch, or after this many hours)"
+          }
+        }
+      },
+      "Customer": {
+        "type": "object",
+        "required": [
+          "id",
+          "phone",
+          "name",
+          "email",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "phone": {
+            "type": "string",
+            "description": "10 digits"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Address": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "line1",
+          "line2",
+          "city",
+          "state",
+          "zip",
+          "notes",
+          "default",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          },
+          "line1": {
+            "type": "string"
+          },
+          "line2": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "zip": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AddressRequest": {
+        "type": "object",
+        "required": [
+          "line1"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "line1": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "line2": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "zip": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "default": {
+            "type": "boolean"
+          }
+        },
+        "description": "line1 and a zip or city; the account's first address is its default; up to 20"
+      },
+      "SavedCard": {
+        "type": "object",
+        "required": [
+          "id",
+          "brand",
+          "last4",
+          "exp_month",
+          "exp_year",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Send as payment.card_id"
+          },
+          "brand": {
+            "type": "string"
+          },
+          "last4": {
+            "type": "string"
+          },
+          "exp_month": {
+            "type": "integer"
+          },
+          "exp_year": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Account": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Customer"
+          },
+          {
+            "type": "object",
+            "required": [
+              "addresses",
+              "cards"
+            ],
+            "properties": {
+              "addresses": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Address"
+                }
+              },
+              "cards": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SavedCard"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "CodeSent": {
+        "type": "object",
+        "required": [
+          "sent_to",
+          "channel",
+          "call_after_s"
+        ],
+        "properties": {
+          "sent_to": {
+            "type": "string",
+            "description": "The masked number, e.g. (410) •••-0101"
+          },
+          "channel": {
+            "enum": [
+              "sms",
+              "call"
+            ]
+          },
+          "call_after_s": {
+            "type": "integer",
+            "description": "Offer 'Call me instead' after this many seconds"
+          }
+        }
+      },
+      "CustomerSession": {
+        "type": "object",
+        "required": [
+          "session",
+          "expires_at",
+          "customer",
+          "new",
+          "joined_orders"
+        ],
+        "properties": {
+          "session": {
+            "type": "string",
+            "description": "qcs_… — send as X-Customer-Session"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "customer": {
+            "$ref": "#/components/schemas/Customer"
+          },
+          "new": {
+            "type": "boolean",
+            "description": "The account was created now"
+          },
+          "joined_orders": {
+            "type": "integer",
+            "description": "Past guest web orders with this phone now in the account"
+          }
+        }
+      },
+      "Reorder": {
+        "type": "object",
+        "required": [
+          "lines",
+          "dropped",
+          "quote",
+          "issues"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CartLine"
+            },
+            "description": "The past order's lines still on the menu"
+          },
+          "dropped": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Items that can't be ordered any more"
+          },
+          "quote": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Quote"
+              }
+            ],
+            "description": "The lines priced today (null when nothing is left)"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Issue"
+            }
           }
         }
       }

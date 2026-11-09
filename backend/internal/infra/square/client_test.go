@@ -95,7 +95,7 @@ func TestNoEditSavedCardAndDeclines(t *testing.T) {
 	if err != nil || cu.ID == "" {
 		t.Fatalf("customer %v", err)
 	}
-	card, err := c.CreateCard(ctx, tok, "card1", p.ID, cu.ID)
+	card, err := c.CreateCard(ctx, tok, "card1", p.ID, cu.ID, "")
 	if err != nil || card.ID == "" {
 		t.Fatalf("card %v", err)
 	}

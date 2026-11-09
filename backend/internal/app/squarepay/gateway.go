@@ -41,13 +41,52 @@ func (g *Gateway) Charge(ctx context.Context, c payment.Charge) (payment.Result,
 	if sqLoc == "" {
 		return payment.Result{}, payment.ErrNotConnected
 	}
-	if c.Token == "" {
+	if c.Token == "" && c.CardRef == "" {
 		return payment.Result{}, payment.ErrBadToken
 	}
 	idem := key("hold", c.IdempotencyKey)
-	req := square.CreatePayment{IdempotencyKey: idem, SourceID: c.Token, AmountMoney: square.USD(c.AmountCents - c.TipCents),
+	source, customerRef := c.Token, c.CustomerRef
+	var saved *payment.SavedCard
+	switch {
+	case c.CardRef != "": // a card the customer saved before
+		if customerRef == "" {
+			return payment.Result{}, payment.ErrBadToken
+		}
+		source = c.CardRef
+	case c.SaveCard: // keep the card for next time, then pay with the saved card
+		if customerRef == "" {
+			cu, err := g.client().CreateCustomer(ctx, tok, key("account", c.IdempotencyKey), square.Customer{GivenName: clip(c.Buyer.Name, 100),
+				PhoneNumber: c.Buyer.Phone, EmailAddress: c.Buyer.Email, ReferenceID: clip(c.ReferenceID, 40), Note: "Website account"})
+			if err != nil && square.StatusOf(err) == 400 && c.Buyer.Phone != "" {
+				cu, err = g.client().CreateCustomer(ctx, tok, key("account", c.IdempotencyKey, "nophone"), square.Customer{
+					GivenName: clip(c.Buyer.Name, 100), EmailAddress: c.Buyer.Email, ReferenceID: clip(c.ReferenceID, 40), Note: "Website account"})
+			}
+			if err != nil {
+				return payment.Result{}, err
+			}
+			customerRef = cu.ID
+		}
+		card, err := g.client().CreateCard(ctx, tok, key("save", c.IdempotencyKey), c.Token, customerRef, c.VerificationToken)
+		switch {
+		case err == nil:
+		case square.CodeOf(err) == "CARD_DECLINED_VERIFICATION_REQUIRED":
+			return payment.Result{}, payment.ErrVerify
+		case square.Declined(err):
+			return payment.Result{}, payment.ErrDeclined
+		case square.CodeOf(err) == "INVALID_CARD_DATA" || square.CodeOf(err) == "CARD_TOKEN_USED" || square.CodeOf(err) == "CARD_TOKEN_EXPIRED":
+			return payment.Result{}, payment.ErrBadToken
+		default:
+			return payment.Result{}, err
+		}
+		source = card.ID
+		saved = &payment.SavedCard{Ref: card.ID, Brand: card.CardBrand, Last4: card.Last4, ExpMonth: card.ExpMonth, ExpYear: card.ExpYear}
+	}
+	req := square.CreatePayment{IdempotencyKey: idem, SourceID: source, CustomerID: customerRef, AmountMoney: square.USD(c.AmountCents - c.TipCents),
 		Autocomplete: false, LocationID: sqLoc, ReferenceID: clip(c.ReferenceID, 40), Note: clip(c.Note, 500),
-		BuyerEmailAddress: clip(c.BuyerEmail, 255), VerificationToken: c.VerificationToken}
+		BuyerEmailAddress: clip(c.BuyerEmail, 255)}
+	if c.CardRef == "" && !c.SaveCard {
+		req.VerificationToken = c.VerificationToken // a saved card was verified when it was saved
+	}
 	if c.TipCents > 0 {
 		req.TipMoney = square.USD(c.TipCents)
 	}
@@ -73,7 +112,20 @@ func (g *Gateway) Charge(ctx context.Context, c payment.Charge) (payment.Result,
 	if p.Status == square.StatusCompleted {
 		status = payment.StatusCaptured
 	}
-	return payment.Result{Gateway: GatewayName, Ref: p.ID, Status: status, Last4: p.Last4(), Brand: p.Brand(), AuthCode: p.AuthCode()}, nil
+	return payment.Result{Gateway: GatewayName, Ref: p.ID, Status: status, Last4: p.Last4(), Brand: p.Brand(), AuthCode: p.AuthCode(),
+		Saved: saved, CustomerRef: customerRef}, nil
+}
+
+// DisableSavedCard turns a customer's saved card off at Square.
+func (s *Service) DisableSavedCard(ctx context.Context, locationID uuid.UUID, gateway, cardRef string) error {
+	if gateway != GatewayName {
+		return nil
+	}
+	tok, _, err := s.conn(ctx, locationID)
+	if err != nil {
+		return err
+	}
+	return s.client.DisableCard(ctx, tok, cardRef)
 }
 
 // Refund gives money back: a hold is voided, a completed payment refunded.
@@ -197,7 +249,7 @@ func (g *Gateway) ChargeTip(ctx context.Context, h payment.Hold, cents int64, b 
 			return "", err
 		}
 	}
-	card, err := g.client().CreateCard(ctx, tok, key("card", oid), h.Ref, cu.ID)
+	card, err := g.client().CreateCard(ctx, tok, key("card", oid), h.Ref, cu.ID, "")
 	if err != nil {
 		if !square.Temporary(err) {
 			return "", payment.Permanent{Err: fmt.Errorf("couldn't save the card: %w", err)}

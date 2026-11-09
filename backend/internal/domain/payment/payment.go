@@ -51,6 +51,21 @@ type Charge struct {
 	ReferenceID       string    // shown on the processor's side (the channel's order id)
 	Note              string
 	BuyerEmail        string
+	// Saved cards (weborder stage 2, signed-in customers): CardRef pays with
+	// a card saved earlier (instead of Token); SaveCard keeps the Token's card
+	// for next time. CustomerRef is the processor's customer ("" = make one
+	// from Buyer when a card is saved).
+	CardRef     string
+	CustomerRef string
+	SaveCard    bool
+	Buyer       Buyer
+}
+
+// SavedCard is a card the processor kept for the customer.
+type SavedCard struct {
+	Ref               string
+	Brand, Last4      string
+	ExpMonth, ExpYear int
 }
 
 // Result is a charge's outcome.
@@ -61,6 +76,10 @@ type Result struct {
 	Last4    string
 	Brand    string
 	AuthCode string
+	// Saved is the card kept for next time (SaveCard); CustomerRef the
+	// processor's customer it belongs to.
+	Saved       *SavedCard
+	CustomerRef string
 }
 
 // Gateway takes one payment method.

@@ -51,6 +51,9 @@ func (h *OrderPortHandler) Place(c *echo.Context) error {
 	if op, ok := appMiddleware.ChannelOperatorFromContext(c.Request().Context()); ok {
 		req.TakenBy = &op
 	}
+	if cu, ok := appMiddleware.CustomerFromContext(c.Request().Context()); ok {
+		req.Account = &cu // a signed-in website customer (X-Customer-Session)
+	}
 	v, created, err := h.svc.Place(c.Request().Context(), ch, req)
 	if err != nil {
 		return h.fail(c, err)

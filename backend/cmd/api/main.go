@@ -33,12 +33,14 @@ import (
 	"quiccpos/main/internal/app/bankimport"
 	cardholdApp "quiccpos/main/internal/app/cardhold"
 	channelApp "quiccpos/main/internal/app/channel"
+	"quiccpos/main/internal/app/customers"
 	menuApp "quiccpos/main/internal/app/menu"
 	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
 	orderSvc "quiccpos/main/internal/app/order"
 	"quiccpos/main/internal/app/orderport"
 	pricingApp "quiccpos/main/internal/app/pricing"
+	"quiccpos/main/internal/app/receipts"
 	siteApp "quiccpos/main/internal/app/site"
 	"quiccpos/main/internal/app/squarepay"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
@@ -356,9 +358,15 @@ func main() {
 	cardHolds.SetNotifier(notifier)
 	go cardHolds.Run(ctx)
 	floorService.OnCardHolds(cardHolds)
+	// Website customer accounts (weborder stage 2): phone + code sign-in.
+	signinCodes, fakeCodes := customers.CodesFromEnv(cfg.AppConfig.AppEnv, lgr)
+	customerService := customers.NewService(repositories.NewCustomerRepository(pool), signinCodes, lgr)
+	customerService.SetCardRemover(squareService)
+	go customerService.RunPrune(ctx)
 	orderPortService := orderport.NewService(pricingService, storeStatusService, menuViewService, menuService, svc,
 		repositories.NewChannelOrderRepository(pool), gateways, lgr)
 	orderPortService.SetNotifier(notifier) // a failed refund pages the owner
+	orderPortService.SetAccounts(customerService)
 	go geoService.BackfillStores(ctx)
 
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
@@ -370,6 +378,14 @@ func main() {
 	siteService := siteApp.NewService(repositories.NewSiteRepository(pool), tenancyService, os.Getenv("SITE_BASE_DOMAIN"), lgr)
 	siteService.SetWebChannels(channelService)
 	channelService.SetSites(siteService)
+	// Email receipts for web orders (weborder stage 2).
+	mailSender, fakeMail, mailFrom := receipts.SenderFromEnv(ctx, cfg.AppConfig.AppEnv, lgr)
+	receiptService := receipts.NewService(repositories.NewReceiptRepository(pool), repo, tenancyService,
+		repositories.NewChannelOrderRepository(pool), receipts.StoreFuncs{Host: siteService.PrimaryHost, Reply: customerService.ReplyEmail},
+		squareRepo, mailSender, mailFrom, lgr)
+	go receiptService.Run(ctx)
+	cardHolds.OnAmountChanged(receiptService.QueueFinal)
+	floorService.OnCancelled(receiptService.QueueFinal)
 
 	sqsClient, err := sqsconsumer.NewSQSClient(ctx, cfg, lgr)
 	if err != nil {
@@ -425,6 +441,10 @@ func main() {
 		Square:          squareService,
 		CardHolds:       cardHolds,
 		SquareFake:      sqFake,
+		Customers:       customerService,
+		Receipts:        receiptService,
+		FakeCodes:       fakeCodes,
+		FakeMail:        fakeMail,
 		MenuViewService: menuViewService,
 		BankImport:      bankImportService,
 		StoreStatus:     storeStatusService,

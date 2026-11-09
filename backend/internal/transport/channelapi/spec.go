@@ -3,7 +3,7 @@
 // counter terminal, vendor — is built against. main serves it at
 // GET /channel/v1/openapi.json and pytest validates every /channel/v1 answer
 // against it, so the document can't drift from what main does (Air doesn't
-// watch .json: change this file after editing the document).
+// watch .json: change this file after editing the document.)
 package channelapi
 
 import _ "embed"

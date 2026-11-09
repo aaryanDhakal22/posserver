@@ -295,6 +295,8 @@ type ChannelRef struct {
 	TrackToken    string     // the public tracking link's token ("" = none)
 	OperatorID    *uuid.UUID // the call-center operator who took it (main 3.0)
 	Hold          *CardHold  // an online card hold to capture later (weborder stage 2)
+	CustomerID    *uuid.UUID // the signed-in customer's account (weborder stage 2)
+	Receipt       bool       // queue the email receipt (a web order with an email)
 }
 
 // CardHold is an authorized card payment the order's channel took: main

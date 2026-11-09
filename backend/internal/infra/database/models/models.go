@@ -123,6 +123,55 @@ type ChannelOrder struct {
 	TrackToken    pgtype.Text        `json:"track_token"`
 	AlertedAt     pgtype.Timestamptz `json:"alerted_at"`
 	OperatorID    pgtype.UUID        `json:"operator_id"`
+	CustomerID    pgtype.UUID        `json:"customer_id"`
+}
+
+type Customer struct {
+	ID               pgtype.UUID        `json:"id"`
+	TenantID         pgtype.UUID        `json:"tenant_id"`
+	LocationID       pgtype.UUID        `json:"location_id"`
+	Phone            string             `json:"phone"`
+	Name             string             `json:"name"`
+	Email            string             `json:"email"`
+	SquareCustomerID string             `json:"square_customer_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	LastSeenAt       pgtype.Timestamptz `json:"last_seen_at"`
+}
+
+type CustomerAddress struct {
+	ID         pgtype.UUID        `json:"id"`
+	CustomerID pgtype.UUID        `json:"customer_id"`
+	Label      string             `json:"label"`
+	Line1      string             `json:"line1"`
+	Line2      string             `json:"line2"`
+	City       string             `json:"city"`
+	State      string             `json:"state"`
+	Zip        string             `json:"zip"`
+	Notes      string             `json:"notes"`
+	IsDefault  bool               `json:"is_default"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type CustomerCard struct {
+	ID         pgtype.UUID        `json:"id"`
+	CustomerID pgtype.UUID        `json:"customer_id"`
+	Gateway    string             `json:"gateway"`
+	CardRef    string             `json:"card_ref"`
+	Brand      string             `json:"brand"`
+	Last4      string             `json:"last4"`
+	ExpMonth   int32              `json:"exp_month"`
+	ExpYear    int32              `json:"exp_year"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type CustomerSession struct {
+	TokenHash  string             `json:"token_hash"`
+	CustomerID pgtype.UUID        `json:"customer_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
 }
 
 type Deal struct {
@@ -211,6 +260,19 @@ type DriverShift struct {
 	ClockOut   pgtype.Timestamptz `json:"clock_out"`
 	AutoOut    bool               `json:"auto_out"`
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type EmailReceipt struct {
+	OrderID    pgtype.UUID        `json:"order_id"`
+	Kind       string             `json:"kind"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Status     string             `json:"status"`
+	Attempts   int32              `json:"attempts"`
+	NextTryAt  pgtype.Timestamptz `json:"next_try_at"`
+	LastError  string             `json:"last_error"`
+	MessageID  string             `json:"message_id"`
+	SentAt     pgtype.Timestamptz `json:"sent_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
 type FloorEventsSeen struct {
@@ -648,6 +710,7 @@ type SiteSetting struct {
 	Published  []byte             `json:"published"`
 	Version    int64              `json:"version"`
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	ReplyEmail string             `json:"reply_email"`
 }
 
 type SquareConnection struct {

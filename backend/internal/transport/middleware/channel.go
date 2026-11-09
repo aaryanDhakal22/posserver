@@ -9,6 +9,7 @@ import (
 	channelApp "quiccpos/main/internal/app/channel"
 	operatorApp "quiccpos/main/internal/app/operator"
 	channelDom "quiccpos/main/internal/domain/channel"
+	"quiccpos/main/internal/domain/customer"
 	siteDom "quiccpos/main/internal/domain/site"
 
 	"github.com/google/uuid"
@@ -100,4 +101,49 @@ func ChannelFromContext(ctx context.Context) (channelDom.Channel, bool) {
 func ChannelOperatorFromContext(ctx context.Context) (channelDom.Operator, bool) {
 	op, ok := ctx.Value(channelOperatorKey).(channelDom.Operator)
 	return op, ok
+}
+
+// --- customer sessions (weborder stage 2) ---------------------------------------------
+
+type customerCtxKey struct{}
+
+// CustomerAuth reads a store's customer session from X-Customer-Session on
+// a web channel request (after ChannelAuth). Without the header the request
+// is a guest's; required = the route needs a signed-in customer (401
+// sign_in). A bad / expired session is 401 session_invalid.
+func CustomerAuth(auth func(ctx context.Context, locationID uuid.UUID, raw string) (customer.Customer, error), required bool) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c *echo.Context) error {
+			ch, ok := ChannelFromContext(c.Request().Context())
+			if !ok {
+				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "missing channel key", "code": "unauthorized"})
+			}
+			raw := strings.TrimSpace(c.Request().Header.Get("X-Customer-Session"))
+			if raw == "" {
+				if required {
+					return c.JSON(http.StatusUnauthorized, map[string]string{"error": "sign in first", "code": "sign_in"})
+				}
+				return next(c)
+			}
+			if ch.Kind != channelDom.KindWeb {
+				return c.JSON(http.StatusForbidden, map[string]string{"error": "customer accounts are for the store's website", "code": "forbidden"})
+			}
+			cu, err := auth(c.Request().Context(), ch.LocationID, raw)
+			if errors.Is(err, customer.ErrBadSession) {
+				return c.JSON(http.StatusUnauthorized, map[string]string{"error": err.Error(), "code": "session_invalid"})
+			}
+			if err != nil {
+				return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sign-in lookup is unavailable, try again", "code": "try_again"})
+			}
+			trace.SpanFromContext(c.Request().Context()).SetAttributes(attribute.String("customer.id", cu.ID.String()))
+			c.SetRequest(c.Request().WithContext(context.WithValue(c.Request().Context(), customerCtxKey{}, cu)))
+			return next(c)
+		}
+	}
+}
+
+// CustomerFromContext is the signed-in customer (none for a guest).
+func CustomerFromContext(ctx context.Context) (customer.Customer, bool) {
+	cu, ok := ctx.Value(customerCtxKey{}).(customer.Customer)
+	return cu, ok
 }

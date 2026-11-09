@@ -264,3 +264,12 @@ func (s *Service) Site(ctx context.Context, locationID uuid.UUID) (View, error) 
 	}
 	return v, nil
 }
+
+// PrimaryHost is the store's primary verified host ("" = none).
+func (s *Service) PrimaryHost(ctx context.Context, locationID uuid.UUID) string {
+	v, err := s.Site(ctx, locationID)
+	if err != nil {
+		return ""
+	}
+	return v.PrimaryHost
+}
