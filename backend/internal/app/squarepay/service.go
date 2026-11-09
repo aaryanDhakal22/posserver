@@ -38,10 +38,10 @@ import (
 )
 
 var (
-	ErrDisabled       = errors.New("Square isn't set up on this server")
+	ErrDisabled       = errors.New("this server isn't set up for Square")
 	ErrNotConnected   = errors.New("this store hasn't connected Square")
 	ErrBadState       = errors.New("the Square sign-in link expired or isn't valid — start again")
-	ErrDenied         = errors.New("Square access was not granted")
+	ErrDenied         = errors.New("access to Square was not granted")
 	ErrUnknownSquare  = errors.New("that Square location isn't one of this account's card-taking locations")
 	ErrHoldsOpen      = errors.New("card orders are still waiting to be captured — disconnect after Close batch")
 	ErrNoLocation     = errors.New("pick the Square location payments go to")
