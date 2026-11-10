@@ -867,6 +867,10 @@ CREATE TABLE site_settings (
     version     bigint      NOT NULL DEFAULT 1,
     updated_at  timestamptz NOT NULL DEFAULT now(),
     reply_email text        NOT NULL DEFAULT '',
+    draft_at      timestamptz,                       -- 00029: a draft is open
+    published_at  timestamptz,                       -- 00029
+    published_by  text        NOT NULL DEFAULT '',   -- 00029
+    preview_token text        NOT NULL DEFAULT '',   -- 00029: the private preview link
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
 );
 
@@ -989,3 +993,16 @@ CREATE TABLE email_receipts (
     PRIMARY KEY (order_id, kind)
 );
 CREATE INDEX idx_email_receipts_work ON email_receipts (next_try_at) WHERE status = 'pending';
+
+-- 00029_site_website (the Website page's logo + cover photo)
+CREATE TABLE site_images (
+    id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    location_id  uuid        NOT NULL,
+    tenant_id    uuid        NOT NULL,
+    kind         text        NOT NULL CHECK (kind IN ('logo', 'cover')),
+    content_type text        NOT NULL,
+    bytes        bytea       NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+);
+CREATE INDEX idx_site_images_location ON site_images (location_id);

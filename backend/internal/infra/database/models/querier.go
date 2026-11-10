@@ -139,14 +139,17 @@ type Querier interface {
 	DeleteTenantOrders(ctx context.Context, tenantID pgtype.UUID) error
 	DeleteTenantOutboxEvents(ctx context.Context, tenantID pgtype.UUID) error
 	DeleteTenantPrinters(ctx context.Context, tenantID pgtype.UUID) error
+	DeleteUnusedSiteImages(ctx context.Context, arg DeleteUnusedSiteImagesParams) (int64, error)
 	DetachGroupFromAllItems(ctx context.Context, arg DetachGroupFromAllItemsParams) error
 	DetachModifierGroup(ctx context.Context, arg DetachModifierGroupParams) error
 	DiagReportExists(ctx context.Context, id pgtype.UUID) (bool, error)
+	DiscardSiteDraft(ctx context.Context, locationID pgtype.UUID) error
 	EmailReceiptDone(ctx context.Context, arg EmailReceiptDoneParams) error
 	EmailReceiptRetry(ctx context.Context, arg EmailReceiptRetryParams) error
 	// Safety net for the after-ingest enqueue: recent delivery orders that have
 	// no order_geo row yet.
 	EnqueueMissingOrderGeo(ctx context.Context, since pgtype.Timestamptz) (int64, error)
+	EnsureSitePreviewToken(ctx context.Context, arg EnsureSitePreviewTokenParams) (string, error)
 	// ─── Store status (main 3.0 step 3) ─────────────────────────────────────────
 	// restocked_at starts at now: 86'd items come back at the next reset hour,
 	// never right when the row is first made.
@@ -212,6 +215,7 @@ type Querier interface {
 	GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error)
 	GetPrinterByID(ctx context.Context, id pgtype.UUID) (Printer, error)
 	GetSiteDomain(ctx context.Context, host string) (SiteDomain, error)
+	GetSiteImage(ctx context.Context, arg GetSiteImageParams) (GetSiteImageRow, error)
 	GetSiteReplyEmail(ctx context.Context, locationID pgtype.UUID) (string, error)
 	GetSiteSettings(ctx context.Context, locationID pgtype.UUID) (SiteSetting, error)
 	GetSquareConnection(ctx context.Context, locationID pgtype.UUID) (SquareConnection, error)
@@ -251,6 +255,7 @@ type Querier interface {
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) error
 	InsertPrinterIPChange(ctx context.Context, arg InsertPrinterIPChangeParams) error
 	InsertSiteDomain(ctx context.Context, arg InsertSiteDomainParams) (SiteDomain, error)
+	InsertSiteImage(ctx context.Context, arg InsertSiteImageParams) (InsertSiteImageRow, error)
 	InsertTabletReportToken(ctx context.Context, arg InsertTabletReportTokenParams) (pgtype.UUID, error)
 	// A verified phone takes over that number's guest web orders at the store.
 	JoinGuestOrders(ctx context.Context, arg JoinGuestOrdersParams) (int64, error)
@@ -370,6 +375,7 @@ type Querier interface {
 	PruneDiagReports(ctx context.Context, receivedAt pgtype.Timestamptz) (int64, error)
 	PruneExternalStops(ctx context.Context, now pgtype.Timestamptz) (int64, error)
 	PruneExternalWork(ctx context.Context, now pgtype.Timestamptz) (int64, error)
+	PublishSiteDraft(ctx context.Context, arg PublishSiteDraftParams) (PublishSiteDraftRow, error)
 	// A final receipt only for an order that got a receipt when it was placed.
 	QueueFinalReceipt(ctx context.Context, orderID pgtype.UUID) (int64, error)
 	RequestCardHoldCapture(ctx context.Context, arg RequestCardHoldCaptureParams) (int64, error)
@@ -422,6 +428,8 @@ type Querier interface {
 	// matches found near the store, or not_found with a note. Replaces whatever
 	// the order had (staff searched because it was wrong) and is pushed again.
 	SaveOrderGeoSearch(ctx context.Context, arg SaveOrderGeoSearchParams) (int64, error)
+	// The Website page (00029).
+	SaveSiteDraft(ctx context.Context, arg SaveSiteDraftParams) error
 	// Filtered/sorted order history for the agent's store-manager web UI. Every
 	// filter is optional: empty text params and NULL time bounds match everything.
 	// `reverse` flips newest-first (default) to oldest-first without a second query.

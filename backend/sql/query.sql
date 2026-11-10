@@ -1705,6 +1705,37 @@ UPDATE site_domains SET verified = $2 WHERE host = $1 RETURNING *;
 -- name: GetSiteSettings :one
 SELECT * FROM site_settings WHERE location_id = $1;
 
+-- The Website page (00029).
+
+-- name: SaveSiteDraft :exec
+INSERT INTO site_settings (location_id, tenant_id, draft, draft_at) VALUES ($1, $2, $3, now())
+ON CONFLICT (location_id) DO UPDATE SET draft = EXCLUDED.draft, draft_at = now(), updated_at = now();
+
+-- name: DiscardSiteDraft :exec
+UPDATE site_settings SET draft = '{}'::jsonb, draft_at = NULL, updated_at = now() WHERE location_id = $1;
+
+-- name: PublishSiteDraft :one
+UPDATE site_settings SET published = draft, draft = '{}'::jsonb, draft_at = NULL, version = version + 1,
+    published_at = now(), published_by = $2, updated_at = now()
+WHERE location_id = $1 AND draft_at IS NOT NULL
+RETURNING version, published_at;
+
+-- name: EnsureSitePreviewToken :one
+INSERT INTO site_settings (location_id, tenant_id, preview_token) VALUES ($1, $2, $3)
+ON CONFLICT (location_id) DO UPDATE SET preview_token =
+    CASE WHEN site_settings.preview_token = '' THEN EXCLUDED.preview_token ELSE site_settings.preview_token END
+RETURNING preview_token;
+
+-- name: InsertSiteImage :one
+INSERT INTO site_images (location_id, tenant_id, kind, content_type, bytes) VALUES ($1, $2, $3, $4, $5)
+RETURNING id, created_at;
+
+-- name: GetSiteImage :one
+SELECT id, kind, content_type, bytes, created_at FROM site_images WHERE id = $1 AND location_id = $2;
+
+-- name: DeleteUnusedSiteImages :execrows
+DELETE FROM site_images WHERE location_id = $1 AND created_at < now() - interval '1 day' AND NOT (id = ANY(@keep::uuid[]));
+
 -- weborder stage 2: Square connections + card holds.
 
 -- name: UpsertSquareConnection :one

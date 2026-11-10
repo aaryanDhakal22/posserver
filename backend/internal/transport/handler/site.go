@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 
 	siteApp "quiccpos/main/internal/app/site"
@@ -40,6 +41,16 @@ func (h *SiteHandler) sErr(c *echo.Context, err error) error {
 		return c.JSON(http.StatusForbidden, errCode(err.Error(), "admin_only"))
 	case errors.Is(err, site.ErrHostTaken):
 		return c.JSON(http.StatusConflict, errCode(err.Error(), "host_taken"))
+	case errors.Is(err, site.ErrBadLook):
+		return c.JSON(http.StatusBadRequest, errCode(err.Error(), "bad_settings"))
+	case errors.Is(err, site.ErrBadImage):
+		return c.JSON(http.StatusBadRequest, errCode(err.Error(), "bad_image"))
+	case errors.Is(err, siteApp.ErrNothingToPublish):
+		return c.JSON(http.StatusConflict, errCode(err.Error(), "nothing_to_publish"))
+	case errors.Is(err, siteApp.ErrBadPreview):
+		return c.JSON(http.StatusForbidden, errCode(err.Error(), "bad_preview"))
+	case errors.Is(err, siteApp.ErrImageNotFound):
+		return c.JSON(http.StatusNotFound, errCode(err.Error(), "not_found"))
 	}
 	h.logger.Error().Err(err).Msg("site")
 	return c.JSON(http.StatusInternalServerError, errCode("site request failed", "internal"))
@@ -204,7 +215,7 @@ func (h *SiteHandler) ChannelSite(c *echo.Context) error {
 	if !ch.Permissions.Menu {
 		return c.JSON(http.StatusForbidden, errCode("this channel may not read the site", "forbidden"))
 	}
-	v, err := h.svc.Site(c.Request().Context(), ch.LocationID)
+	v, err := h.svc.SiteFor(c.Request().Context(), ch.LocationID, c.QueryParam("preview"))
 	if err != nil {
 		return h.sErr(c, err)
 	}
@@ -220,4 +231,104 @@ func (h *SiteHandler) ChannelSite(c *echo.Context) error {
 		return c.NoContent(http.StatusNotModified)
 	}
 	return c.Blob(http.StatusOK, "application/json", raw)
+}
+
+// --- the Website page (/store/v1/me/site/website + images) ---------------------------
+// (the settings document: domain/site/look.go; OpenAPI schema SiteSettings)
+
+// GET /store/v1/me/site/website — the draft (or the published look), what it
+// changes, and the private preview link.
+func (h *SiteHandler) MeWebsite(c *echo.Context) error {
+	_, lid, _ := meScope(c)
+	w, err := h.svc.Website(c.Request().Context(), lid)
+	if err != nil {
+		return h.sErr(c, err)
+	}
+	return c.JSON(http.StatusOK, w)
+}
+
+// PUT /store/v1/me/site/website/draft — the whole document (checked; unknown
+// fields refused).
+func (h *SiteHandler) MeSaveDraft(c *echo.Context) error {
+	_, lid, _ := meScope(c)
+	raw, err := io.ReadAll(io.LimitReader(c.Request().Body, site.MaxLookBytes+1))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errCode("could not read the body", "bad_request"))
+	}
+	w, err := h.svc.SaveDraft(c.Request().Context(), lid, raw)
+	if err != nil {
+		return h.sErr(c, err)
+	}
+	return c.JSON(http.StatusOK, w)
+}
+
+// DELETE /store/v1/me/site/website/draft
+func (h *SiteHandler) MeDiscardDraft(c *echo.Context) error {
+	_, lid, _ := meScope(c)
+	w, err := h.svc.DiscardDraft(c.Request().Context(), lid)
+	if err != nil {
+		return h.sErr(c, err)
+	}
+	return c.JSON(http.StatusOK, w)
+}
+
+// POST /store/v1/me/site/website/publish — 409 nothing_to_publish without a draft.
+func (h *SiteHandler) MePublish(c *echo.Context) error {
+	_, lid, _ := meScope(c)
+	by := "manager"
+	if appMiddleware.StoreImpersonatorFromContext(c.Request().Context()) != "" {
+		by = "admin"
+	}
+	w, err := h.svc.Publish(c.Request().Context(), lid, by)
+	if err != nil {
+		return h.sErr(c, err)
+	}
+	return c.JSON(http.StatusOK, w)
+}
+
+// POST /store/v1/me/site/images?kind=logo|cover — the image as the raw body
+// (PNG, JPEG, WebP; a logo may be SVG), ≤ 2 MB → 201 {id, kind, content_type, size}.
+func (h *SiteHandler) MeAddImage(c *echo.Context) error {
+	_, lid, _ := meScope(c)
+	data, err := io.ReadAll(io.LimitReader(c.Request().Body, site.MaxImageBytes+1))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errCode("could not read the image", "bad_request"))
+	}
+	img, err := h.svc.AddImage(c.Request().Context(), lid, c.QueryParam("kind"), data)
+	if err != nil {
+		return h.sErr(c, err)
+	}
+	return c.JSON(http.StatusCreated, img)
+}
+
+// GET /store/v1/me/site/images/:id
+func (h *SiteHandler) MeImage(c *echo.Context) error {
+	_, lid, _ := meScope(c)
+	return h.image(c, lid)
+}
+
+// GET /channel/v1/site/images/:id — a logo or cover photo of the channel's store.
+func (h *SiteHandler) ChannelImage(c *echo.Context) error {
+	ch, ok := appMiddleware.ChannelFromContext(c.Request().Context())
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, errCode("missing channel key", "unauthorized"))
+	}
+	if !ch.Permissions.Menu {
+		return c.JSON(http.StatusForbidden, errCode("this channel may not read the site", "forbidden"))
+	}
+	return h.image(c, ch.LocationID)
+}
+
+// image answers with the bytes. An id never changes, so it caches for a year;
+// an SVG can't run anything (sandboxed, no scripts).
+func (h *SiteHandler) image(c *echo.Context, lid uuid.UUID) error {
+	img, err := h.svc.Image(c.Request().Context(), lid, c.Param("id"))
+	if err != nil {
+		return h.sErr(c, err)
+	}
+	hd := c.Response().Header()
+	hd.Set("Cache-Control", "public, max-age=31536000, immutable")
+	hd.Set("X-Content-Type-Options", "nosniff")
+	hd.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+	return c.Blob(http.StatusOK, img.ContentType, img.Bytes)
 }

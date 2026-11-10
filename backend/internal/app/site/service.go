@@ -61,7 +61,9 @@ type Service struct {
 	locs       LocationReader
 	web        WebChannels
 	baseDomain string
-	logger     zerolog.Logger
+	// previewOrigin turns a host into the preview's origin ("" = https://{host}).
+	previewOrigin string
+	logger        zerolog.Logger
 }
 
 // NewService: baseDomain is the platform's own domain ("" = quiccpos.com).
@@ -231,6 +233,10 @@ type View struct {
 	PrimaryHost string   `json:"primary_host"`
 	Hosts       []string `json:"hosts"`
 	Settings    jsonRaw  `json:"settings"`
+	// Preview: these are the draft's settings (asked with a preview token).
+	Preview bool `json:"preview,omitempty"`
+	// Email is the store's contact email (receipt replies; the privacy page).
+	Email string `json:"email"`
 }
 
 type jsonRaw []byte
@@ -252,7 +258,7 @@ func (s *Service) Site(ctx context.Context, locationID uuid.UUID) (View, error) 
 	if err != nil {
 		return View{}, err
 	}
-	v := View{Version: st.Version, Hosts: []string{}, Settings: jsonRaw(st.Published)}
+	v := View{Version: st.Version, Hosts: []string{}, Settings: jsonRaw(st.Published), Email: st.ReplyEmail}
 	for _, d := range ds {
 		if !d.Verified {
 			continue

@@ -167,7 +167,7 @@ def test_channel_site(admin, store, platform_key) -> None:
     r = requests.get(f"{CH_V1}/site", headers=_site(key, host), timeout=5)
     site = check(r, "getSite")
     # Only verified hosts are listed; nothing published yet.
-    assert site == {"version": 0, "primary_host": host, "hosts": [host], "settings": {}}
+    assert site == {"version": 0, "primary_host": host, "hosts": [host], "settings": {}, "email": ""}
     etag = r.headers["ETag"]
     r = requests.get(f"{CH_V1}/site", headers={**_site(key, host), "If-None-Match": etag}, timeout=5)
     assert r.status_code == 304

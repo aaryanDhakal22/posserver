@@ -705,14 +705,28 @@ type SiteDomain struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type SiteImage struct {
+	ID          pgtype.UUID        `json:"id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	Kind        string             `json:"kind"`
+	ContentType string             `json:"content_type"`
+	Bytes       []byte             `json:"bytes"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
 type SiteSetting struct {
-	LocationID pgtype.UUID        `json:"location_id"`
-	TenantID   pgtype.UUID        `json:"tenant_id"`
-	Draft      []byte             `json:"draft"`
-	Published  []byte             `json:"published"`
-	Version    int64              `json:"version"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
-	ReplyEmail string             `json:"reply_email"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	Draft        []byte             `json:"draft"`
+	Published    []byte             `json:"published"`
+	Version      int64              `json:"version"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ReplyEmail   string             `json:"reply_email"`
+	DraftAt      pgtype.Timestamptz `json:"draft_at"`
+	PublishedAt  pgtype.Timestamptz `json:"published_at"`
+	PublishedBy  string             `json:"published_by"`
+	PreviewToken string             `json:"preview_token"`
 }
 
 type SquareConnection struct {

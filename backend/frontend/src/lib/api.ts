@@ -782,3 +782,53 @@ export interface CardHoldRow {
   cancelled_at: string | null;
   created_at: string;
 }
+
+// --- Website (Store › Website, weborder) ----------------------------------
+
+export type BlockId = 'hero' | 'again' | 'categories' | 'deals' | 'picks' | 'hours' | 'about' | 'install';
+export type MisoSpot = 'peek' | 'side' | 'off';
+
+/** The website's settings document (main's site.Look; the storefront's defaults fill what's missing). */
+export interface SiteLook {
+  preset?: string;
+  brand?: string;
+  menu_layout?: '' | 'compact' | 'photo' | 'printed';
+  languages?: string[];
+  logo?: string;
+  cover?: string;
+  texts?: Partial<Record<'eyebrow' | 'headline' | 'lead' | 'about_title' | 'about' | 'eyebrow_es' | 'headline_es' | 'lead_es' | 'about_title_es' | 'about_es', string>>;
+  blocks?: { id: BlockId; on: boolean }[];
+  picks?: string[];
+  announcement?: { on: boolean; text?: string; text_es?: string; from?: string; to?: string };
+  miso_pages?: boolean;
+  miso_blocks?: Partial<Record<BlockId, MisoSpot>>;
+  privacy?: string;
+}
+
+export interface Website {
+  draft: SiteLook;
+  published: SiteLook;
+  has_draft: boolean;
+  changes: string[];
+  version: number;
+  draft_at: string | null;
+  published_at: string | null;
+  published_by: string;
+  /** <origin>/p/<token>, + "/menu" etc. for another page ("" = no host yet) */
+  preview_url: string;
+  preview_host: string;
+}
+
+export interface SiteImage {
+  id: string;
+  kind: 'logo' | 'cover';
+  content_type: string;
+  size: number;
+}
+
+export interface SiteDomain {
+  host: string;
+  primary: boolean;
+  verified: boolean;
+  created_at: string;
+}

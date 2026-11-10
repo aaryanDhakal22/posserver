@@ -384,6 +384,13 @@ func main() {
 	channelService.SetViews(menuViewService)
 	// Store websites (weborder stage 2): the storefront's platform key + host → the store's web channel.
 	siteService := siteApp.NewService(repositories.NewSiteRepository(pool), tenancyService, os.Getenv("SITE_BASE_DOMAIN"), lgr)
+	// The Website page's preview opens on the storefront: https://{host}, or
+	// SITE_PREVIEW_ORIGIN (dev: the storefront's dev server, http://{host}:5173).
+	if o := os.Getenv("SITE_PREVIEW_ORIGIN"); o != "" {
+		siteService.SetPreviewOrigin(o)
+	} else if cfg.AppConfig.AppEnv == "dev" {
+		siteService.SetPreviewOrigin("http://{host}:5173")
+	}
 	siteService.SetWebChannels(channelService)
 	channelService.SetSites(siteService)
 	// Email receipts for web orders (weborder stage 2).

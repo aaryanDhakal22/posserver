@@ -476,6 +476,12 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/me/site/domains", "store-session", "Add the store's own domain {host, primary} (unverified until checked)", siteH.MeAddDomain, storeSession),
 		def("POST", storePrefix+"/me/site/domains/:host/primary", "store-session", "Make a host the primary one", siteH.MeSetPrimary, storeSession),
 		def("DELETE", storePrefix+"/me/site/domains/:host", "store-session", "Remove a host", siteH.MeRemoveDomain, storeSession),
+		def("GET", storePrefix+"/me/site/website", "store-session", "The Website page: draft, published, changes, preview link", siteH.MeWebsite, storeSession),
+		def("PUT", storePrefix+"/me/site/website/draft", "store-session", "Save the website draft (the whole settings document)", siteH.MeSaveDraft, storeSession),
+		def("DELETE", storePrefix+"/me/site/website/draft", "store-session", "Discard the website draft", siteH.MeDiscardDraft, storeSession),
+		def("POST", storePrefix+"/me/site/website/publish", "store-session", "Publish the website draft", siteH.MePublish, storeSession),
+		def("POST", storePrefix+"/me/site/images", "store-session", "Upload a logo or cover photo (?kind=logo|cover, raw body ≤ 2 MB)", siteH.MeAddImage, storeSession),
+		def("GET", storePrefix+"/me/site/images/:id", "store-session", "A logo or cover photo", siteH.MeImage, storeSession),
 		def("GET", storePrefix+"/me/menu/vendor", "store-session", "The vendor view (Brygid): mappings + names nothing routes", viewH.MeVendor, storeSession),
 		def("POST", storePrefix+"/me/menu/vendor/maps", "store-session", "Map a vendor item name to a bank item {vendor_name, item_id}", viewH.MeVendorMap, storeSession),
 
@@ -516,7 +522,8 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", channelPrefix+"/store/times", "channel", "Times an order can be promised for (?type=pickup|delivery&date=YYYY-MM-DD)", statusH.ChannelTimes, channelAuth, channelGzip),
 		def("POST", channelPrefix+"/store/delivery-check", "channel", "Does the store deliver to this address {line1, city, state, zip}", statusH.ChannelDeliveryCheck, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/payments", "channel", "How this channel takes payments (methods + the card SDK's setup)", squareH.ChannelPayments, channelAuth, channelGzip),
-		def("GET", channelPrefix+"/site", "channel", "The store's website: published look + texts, hosts (ETag)", siteH.ChannelSite, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/site", "channel", "The store's website: published look + texts, hosts (ETag; ?preview=token → the draft)", siteH.ChannelSite, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/site/images/:id", "channel", "A logo or cover photo of the store's website", siteH.ChannelImage, channelAuth),
 		def("GET", channelPrefix+"/menu/version", "channel", "The menu version (?since=N → changed)", viewH.ChannelMenuVersion, channelAuth, channelGzip),
 
 		def("GET", storeUIPath, "none", "Redirect → /app/store", redirectTo("/app/store")),

@@ -857,7 +857,7 @@
       "get": {
         "operationId": "getSite",
         "summary": "The store's website: published look + texts and hosts",
-        "description": "ETag = a hash of the answer; send If-None-Match to get a 304 while nothing changed. The storefront polls this (and /menu/version) to know when to re-render.",
+        "description": "ETag = a hash of the answer; send If-None-Match to get a 304 while nothing changed. The storefront polls this (and /menu/version) to know when to re-render. With ?preview=<token> (the Website page's private link) it answers with the open draft instead (preview: true); a stale token is 403 bad_preview.",
         "parameters": [
           {
             "name": "If-None-Match",
@@ -866,6 +866,15 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "preview",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The store's preview token: answer with the draft"
           }
         ],
         "responses": {
@@ -1823,6 +1832,56 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/channel/v1/site/images/{id}": {
+      "get": {
+        "operationId": "getSiteImage",
+        "summary": "A logo or cover photo of the store's website",
+        "description": "The bytes (image/png, image/jpeg, image/webp or, for a logo, image/svg+xml). An id never changes: cache it for good. Ids come from the site settings' logo / cover.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image",
+            "content": {
+              "image/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not one of this store's images",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
           }
         }
       }
@@ -4192,7 +4251,8 @@
           "version",
           "primary_host",
           "hosts",
-          "settings"
+          "settings",
+          "email"
         ],
         "properties": {
           "version": {
@@ -4211,8 +4271,15 @@
             "description": "Every verified host the store is served on"
           },
           "settings": {
-            "type": "object",
-            "description": "The published look and texts from Store › Website ({} until published); its shape is versioned with the Website page"
+            "$ref": "#/components/schemas/SiteSettings"
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "These are the open draft's settings (asked with ?preview=)"
+          },
+          "email": {
+            "type": "string",
+            "description": "The store's contact email (receipt replies; the privacy page). \"\" = none"
           }
         }
       },
@@ -4550,6 +4617,176 @@
             "items": {
               "$ref": "#/components/schemas/Issue"
             }
+          }
+        }
+      },
+      "SiteSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "The look and texts from Store › Website ({} until published). Every field is optional: missing = the storefront's default.",
+        "properties": {
+          "preset": {
+            "type": "string",
+            "enum": [
+              "pizzeria-loud",
+              "cafe-calm",
+              "taqueria-bold",
+              "classic-paper"
+            ]
+          },
+          "brand": {
+            "type": "string",
+            "pattern": "^#[0-9A-F]{6}$",
+            "description": "The brand colour"
+          },
+          "menu_layout": {
+            "type": "string",
+            "enum": [
+              "compact",
+              "photo",
+              "printed"
+            ],
+            "description": "Missing = the preset's own"
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "en",
+                "es"
+              ]
+            },
+            "description": "[\"en\"] or [\"en\",\"es\"] (the Spanish switch)"
+          },
+          "logo": {
+            "type": "string",
+            "format": "uuid",
+            "description": "A site image: GET /channel/v1/site/images/{id}"
+          },
+          "cover": {
+            "type": "string",
+            "format": "uuid",
+            "description": "A site image (16:9)"
+          },
+          "texts": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "The store's words (\"\" = the storefront's own); *_es = the Spanish text",
+            "properties": {
+              "eyebrow": {
+                "type": "string"
+              },
+              "headline": {
+                "type": "string"
+              },
+              "lead": {
+                "type": "string"
+              },
+              "about_title": {
+                "type": "string"
+              },
+              "about": {
+                "type": "string"
+              },
+              "eyebrow_es": {
+                "type": "string"
+              },
+              "headline_es": {
+                "type": "string"
+              },
+              "lead_es": {
+                "type": "string"
+              },
+              "about_title_es": {
+                "type": "string"
+              },
+              "about_es": {
+                "type": "string"
+              }
+            }
+          },
+          "blocks": {
+            "type": "array",
+            "description": "The home page's blocks in order, each on or off (missing = the default set)",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "on"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "enum": [
+                    "hero",
+                    "again",
+                    "categories",
+                    "deals",
+                    "picks",
+                    "hours",
+                    "about",
+                    "install"
+                  ]
+                },
+                "on": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "picks": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string"
+            },
+            "description": "\"From the menu\": menu item ids, in order"
+          },
+          "announcement": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "One line on top of every page, optionally only between two store-local dates (inclusive)",
+            "properties": {
+              "on": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "string"
+              },
+              "text_es": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string",
+                "format": "date"
+              },
+              "to": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          },
+          "miso_pages": {
+            "type": "boolean",
+            "description": "Miso on cart, checkout, sign-in and the empty pages (missing = on)"
+          },
+          "miso_blocks": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "peek",
+                "side",
+                "off"
+              ]
+            },
+            "description": "Miso around each home block"
+          },
+          "privacy": {
+            "type": "string",
+            "description": "The privacy policy (\"\" = the default text)"
           }
         }
       }

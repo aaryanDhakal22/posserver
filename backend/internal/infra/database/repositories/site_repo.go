@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -163,6 +164,66 @@ func (r *SiteRepository) Settings(ctx context.Context, locationID uuid.UUID) (si
 	if err != nil {
 		return site.Settings{}, err
 	}
-	return site.Settings{LocationID: locationID, Draft: row.Draft, Published: row.Published, Version: row.Version,
-		UpdatedAt: row.UpdatedAt.Time}, nil
+	st := site.Settings{LocationID: locationID, Draft: row.Draft, Published: row.Published, Version: row.Version,
+		UpdatedAt: row.UpdatedAt.Time, PublishedBy: row.PublishedBy, PreviewToken: row.PreviewToken, ReplyEmail: row.ReplyEmail}
+	if row.DraftAt.Valid {
+		st.DraftAt = &row.DraftAt.Time
+	}
+	if row.PublishedAt.Valid {
+		st.PublishedAt = &row.PublishedAt.Time
+	}
+	return st, nil
+}
+
+// --- the Website page (00029) -------------------------------------------------------
+
+// SaveDraft opens or replaces the store's draft.
+func (r *SiteRepository) SaveDraft(ctx context.Context, tenantID, locationID uuid.UUID, draft []byte) error {
+	return models.New(r.pool).SaveSiteDraft(ctx, models.SaveSiteDraftParams{LocationID: pgID(locationID), TenantID: pgID(tenantID), Draft: draft})
+}
+
+// DiscardDraft drops the store's draft.
+func (r *SiteRepository) DiscardDraft(ctx context.Context, locationID uuid.UUID) error {
+	return models.New(r.pool).DiscardSiteDraft(ctx, pgID(locationID))
+}
+
+// Publish copies the draft over the published look (pgx.ErrNoRows = no draft).
+func (r *SiteRepository) Publish(ctx context.Context, locationID uuid.UUID, by string) (int64, error) {
+	row, err := models.New(r.pool).PublishSiteDraft(ctx, models.PublishSiteDraftParams{LocationID: pgID(locationID), PublishedBy: by})
+	return row.Version, err
+}
+
+// PreviewToken is the store's preview token, set to fresh when it has none.
+func (r *SiteRepository) PreviewToken(ctx context.Context, tenantID, locationID uuid.UUID, fresh string) (string, error) {
+	return models.New(r.pool).EnsureSitePreviewToken(ctx, models.EnsureSitePreviewTokenParams{
+		LocationID: pgID(locationID), TenantID: pgID(tenantID), PreviewToken: fresh})
+}
+
+// AddImage stores an uploaded logo or cover photo.
+func (r *SiteRepository) AddImage(ctx context.Context, tenantID, locationID uuid.UUID, img site.Image) (site.Image, error) {
+	row, err := models.New(r.pool).InsertSiteImage(ctx, models.InsertSiteImageParams{LocationID: pgID(locationID), TenantID: pgID(tenantID),
+		Kind: img.Kind, ContentType: img.ContentType, Bytes: img.Bytes})
+	if err != nil {
+		return img, err
+	}
+	img.ID, img.CreatedAt, img.Size = uuid.UUID(row.ID.Bytes), row.CreatedAt.Time, len(img.Bytes)
+	return img, nil
+}
+
+// Image is one of the store's images (pgx.ErrNoRows = not this store's).
+func (r *SiteRepository) Image(ctx context.Context, locationID, id uuid.UUID) (site.Image, error) {
+	row, err := models.New(r.pool).GetSiteImage(ctx, models.GetSiteImageParams{ID: pgID(id), LocationID: pgID(locationID)})
+	if err != nil {
+		return site.Image{}, err
+	}
+	return site.Image{ID: id, Kind: row.Kind, ContentType: row.ContentType, Bytes: row.Bytes, Size: len(row.Bytes), CreatedAt: row.CreatedAt.Time}, nil
+}
+
+// DropUnusedImages deletes the store's images older than a day that keep doesn't list.
+func (r *SiteRepository) DropUnusedImages(ctx context.Context, locationID uuid.UUID, keep []uuid.UUID) (int64, error) {
+	ids := make([]pgtype.UUID, 0, len(keep))
+	for _, k := range keep {
+		ids = append(ids, pgID(k))
+	}
+	return models.New(r.pool).DeleteUnusedSiteImages(ctx, models.DeleteUnusedSiteImagesParams{LocationID: pgID(locationID), Keep: ids})
 }

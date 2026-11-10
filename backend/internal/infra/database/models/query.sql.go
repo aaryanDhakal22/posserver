@@ -2114,6 +2114,23 @@ func (q *Queries) DeleteTenantPrinters(ctx context.Context, tenantID pgtype.UUID
 	return err
 }
 
+const deleteUnusedSiteImages = `-- name: DeleteUnusedSiteImages :execrows
+DELETE FROM site_images WHERE location_id = $1 AND created_at < now() - interval '1 day' AND NOT (id = ANY($2::uuid[]))
+`
+
+type DeleteUnusedSiteImagesParams struct {
+	LocationID pgtype.UUID   `json:"location_id"`
+	Keep       []pgtype.UUID `json:"keep"`
+}
+
+func (q *Queries) DeleteUnusedSiteImages(ctx context.Context, arg DeleteUnusedSiteImagesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUnusedSiteImages, arg.LocationID, arg.Keep)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const detachGroupFromAllItems = `-- name: DetachGroupFromAllItems :exec
 DELETE FROM item_modifier_groups WHERE group_id = $1 AND tenant_id = $2
 `
@@ -2152,6 +2169,15 @@ func (q *Queries) DiagReportExists(ctx context.Context, id pgtype.UUID) (bool, e
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const discardSiteDraft = `-- name: DiscardSiteDraft :exec
+UPDATE site_settings SET draft = '{}'::jsonb, draft_at = NULL, updated_at = now() WHERE location_id = $1
+`
+
+func (q *Queries) DiscardSiteDraft(ctx context.Context, locationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, discardSiteDraft, locationID)
+	return err
 }
 
 const emailReceiptDone = `-- name: EmailReceiptDone :exec
@@ -2216,6 +2242,26 @@ func (q *Queries) EnqueueMissingOrderGeo(ctx context.Context, since pgtype.Times
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const ensureSitePreviewToken = `-- name: EnsureSitePreviewToken :one
+INSERT INTO site_settings (location_id, tenant_id, preview_token) VALUES ($1, $2, $3)
+ON CONFLICT (location_id) DO UPDATE SET preview_token =
+    CASE WHEN site_settings.preview_token = '' THEN EXCLUDED.preview_token ELSE site_settings.preview_token END
+RETURNING preview_token
+`
+
+type EnsureSitePreviewTokenParams struct {
+	LocationID   pgtype.UUID `json:"location_id"`
+	TenantID     pgtype.UUID `json:"tenant_id"`
+	PreviewToken string      `json:"preview_token"`
+}
+
+func (q *Queries) EnsureSitePreviewToken(ctx context.Context, arg EnsureSitePreviewTokenParams) (string, error) {
+	row := q.db.QueryRow(ctx, ensureSitePreviewToken, arg.LocationID, arg.TenantID, arg.PreviewToken)
+	var preview_token string
+	err := row.Scan(&preview_token)
+	return preview_token, err
 }
 
 const ensureStoreOrdering = `-- name: EnsureStoreOrdering :exec
@@ -3754,6 +3800,36 @@ func (q *Queries) GetSiteDomain(ctx context.Context, host string) (SiteDomain, e
 	return i, err
 }
 
+const getSiteImage = `-- name: GetSiteImage :one
+SELECT id, kind, content_type, bytes, created_at FROM site_images WHERE id = $1 AND location_id = $2
+`
+
+type GetSiteImageParams struct {
+	ID         pgtype.UUID `json:"id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+type GetSiteImageRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	Kind        string             `json:"kind"`
+	ContentType string             `json:"content_type"`
+	Bytes       []byte             `json:"bytes"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) GetSiteImage(ctx context.Context, arg GetSiteImageParams) (GetSiteImageRow, error) {
+	row := q.db.QueryRow(ctx, getSiteImage, arg.ID, arg.LocationID)
+	var i GetSiteImageRow
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.ContentType,
+		&i.Bytes,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getSiteReplyEmail = `-- name: GetSiteReplyEmail :one
 SELECT reply_email FROM site_settings WHERE location_id = $1
 `
@@ -3766,7 +3842,7 @@ func (q *Queries) GetSiteReplyEmail(ctx context.Context, locationID pgtype.UUID)
 }
 
 const getSiteSettings = `-- name: GetSiteSettings :one
-SELECT location_id, tenant_id, draft, published, version, updated_at, reply_email FROM site_settings WHERE location_id = $1
+SELECT location_id, tenant_id, draft, published, version, updated_at, reply_email, draft_at, published_at, published_by, preview_token FROM site_settings WHERE location_id = $1
 `
 
 func (q *Queries) GetSiteSettings(ctx context.Context, locationID pgtype.UUID) (SiteSetting, error) {
@@ -3780,6 +3856,10 @@ func (q *Queries) GetSiteSettings(ctx context.Context, locationID pgtype.UUID) (
 		&i.Version,
 		&i.UpdatedAt,
 		&i.ReplyEmail,
+		&i.DraftAt,
+		&i.PublishedAt,
+		&i.PublishedBy,
+		&i.PreviewToken,
 	)
 	return i, err
 }
@@ -4542,6 +4622,37 @@ func (q *Queries) InsertSiteDomain(ctx context.Context, arg InsertSiteDomainPara
 		&i.Verified,
 		&i.CreatedAt,
 	)
+	return i, err
+}
+
+const insertSiteImage = `-- name: InsertSiteImage :one
+INSERT INTO site_images (location_id, tenant_id, kind, content_type, bytes) VALUES ($1, $2, $3, $4, $5)
+RETURNING id, created_at
+`
+
+type InsertSiteImageParams struct {
+	LocationID  pgtype.UUID `json:"location_id"`
+	TenantID    pgtype.UUID `json:"tenant_id"`
+	Kind        string      `json:"kind"`
+	ContentType string      `json:"content_type"`
+	Bytes       []byte      `json:"bytes"`
+}
+
+type InsertSiteImageRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) InsertSiteImage(ctx context.Context, arg InsertSiteImageParams) (InsertSiteImageRow, error) {
+	row := q.db.QueryRow(ctx, insertSiteImage,
+		arg.LocationID,
+		arg.TenantID,
+		arg.Kind,
+		arg.ContentType,
+		arg.Bytes,
+	)
+	var i InsertSiteImageRow
+	err := row.Scan(&i.ID, &i.CreatedAt)
 	return i, err
 }
 
@@ -7739,6 +7850,30 @@ func (q *Queries) PruneExternalWork(ctx context.Context, now pgtype.Timestamptz)
 	return result.RowsAffected(), nil
 }
 
+const publishSiteDraft = `-- name: PublishSiteDraft :one
+UPDATE site_settings SET published = draft, draft = '{}'::jsonb, draft_at = NULL, version = version + 1,
+    published_at = now(), published_by = $2, updated_at = now()
+WHERE location_id = $1 AND draft_at IS NOT NULL
+RETURNING version, published_at
+`
+
+type PublishSiteDraftParams struct {
+	LocationID  pgtype.UUID `json:"location_id"`
+	PublishedBy string      `json:"published_by"`
+}
+
+type PublishSiteDraftRow struct {
+	Version     int64              `json:"version"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
+}
+
+func (q *Queries) PublishSiteDraft(ctx context.Context, arg PublishSiteDraftParams) (PublishSiteDraftRow, error) {
+	row := q.db.QueryRow(ctx, publishSiteDraft, arg.LocationID, arg.PublishedBy)
+	var i PublishSiteDraftRow
+	err := row.Scan(&i.Version, &i.PublishedAt)
+	return i, err
+}
+
 const queueFinalReceipt = `-- name: QueueFinalReceipt :execrows
 INSERT INTO email_receipts (order_id, kind, location_id)
 SELECT r.order_id, 'final', r.location_id FROM email_receipts r WHERE r.order_id = $1 AND r.kind = 'placed'
@@ -8324,6 +8459,24 @@ func (q *Queries) SaveOrderGeoSearch(ctx context.Context, arg SaveOrderGeoSearch
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const saveSiteDraft = `-- name: SaveSiteDraft :exec
+
+INSERT INTO site_settings (location_id, tenant_id, draft, draft_at) VALUES ($1, $2, $3, now())
+ON CONFLICT (location_id) DO UPDATE SET draft = EXCLUDED.draft, draft_at = now(), updated_at = now()
+`
+
+type SaveSiteDraftParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	Draft      []byte      `json:"draft"`
+}
+
+// The Website page (00029).
+func (q *Queries) SaveSiteDraft(ctx context.Context, arg SaveSiteDraftParams) error {
+	_, err := q.db.Exec(ctx, saveSiteDraft, arg.LocationID, arg.TenantID, arg.Draft)
+	return err
 }
 
 const searchOrdersInScope = `-- name: SearchOrdersInScope :many

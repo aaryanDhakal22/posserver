@@ -52,6 +52,12 @@ type Settings struct {
 	Published  []byte    `json:"-"`
 	Version    int64     `json:"version"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	// The Website page (00029): a draft is open while DraftAt is set.
+	DraftAt      *time.Time `json:"draft_at"`
+	PublishedAt  *time.Time `json:"published_at"`
+	PublishedBy  string     `json:"published_by"`
+	PreviewToken string     `json:"-"`
+	ReplyEmail   string     `json:"reply_email"`
 }
 
 var hostRe = regexp.MustCompile(`^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$`)
