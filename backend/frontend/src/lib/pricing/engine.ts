@@ -18,7 +18,8 @@ export interface BuildGroup {
   id: string; name: string; required: boolean; min_select: number; max_select: number; allow_multiple: boolean; portions: boolean; options: BuildOption[];
 }
 export interface Menu { categories: { items: BuildItem[] }[]; modifier_groups: BuildGroup[] }
-export interface ItemFacts { category_id: string; tax_bps: number; half_base?: string }
+/** no_tax: the item isn't taxed (tax_bps 0 = the store rate); open_price: the line carries its own price_cents (the counter only). */
+export interface ItemFacts { category_id: string; tax_bps: number; half_base?: string; no_tax?: boolean; open_price?: boolean }
 export interface Settings {
   tax_bps: number; service_fee_cents: number; service_fee_bps: number;
   delivery_fee_cents: number; free_delivery_over_cents: number | null; delivery_min_cents: number;
@@ -40,12 +41,15 @@ export interface Deal {
 export interface Context {
   menu: Menu; items: Record<string, ItemFacts>; settings: Settings; deals: Deal[] | null; timezone: string;
   types: { pickup: boolean; delivery: boolean };
+  /** This channel may sell open-price items at the line's own price (the counter). */
+  open_prices?: boolean;
 }
 /** portion: whole ('' too) | first | second (older carts: left = first, right = second); mode: add ('' too) | only | no. */
 export interface Pick { group_id: string; option_id: string; portion?: string; mode?: string }
 /** A specialty pizza (a menu item) on half 1 or 2, priced at the line's size. */
 export interface Half { item_id: string; half: number }
-export interface Selection { item_id: string; choice_id?: string; size_id?: string; options?: Pick[] | null; halves?: Half[] | null }
+/** price_cents: an open-price item's price (0–MAX_OPEN_PRICE_CENTS); refused on any other item. */
+export interface Selection { item_id: string; choice_id?: string; size_id?: string; options?: Pick[] | null; halves?: Half[] | null; price_cents?: number | null }
 export interface Line extends Selection { qty?: number; note?: string; deal_id?: string; picks?: Selection[] | null }
 export interface Cart {
   type: string; payment?: string; lines: Line[] | null; code?: string;
@@ -123,6 +127,9 @@ interface Priced {
   name: string; mods: string[]; base: number; halfUp: number; extras: number; unit: number; bankItem: string; rateItem: string; size: string; issues: Issue[];
 }
 
+/** An open price's ceiling ($10,000). */
+export const MAX_OPEN_PRICE_CENTS = 1_000_000;
+
 const issueOf = (code: string, message: string): Issue => ({ code, message, line: null });
 
 /** A pick's portion: first | second | '' (whole); left / right are older carts' first / second. */
@@ -166,6 +173,7 @@ class Engine {
     return this.ctx.items?.[bankItem]?.category_id ?? '';
   }
   rate(bankItem: string): number {
+    if (this.ctx.items?.[bankItem]?.no_tax) return 0;
     const r = this.ctx.items?.[bankItem]?.tax_bps ?? 0;
     return r > 0 ? r : this.ctx.settings.tax_bps;
   }
@@ -246,6 +254,13 @@ class Engine {
       return p;
     }
     if (soldOut) p.issues.push(issueOf('sold_out', `${p.name} is sold out right now.`));
+    // An open-price item (the counter's "Advance Payment"): the line carries the cashier's price.
+    const open = p.bankItem !== '' && !!this.ctx.items?.[p.bankItem]?.open_price;
+    const own = sel.price_cents;
+    if (open && !this.ctx.open_prices) p.issues.push(issueOf('open_price', `${p.name} can't be ordered here.`));
+    else if (open && (own == null || !Number.isInteger(own) || own < 0 || own > MAX_OPEN_PRICE_CENTS)) p.issues.push(issueOf('open_price', `${p.name}: enter a price.`));
+    else if (open) base = own as number;
+    else if (own != null) p.issues.push(issueOf('open_price', `${p.name} has a set price.`));
     const groupIds = it.modifier_group_ids ?? [];
     // Half-specialties: a specialty pizza on a half, at the line's size.
     const spec: (Specialty | null)[] = [null, null, null];

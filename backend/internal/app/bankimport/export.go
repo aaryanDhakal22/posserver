@@ -116,6 +116,10 @@ func export(ctx context.Context, tx bankdoc.Tx) (*bankdoc.Document, error) {
 		doc.Menus = append(doc.Menus, dm)
 	}
 	exportHalfBases(bank, doc, item)
+	menuName := map[string]string{}
+	for _, m := range bank.Menus {
+		menuName[m.ID.String()] = m.Name
+	}
 	views, err := tx.Views(ctx)
 	if err != nil {
 		return nil, err
@@ -133,6 +137,9 @@ func export(ctx context.Context, tx bankdoc.Tx) (*bankdoc.Document, error) {
 			RequirePhoto: v.Rules.RequirePhoto, HiddenCategories: []string{}}, Entries: []bankdoc.Entry{}}
 		for _, id := range v.Rules.HiddenCategories {
 			dv.Rules.HiddenCategories = append(dv.Rules.HiddenCategories, nameOr(cat, id.String()))
+		}
+		for _, id := range v.Rules.Menus {
+			dv.Rules.Menus = append(dv.Rules.Menus, nameOr(menuName, id.String()))
 		}
 		entries, err := tx.Entries(ctx, v.ID)
 		if err != nil {

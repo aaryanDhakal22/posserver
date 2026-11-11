@@ -210,6 +210,20 @@ func (c *compiler) run(entries []Entry) {
 	for _, id := range c.rules.HiddenCategories {
 		hiddenCat[id] = true
 	}
+	// A view limited to some menus hides every other menu's categories.
+	if len(c.rules.Menus) > 0 {
+		only := map[uuid.UUID]bool{}
+		for _, id := range c.rules.Menus {
+			only[id] = true
+		}
+		for _, m := range c.bank.Menus {
+			if !only[m.ID] {
+				for _, cat := range m.Categories {
+					hiddenCat[cat.ID] = true
+				}
+			}
+		}
+	}
 	byItem := map[uuid.UUID]*Entry{} // item entries by their one anchor
 	merged := map[uuid.UUID]bool{}   // bank items shown inside a merge
 	for i := range entries {

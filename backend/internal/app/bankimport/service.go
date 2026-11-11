@@ -790,6 +790,9 @@ func (a *applier) applyItem(ctx context.Context, path string, catID uuid.UUID, p
 // list (kept when not pruning); the document's own names win.
 func (a *applier) refsFromBank() {
 	for _, m := range a.bank.Menus {
+		if _, ok := a.menus[bankdoc.Norm(m.Name)]; !ok {
+			a.menus[bankdoc.Norm(m.Name)] = m.ID
+		}
 		for _, c := range m.Categories {
 			if _, ok := a.cats[bankdoc.Norm(c.Name)]; !ok {
 				a.cats[bankdoc.Norm(c.Name)] = c.ID
@@ -845,6 +848,13 @@ func (a *applier) applyViews(ctx context.Context) error {
 				return err
 			}
 			rules.HiddenCategories = append(rules.HiddenCategories, id)
+		}
+		for j, mn := range dv.Rules.Menus {
+			id, ok := a.menus[bankdoc.Norm(mn)]
+			if !ok {
+				return bad(fmt.Sprintf("%s.rules.menus[%d]", path, j), "unknown menu %q", mn)
+			}
+			rules.Menus = append(rules.Menus, id)
 		}
 		if err := menuviewApp.ValidRules(&rules); err != nil {
 			return bad(path+".rules", "%v", err)
@@ -1129,7 +1139,7 @@ func sameSizes(a, b []menu.ItemSize) bool {
 
 func sameRules(a, b menuview.Rules) bool {
 	return a.MarkupBps == b.MarkupBps && a.Round == b.Round && a.RequirePhoto == b.RequirePhoto &&
-		slices.Equal(a.HiddenCategories, b.HiddenCategories)
+		slices.Equal(a.HiddenCategories, b.HiddenCategories) && slices.Equal(a.Menus, b.Menus)
 }
 
 // sameEntries compares what an entry says, ignoring ids and times.

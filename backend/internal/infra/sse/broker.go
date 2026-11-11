@@ -197,6 +197,19 @@ func (b *Broker) DisconnectDevice(deviceID uuid.UUID) int {
 	return n
 }
 
+// Scopes lists the scopes with at least one subscriber now.
+func (b *Broker) Scopes() []Scope {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]Scope, 0, len(b.clients))
+	for sc, set := range b.clients {
+		if len(set) > 0 {
+			out = append(out, sc)
+		}
+	}
+	return out
+}
+
 // SubscribersFor returns how many clients are currently subscribed to a
 // specific scope. The SSE dispatch handler uses this to skip publish work
 // when nobody on the receiving end cares.

@@ -60,11 +60,28 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	q := models.New(tx)
+	if err := r.createInTx(ctx, models.New(tx), o); err != nil {
+		if errors.Is(err, order.ErrDuplicate) {
+			log.Info().Msg("duplicate order; skipping")
+		}
+		return err
+	}
 
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	log.Info().
+		Str("source", string(o.Source())).
+		Str("source_event_id", o.SourceEventID()).
+		Msg("order persisted")
+	return nil
+}
+
+// createInTx writes the order, its lines, payments, status history, channel
+// link and outbox events with q (inside the caller's transaction).
+func (r *OrderRepository) createInTx(ctx context.Context, q *models.Queries, o *order.Order) error {
 	if err := q.CreateOrder(ctx, toOrderRow(o)); err != nil {
 		if isUniqueViolation(err) {
-			log.Info().Msg("duplicate order; skipping")
 			return order.ErrDuplicate
 		}
 		return fmt.Errorf("create order: %w", err)
@@ -101,7 +118,6 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 			OperatorID: pgIDPtr(ch.OperatorID), CustomerID: pgIDPtr(ch.CustomerID),
 		}); err != nil {
 			if isUniqueViolation(err) {
-				log.Info().Msg("duplicate channel order; skipping")
 				return order.ErrDuplicate
 			}
 			return fmt.Errorf("create channel order: %w", err)
@@ -138,14 +154,6 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 			return fmt.Errorf("emit domain event %s: %w", ev.Type, err)
 		}
 	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit tx: %w", err)
-	}
-	log.Info().
-		Str("source", string(o.Source())).
-		Str("source_event_id", o.SourceEventID()).
-		Msg("order persisted")
 	return nil
 }
 

@@ -46,6 +46,13 @@ type VendorMapper interface {
 	VendorMaps(ctx context.Context, locationID uuid.UUID) (map[string]uuid.UUID, error)
 }
 
+// CounterOnly lists a location's items that only the counter terminal sells
+// (menuviewApp.Service.CounterOnlyItems); the vendor mapper may also be one.
+// Routing never matches them, by name or by a vendor map (TERMINAL-PLAN 0d).
+type CounterOnly interface {
+	CounterOnlyItems(ctx context.Context, locationID uuid.UUID) (map[uuid.UUID]bool, error)
+}
+
 // SetVendorMapper plugs in the vendor view's mappings (set once at startup;
 // the views service depends on this one, so it can't be a constructor arg).
 func (s *Service) SetVendorMapper(m VendorMapper) { s.vendor = m }
@@ -538,6 +545,23 @@ func (s *Service) routingTable(ctx context.Context, locationID uuid.UUID) (map[s
 	entries, err := s.repo.ListRoutingByLocation(ctx, locationID)
 	if err != nil {
 		return nil, err
+	}
+	if co, ok := s.vendor.(CounterOnly); ok && co != nil {
+		// Never route an online order to a counter-only item: an error here
+		// fails the routing like a database error would (the message is retried).
+		skip, err := co.CounterOnlyItems(ctx, locationID)
+		if err != nil {
+			return nil, fmt.Errorf("counter-only items: %w", err)
+		}
+		if len(skip) > 0 {
+			kept := entries[:0:0]
+			for _, e := range entries {
+				if !skip[e.ItemID] {
+					kept = append(kept, e)
+				}
+			}
+			entries = kept
+		}
 	}
 	byName := make(map[string]menuDom.RouteEntry, len(entries))
 	for _, e := range entries {

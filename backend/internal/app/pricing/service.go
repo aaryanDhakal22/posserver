@@ -237,7 +237,8 @@ func (s *Service) itemFacts(ctx context.Context, locationID uuid.UUID) (factsAt,
 		for _, c := range m.Categories {
 			f.cats[c.ID.String()] = true
 			for _, it := range c.Items {
-				f.items[it.ID.String()] = pricing.ItemFacts{CategoryID: c.ID.String(), TaxBps: it.TaxRateBps, HalfBase: pricing.HalfBaseOf(it.Attributes)}
+				f.items[it.ID.String()] = pricing.ItemFacts{CategoryID: c.ID.String(), TaxBps: it.TaxRateBps, HalfBase: pricing.HalfBaseOf(it.Attributes),
+					NoTax: pricing.FlagOf(it.Attributes, pricing.NoTaxAttr), OpenPrice: pricing.FlagOf(it.Attributes, pricing.OpenPriceAttr)}
 			}
 		}
 	}
@@ -303,7 +304,7 @@ func (s *Service) Context(ctx context.Context, tenantID, locationID uuid.UUID, k
 		return nil, 0, err
 	}
 	return &pricing.Context{Menu: m, Items: f.items, Settings: pricing.Effective(st, over[kind]), Deals: deals, Timezone: l.Timezone,
-		Types: pricing.Types{Pickup: ord.PickupEnabled, Delivery: ord.DeliveryEnabled}}, version, nil
+		Types: pricing.Types{Pickup: ord.PickupEnabled, Delivery: ord.DeliveryEnabled}, OpenPrices: kind == string(menuview.KindCounter)}, version, nil
 }
 
 // Quote prices a cart for a channel of a kind.

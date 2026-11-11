@@ -40,6 +40,7 @@ import (
 	"quiccpos/main/internal/app/receipts"
 	siteApp "quiccpos/main/internal/app/site"
 	"quiccpos/main/internal/app/squarepay"
+	staffApp "quiccpos/main/internal/app/staff"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/app/tracking"
@@ -148,6 +149,8 @@ type RouterDeps struct {
 	AppEnv string
 	// DevNotices records owner notices on dev (GET /admin/v1/dev/notices).
 	DevNotices *notify.Recorder
+	// Staff backs the counter terminal's staff + terminal settings (TERMINAL-PLAN 0d).
+	Staff *staffApp.Service
 }
 
 // RouteInfo is the JSON shape served at GET /__routes (shared across all
@@ -231,6 +234,7 @@ func routeTable(d RouterDeps) []routeDef {
 	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
 	bankDocH := handler.NewBankImportHandler(d.BankImport, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
+	staffH := handler.NewStaffHandler(d.Staff, d.MenuViewService, d.Pricing, d.Logger)
 	if d.Kitchen != nil {
 		statusH.SetKitchen(d.Kitchen)
 	}
@@ -388,6 +392,8 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", storePrefix+"/agent/app/latest", "device", "Newest tablet-app release (?app=quibase; 204 none) — agent keys only", appRelH.Latest, device, agentOnly),
 		def("GET", storePrefix+"/agent/app/releases/:code/apk", "device", "Download a tablet-app APK (?app=quibase) — agent keys only", appRelH.APK, device, agentOnly),
 		def("GET", storePrefix+"/agent/customers", "device", "The store's customer changes for the Pi's offline copy (?since=<cursor>&limit) — agent keys only", customersH.Feed, device, agentOnly),
+		def("GET", storePrefix+"/agent/terminal-config", "device", "The counter terminal's settings + active staff with PIN hashes (ETag) — agent keys only", staffH.TerminalConfig, device, agentOnly),
+		def("GET", storePrefix+"/agent/counter-menu", "device", "The counter view's build + layout + the counter's pricing (ETag, gzip) — agent keys only", staffH.CounterMenu, device, agentOnly, channelGzip),
 		def("POST", storePrefix+"/agent/revoke", "device", "Agent self-revoke (kills its own key) — agent keys only", storeH.AgentSelfRevoke, device, agentOnly),
 		def("POST", storePrefix+"/agent/tablet-tokens", "device", "Mint a tablet's diagnostics report token {tablet_id, tablet_name} — agent keys only", diagH.MintTabletToken, device, agentOnly),
 		def("DELETE", storePrefix+"/agent/tablet-tokens/:tablet_id", "device", "Revoke a tablet's report token (idempotent) — agent keys only", diagH.RevokeTabletToken, device, agentOnly),
@@ -461,6 +467,14 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/me/hours-exceptions", "store-session", "Set a date closed or its own hours {date, closed, hours, note}", statusH.MeSetException, storeSession),
 		def("DELETE", storePrefix+"/me/hours-exceptions/:id", "store-session", "Remove a date exception", statusH.MeDeleteException, storeSession),
 		// Pricing + deals (main 3.0).
+		def("GET", storePrefix+"/me/staff", "store-session", "The counter terminal's staff (never the PIN)", staffH.MeList, storeSession),
+		def("POST", storePrefix+"/me/staff", "store-session", "Add a person {first_name, last_name, role, pin, limits?}", staffH.MeCreate, storeSession),
+		def("GET", storePrefix+"/me/staff/journal", "store-session", "The terminal journal, newest first (?before=&limit=)", staffH.MeJournal, storeSession),
+		def("PATCH", storePrefix+"/me/staff/:id", "store-session", "Change a person {first_name, last_name, role, limits, active, pin}", staffH.MeUpdate, storeSession),
+		def("POST", storePrefix+"/me/staff/:id/pin", "store-session", "Reset a person's PIN {pin}", staffH.MeResetPin, storeSession),
+		def("DELETE", storePrefix+"/me/staff/:id", "store-session", "Delete a person", staffH.MeDelete, storeSession),
+		def("GET", storePrefix+"/me/terminal/settings", "store-session", "The store's terminal settings (role limits, auto-lock, counter start, receipt auto-Done)", staffH.MeSettings, storeSession),
+		def("PUT", storePrefix+"/me/terminal/settings", "store-session", "Replace the terminal settings", staffH.MeSaveSettings, storeSession),
 		def("GET", storePrefix+"/me/pricing", "store-session", "Pricing settings: the store's + each channel kind's sets", pricingH.MePricing, storeSession),
 		def("PUT", storePrefix+"/me/pricing", "store-session", "Replace the pricing settings {store, kinds}", pricingH.MeSavePricing, storeSession),
 		def("GET", storePrefix+"/me/pricing/context", "store-session", "What a channel kind prices with (?kind=web) — for previews", pricingH.MeContext, storeSession),

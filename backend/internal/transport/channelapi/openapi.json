@@ -2951,6 +2951,10 @@
               "$ref": "#/components/schemas/Half"
             },
             "description": "Half and half: up to two half-specialties, one per half. One costs that specialty's price; two cost the dearer + the cheaper's extra over its plain pizza at the store's half_specialty_off_pct % off"
+          },
+          "price_cents": {
+            "type": "integer",
+            "description": "An open-price item's price (the counter only, 0–1000000); refused on any other item"
           }
         },
         "additionalProperties": false
@@ -2989,6 +2993,10 @@
               "$ref": "#/components/schemas/Half"
             },
             "description": "Half and half: up to two half-specialties, one per half. One costs that specialty's price; two cost the dearer + the cheaper's extra over its plain pizza at the store's half_specialty_off_pct % off"
+          },
+          "price_cents": {
+            "type": "integer",
+            "description": "An open-price item's price (the counter only, 0–1000000); refused on any other item"
           },
           "qty": {
             "type": "integer",
@@ -3148,7 +3156,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "description": "empty, unknown_item, unknown_size, unknown_option, option_rules, sold_out, deal_ended, deal_unavailable, deal_slot, code_invalid, code_minimum, code_first_order, code_not_combinable, type_off, bad_type, delivery_minimum"
+            "description": "empty, unknown_item, unknown_size, unknown_option, option_rules, sold_out, deal_ended, deal_unavailable, deal_slot, code_invalid, code_minimum, code_first_order, code_not_combinable, type_off, bad_type, delivery_minimum, open_price"
           },
           "message": {
             "type": "string",
@@ -3529,6 +3537,14 @@
                 "half_base": {
                   "type": "string",
                   "description": "A specialty pizza's plain pizza (a bank item id); absent = the item is its own plain"
+                },
+                "no_tax": {
+                  "type": "boolean",
+                  "description": "The item isn't taxed"
+                },
+                "open_price": {
+                  "type": "boolean",
+                  "description": "The line carries its own price (price_cents); only the counter may sell one"
                 }
               },
               "additionalProperties": false

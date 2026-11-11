@@ -268,6 +268,9 @@ type Order struct {
 }
 
 type NewOrderInput struct {
+	// ID is the order's id when another system already gave it one (a
+	// counter order keeps the Pi's id); zero = a new UUIDv7.
+	ID            ID
 	TenantID      TenantID
 	LocationID    LocationID
 	Source        Source
@@ -367,8 +370,12 @@ func NewOrder(in NewOrderInput) (*Order, error) {
 
 	now := time.Now().UTC()
 	rawCopy := append([]byte(nil), in.RawPayload...)
+	id := in.ID
+	if uuid.UUID(id) == uuid.Nil {
+		id = ID(uuid.Must(uuid.NewV7()))
+	}
 	o := &Order{
-		id:             ID(uuid.Must(uuid.NewV7())),
+		id:             id,
 		tenantID:       in.TenantID,
 		locationID:     in.LocationID,
 		schemaVersion:  1,

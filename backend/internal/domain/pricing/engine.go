@@ -234,8 +234,11 @@ func (e *engine) category(bankItem string) string {
 	return e.ctx.Items[bankItem].CategoryID
 }
 
-// rate is a bank item's tax rate (its own, else the store's).
+// rate is a bank item's tax rate (none for a no-tax item; its own, else the store's).
 func (e *engine) rate(bankItem string) int {
+	if e.ctx.Items[bankItem].NoTax {
+		return 0
+	}
 	if r := e.ctx.Items[bankItem].TaxBps; r > 0 {
 		return r
 	}
@@ -380,6 +383,19 @@ func (e *engine) price(sel Selection, free int) priced {
 	}
 	if soldOut {
 		p.issues = append(p.issues, Issue{Code: IssueSoldOut, Message: p.name + " is sold out right now."})
+	}
+	// An open-price item (the counter's "Advance Payment"): the line carries
+	// the cashier's price; only a context with OpenPrices may sell one.
+	open := p.bankItem != "" && e.ctx.Items[p.bankItem].OpenPrice
+	switch {
+	case open && !e.ctx.OpenPrices:
+		p.issues = append(p.issues, Issue{Code: IssueOpenPrice, Message: p.name + " can't be ordered here."})
+	case open && (sel.PriceCents == nil || *sel.PriceCents < 0 || *sel.PriceCents > MaxOpenPriceCents):
+		p.issues = append(p.issues, Issue{Code: IssueOpenPrice, Message: p.name + ": enter a price."})
+	case open:
+		base = *sel.PriceCents
+	case sel.PriceCents != nil:
+		p.issues = append(p.issues, Issue{Code: IssueOpenPrice, Message: p.name + " has a set price."})
 	}
 	// Half-specialties: a specialty pizza on a half, at the line's size.
 	var spec [3]*specialty

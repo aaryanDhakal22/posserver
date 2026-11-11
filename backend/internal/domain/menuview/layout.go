@@ -117,7 +117,13 @@ type Action struct {
 	GroupID    *uuid.UUID `json:"group_id,omitempty"`
 	OptionID   *uuid.UUID `json:"option_id,omitempty"`
 	State      string     `json:"state,omitempty"`
+	// Mode is an option button's mode: add ("" too) | no — a "No Onion"
+	// button picks Onion with mode no (TERMINAL-PLAN 0d).
+	Mode string `json:"mode,omitempty"`
 }
+
+// Option button modes.
+var OptionModes = []string{"add", "no"}
 
 // Step is one modifier step of an item: the screen to show, how many picks
 // it needs (0 = optional), whether it can't be skipped, the prompt. SizeID
@@ -562,6 +568,13 @@ func (v *layoutValidator) action(path string, a Action, screen bool) {
 		if set {
 			p.add(path+"."+field, "%s doesn't belong on a %s action", field, a.Type)
 		}
+	}
+	if a.Type == ActOption {
+		if a.Mode != "" && a.Mode != "add" && a.Mode != "no" {
+			p.add(path+".mode", "mode must be one of %s", strings.Join(OptionModes, ", "))
+		}
+	} else {
+		extra("mode", a.Mode != "")
 	}
 	switch a.Type {
 	case ActItem:

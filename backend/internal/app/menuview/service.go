@@ -85,10 +85,18 @@ type Service struct {
 	// mem holds each view's latest build (by menu version) in this process.
 	mu  sync.Mutex
 	mem map[uuid.UUID]built
+	// counterOnly caches each location's counter-only items by menu version.
+	counterOnly map[uuid.UUID]counterOnlyAt
+}
+
+type counterOnlyAt struct {
+	version int64
+	items   map[uuid.UUID]bool
 }
 
 func NewService(repo Repo, unmatched Unmatched, lg zerolog.Logger) *Service {
-	return &Service{repo: repo, unmatched: unmatched, logger: lg.With().Str("module", "menuview-service").Logger(), mem: map[uuid.UUID]built{}}
+	return &Service{repo: repo, unmatched: unmatched, logger: lg.With().Str("module", "menuview-service").Logger(), mem: map[uuid.UUID]built{},
+		counterOnly: map[uuid.UUID]counterOnlyAt{}}
 }
 
 // --- the bank --------------------------------------------------------------------
@@ -644,4 +652,50 @@ func (s *Service) VendorMaps(ctx context.Context, locationID uuid.UUID) (map[str
 		}
 	}
 	return out, nil
+}
+
+// CounterOnlyItems are the bank items of the location's counter-only menus
+// (menuview.CounterOnlyMenus), cached by menu version. The online caster's
+// routing never matches them (menuApp.CounterOnly).
+func (s *Service) CounterOnlyItems(ctx context.Context, locationID uuid.UUID) (map[uuid.UUID]bool, error) {
+	ver, err := s.repo.Version(ctx, locationID)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	c, ok := s.counterOnly[locationID]
+	s.mu.Unlock()
+	if ok && c.version == ver.Version {
+		return c.items, nil
+	}
+	views, err := s.repo.ListViews(ctx, locationID)
+	if err != nil {
+		return nil, err
+	}
+	items := map[uuid.UUID]bool{}
+	hasCounterMenus := false
+	for _, v := range views {
+		hasCounterMenus = hasCounterMenus || (v.Kind == menuview.KindCounter && len(v.Rules.Menus) > 0)
+	}
+	if hasCounterMenus {
+		bank, err := s.repo.LoadBank(ctx, locationID)
+		if err != nil {
+			return nil, err
+		}
+		menus := menuview.CounterOnlyMenus(bank, views)
+		for _, m := range bank.Menus {
+			if !menus[m.ID] {
+				continue
+			}
+			for _, cat := range m.Categories {
+				for _, it := range cat.Items {
+					items[it.ID] = true
+				}
+			}
+		}
+	}
+	s.mu.Lock()
+	s.counterOnly[locationID] = counterOnlyAt{version: ver.Version, items: items}
+	s.mu.Unlock()
+	return items, nil
 }

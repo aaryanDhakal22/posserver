@@ -109,6 +109,10 @@ type Item struct {
 	// half-and-half pricing (the item's half_base_item attribute). nil =
 	// keep, "" = none.
 	HalfBase *string `json:"half_base,omitempty"`
+	// NoTax: the item isn't taxed; OpenPrice: the cashier types its price
+	// (the counter). Item attributes no_tax / open_price; nil = keep.
+	NoTax     *bool `json:"no_tax,omitempty"`
+	OpenPrice *bool `json:"open_price,omitempty"`
 }
 
 // ItemSize is a size an item comes in.
@@ -145,6 +149,7 @@ type LayoutAction struct {
 	Group    string `json:"group,omitempty"`
 	Option   string `json:"option,omitempty"`
 	State    string `json:"state,omitempty"`
+	Mode     string `json:"mode,omitempty"` // option: add | no
 }
 
 // LayoutStep is a menuview.Step with a size name.
@@ -161,7 +166,9 @@ type Rules struct {
 	MarkupBps        int      `json:"markup_bps"`
 	Round            string   `json:"round"`
 	HiddenCategories []string `json:"hidden_categories"`
-	RequirePhoto     bool     `json:"require_photo"`
+	// Menus: the view shows only these menus (names; empty = every menu).
+	Menus        []string `json:"menus,omitempty"`
+	RequirePhoto bool     `json:"require_photo"`
 }
 
 // Entry is a menuview.Entry with item and size names.

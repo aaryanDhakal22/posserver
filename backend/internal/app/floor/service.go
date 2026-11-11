@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"quiccpos/main/internal/domain/order"
+	"quiccpos/main/internal/domain/staff"
 	sseBroker "quiccpos/main/internal/infra/sse"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
@@ -62,7 +63,13 @@ type event struct {
 	SuggestedIDs []string        `json:"suggested_ids"`
 	SentIDs      []string        `json:"sent_ids"`
 	Stops        json.RawMessage `json:"stops"`
-	Drivers      []struct {
+	// Counter orders (TERMINAL-PLAN 0d): order.placed's snapshot,
+	// order.payment's payment, order.void's staff, journal.entries' entries.
+	Snapshot json.RawMessage `json:"snapshot"`
+	Payment  json.RawMessage `json:"payment"`
+	StaffID  string          `json:"staff_id"`
+	Entries  json.RawMessage `json:"entries"`
+	Drivers  []struct {
 		ID       string `json:"id"`
 		Name     string `json:"name"`
 		Position int    `json:"position"`
@@ -82,7 +89,22 @@ type DeliveryRunStore interface {
 	ListDeliveryRuns(ctx context.Context, sc order.Scope, limit int) ([]order.DeliveryRun, error)
 }
 
+// CounterOrders stores the Pi's counter orders and their payments
+// (repositories.OrderRepository).
+type CounterOrders interface {
+	CreateCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, co *order.CounterOrder, agentStatus []byte, batchID *int64) (string, error)
+	AddCounterPayment(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, p order.CheckedPayment) (string, error)
+}
+
+// Journal keeps the terminal's staff journal (the staff service).
+type Journal interface {
+	AddJournal(ctx context.Context, tenantID, locationID uuid.UUID, entries []staff.JournalEntry) (int, error)
+}
+
 type Service struct {
+	counter  CounterOrders
+	journal  Journal
+	onPlaced func(ctx context.Context, o *order.Order)
 	orders   OrderLoader
 	repo     order.FloorRepository
 	runs     DeliveryRunStore
@@ -109,6 +131,14 @@ func (s *Service) OnCardHolds(h CardHolds) { s.holds = h }
 // OnCancelled is told after a cancelled order's card hold was dealt with
 // (the customer's final receipt).
 func (s *Service) OnCancelled(f func(ctx context.Context, orderID uuid.UUID)) { s.onCancel = f }
+
+// OnCounter plugs in counter orders + the staff journal (nil = the 0d event
+// types are answered invalid, as by an older main).
+func (s *Service) OnCounter(c CounterOrders, j Journal) { s.counter, s.journal = c, j }
+
+// OnCounterPlaced is told after a counter order was stored (the geo worker
+// locates a counter delivery).
+func (s *Service) OnCounterPlaced(f func(ctx context.Context, o *order.Order)) { s.onPlaced = f }
 
 // MaxTipCents bounds an added tip ($500).
 const MaxTipCents = 50000
@@ -234,6 +264,14 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 			BatchID: ev.BatchID, DriverID: ev.DriverID, DriverName: ev.DriverName, PlanID: ev.PlanID,
 			SuggestedIDs: ev.SuggestedIDs, SentIDs: ev.SentIDs, Stops: stops, At: ev.At,
 		})
+	case "order.placed":
+		return s.applyPlaced(ctx, sc, eid, ev)
+	case "order.payment":
+		return s.applyPayment(ctx, sc, eid, ev)
+	case "order.void":
+		return s.applyVoid(ctx, sc, eid, ev)
+	case "journal.entries":
+		return s.applyJournal(ctx, sc, eid, ev)
 	default:
 		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 	}

@@ -18,7 +18,8 @@ import (
 // It is applied once every item exists, so it may name an item further on.
 
 // applyHalfBases sets each document item's plain pizza (nil = keep, "" =
-// none); it may name any item the document or the bank has.
+// none; it may name any item the document or the bank has) and its counter
+// flags no_tax / open_price (nil = keep), in one update per item.
 func (a *applier) applyHalfBases(ctx context.Context) error {
 	cur := map[uuid.UUID]menu.BankItem{}
 	for _, m := range a.bank.Menus {
@@ -31,36 +32,57 @@ func (a *applier) applyHalfBases(ctx context.Context) error {
 	for i, dm := range a.doc.Menus {
 		for j, dc := range dm.Categories {
 			for k, di := range dc.Items {
-				if di.HalfBase == nil {
+				if di.HalfBase == nil && di.NoTax == nil && di.OpenPrice == nil {
 					continue
 				}
-				path := fmt.Sprintf("menus[%d].categories[%d].items[%d].half_base", i, j, k)
+				path := fmt.Sprintf("menus[%d].categories[%d].items[%d]", i, j, k)
 				it, ok := cur[a.items[bankdoc.Norm(di.Name)]]
 				if !ok {
-					continue
-				}
-				want := ""
-				if n := strings.TrimSpace(*di.HalfBase); n != "" {
-					id, err := a.itemID(path, n)
-					if err != nil {
-						return err
-					}
-					if id == it.ID {
-						return bad(path, "an item can't be its own plain pizza")
-					}
-					want = id.String()
-				}
-				if pricing.HalfBaseOf(it.Attributes) == want {
 					continue
 				}
 				attrs := maps.Clone(it.Attributes)
 				if attrs == nil {
 					attrs = map[string]any{}
 				}
-				if want == "" {
-					delete(attrs, pricing.HalfBaseAttr)
-				} else {
-					attrs[pricing.HalfBaseAttr] = want
+				changed := []string{}
+				if di.HalfBase != nil {
+					want := ""
+					if n := strings.TrimSpace(*di.HalfBase); n != "" {
+						id, err := a.itemID(path+".half_base", n)
+						if err != nil {
+							return err
+						}
+						if id == it.ID {
+							return bad(path+".half_base", "an item can't be its own plain pizza")
+						}
+						want = id.String()
+					}
+					if pricing.HalfBaseOf(it.Attributes) != want {
+						if want == "" {
+							delete(attrs, pricing.HalfBaseAttr)
+						} else {
+							attrs[pricing.HalfBaseAttr] = want
+						}
+						changed = append(changed, "half_base")
+					}
+				}
+				// Counter flags (TERMINAL-PLAN 0d): no_tax, open_price (true = set, false = cleared).
+				for _, f := range []struct {
+					v   *bool
+					key string
+				}{{di.NoTax, pricing.NoTaxAttr}, {di.OpenPrice, pricing.OpenPriceAttr}} {
+					if f.v == nil || pricing.FlagOf(it.Attributes, f.key) == *f.v {
+						continue
+					}
+					if *f.v {
+						attrs[f.key] = true
+					} else {
+						delete(attrs, f.key)
+					}
+					changed = append(changed, f.key)
+				}
+				if len(changed) == 0 {
+					continue
 				}
 				upd := it.Item
 				upd.Attributes = attrs
@@ -68,16 +90,16 @@ func (a *applier) applyHalfBases(ctx context.Context) error {
 				if err := a.tx.UpdateItem(ctx, upd); err != nil {
 					return fmt.Errorf("%s: %w", what, err)
 				}
-				a.halfBaseChanged(what)
+				a.attrsChanged(what, strings.Join(changed, ", "))
 			}
 		}
 	}
 	return nil
 }
 
-// halfBaseChanged records the change; an item already counted as unchanged
+// attrsChanged records the change; an item already counted as unchanged
 // becomes updated.
-func (a *applier) halfBaseChanged(what string) {
+func (a *applier) attrsChanged(what, fields string) {
 	seen := false
 	for _, ch := range a.res.Changes {
 		seen = seen || strings.HasPrefix(ch, what+": ")
@@ -89,7 +111,7 @@ func (a *applier) halfBaseChanged(what string) {
 		}
 		c.Updated++
 	}
-	a.res.Changes = append(a.res.Changes, what+": half_base")
+	a.res.Changes = append(a.res.Changes, what+": "+fields)
 }
 
 // exportHalfBases names each item's plain pizza (doc items are in the bank's
@@ -98,6 +120,13 @@ func exportHalfBases(bank *menu.Bank, doc *bankdoc.Document, item map[string]str
 	for i, m := range bank.Menus {
 		for j, c := range m.Categories {
 			for k, it := range c.Items {
+				di := &doc.Menus[i].Categories[j].Items[k]
+				if pricing.FlagOf(it.Attributes, pricing.NoTaxAttr) {
+					di.NoTax = ptrTrue()
+				}
+				if pricing.FlagOf(it.Attributes, pricing.OpenPriceAttr) {
+					di.OpenPrice = ptrTrue()
+				}
 				hb := pricing.HalfBaseOf(it.Attributes)
 				if hb == "" {
 					continue
@@ -109,3 +138,5 @@ func exportHalfBases(bank *menu.Bank, doc *bankdoc.Document, item map[string]str
 		}
 	}
 }
+
+func ptrTrue() *bool { b := true; return &b }

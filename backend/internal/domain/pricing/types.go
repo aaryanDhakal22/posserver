@@ -19,6 +19,9 @@ type Context struct {
 	Timezone string               `json:"timezone"`
 	// Types: which order types the store takes now (store status).
 	Types Types `json:"types"`
+	// OpenPrices: this channel may sell open-price items at the line's own
+	// price (the counter terminal only).
+	OpenPrices bool `json:"open_prices,omitempty"`
 }
 
 // Menu is the part of a channel's menu a quote reads.
@@ -35,11 +38,33 @@ type ItemFacts struct {
 	// `half_base_item` attribute): "the extra over plain" when it is the
 	// cheaper of two half-specialties. "" = the item is its own plain.
 	HalfBase string `json:"half_base,omitempty"`
+	// NoTax: the item isn't taxed (item attribute no_tax; TaxBps 0 means
+	// the store rate, not "no tax").
+	NoTax bool `json:"no_tax,omitempty"`
+	// OpenPrice: the item's price is the cashier's, per line (item attribute
+	// open_price; the counter only).
+	OpenPrice bool `json:"open_price,omitempty"`
 }
 
 // HalfBaseAttr is the menu item attribute naming a specialty pizza's plain
 // pizza (a bank item id). The bank document sets it by name (`half_base`).
 const HalfBaseAttr = "half_base_item"
+
+// NoTaxAttr / OpenPriceAttr are the item attributes behind ItemFacts'
+// NoTax / OpenPrice (true when set).
+const (
+	NoTaxAttr     = "no_tax"
+	OpenPriceAttr = "open_price"
+)
+
+// MaxOpenPriceCents bounds an open price ($10,000).
+const MaxOpenPriceCents = 1_000_000
+
+// FlagOf reads a true/false item attribute.
+func FlagOf(attrs map[string]any, key string) bool {
+	b, _ := attrs[key].(bool)
+	return b
+}
 
 // HalfBaseOf reads an item's plain pizza from its attributes ("" = none).
 func HalfBaseOf(attrs map[string]any) string {
@@ -188,6 +213,9 @@ type Selection struct {
 	// Halves are up to two half-specialties: a specialty pizza (a menu item)
 	// on the 1st or 2nd half, priced at the line's size.
 	Halves []Half `json:"halves,omitempty"`
+	// PriceCents is the cashier's price of an open-price item (0 to
+	// MaxOpenPriceCents); refused on any other item.
+	PriceCents *int64 `json:"price_cents,omitempty"`
 }
 
 // Half is a specialty pizza on one half of the line's pizza.
@@ -291,4 +319,5 @@ const (
 	IssueTypeOff     = "type_off"
 	IssueBadType     = "bad_type"
 	IssueDeliveryMin = "delivery_minimum"
+	IssueOpenPrice   = "open_price"
 )

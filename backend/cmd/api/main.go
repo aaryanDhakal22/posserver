@@ -45,6 +45,7 @@ import (
 	"quiccpos/main/internal/app/receipts"
 	siteApp "quiccpos/main/internal/app/site"
 	"quiccpos/main/internal/app/squarepay"
+	staffApp "quiccpos/main/internal/app/staff"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/app/tracking"
@@ -240,7 +241,8 @@ func main() {
 	menuRepo := repositories.NewMenuRepository(pool, lgr)
 	menuService := menuApp.NewService(menuRepo, tenancyService, meters, lgr)
 	// The menu bank's views (3.0); the vendor view's name mappings feed kitchen routing.
-	menuViewService := menuviewApp.NewService(repositories.NewMenuBankRepository(pool), menuService, lgr)
+	menuBankRepo := repositories.NewMenuBankRepository(pool)
+	menuViewService := menuviewApp.NewService(menuBankRepo, menuService, lgr)
 	bankImportService := bankimport.NewService(repositories.NewBankImportRepository(pool), lgr)
 	menuService.SetVendorMapper(menuViewService)
 
@@ -341,6 +343,12 @@ func main() {
 	// delivery check, and 86'd items back at each location's reset hour.
 	storeStatusService := storestatusApp.NewService(repositories.NewStoreStatusRepository(pool), tenancyService, geoService, lgr)
 	go storeStatusService.RunRestock(ctx)
+	// The counter terminal (TERMINAL-PLAN 0d): staff + terminal settings, the
+	// Pi's counter orders / payments / voids / journal, menu.changed pushes.
+	staffService := staffApp.NewService(repositories.NewStaffRepository(pool), broker, lgr)
+	floorService.OnCounter(repo, staffService)
+	floorService.OnCounterPlaced(geoService.OnOrderCreated)
+	go staffService.WatchMenus(ctx, menuBankRepo, broker)
 	// Quibase's online-ordering controls through the Pi (weborder stage 3): pause + sold out.
 	onlineCtl := onlinectl.NewService(storeStatusService, repositories.NewStockRepository(pool), lgr)
 	requester.RegisterInbound(onlinectl.MsgOnlineStatus, onlineCtl.HandleStatus)
@@ -495,6 +503,7 @@ func main() {
 		AlertSender:       ownerPager,
 		AppEnv:            cfg.AppConfig.AppEnv,
 		DevNotices:        devNotices,
+		Staff:             staffService,
 	})
 
 	serverLogger := lgr.With().Str("module", "server").Logger()

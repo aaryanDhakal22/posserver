@@ -38,6 +38,7 @@ func testLayout() Layout {
 				{Page: 1, Row: 0, Col: 0, Action: Action{Type: ActState, State: "whole"}},
 				{Page: 1, Row: 0, Col: 1, Action: Action{Type: ActState, State: "first_only"}},
 				{Page: 1, Row: 1, Col: 0, Action: Action{Type: ActItemPick, CategoryID: uid(id(12))}},
+				{Page: 0, Row: 0, Col: 1, Caption: "No Pepperoni", Action: Action{Type: ActOption, GroupID: uid(id(201)), OptionID: uid(id(211)), Mode: "no"}},
 			},
 		}},
 		Flows: map[string][]Step{id(20).String(): {
@@ -98,6 +99,8 @@ func TestLayoutProblems(t *testing.T) {
 		{"unknown group", func(l *Layout) { l.Screens[0].Buttons[0].Action.GroupID = uid(id(250)) }, "screens[0].buttons[0].action.group_id", "not in this store"},
 		{"option not in group", func(l *Layout) { l.Screens[0].Buttons[0].Action.OptionID = uid(id(250)) }, "screens[0].buttons[0].action.option_id", "not in group"},
 		{"bad state", func(l *Layout) { l.Screens[0].Buttons[1].Action.State = "left" }, "screens[0].buttons[1].action.state", "must be one of"},
+		{"bad option mode", func(l *Layout) { l.Screens[0].Buttons[0].Action.Mode = "only" }, "screens[0].buttons[0].action.mode", "must be one of"},
+		{"mode on a state button", func(l *Layout) { l.Screens[0].Buttons[1].Action.Mode = "no" }, "screens[0].buttons[1].action.mode", "doesn't belong"},
 		{"item_pick both", func(l *Layout) { l.Screens[0].Buttons[3].Action.ItemID = uid(id(40)) }, "screens[0].buttons[3].action", "not both"},
 		{"stray field", func(l *Layout) { l.Tabs[0].Buttons[3].Action.State = "whole" }, "tabs[0].buttons[3].action.state", "doesn't belong"},
 		{"outside grid", func(l *Layout) { l.Tabs[0].Buttons[2].Col = 3 }, "tabs[0].buttons[2]", "outside the 6×3 grid"},

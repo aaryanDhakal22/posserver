@@ -111,7 +111,7 @@ func (a *applier) layoutIDs(path string, dl bankdoc.Layout, deals map[string]str
 		return &id, nil
 	}
 	act := func(p string, da bankdoc.LayoutAction) (menuview.Action, error) {
-		x := menuview.Action{Type: da.Type, Name: da.Name, State: da.State}
+		x := menuview.Action{Type: da.Type, Name: da.Name, State: da.State, Mode: da.Mode}
 		var err error
 		if x.ItemID, err = ref(p+".item", a.itemID, da.Item); err != nil {
 			return x, err
@@ -192,7 +192,7 @@ func exportLayout(l menuview.Layout, bank *menu.Bank, item, cat map[string]strin
 		return id.String()
 	}
 	act := func(_ string, x menuview.Action) (bankdoc.LayoutAction, error) {
-		da := bankdoc.LayoutAction{Type: x.Type, Name: x.Name, State: x.State, Item: idName(item, x.ItemID),
+		da := bankdoc.LayoutAction{Type: x.Type, Name: x.Name, State: x.State, Mode: x.Mode, Item: idName(item, x.ItemID),
 			Size: sizeName(x.SizeID), Category: idName(cat, x.CategoryID), Group: uName(group, x.GroupID), Option: uName(option, x.OptionID)}
 		if x.DealID != "" {
 			da.Deal = nameOr(deals, x.DealID)
