@@ -234,7 +234,7 @@ func routeTable(d RouterDeps) []routeDef {
 	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
 	bankDocH := handler.NewBankImportHandler(d.BankImport, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
-	staffH := handler.NewStaffHandler(d.Staff, d.MenuViewService, d.Pricing, d.Logger)
+	staffH := handler.NewStaffHandler(d.Staff, d.MenuViewService, d.Pricing, d.MenuService, d.Logger)
 	if d.Kitchen != nil {
 		statusH.SetKitchen(d.Kitchen)
 	}

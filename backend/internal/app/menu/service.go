@@ -510,6 +510,40 @@ func IsNotFound(err error) bool { return errors.Is(err, errNotFound) }
 
 // --- Kitchen routing ----------------------------------------------------------
 
+// ItemPrinter is one bank item's kitchen printer for the Pi's counter menu.
+type ItemPrinter struct {
+	PrinterID uuid.UUID `json:"printer_id"`
+	Name      string    `json:"name,omitempty"`
+}
+
+// ItemPrinters maps every item of the location that has a kitchen printer (its
+// own, else its category's default) to that printer. The Pi routes counter
+// lines with it; an item without one prints on every station, as online
+// orders without a route do.
+func (s *Service) ItemPrinters(ctx context.Context, locationID uuid.UUID) (map[uuid.UUID]ItemPrinter, error) {
+	entries, err := s.repo.ListRoutingByLocation(ctx, locationID)
+	if err != nil {
+		return nil, err
+	}
+	names := map[uuid.UUID]string{}
+	if printers, perr := s.listPrinters(ctx, locationID); perr == nil {
+		for _, p := range printers {
+			names[p.ID] = p.Name
+		}
+	}
+	out := make(map[uuid.UUID]ItemPrinter, len(entries))
+	for _, e := range entries {
+		if e.PrinterID == nil {
+			continue
+		}
+		if _, seen := out[e.ItemID]; !seen {
+			out[e.ItemID] = ItemPrinter{PrinterID: *e.PrinterID, Name: names[*e.PrinterID]}
+		}
+	}
+	return out, nil
+}
+
+
 // RouteItems maps vendor item names to kitchen printers for one location, in
 // order. A name matches a menu item when they're equal ignoring case and
 // repeated whitespace (size is not part of the name). The effective printer is

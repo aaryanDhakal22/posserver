@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"net/http"
+	menuApp "quiccpos/main/internal/app/menu"
 	"strconv"
 	"time"
 
@@ -26,11 +28,12 @@ type StaffHandler struct {
 	svc     *staffApp.Service
 	views   *menuviewApp.Service
 	pricing *pricingApp.Service
+	menu    *menuApp.Service // per-item kitchen printers for the counter menu
 	logger  zerolog.Logger
 }
 
-func NewStaffHandler(svc *staffApp.Service, views *menuviewApp.Service, pricing *pricingApp.Service, lg zerolog.Logger) *StaffHandler {
-	return &StaffHandler{svc: svc, views: views, pricing: pricing, logger: lg.With().Str("module", "staff-handler").Logger()}
+func NewStaffHandler(svc *staffApp.Service, views *menuviewApp.Service, pricing *pricingApp.Service, menu *menuApp.Service, lg zerolog.Logger) *StaffHandler {
+	return &StaffHandler{svc: svc, views: views, pricing: pricing, menu: menu, logger: lg.With().Str("module", "staff-handler").Logger()}
 }
 
 func (h *StaffHandler) err(c *echo.Context, err error) error {
@@ -246,11 +249,18 @@ func (h *StaffHandler) CounterMenu(c *echo.Context) error {
 	if err != nil {
 		return h.err(c, err)
 	}
+	routes := map[uuid.UUID]menuApp.ItemPrinter{}
+	if h.menu != nil {
+		if routes, err = h.menu.ItemPrinters(ctx, scope.LocationID); err != nil {
+			return h.err(c, err)
+		}
+	}
 	c.Response().Header().Set("ETag", fmt.Sprintf(`"v%d"`, version))
 	return c.JSON(http.StatusOK, map[string]any{
 		"menu_version": version,
 		"view_id":      v.ID,
 		"build":        build,
+		"routes":       routes,
 		"pricing": CounterPricing{Items: pc.Items, Settings: pc.Settings, Deals: pc.Deals, Timezone: pc.Timezone,
 			OpenPrices: true},
 	})
