@@ -152,7 +152,7 @@ def test_hosts_admin_and_manager(admin, make_store, platform_key) -> None:
     # Removing a host stops it at once.
     assert mgr.delete(f"{STORE_V1}/me/site/domains/{own}", timeout=5).status_code == 204
     assert requests.get(f"{CH_V1}/me", headers=_site(key, own), timeout=5).status_code == 404
-    assert admin.delete(f"{ADMIN_V1}/locations/{a.location_id}/site-domains/{host_a}", timeout=5).status_code == 204
+    assert mgr.delete(f"{STORE_V1}/me/site/domains/{host_a}", timeout=5).status_code == 204
     assert requests.get(f"{CH_V1}/me", headers=_site(key, host_a), timeout=5).status_code == 404
 
 

@@ -1,4 +1,4 @@
-"""Sales channels (main 3.0, PORTS-PLAN.md): admin-managed channels of a
+"""Sales channels (main 3.0, archive/PORTS-PLAN.md): admin-managed channels of a
 store, each with its own /channel/v1 key; every /channel/v1 answer is checked
 against the OpenAPI document (openapi.py).
 

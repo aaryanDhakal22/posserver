@@ -138,21 +138,6 @@ func (h *PricingHandler) MeContext(c *echo.Context) error {
 	return c.JSON(http.StatusOK, pc)
 }
 
-// POST /store/v1/me/quote?kind=web {cart} — price a cart as a channel of
-// that kind would (its kind's default view).
-func (h *PricingHandler) MeQuote(c *echo.Context) error {
-	tid, lid, _ := meScope(c)
-	var cart pricing.Cart
-	if err := echo.BindBody(c, &cart); err != nil {
-		return badBody(c)
-	}
-	q, err := h.svc.Quote(c.Request().Context(), tid, lid, c.QueryParam("kind"), nil, cart)
-	if err != nil {
-		return h.pErr(c, err)
-	}
-	return c.JSON(http.StatusOK, q)
-}
-
 // --- /channel/v1 -----------------------------------------------------------------
 
 func quoteChannel(c *echo.Context) (bool, error) {

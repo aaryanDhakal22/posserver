@@ -1,4 +1,4 @@
-"""Pricing (main 3.0, PORTS-PLAN.md step 4). The engine's arithmetic is
+"""Pricing (main 3.0, archive/PORTS-PLAN.md step 4). The engine's arithmetic is
 covered by the shared cases (Go + TS, internal/domain/pricing/testdata);
 this is the HTTP side against a real store.
 
@@ -191,11 +191,6 @@ def test_channel_quote(admin, store, mgr) -> None:
     assert requests.get(f"{CH_V1}/pricing", headers=vendor, timeout=5).status_code == 403
     r = requests.post(f"{CH_V1}/quote", data="{not json", headers={**web, "Content-Type": "application/json"}, timeout=5)
     assert r.status_code == 400 and check(r, "quote")["code"] == "bad_request"
-
-    # The manager's test quote prices as a kind would.
-    mq = _ok(mgr.post(f"{ME}/quote", params={"kind": "web"}, json={"type": "pickup", "lines": lines}, timeout=5))
-    assert mq["discounts"][0]["label"] == "Any 2 pizzas"
-    assert mgr.post(f"{ME}/quote", params={"kind": "kiosk"}, json={"type": "pickup", "lines": lines}, timeout=5).status_code == 400
 
     # The context the TS engine previews with.
     ctx = check(requests.get(f"{CH_V1}/pricing", headers=web, timeout=5), "getPricing")

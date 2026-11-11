@@ -1,4 +1,4 @@
-"""The order port (main 3.0, PORTS-PLAN.md step 5): POST /channel/v1/orders.
+"""The order port (main 3.0, archive/PORTS-PLAN.md step 5): POST /channel/v1/orders.
 
   * a cash pickup through the call center: 201, OpenAPI-checked; the Pi's SSE
     frame is an ordinary Snapshot (source = the channel kind, the bank's

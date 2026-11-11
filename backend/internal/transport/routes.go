@@ -341,7 +341,6 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", adminPrefix+"/platform-keys/:id/revoke", "admin", "Revoke a platform key", siteH.AdminRevokeKey, admin),
 		def("GET", adminPrefix+"/locations/:id/site-domains", "admin", "A store's website hosts", siteH.AdminDomains, admin),
 		def("POST", adminPrefix+"/locations/:id/site-domains", "admin", "Add a host {host, primary} (platform subdomains verified at once)", siteH.AdminAddDomain, admin),
-		def("DELETE", adminPrefix+"/locations/:id/site-domains/:host", "admin", "Remove a host", siteH.AdminRemoveDomain, admin),
 		def("PATCH", adminPrefix+"/site-domains/:host", "admin", "Mark a host verified {verified}", siteH.AdminVerifyDomain, admin),
 
 		// Online card holds (weborder stage 2).
@@ -458,7 +457,6 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", storePrefix+"/me/pricing", "store-session", "Pricing settings: the store's + each channel kind's sets", pricingH.MePricing, storeSession),
 		def("PUT", storePrefix+"/me/pricing", "store-session", "Replace the pricing settings {store, kinds}", pricingH.MeSavePricing, storeSession),
 		def("GET", storePrefix+"/me/pricing/context", "store-session", "What a channel kind prices with (?kind=web) — for previews", pricingH.MeContext, storeSession),
-		def("POST", storePrefix+"/me/quote", "store-session", "Price a cart as a channel kind would (?kind=web)", pricingH.MeQuote, storeSession),
 		def("GET", storePrefix+"/me/deals", "store-session", "The store's deals", pricingH.MeDeals, storeSession),
 		def("POST", storePrefix+"/me/deals", "store-session", "Add a deal (bundle, mix, nth, code, free_item)", pricingH.MeCreateDeal, storeSession),
 		def("PUT", storePrefix+"/me/deals/:id", "store-session", "Replace a deal", pricingH.MeUpdateDeal, storeSession),
@@ -502,7 +500,6 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/me/site/website/publish", "store-session", "Publish the website draft", siteH.MePublish, storeSession),
 		def("POST", storePrefix+"/me/site/images", "store-session", "Upload a logo or cover photo (?kind=logo|cover, raw body ≤ 2 MB)", siteH.MeAddImage, storeSession),
 		def("GET", storePrefix+"/me/site/images/:id", "store-session", "A logo or cover photo", siteH.MeImage, storeSession),
-		def("GET", storePrefix+"/me/menu/vendor", "store-session", "The vendor view (Brygid): mappings + names nothing routes", viewH.MeVendor, storeSession),
 		def("POST", storePrefix+"/me/menu/vendor/maps", "store-session", "Map a vendor item name to a bank item {vendor_name, item_id}", viewH.MeVendorMap, storeSession),
 
 		// Operators (call-center order-takers) — read-only menu via bearer token.

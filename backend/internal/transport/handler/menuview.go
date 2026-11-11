@@ -331,23 +331,6 @@ func (h *MenuViewHandler) MeDeleteEntry(c *echo.Context) error {
 
 // --- the vendor view (Brygid) ---------------------------------------------------
 
-// GET /store/v1/me/menu/vendor — the default vendor view's build: its
-// mappings and needs-attention list (vendor names nothing routes, mappings
-// whose bank item is gone).
-func (h *MenuViewHandler) MeVendor(c *echo.Context) error {
-	tid, lid, _ := meScope(c)
-	ctx := c.Request().Context()
-	v, err := h.svc.DefaultView(ctx, tid, lid, menuview.KindVendor)
-	if err != nil {
-		return h.vErr(c, err)
-	}
-	raw, _, err := h.svc.Build(ctx, v)
-	if err != nil {
-		return h.vErr(c, err)
-	}
-	return c.Blob(http.StatusOK, "application/json", raw)
-}
-
 // POST /store/v1/me/menu/vendor/maps {vendor_name, item_id} — map a vendor
 // item name to a bank item (the needs-attention picker).
 func (h *MenuViewHandler) MeVendorMap(c *echo.Context) error {

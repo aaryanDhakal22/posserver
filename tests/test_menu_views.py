@@ -1,4 +1,4 @@
-"""The menu bank + its views (main 3.0, PORTS-PLAN.md step 2).
+"""The menu bank + its views (main 3.0, archive/PORTS-PLAN.md step 2).
 
   * sizes: the store-wide size list (add, duplicate, rename, reorder, delete,
     another store's size)
@@ -280,14 +280,15 @@ def test_vendor_mapping_routes_orders(store, mgr, publish) -> None:
     publish(o)
     first = wait_order(store.key, o["order_id"])["items"][0]
     assert first["routing"] == "unmatched", first
-    vendor = _ok(mgr.get(f"{MENU}/vendor", timeout=5))
+    vendor_build = f"{MENU}/views/{_views(mgr)['vendor']['id']}/build"  # the default vendor (Brygid) view
+    vendor = _ok(mgr.get(vendor_build, timeout=5))
     assert vendor["view"]["kind"] == "vendor" and vendor["categories"] == []
     att = [n for n in vendor["needs_attention"] if n["code"] == "unmatched"]
     assert [(n["name"], n.get("orders")) for n in att] == [("Jumbo Party Wings", 1)], vendor["needs_attention"]
 
     e = _ok(mgr.post(f"{MENU}/vendor/maps", json={"vendor_name": "jumbo party  wings", "item_id": b["items"]["Wings 8pc"]["id"]}, timeout=5), 201)
     assert e["kind"] == "map" and e["extra"]["vendor_name"] == "jumbo party  wings"
-    vendor = _ok(mgr.get(f"{MENU}/vendor", timeout=5))
+    vendor = _ok(mgr.get(vendor_build, timeout=5))
     assert vendor["needs_attention"] == [] and vendor["maps"][0]["item_id"] == b["items"]["Wings 8pc"]["id"]
     assert mgr.post(f"{MENU}/vendor/maps", json={"vendor_name": "", "item_id": b["items"]["Soda"]["id"]}, timeout=5).status_code == 400
 

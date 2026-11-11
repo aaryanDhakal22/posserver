@@ -1,4 +1,4 @@
-"""Golden replay of main's legacy surface (main 3.0, PORTS-PLAN.md).
+"""Golden replay of main's legacy surface (main 3.0, archive/PORTS-PLAN.md).
 
 Each chapter in golden/ drives one area of main — every route, the agent's
 SSE frames and RPC replies, SQS ingest — and compares what main answers with

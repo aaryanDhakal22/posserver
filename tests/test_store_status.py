@@ -1,4 +1,4 @@
-"""Store status (main 3.0, PORTS-PLAN.md step 3).
+"""Store status (main 3.0, archive/PORTS-PLAN.md step 3).
 
   * /channel/v1/store: open / paused / closed, order types + ETAs, today,
     scheduling, sold out — OpenAPI-checked; the manager's /me/status is the same

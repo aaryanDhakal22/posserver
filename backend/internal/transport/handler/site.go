@@ -152,18 +152,6 @@ func (h *SiteHandler) AdminVerifyDomain(c *echo.Context) error {
 	return c.JSON(http.StatusOK, d)
 }
 
-// DELETE /admin/v1/locations/:id/site-domains/:host
-func (h *SiteHandler) AdminRemoveDomain(c *echo.Context) error {
-	lid, err := uuid.Parse(c.Param("id"))
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, errCode("invalid location id", "bad_request"))
-	}
-	if err := h.svc.RemoveDomain(c.Request().Context(), lid, c.Param("host")); err != nil {
-		return h.sErr(c, err)
-	}
-	return c.NoContent(http.StatusNoContent)
-}
-
 // GET /store/v1/me/site/domains
 func (h *SiteHandler) MeDomains(c *echo.Context) error {
 	_, lid, _ := meScope(c)

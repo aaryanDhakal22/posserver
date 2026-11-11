@@ -1,4 +1,4 @@
-"""Operators on the channel API (main 3.0, PORTS-PLAN.md step 7).
+"""Operators on the channel API (main 3.0, archive/PORTS-PLAN.md step 7).
 
   * an operator signs in at /channel/v1/operator/login (12 h, qops_) and works
     a store with X-Location-ID: /me is that store's built-in Call center

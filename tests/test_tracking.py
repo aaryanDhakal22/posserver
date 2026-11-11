@@ -1,4 +1,4 @@
-"""Tracking (main 3.0, PORTS-PLAN.md step 6).
+"""Tracking (main 3.0, archive/PORTS-PLAN.md step 6).
 
   * a channel's live stream (/channel/v1/events) follows its order through
     the floor the Pi reports: received → accepted (kitchen #, ready-by) →
