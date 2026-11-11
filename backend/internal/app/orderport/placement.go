@@ -222,28 +222,32 @@ func (s *Service) SetMeters(m *observability.Meters) { s.pl.meters = m }
 
 func liveKey(channelID uuid.UUID, key string) string { return channelID.String() + "\x00" + key }
 
-func (s *Service) count(c metric.Int64Counter, attrs ...attribute.KeyValue) {
+// count adds one to c, labelled with the store (tenant + location slugs, or
+// "unrouted" for uuid.Nil) so alerts and dashboards can say which store.
+func (s *Service) count(c metric.Int64Counter, tenantID uuid.UUID, attrs ...attribute.KeyValue) {
 	if s.pl.meters == nil || c == nil {
 		return
 	}
-	c.Add(context.Background(), 1, metric.WithAttributes(attrs...))
+	ctx := context.Background()
+	c.Add(ctx, 1, observability.WithStore(ctx, tenantID, attrs...))
 }
 
 func (s *Service) countPlacement(ch channelDom.Channel, result string) {
 	if s.pl.meters != nil {
-		s.count(s.pl.meters.OrderPlacements, attribute.String("result", result), attribute.String("channel", string(ch.Kind)))
+		s.count(s.pl.meters.OrderPlacements, ch.TenantID, attribute.String("result", result), attribute.String("channel", string(ch.Kind)))
 	}
 }
 
 func (s *Service) countRefusal(ch channelDom.Channel, code string) {
 	if s.pl.meters != nil {
-		s.count(s.pl.meters.OrderRefusals, attribute.String("reason", code), attribute.String("channel", string(ch.Kind)))
+		s.count(s.pl.meters.OrderRefusals, ch.TenantID, attribute.String("reason", code), attribute.String("channel", string(ch.Kind)))
 	}
 }
 
-func (s *Service) countSweep(action string) {
+// countSweep counts one sweeper action (tenantID uuid.Nil: not one store's, e.g. pruned).
+func (s *Service) countSweep(tenantID uuid.UUID, action string) {
 	if s.pl.meters != nil {
-		s.count(s.pl.meters.PlacementSweeps, attribute.String("action", action))
+		s.count(s.pl.meters.PlacementSweeps, tenantID, attribute.String("action", action))
 	}
 }
 
@@ -586,7 +590,7 @@ func (s *Service) Sweep(ctx context.Context, staleAfter time.Duration) SweepResu
 					}
 				}
 				res.ParkedExpired++
-				s.countSweep("parked_expired")
+				s.countSweep(p.TenantID, "parked_expired")
 			}
 		}
 	}
@@ -598,7 +602,7 @@ func (s *Service) Sweep(ctx context.Context, staleAfter time.Duration) SweepResu
 	}
 	if n, err := s.pl.placements.Prune(ctx, s.now().Add(-KeepFor)); err == nil && n > 0 {
 		res.Pruned = n
-		s.countSweep("pruned")
+		s.countSweep(uuid.Nil, "pruned")
 	}
 	return res
 }
@@ -614,7 +618,7 @@ func (s *Service) resume(ctx context.Context, p repositories.Placement) string {
 		return ""
 	}
 	p.Worker, p.Attempts = s.pl.boot, p.Attempts+1
-	s.countSweep("resumed")
+	s.countSweep(p.TenantID, "resumed")
 	chp, err := s.pl.channels.Get(ctx, p.ChannelID)
 	if err != nil {
 		s.logger.Error().Err(err).Str("client_order_id", p.ClientOrderID).Msg("sweeper: channel gone")
@@ -647,7 +651,7 @@ func (s *Service) resume(ctx context.Context, p repositories.Placement) string {
 		}
 		if ok, _ := s.pl.placements.Finish(ctx, ch.ID, p.ClientOrderID, state, resultOf(e)); ok {
 			s.voidIfCharged(ctx, ch, p)
-			s.countSweep(state)
+			s.countSweep(p.TenantID, state)
 			s.notNotify(ctx, ch, req, "main couldn't finish it before its deadline", p.ChargeStarted)
 			return state
 		}
@@ -657,10 +661,10 @@ func (s *Service) resume(ctx context.Context, p repositories.Placement) string {
 	<-r.done
 	switch {
 	case r.out.err == nil:
-		s.countSweep("completed")
+		s.countSweep(p.TenantID, "completed")
 		return "completed"
 	case errors.Is(r.out.err, errVoided):
-		s.countSweep("voided")
+		s.countSweep(p.TenantID, "voided")
 		return "voided"
 	}
 	// Refused on the re-run (closed meanwhile, …): nobody may be watching.
@@ -674,7 +678,7 @@ func (s *Service) resume(ctx context.Context, p repositories.Placement) string {
 // is offline.
 func (s *Service) dueAlert(ctx context.Context, p repositories.Placement) {
 	defer func() { _ = s.pl.placements.SetDueAlerted(ctx, p.ChannelID, p.ClientOrderID) }()
-	s.countSweep("due_alert")
+	s.countSweep(p.TenantID, "due_alert")
 	if s.pl.kitchen == nil {
 		return
 	}

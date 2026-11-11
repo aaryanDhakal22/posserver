@@ -409,7 +409,11 @@ func main() {
 	go receiptService.Run(ctx)
 	// Placements (DURABILITY-PLAN.md): the key before any money moves, the
 	// work detached from the request, the sweeper, kitchen_offline.
-	orderPortService.SetPlacements(repositories.NewPlacementRepository(pool), uuid.NewString())
+	// The card nonce a placement keeps while in flight is sealed with
+	// SQUARE_TOKEN_KEY, like the stores' OAuth tokens (plaintext when unset).
+	placementRepo := repositories.NewPlacementRepository(pool)
+	placementRepo.SetTokenBox(squareService)
+	orderPortService.SetPlacements(placementRepo, uuid.NewString())
 	kitchenLiveness := kitchen.New(broker, printerCache, repositories.NewPlacementRepository(pool))
 	orderPortService.SetKitchen(kitchenLiveness)
 	orderPortService.SetSweeper(channelService, customerService)

@@ -244,6 +244,7 @@ func routeTable(d RouterDeps) []routeDef {
 	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
+	kitchenH := handler.NewKitchenStatusHandler(d.TenancyService.ListLocations, d.Kitchen, d.Logger)
 	diagH := handler.NewDiagHandler(d.Diag, d.Logger)
 	agentUpdateH := handler.NewAgentUpdateHandler(d.AgentSync, d.Requester, d.Logger)
 	alertsH := handler.NewAlertsHandler(d.TenancyService, d.AlertSender, d.Logger)
@@ -280,6 +281,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", adminPrefix+"/app-releases/:code", "admin", "Delete a tablet-app release (?app=quibase)", appRelH.Delete, admin),
 		def("GET", adminPrefix+"/app-releases", "admin", "List tablet-app releases (?app=quibase), newest first", appRelH.List, admin),
 		def("GET", adminPrefix+"/agents/health", "admin", "Every location's agent health + connected state (fleet view)", agentLinkH.Fleet, admin),
+		def("GET", adminPrefix+"/kitchen", "admin", "Every location's kitchen_offline (the Pi liveness check behind 409 kitchen_offline) + away_since", kitchenH.AdminList, admin),
 		def("GET", adminPrefix+"/agent-backups", "admin", "Stored agent DB backups (?location_id)", agentLinkH.ListBackups, admin),
 		def("GET", adminPrefix+"/agent-backups/:id", "admin", "Download one agent DB backup", agentLinkH.GetBackup, admin),
 		def("GET", adminPrefix+"/overview", "admin", "Flat dump of tenants/locations/devices", adminH.Overview, admin),

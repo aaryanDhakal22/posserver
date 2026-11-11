@@ -3,6 +3,7 @@ package repositories
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"quiccpos/main/internal/infra/database/models"
@@ -18,6 +19,55 @@ import (
 // money moves. MarkPlacementPlaced runs inside OrderRepository.Create.
 type PlacementRepository struct {
 	pool *pgxpool.Pool
+	box  TextBox // nil: card tokens are stored as given
+}
+
+// TextBox seals the card token a placement keeps while it is in flight
+// (squarepay.Service: SQUARE_TOKEN_KEY, the stored OAuth tokens' key). Open
+// must return a value it never sealed unchanged (plaintext rows from before).
+type TextBox interface {
+	SealText(plain string) (string, error)
+	OpenText(sealed string) (string, error)
+}
+
+// SetTokenBox seals card tokens at rest from now on.
+func (r *PlacementRepository) SetTokenBox(b TextBox) { r.box = b }
+
+func (r *PlacementRepository) sealToken(t string) (string, error) {
+	if r.box == nil || t == "" {
+		return t, nil
+	}
+	return r.box.SealText(t)
+}
+
+// opened is p with its card token opened.
+func (r *PlacementRepository) opened(p Placement) (Placement, error) {
+	if r.box == nil || p.CardToken == "" {
+		return p, nil
+	}
+	t, err := r.box.OpenText(p.CardToken)
+	if err != nil {
+		return Placement{}, fmt.Errorf("placement %s: card token: %w", p.ClientOrderID, err)
+	}
+	p.CardToken = t
+	return p, nil
+}
+
+// openedAll opens every row's card token. A token that can't be opened (a
+// changed key) is blanked rather than failing the list: the sweeper must not
+// stall on one row; that placement's card call then fails and it ends.
+func (r *PlacementRepository) openedAll(ps []Placement, err error) ([]Placement, error) {
+	if err != nil {
+		return ps, err
+	}
+	for i := range ps {
+		if o, oerr := r.opened(ps[i]); oerr == nil {
+			ps[i] = o
+		} else {
+			ps[i].CardToken = ""
+		}
+	}
+	return ps, nil
 }
 
 func NewPlacementRepository(pool *pgxpool.Pool) *PlacementRepository {
@@ -86,12 +136,17 @@ func placementsOf(rs []models.OrderPlacement) []Placement {
 // then the stored one).
 func (r *PlacementRepository) Insert(ctx context.Context, p Placement) (Placement, bool, error) {
 	q := models.New(r.pool)
+	token, err := r.sealToken(p.CardToken)
+	if err != nil {
+		return Placement{}, false, err
+	}
 	row, err := q.InsertPlacement(ctx, models.InsertPlacementParams{ChannelID: toPgUUID(p.ChannelID), ClientOrderID: p.ClientOrderID,
 		TenantID: toPgUUID(p.TenantID), LocationID: toPgUUID(p.LocationID), BodyHash: p.BodyHash, Request: p.Request,
-		CardToken: p.CardToken, VerificationToken: p.VerificationToken, CustomerID: pgIDPtr(p.CustomerID), Operator: p.Operator,
+		CardToken: token, VerificationToken: p.VerificationToken, CustomerID: pgIDPtr(p.CustomerID), Operator: p.Operator,
 		ExpiresAt: pgTS(p.ExpiresAt), State: p.State, Result: p.Result, Worker: p.Worker})
 	if err == nil {
-		return placementOf(row), true, nil
+		got, err := r.opened(placementOf(row))
+		return got, err == nil, err
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return Placement{}, false, err
@@ -106,11 +161,15 @@ func (r *PlacementRepository) Get(ctx context.Context, channelID uuid.UUID, key 
 	if err != nil {
 		return Placement{}, err
 	}
-	return placementOf(row), nil
+	return r.opened(placementOf(row))
 }
 
 // Claim takes a pending placement over for worker; false = someone else did.
 func (r *PlacementRepository) Claim(ctx context.Context, p Placement, worker, cardToken, verificationToken string) (bool, error) {
+	cardToken, err := r.sealToken(cardToken)
+	if err != nil {
+		return false, err
+	}
 	n, err := models.New(r.pool).ClaimPlacement(ctx, models.ClaimPlacementParams{Worker: worker, CardToken: cardToken,
 		VerificationToken: verificationToken, ChannelID: toPgUUID(p.ChannelID), ClientOrderID: p.ClientOrderID,
 		OldWorker: p.Worker, OldAttempts: p.Attempts})
@@ -140,19 +199,19 @@ func (r *PlacementRepository) Park(ctx context.Context, channelID uuid.UUID, key
 func (r *PlacementRepository) Stale(ctx context.Context, worker string, before time.Time) ([]Placement, error) {
 	rs, err := models.New(r.pool).ListStalePlacements(ctx, models.ListStalePlacementsParams{Worker: worker,
 		Before: pgtype.Timestamptz{Time: before, Valid: true}})
-	return placementsOf(rs), err
+	return r.openedAll(placementsOf(rs), err)
 }
 
 // ParkedExpired lists parked placements nobody came back for.
 func (r *PlacementRepository) ParkedExpired(ctx context.Context) ([]Placement, error) {
 	rs, err := models.New(r.pool).ListParkedExpired(ctx)
-	return placementsOf(rs), err
+	return r.openedAll(placementsOf(rs), err)
 }
 
 // DueAlerts lists placed scheduled orders whose Pi check is due.
 func (r *PlacementRepository) DueAlerts(ctx context.Context) ([]Placement, error) {
 	rs, err := models.New(r.pool).ListPlacementDueAlerts(ctx)
-	return placementsOf(rs), err
+	return r.openedAll(placementsOf(rs), err)
 }
 
 func (r *PlacementRepository) SetDueAlerted(ctx context.Context, channelID uuid.UUID, key string) error {

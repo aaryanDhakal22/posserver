@@ -71,6 +71,18 @@
       });
     }
     for (const r of rows) {
+      if (!r.kitchenOffline) continue;
+      out.push({
+        key: 'ko-' + r.tenant.id,
+        tone: 'bad',
+        tag: 'Kitchen offline',
+        store: r.tenant.name,
+        text: 'online orders are being refused (no Pi connection on an active key) — if its Pi was retired, revoke the old key',
+        href: `${base}/admin/tenants/${r.tenant.id}`,
+        cta: 'Open store'
+      });
+    }
+    for (const r of rows) {
       if (r.pi !== 'online') continue;
       if (r.printersDown)
         out.push({

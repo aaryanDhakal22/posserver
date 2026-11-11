@@ -142,6 +142,45 @@ func (s *Service) open(sealed []byte) (string, error) {
 	return string(plain), err
 }
 
+// SealedPrefix marks a text sealed by SealText; a stored value without it is
+// plaintext written before sealing existed (read as is).
+const SealedPrefix = "sqbox1:"
+
+var errNoTokenKey = errors.New("token box: sealed value but no SQUARE_TOKEN_KEY")
+
+// SealText seals a short secret for a text column (the card nonce an order
+// placement keeps while it's in flight) with the same key and AES-GCM box as
+// the stores' OAuth tokens: SealedPrefix + base64(nonce|ciphertext). With no
+// key (Square off: no Square card token can exist, only the test card's),
+// it returns the text unchanged, as the OAuth path stores nothing then.
+func (s *Service) SealText(plain string) (string, error) {
+	if plain == "" || s.aead == nil {
+		return plain, nil
+	}
+	b, err := s.seal(plain)
+	if err != nil {
+		return "", err
+	}
+	return SealedPrefix + base64.RawStdEncoding.EncodeToString(b), nil
+}
+
+// OpenText reverses SealText; a value without SealedPrefix is returned as is
+// (rows written before the upgrade).
+func (s *Service) OpenText(v string) (string, error) {
+	rest, ok := strings.CutPrefix(v, SealedPrefix)
+	if !ok {
+		return v, nil
+	}
+	if s.aead == nil {
+		return "", errNoTokenKey
+	}
+	b, err := base64.RawStdEncoding.DecodeString(rest)
+	if err != nil {
+		return "", fmt.Errorf("token box: %w", err)
+	}
+	return s.open(b)
+}
+
 // --- OAuth --------------------------------------------------------------------------
 
 // state = location id . expiry . HMAC (the token key) — no table needed.
