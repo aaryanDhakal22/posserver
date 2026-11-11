@@ -473,7 +473,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("PATCH", storePrefix+"/me/staff/:id", "store-session", "Change a person {first_name, last_name, role, limits, active, pin}", staffH.MeUpdate, storeSession),
 		def("POST", storePrefix+"/me/staff/:id/pin", "store-session", "Reset a person's PIN {pin}", staffH.MeResetPin, storeSession),
 		def("DELETE", storePrefix+"/me/staff/:id", "store-session", "Delete a person", staffH.MeDelete, storeSession),
-		def("GET", storePrefix+"/me/terminal/settings", "store-session", "The store's terminal settings (role limits, auto-lock, counter start, receipt auto-Done)", staffH.MeSettings, storeSession),
+		def("GET", storePrefix+"/me/terminal/settings", "store-session", "The store's terminal settings (role limits, auto-lock, counter start, receipt auto-Done, batch auto-close time)", staffH.MeSettings, storeSession),
 		def("PUT", storePrefix+"/me/terminal/settings", "store-session", "Replace the terminal settings", staffH.MeSaveSettings, storeSession),
 		def("GET", storePrefix+"/me/pricing", "store-session", "Pricing settings: the store's + each channel kind's sets", pricingH.MePricing, storeSession),
 		def("PUT", storePrefix+"/me/pricing", "store-session", "Replace the pricing settings {store, kinds}", pricingH.MeSavePricing, storeSession),

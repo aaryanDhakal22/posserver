@@ -99,12 +99,18 @@ def test_staff_crud_and_pins(mgr) -> None:
 
 def test_terminal_settings(mgr) -> None:
     assert _ok(mgr.get(SETTINGS, timeout=5)) == {"cashier_refund_cents": 0, "cashier_discount_pct": 10, "auto_lock_minutes": 5,
-                                                 "counter_start": 1, "receipt_auto_done_seconds": 15}
+                                                 "counter_start": 1, "receipt_auto_done_seconds": 15, "auto_close_batch_at": "04:00"}
     want = {"cashier_refund_cents": 2000, "cashier_discount_pct": 15, "auto_lock_minutes": 3, "counter_start": 100,
-            "receipt_auto_done_seconds": 0}
+            "receipt_auto_done_seconds": 0, "auto_close_batch_at": "03:30"}
     assert _ok(mgr.put(SETTINGS, json=want, timeout=5)) == want
     assert _ok(mgr.get(SETTINGS, timeout=5)) == want
-    for bad in ({"auto_lock_minutes": 0}, {"counter_start": 0}, {"cashier_discount_pct": 101}, {"receipt_auto_done_seconds": 601}):
+    # A client that doesn't know auto_close_batch_at keeps the saved one; "" = off.
+    older = {k: v for k, v in want.items() if k != "auto_close_batch_at"}
+    assert _ok(mgr.put(SETTINGS, json=older, timeout=5))["auto_close_batch_at"] == "03:30"
+    assert _ok(mgr.put(SETTINGS, json={**want, "auto_close_batch_at": ""}, timeout=5))["auto_close_batch_at"] == ""
+    _ok(mgr.put(SETTINGS, json=want, timeout=5))
+    for bad in ({"auto_lock_minutes": 0}, {"counter_start": 0}, {"cashier_discount_pct": 101}, {"receipt_auto_done_seconds": 601},
+                {"auto_close_batch_at": "4:00"}, {"auto_close_batch_at": "24:00"}):
         assert _code(mgr.put(SETTINGS, json={**want, **bad}, timeout=5), 400) == "bad_settings"
     assert _code(mgr.put(SETTINGS, json={**want, "extra": 1}, timeout=5), 400) == "bad_request"
     # A cashier's effective limits follow the settings.
@@ -115,6 +121,7 @@ def test_terminal_settings(mgr) -> None:
 def test_terminal_config_for_the_pi(store, mgr) -> None:
     empty = _config(store.key)
     assert empty["version"] == 0 and empty["staff"] == [] and empty["settings"]["auto_lock_minutes"] == 5
+    assert empty["settings"]["auto_close_batch_at"] == "04:00"  # the Pi's batch auto-close, on by default
 
     with SSEStream(store.key) as s:
         p = _ok(mgr.post(STAFF, json={"first_name": "Eve", "last_name": "Ray", "role": "cashier", "pin": "2468"}, timeout=10), 201)

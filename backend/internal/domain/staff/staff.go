@@ -60,13 +60,21 @@ type Settings struct {
 	AutoLockMinutes        int   `json:"auto_lock_minutes"`
 	CounterStart           int   `json:"counter_start"`
 	ReceiptAutoDoneSeconds int   `json:"receipt_auto_done_seconds"`
+	// AutoCloseBatchAt: the Pi closes a batch nobody closed at this store
+	// time ("HH:MM", 24 h; "" = off). Default DefaultAutoCloseBatchAt.
+	AutoCloseBatchAt string `json:"auto_close_batch_at"`
 }
+
+// DefaultAutoCloseBatchAt is the batch auto-close time (the owner: on by
+// default at 4:00 am).
+const DefaultAutoCloseBatchAt = "04:00"
 
 // DefaultSettings: refunds are a manager's (TERMINAL-PLAN "Refunds: manager
 // only"), a cashier discounts up to 10 %, the terminal locks after 5 idle
 // minutes, counter numbers start at 1, the receipt screen closes after 15 s.
 func DefaultSettings() Settings {
-	return Settings{CashierRefundCents: 0, CashierDiscountPct: 10, AutoLockMinutes: 5, CounterStart: 1, ReceiptAutoDoneSeconds: 15}
+	return Settings{CashierRefundCents: 0, CashierDiscountPct: 10, AutoLockMinutes: 5, CounterStart: 1, ReceiptAutoDoneSeconds: 15,
+		AutoCloseBatchAt: DefaultAutoCloseBatchAt}
 }
 
 // Ranges.
@@ -145,8 +153,19 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: counter_start must be 1–%d", ErrBadSettings, MaxCounterStart)
 	case s.ReceiptAutoDoneSeconds < 0 || s.ReceiptAutoDoneSeconds > MaxReceiptDoneS:
 		return fmt.Errorf("%w: receipt_auto_done_seconds must be 0–%d", ErrBadSettings, MaxReceiptDoneS)
+	case !ValidHHMM(s.AutoCloseBatchAt):
+		return fmt.Errorf("%w: auto_close_batch_at must be HH:MM (24 h) or empty (off)", ErrBadSettings)
 	}
 	return nil
+}
+
+// ValidHHMM: "" or a 24-hour "HH:MM".
+func ValidHHMM(v string) bool {
+	if v == "" {
+		return true
+	}
+	t, err := time.Parse("15:04", v)
+	return err == nil && len(v) == 5 && t.Format("15:04") == v
 }
 
 // RoleDefaults are a role's limits under the store's settings: managers are

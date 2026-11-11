@@ -44,11 +44,28 @@ func TestSettingsValidate(t *testing.T) {
 		func(s *Settings) { s.CashierDiscountPct = 101 },
 		func(s *Settings) { s.CashierRefundCents = -1 },
 		func(s *Settings) { s.ReceiptAutoDoneSeconds = 601 },
+		func(s *Settings) { s.AutoCloseBatchAt = "4:00" },
+		func(s *Settings) { s.AutoCloseBatchAt = "24:00" },
+		func(s *Settings) { s.AutoCloseBatchAt = "04:60" },
+		func(s *Settings) { s.AutoCloseBatchAt = "4am" },
 	} {
 		s := DefaultSettings()
 		f(&s)
 		if s.Validate() == nil {
 			t.Errorf("accepted %+v", s)
+		}
+	}
+}
+
+func TestAutoCloseBatchAt(t *testing.T) {
+	if DefaultSettings().AutoCloseBatchAt != "04:00" {
+		t.Fatal("on by default at 4:00 am")
+	}
+	for _, v := range []string{"", "00:00", "04:00", "23:59"} {
+		s := DefaultSettings()
+		s.AutoCloseBatchAt = v
+		if err := s.Validate(); err != nil {
+			t.Errorf("%q: %v", v, err)
 		}
 	}
 }
