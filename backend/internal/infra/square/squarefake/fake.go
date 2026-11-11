@@ -13,6 +13,7 @@
 //	cnon:card-nonce-declined            400 GENERIC_DECLINE
 //	cnon:card-nonce-rejected-cvv        400 CVV_FAILURE
 //	cnon:card-nonce-verification        402 CARD_DECLINED_VERIFICATION_REQUIRED
+//	cnon:card-nonce-slow-<seconds>      approved like no-edit, after <seconds> (≤ 60; tests of slow placements)
 //	ccof:…                              a saved card (charged at once)
 //
 // Test hooks (no auth): GET _fake/payments/{id}, GET _fake/state,
@@ -22,11 +23,14 @@
 package squarefake
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -279,7 +283,7 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 	mux.HandleFunc("GET "+p+"/v2/locations", authed("", func(w http.ResponseWriter, r *http.Request, m string) {
 		writeJSON(w, http.StatusOK, map[string]any{"locations": f.locations[m]})
 	}))
-	mux.HandleFunc("POST "+p+"/v2/payments", authed("create", func(w http.ResponseWriter, r *http.Request, m string) {
+	createPayment := authed("create", func(w http.ResponseWriter, r *http.Request, m string) {
 		var b struct {
 			IdempotencyKey string `json:"idempotency_key"`
 			SourceID       string `json:"source_id"`
@@ -307,7 +311,8 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 		switch {
 		case b.SourceID == "cnon:card-nonce-ok":
 			canEdit = true
-		case b.SourceID == "cnon:card-nonce-no-edit", b.SourceID == "cnon:card-edit-tip-failure", b.SourceID == "cnon:card-edit-failure":
+		case b.SourceID == "cnon:card-nonce-no-edit", b.SourceID == "cnon:card-edit-tip-failure", b.SourceID == "cnon:card-edit-failure",
+			strings.HasPrefix(b.SourceID, "cnon:card-nonce-slow-"):
 		case b.SourceID == "cnon:card-nonce-declined":
 			sqErr(w, http.StatusBadRequest, "PAYMENT_METHOD_ERROR", "GENERIC_DECLINE", "Authorization error: 'GENERIC_DECLINE'")
 			return
@@ -344,7 +349,21 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 		f.payments[pay.ID] = pay
 		f.byKey["pay:"+b.IdempotencyKey] = pay.ID
 		writeJSON(w, http.StatusOK, map[string]any{"payment": f.view(pay)})
-	}))
+	})
+	// A slow card (cnon:card-nonce-slow-<s>) waits before Square answers, outside the lock.
+	mux.HandleFunc("POST "+p+"/v2/payments", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if i := bytes.Index(body, []byte(`"cnon:card-nonce-slow-`)); i >= 0 {
+			rest := body[i+len(`"cnon:card-nonce-slow-`):]
+			if j := bytes.IndexByte(rest, '"'); j > 0 {
+				if n, err := strconv.Atoi(string(rest[:j])); err == nil && n > 0 && n <= 60 {
+					time.Sleep(time.Duration(n) * time.Second)
+				}
+			}
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		createPayment(w, r)
+	})
 	mux.HandleFunc("POST "+p+"/v2/payments/cancel", authed("cancel", func(w http.ResponseWriter, r *http.Request, m string) {
 		var b map[string]string
 		if !decode(r, &b) || b["idempotency_key"] == "" {

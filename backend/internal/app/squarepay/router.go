@@ -38,3 +38,15 @@ func (r *CardRouter) Refund(ctx context.Context, locationID uuid.UUID, ref strin
 	}
 	return r.square.Refund(ctx, locationID, ref, amountCents)
 }
+
+// VoidByKey releases whatever a Charge with that key made at Square (or the
+// test card) without making anything.
+func (r *CardRouter) VoidByKey(ctx context.Context, locationID uuid.UUID, key string) error {
+	if r.svc.Connected(ctx, locationID) {
+		return r.square.VoidByKey(ctx, locationID, key)
+	}
+	if v, ok := r.fallback.(payment.KeyVoider); ok {
+		return v.VoidByKey(ctx, locationID, key)
+	}
+	return nil
+}

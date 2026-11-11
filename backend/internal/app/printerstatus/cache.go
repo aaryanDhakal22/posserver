@@ -80,3 +80,9 @@ func (c *Cache) Handle(_ context.Context, scope sseBroker.Scope, payload json.Ra
 	c.Put(scope, r)
 	return nil, nil
 }
+
+// Age is how long ago the scope's Pi last reported (ok=false: not since main started).
+func (c *Cache) Age(scope sseBroker.Scope) (time.Duration, bool) {
+	_, age, ok := c.Get(scope)
+	return age, ok
+}

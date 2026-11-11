@@ -266,7 +266,7 @@
       "post": {
         "operationId": "placeOrder",
         "summary": "Place an order",
-        "description": "Checked against the store's status (open now, or promised_at one of /store/times), re-priced (cart problems → 422 cart_invalid with issues; expected_total_cents different from main's → 409 price_changed: refresh), a delivery address the store reaches (the website must be inside the area; the call center and counter may send any), paid through the payment port (cash = due at the store / to the driver; card only where a card processor is connected). Idempotent: the same client_order_id answers 200 with the same order. Needs the orders permission and the payment method in the channel's payments.",
+        "description": "Checked against the store's status (open now, or promised_at one of /store/times), re-priced (cart problems → 422 cart_invalid with issues; expected_total_cents different from main's → 409 price_changed: refresh), a delivery address the store reaches (the website must be inside the area; the call center and counter may send any), paid through the payment port (cash = due at the store / to the driver; card only where a card processor is connected). Idempotent: the same client_order_id answers 200 with the same order. Needs the orders permission and the payment method in the channel's payments. Durable (DURABILITY-PLAN.md): main records the order under its client_order_id before any money moves and finishes the work even if the caller hangs up; the same client_order_id with a different order → 409 key_reused; arriving after expires_at → 409 expired (never charged); the store's Pi offline ~30 s → 409 kitchen_offline (a scheduled order due ≥ 1 h ahead is still taken); still at work after ~25 s → 202 {state: pending}: ask GET /channel/v1/orders/by-key/{client_order_id}. verification_required isn't final: send the same order again with payment.verification_token.",
         "requestBody": {
           "required": true,
           "content": {
@@ -294,6 +294,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Order"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Still at work: ask GET /channel/v1/orders/by-key/{client_order_id}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderPending"
                 }
               }
             }
@@ -339,7 +349,7 @@
             }
           },
           "409": {
-            "description": "store_paused, store_closed, bad_time, price_changed, payment_unavailable",
+            "description": "store_paused, store_closed, bad_time, price_changed, payment_unavailable; key_reused (the same client_order_id with a different order), expired (after expires_at: never charged), voided (the card hold was released before the order was saved), kitchen_offline (the store's Pi is offline), payment_canceled",
             "content": {
               "application/json": {
                 "schema": {
@@ -431,6 +441,51 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/channel/v1/orders/by-key/{client_order_id}": {
+      "get": {
+        "operationId": "getOrderByKey",
+        "summary": "An order's placement by its client_order_id",
+        "description": "What happened to a POST /orders: pending, placed (with the order), refused / expired / voided (with the error). 404 unknown_key: main never got it — send the same order again.",
+        "parameters": [
+          {
+            "name": "client_order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The placement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderPlacement"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "unknown_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderError"
+                }
+              }
+            }
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
@@ -683,7 +738,7 @@
       "get": {
         "operationId": "getStore",
         "summary": "The store's status: open, paused or closed, order types and ready-time estimates, today's hours, sold-out items",
-        "description": "accepting = ASAP orders are taken now. When it is false, next_open_at says when they are again (null = unknown: paused until the store unpauses, or open with every order type off). Brygid-style vendor orders are not affected by a pause.",
+        "description": "accepting = ASAP orders are taken now. When it is false, next_open_at says when they are again (null = unknown: paused until the store unpauses, or open with every order type off). Brygid-style vendor orders are not affected by a pause. kitchen_offline = the store's kitchen (its Pi) can't get an order right now: say so before checkout (ASAP orders are refused).",
         "responses": {
           "200": {
             "description": "The status",
@@ -2497,7 +2552,8 @@
           "order_types",
           "scheduling",
           "sold_out",
-          "menu_version"
+          "menu_version",
+          "kitchen_offline"
         ],
         "properties": {
           "store": {
@@ -2717,6 +2773,10 @@
           },
           "menu_version": {
             "type": "integer"
+          },
+          "kitchen_offline": {
+            "type": "boolean",
+            "description": "The store's Pi (its kitchen) can't get an order now: no live connection to main for ~30 s, or its printer reports stopped. ASAP orders are refused with 409 kitchen_offline; orders scheduled at least 1 h ahead are still taken. Always false for a store with no Pi set up."
           }
         },
         "additionalProperties": false
@@ -3630,6 +3690,14 @@
               "null"
             ],
             "description": "The total the channel showed; refused if main's differs"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The channel's deadline: arriving later, the order is refused (expired) and never charged. The storefront sends it; optional."
           }
         },
         "additionalProperties": false
@@ -4787,6 +4855,66 @@
           "privacy": {
             "type": "string",
             "description": "The privacy policy (\"\" = the default text)"
+          }
+        }
+      },
+      "OrderPending": {
+        "type": "object",
+        "required": [
+          "state",
+          "client_order_id"
+        ],
+        "properties": {
+          "state": {
+            "const": "pending"
+          },
+          "client_order_id": {
+            "type": "string"
+          }
+        }
+      },
+      "OrderPlacement": {
+        "type": "object",
+        "required": [
+          "state",
+          "expires_at"
+        ],
+        "description": "A placement: pending (main is at work; with error when it waits for the caller — verification_required / try_again), placed (order), refused / expired / voided (error).",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "placed",
+              "refused",
+              "expired",
+              "voided"
+            ]
+          },
+          "order": {
+            "$ref": "#/components/schemas/Order"
+          },
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
           }
         }
       }

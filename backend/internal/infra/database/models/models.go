@@ -621,6 +621,32 @@ type OrderGeo struct {
 	Note             string             `json:"note"`
 }
 
+type OrderPlacement struct {
+	ChannelID         pgtype.UUID        `json:"channel_id"`
+	ClientOrderID     string             `json:"client_order_id"`
+	TenantID          pgtype.UUID        `json:"tenant_id"`
+	LocationID        pgtype.UUID        `json:"location_id"`
+	BodyHash          string             `json:"body_hash"`
+	Request           []byte             `json:"request"`
+	CardToken         string             `json:"card_token"`
+	VerificationToken string             `json:"verification_token"`
+	CustomerID        pgtype.UUID        `json:"customer_id"`
+	Operator          []byte             `json:"operator"`
+	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
+	State             string             `json:"state"`
+	Waiting           string             `json:"waiting"`
+	Result            []byte             `json:"result"`
+	OrderID           pgtype.UUID        `json:"order_id"`
+	Worker            string             `json:"worker"`
+	Attempts          int32              `json:"attempts"`
+	ChargeStarted     bool               `json:"charge_started"`
+	ChargeCents       int64              `json:"charge_cents"`
+	DueAlertAt        pgtype.Timestamptz `json:"due_alert_at"`
+	DueAlerted        bool               `json:"due_alerted"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
 type OutboxDispatch struct {
 	EventID       pgtype.UUID        `json:"event_id"`
 	HandlerName   string             `json:"handler_name"`

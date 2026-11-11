@@ -97,6 +97,7 @@ type Service struct {
 	accounts Accounts
 	logger   zerolog.Logger
 	now      func() time.Time
+	pl       placementWiring // durability (DURABILITY-PLAN.md); nil placements = off
 }
 
 // NewService: gateways maps a payment method to its adapter; a method with
@@ -142,6 +143,9 @@ type Request struct {
 	PromisedAt         *time.Time `json:"promised_at"` // nil = as soon as possible
 	Notes              string     `json:"notes"`
 	ExpectedTotalCents *int64     `json:"expected_total_cents"` // the total the channel showed
+	// ExpiresAt: the channel's deadline (DURABILITY-PLAN.md) — arriving later,
+	// the order is refused (expired) and never charged. Optional.
+	ExpiresAt *time.Time `json:"expires_at"`
 
 	// TakenBy is the operator signed in to an operator channel (set by the
 	// handler from the sign-in, never from the body).
@@ -232,8 +236,10 @@ func sourceEventID(ch channelDom.Channel, clientOrderID string) string {
 }
 
 // Place places a channel's order: the order (created = false when the same
-// client_order_id was placed before — the same order comes back), or an
-// *Error to show.
+// client_order_id was placed before — the same order comes back), *Pending
+// (main is still at work: ask by key), or an *Error to show. With placements
+// on (DURABILITY-PLAN.md) the work runs detached from ctx: a caller hanging
+// up never cancels it.
 func (s *Service) Place(ctx context.Context, ch channelDom.Channel, req Request) (*View, bool, error) {
 	if !ch.Permissions.Orders {
 		return nil, false, refuse(http.StatusForbidden, "forbidden", "this channel may not place orders")
@@ -244,74 +250,124 @@ func (s *Service) Place(ctx context.Context, ch channelDom.Channel, req Request)
 	if !containsStr(ch.Permissions.Payments, req.Payment.Method) {
 		return nil, false, refuse(http.StatusForbidden, "payment_not_allowed", "this channel can't take "+req.Payment.Method+" orders")
 	}
+	if s.pl.placements != nil {
+		return s.placeDurable(ctx, ch, req)
+	}
 	// The same key again: the same order.
 	if v, err := s.byClient(ctx, ch, req.ClientOrderID); err == nil {
 		return v, false, nil
 	} else if !errors.Is(err, pgx.ErrNoRows) {
 		return nil, false, err
 	}
+	out := s.work(context.WithoutCancel(ctx), ch, req, repositories.Placement{}, false)
+	return out.view, out.created, out.err
+}
+
+// work is one placement's work: check, price, hold the card, save. Every
+// outcome is written to the placement (refused / parked / placed, voided).
+// resume: the sweeper took over after the card call was made — the checks
+// already passed then; it re-issues the same card call (Square returns the same
+// payment) and saves the order only if the total is unchanged.
+func (s *Service) work(ctx context.Context, ch channelDom.Channel, req Request, pl repositories.Placement, resume bool) outcome {
+	key := req.ClientOrderID
+	refused := func(e *Error) outcome {
+		s.finish(ctx, ch, key, repositories.PlacementRefused, e)
+		s.countRefusal(ch, e.Code)
+		return outcome{err: e}
+	}
+	// parked: not final — the caller may come back with the same key.
+	parked := func(waiting string, e *Error, err error) outcome {
+		s.park(ctx, ch, key, waiting, e)
+		if err == nil {
+			err = e
+		}
+		return outcome{err: err}
+	}
+	tryAgain := refuse(http.StatusServiceUnavailable, "try_again", "The order couldn't be placed — try again.")
+
 	gw, ok := s.gateways[req.Payment.Method]
 	if !ok {
-		return nil, false, refuse(http.StatusConflict, "payment_unavailable", "card payments aren't available yet — pay with cash")
+		return refused(refuse(http.StatusConflict, "payment_unavailable", "card payments aren't available yet — pay with cash"))
 	}
 
-	// The store must take the order: now, or at a time it offers.
-	st, err := s.status.Status(ctx, ch.TenantID, ch.LocationID)
-	if err != nil {
-		return nil, false, err
-	}
-	if req.PromisedAt == nil {
-		switch {
-		case st.State == "paused":
-			msg := "The store isn't taking orders right now."
-			if st.Pause != nil && st.Pause.Note != "" {
-				msg = st.Pause.Note
+	if !resume {
+		// The store must take the order: now, or at a time it offers.
+		st, err := s.status.Status(ctx, ch.TenantID, ch.LocationID)
+		if err != nil {
+			return parked("retry", tryAgain, err)
+		}
+		if req.PromisedAt == nil {
+			switch {
+			case st.State == "paused":
+				msg := "The store isn't taking orders right now."
+				if st.Pause != nil && st.Pause.Note != "" {
+					msg = st.Pause.Note
+				}
+				return refused(refuse(http.StatusConflict, "store_paused", msg))
+			case st.State == "closed":
+				return refused(refuse(http.StatusConflict, "store_closed", "The store is closed — order for later."))
 			}
-			return nil, false, refuse(http.StatusConflict, "store_paused", msg)
-		case st.State == "closed":
-			return nil, false, refuse(http.StatusConflict, "store_closed", "The store is closed — order for later.")
+		} else {
+			loc, _ := time.LoadLocation(st.Store.Timezone)
+			if loc == nil {
+				loc = time.UTC
+			}
+			times, err := s.status.Times(ctx, ch.TenantID, ch.LocationID, req.Type, req.PromisedAt.In(loc).Format(time.DateOnly))
+			if err != nil || !containsTime(times, *req.PromisedAt) {
+				return refused(refuse(http.StatusConflict, "bad_time", "That time isn't available — pick another."))
+			}
 		}
-	} else {
-		loc, _ := time.LoadLocation(st.Store.Timezone)
-		if loc == nil {
-			loc = time.UTC
-		}
-		times, err := s.status.Times(ctx, ch.TenantID, ch.LocationID, req.Type, req.PromisedAt.In(loc).Format(time.DateOnly))
-		if err != nil || !containsTime(times, *req.PromisedAt) {
-			return nil, false, refuse(http.StatusConflict, "bad_time", "That time isn't available — pick another.")
+		// The kitchen must be able to get it (a scheduled order far enough
+		// ahead is taken; the owner is paged before it's due if the Pi is
+		// still away).
+		if s.pl.kitchen != nil && (req.PromisedAt == nil || req.PromisedAt.Sub(s.now()) < ScheduledLead) {
+			off, since, err := s.pl.kitchen.Offline(ctx, ch.TenantID, ch.LocationID)
+			if err != nil {
+				s.logger.Warn().Err(err).Msg("kitchen check failed; taking the order")
+			} else if off {
+				return refused(s.kitchenOffline(ctx, ch, since))
+			}
 		}
 	}
 
 	// Price it again with the channel's prices and deals.
 	pctx, _, err := s.pricing.Context(ctx, ch.TenantID, ch.LocationID, string(ch.Kind), ch.ViewID)
 	if err != nil {
-		return nil, false, err
+		return parked("retry", tryAgain, err)
 	}
 	cart := pricing.Cart{Type: req.Type, Payment: req.Payment.Method, Lines: req.Lines, Code: req.Code, TipCents: req.TipCents,
 		TipPct: req.TipPct, FirstOrder: req.FirstOrder}
 	q := pricing.Price(*pctx, cart, s.now())
+	if resume && (len(q.Errors) > 0 || q.TotalCents != pl.ChargeCents) {
+		// The menu moved since the card call: don't save a different order.
+		if ok, _ := s.pl.placements.Finish(ctx, ch.ID, key, repositories.PlacementVoided, resultOf(errVoided)); ok {
+			s.voidIfCharged(ctx, ch, pl)
+			s.notNotify(ctx, ch, req, "its prices changed before main could finish it", true)
+		}
+		return outcome{err: errVoided}
+	}
 	if len(q.Errors) > 0 {
-		return nil, false, &Error{Status: http.StatusUnprocessableEntity, Code: "cart_invalid", Message: q.Errors[0].Message, Issues: q.Errors}
+		return refused(&Error{Status: http.StatusUnprocessableEntity, Code: "cart_invalid", Message: q.Errors[0].Message, Issues: q.Errors})
 	}
 	if req.ExpectedTotalCents != nil && *req.ExpectedTotalCents != q.TotalCents {
-		return nil, false, refuse(http.StatusConflict, "price_changed", "Prices changed — refresh and check your order.")
+		return refused(refuse(http.StatusConflict, "price_changed", "Prices changed — refresh and check your order."))
 	}
 
 	// A delivery address the store reaches (the website must; the call
 	// center and counter may send it anyway — the tablet flags it).
-	if req.Type == "delivery" {
+	if req.Type == "delivery" && !resume {
 		a := req.Address
 		dc, err := s.status.DeliveryCheck(ctx, ch.TenantID, ch.LocationID, geo.Address{Line1: a.Line1, City: a.City, State: a.State, Zip: a.Zip})
 		strict := ch.Kind == channelDom.KindWeb
 		switch {
 		case err != nil && strict:
-			return nil, false, refuse(http.StatusServiceUnavailable, "try_again", "We couldn't check the address — try again.")
+			return parked("retry", refuse(http.StatusServiceUnavailable, "try_again", "We couldn't check the address — try again."), nil)
 		case err != nil:
 		case !strict:
 		case dc.Result == "outside":
-			return nil, false, refuse(http.StatusUnprocessableEntity, "outside_area", "We don't deliver to that address.")
+			return refused(refuse(http.StatusUnprocessableEntity, "outside_area", "We don't deliver to that address."))
 		case dc.Result == "check" || dc.Result == "not_found":
-			return nil, false, refuse(http.StatusUnprocessableEntity, "address_unknown", "We couldn't find that address — check it.")
+			return refused(refuse(http.StatusUnprocessableEntity, "address_unknown", "We couldn't find that address — check it."))
 		}
 	}
 
@@ -320,8 +376,80 @@ func (s *Service) Place(ctx context.Context, ch channelDom.Channel, req Request)
 	// The customer's tracking link (an unguessable token, GET /track/v1/{token}).
 	token := newTrackToken()
 	if _, err := s.build(ctx, ch, req, pctx, q, nil, token); err != nil {
-		return nil, false, err
+		var e *Error
+		if errors.As(err, &e) {
+			return refused(e)
+		}
+		return parked("retry", tryAgain, err)
 	}
+	charge, cerr := s.chargeFor(ctx, ch, req, q)
+	if cerr != nil {
+		return refused(cerr)
+	}
+	if req.Payment.Method == payment.MethodCard && s.pl.placements != nil {
+		// Recorded first: whatever happens next, the sweeper knows a hold may exist.
+		if err := s.pl.placements.StartCharge(ctx, ch.ID, key, q.TotalCents); err != nil {
+			return parked("retry", tryAgain, err)
+		}
+		pl.ChargeStarted, pl.ChargeCents = true, q.TotalCents
+	}
+	res, err := gw.Charge(ctx, charge)
+	switch {
+	case errors.Is(err, payment.ErrDeclined):
+		return refused(refuse(http.StatusPaymentRequired, "payment_declined", "The card was declined."))
+	case errors.Is(err, payment.ErrVerify):
+		return parked("verification", refuse(http.StatusPaymentRequired, "verification_required", "Your bank needs you to verify this card — try again."), nil)
+	case errors.Is(err, payment.ErrBadToken):
+		return refused(refuse(http.StatusPaymentRequired, "payment_declined", "The card couldn't be used."))
+	case errors.Is(err, payment.ErrNotConnected):
+		return refused(refuse(http.StatusConflict, "payment_unavailable", "Card payments aren't available right now — pay with cash."))
+	case errors.Is(err, payment.ErrCanceled):
+		return refused(refuse(http.StatusConflict, "payment_canceled", "The card payment for this order was canceled — place the order again."))
+	case err != nil:
+		return parked("retry", tryAgain, err)
+	}
+	o, err := s.build(ctx, ch, req, pctx, q, &res, token)
+	if err != nil {
+		s.refund(ctx, ch, gw, res, q.TotalCents)
+		s.finish(ctx, ch, key, repositories.PlacementVoided, errVoided)
+		return outcome{err: err}
+	}
+	if err := s.orders.Create(ctx, o); err != nil {
+		switch {
+		case errors.Is(err, order.ErrDuplicate): // the same key, placed at the same moment
+			s.refund(ctx, ch, gw, res, q.TotalCents)
+			v, verr := s.byClient(ctx, ch, req.ClientOrderID)
+			if verr != nil {
+				return outcome{err: err}
+			}
+			return outcome{view: v}
+		case errors.Is(err, order.ErrPlacementGone): // finished elsewhere meanwhile
+			s.refund(ctx, ch, gw, res, q.TotalCents)
+			if s.pl.placements != nil {
+				if p, gerr := s.pl.placements.Get(ctx, ch.ID, key); gerr == nil {
+					return outcome{err: errorOf(p)}
+				}
+			}
+			return outcome{err: errVoided}
+		}
+		s.refund(ctx, ch, gw, res, q.TotalCents)
+		s.finish(ctx, ch, key, repositories.PlacementVoided, errVoided)
+		return outcome{err: err}
+	}
+	if res.Saved != nil && req.Account != nil && s.accounts != nil {
+		card := customer.Card{Gateway: res.Gateway, Ref: res.Saved.Ref, Brand: res.Saved.Brand, Last4: res.Saved.Last4,
+			ExpMonth: res.Saved.ExpMonth, ExpYear: res.Saved.ExpYear}
+		if err := s.accounts.RememberCard(context.WithoutCancel(ctx), req.Account.ID, res.CustomerRef, card); err != nil {
+			s.logger.Warn().Err(err).Msg("saved card not remembered on the account (it stays on the processor)")
+		}
+	}
+	s.logger.Info().Ctx(ctx).Str("order_id", uuid.UUID(o.ID()).String()).Str("channel", string(ch.Kind)).Msg("channel order placed")
+	return outcome{view: viewOf(o, req.ClientOrderID, token), created: true}
+}
+
+// chargeFor is the card call for an order: always the same for the same
+// request and total, so a re-issue with its idempotency key is the same call.
+func (s *Service) chargeFor(ctx context.Context, ch channelDom.Channel, req Request, q pricing.Quote) (payment.Charge, *Error) {
 	charge := payment.Charge{LocationID: ch.LocationID, AmountCents: q.TotalCents, TipCents: q.TipCents,
 		Token: req.Payment.Token, VerificationToken: req.Payment.VerificationToken,
 		IdempotencyKey: ch.ID.String() + ":" + req.ClientOrderID, ReferenceID: req.ClientOrderID,
@@ -332,52 +460,14 @@ func (s *Service) Place(ctx context.Context, ch channelDom.Channel, req Request)
 		if req.Payment.CardID != "" {
 			card, err := s.savedCard(ctx, *a, req.Payment.CardID)
 			if err != nil {
-				return nil, false, refuse(http.StatusUnprocessableEntity, "card_not_found", "That saved card isn't on your account any more — pick another.")
+				return charge, refuse(http.StatusUnprocessableEntity, "card_not_found", "That saved card isn't on your account any more — pick another.")
 			}
 			charge.CardRef, charge.Token = card.Ref, ""
 		} else {
 			charge.SaveCard = req.Payment.SaveCard
 		}
 	}
-	res, err := gw.Charge(ctx, charge)
-	switch {
-	case errors.Is(err, payment.ErrDeclined):
-		return nil, false, refuse(http.StatusPaymentRequired, "payment_declined", "The card was declined.")
-	case errors.Is(err, payment.ErrVerify):
-		return nil, false, refuse(http.StatusPaymentRequired, "verification_required", "Your bank needs you to verify this card — try again.")
-	case errors.Is(err, payment.ErrBadToken):
-		return nil, false, refuse(http.StatusPaymentRequired, "payment_declined", "The card couldn't be used.")
-	case errors.Is(err, payment.ErrNotConnected):
-		return nil, false, refuse(http.StatusConflict, "payment_unavailable", "Card payments aren't available right now — pay with cash.")
-	case err != nil:
-		return nil, false, err
-	}
-	o, err := s.build(ctx, ch, req, pctx, q, &res, token)
-	if err != nil {
-		s.refund(ctx, ch, gw, res, q.TotalCents)
-		return nil, false, err
-	}
-	if err := s.orders.Create(ctx, o); err != nil {
-		if errors.Is(err, order.ErrDuplicate) { // the same key, placed at the same moment
-			s.refund(ctx, ch, gw, res, q.TotalCents)
-			v, verr := s.byClient(ctx, ch, req.ClientOrderID)
-			if verr != nil {
-				return nil, false, err
-			}
-			return v, false, nil
-		}
-		s.refund(ctx, ch, gw, res, q.TotalCents)
-		return nil, false, err
-	}
-	if res.Saved != nil && req.Account != nil && s.accounts != nil {
-		card := customer.Card{Gateway: res.Gateway, Ref: res.Saved.Ref, Brand: res.Saved.Brand, Last4: res.Saved.Last4,
-			ExpMonth: res.Saved.ExpMonth, ExpYear: res.Saved.ExpYear}
-		if err := s.accounts.RememberCard(context.WithoutCancel(ctx), req.Account.ID, res.CustomerRef, card); err != nil {
-			s.logger.Warn().Err(err).Msg("saved card not remembered on the account (it stays on the processor)")
-		}
-	}
-	s.logger.Info().Ctx(ctx).Str("order_id", uuid.UUID(o.ID()).String()).Str("channel", string(ch.Kind)).Msg("channel order placed")
-	return viewOf(o, req.ClientOrderID, token), true, nil
+	return charge, nil
 }
 
 // newTrackToken is 24 random bytes, URL-safe base64 (32 characters).
@@ -588,6 +678,9 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 	if req.Account != nil {
 		id := req.Account.ID
 		ref.CustomerID = &id
+	}
+	if s.pl.placements != nil {
+		ref.Placement, ref.PlacementDueCheck = true, dueCheck(req.PromisedAt)
 	}
 	if res != nil && res.Status == payment.StatusAuthorized {
 		ref.Hold = &order.CardHold{Gateway: res.Gateway, Ref: res.Ref, AmountCents: q.TotalCents - q.TipCents, TipCents: q.TipCents,

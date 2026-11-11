@@ -1983,3 +1983,81 @@ RETURNING id, name, in_stock, out_until, out_hold;
 UPDATE modifier_options SET in_stock = $3, out_hold = (NOT $3::boolean AND $4::boolean), updated_at = now()
 WHERE id = $1 AND location_id = $2
 RETURNING id, name, in_stock, out_hold;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- Order placements (DURABILITY-PLAN.md: a channel order is a placement first)
+-- ───────────────────────────────────────────────────────────────────────────
+
+-- name: InsertPlacement :one
+-- A new placement, or nothing when the key exists (then GetPlacement).
+INSERT INTO order_placements (channel_id, client_order_id, tenant_id, location_id, body_hash, request,
+    card_token, verification_token, customer_id, operator, expires_at, state, result, worker)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+ON CONFLICT (channel_id, client_order_id) DO NOTHING
+RETURNING *;
+
+-- name: GetPlacement :one
+SELECT * FROM order_placements WHERE channel_id = $1 AND client_order_id = $2;
+
+-- name: ClaimPlacement :execrows
+-- Take over a pending placement nobody works on (or a stale worker's), as long
+-- as nobody else took it first (worker + attempts unchanged). New tokens (a
+-- retry after 3-D Secure) replace the stored ones.
+UPDATE order_placements
+SET worker = @worker, attempts = attempts + 1, waiting = '',
+    card_token = CASE WHEN @card_token::text <> '' THEN @card_token::text ELSE card_token END,
+    verification_token = CASE WHEN @verification_token::text <> '' THEN @verification_token::text ELSE verification_token END,
+    updated_at = now()
+WHERE channel_id = @channel_id AND client_order_id = @client_order_id AND state = 'pending'
+  AND worker = @old_worker AND attempts = @old_attempts;
+
+-- name: StartPlacementCharge :exec
+UPDATE order_placements SET charge_started = true, charge_cents = $3, updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2;
+
+-- name: FinishPlacement :execrows
+-- A final state other than placed (refused / expired / voided): the tokens go.
+UPDATE order_placements
+SET state = $3, result = $4, worker = '', waiting = '', card_token = '', verification_token = '', updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2 AND state = 'pending';
+
+-- name: ParkPlacement :exec
+-- Still pending, but nobody works on it until the caller comes back (3-D
+-- Secure, or a temporary failure the caller may retry).
+UPDATE order_placements SET waiting = $3, result = $4, worker = '', updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2 AND state = 'pending';
+
+-- name: MarkPlacementPlaced :execrows
+-- In the order's own transaction: the key and its result together.
+UPDATE order_placements
+SET state = 'placed', order_id = $3, due_alert_at = $4, worker = '', waiting = '', result = NULL,
+    card_token = '', verification_token = '', updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2 AND state = 'pending';
+
+-- name: ListStalePlacements :many
+-- Pending placements whose worker is another main (restarted) or silent too long.
+SELECT * FROM order_placements
+WHERE state = 'pending' AND waiting = '' AND (worker <> @worker OR updated_at < @before)
+ORDER BY updated_at
+LIMIT 20;
+
+-- name: ListParkedExpired :many
+-- Parked placements nobody came back for (their deadline, else 30 minutes).
+SELECT * FROM order_placements
+WHERE state = 'pending' AND waiting <> '' AND COALESCE(expires_at, created_at + interval '30 minutes') < now()
+LIMIT 50;
+
+-- name: ListPlacementDueAlerts :many
+SELECT * FROM order_placements
+WHERE state = 'placed' AND NOT due_alerted AND due_alert_at <= now()
+LIMIT 50;
+
+-- name: SetPlacementDueAlerted :exec
+UPDATE order_placements SET due_alerted = true WHERE channel_id = $1 AND client_order_id = $2;
+
+-- name: PrunePlacements :execrows
+DELETE FROM order_placements WHERE state <> 'pending' AND created_at < $1;
+
+-- name: CountActiveAgents :one
+-- The store has a Pi (an agent key not revoked): only then is "kitchen offline" checked.
+SELECT count(*)::bigint FROM devices WHERE location_id = $1 AND kind = 'agent' AND revoked_at IS NULL;

@@ -79,6 +79,8 @@ services:
       # Dev only: the pytest suites fail logins on purpose and run back to back;
       # the global failed-login ceiling (30 per 10 min elsewhere) would trip.
       LOGIN_GLOBAL_MAX: "1000"
+      # Dev only: the browser suites open tracking pages from one machine (staging/prod keep 120/min).
+      TRACK_PUBLIC_PER_MIN: "100000"
       OTEL_EXPORTER_OTLP_ENDPOINT:
       OTEL_EXPORTER_OTLP_HEADERS:
       OTEL_SERVICE_NAME:

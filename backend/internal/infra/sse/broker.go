@@ -13,6 +13,7 @@ package sse
 import (
 	"context"
 	"sync"
+	"time"
 
 	"quiccpos/main/internal/observability"
 
@@ -81,6 +82,10 @@ type Broker struct {
 	meters  observability.Meters
 	// onSubscribe hooks run (off the caller's path) whenever a stream opens.
 	onSubscribe []func(scope Scope)
+	// left is when each scope's last stream closed (Presence: how long its Pi
+	// has been away); started is when this broker began (a scope never seen).
+	left    map[Scope]time.Time
+	started time.Time
 }
 
 // OnSubscribe registers a hook called (in its own goroutine) whenever a
@@ -92,6 +97,8 @@ func New(lg zerolog.Logger, meters observability.Meters) *Broker {
 	return &Broker{
 		clients: make(map[Scope]map[chan Frame]struct{}),
 		devices: make(map[chan Frame]uuid.UUID),
+		left:    make(map[Scope]time.Time),
+		started: time.Now(),
 		logger:  lg.With().Str("module", "sse-broker").Logger(),
 		meters:  meters,
 	}
@@ -150,8 +157,23 @@ func (b *Broker) removeLocked(scope Scope, ch chan Frame) {
 		}
 		if len(set) == 0 {
 			delete(b.clients, scope)
+			b.left[scope] = time.Now()
 		}
 	}
+}
+
+// Presence is a scope's live streams and, when there are none, since when
+// (its last stream closed, else when this broker started).
+func (b *Broker) Presence(scope Scope) (streams int, awaySince time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if n := len(b.clients[scope]); n > 0 {
+		return n, time.Time{}
+	}
+	if t, ok := b.left[scope]; ok {
+		return 0, t
+	}
+	return 0, b.started
 }
 
 // DisconnectDevice closes every live stream opened by deviceID (a revoked

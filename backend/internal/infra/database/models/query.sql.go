@@ -391,6 +391,45 @@ func (q *Queries) ClaimEmailReceipts(ctx context.Context, limit int32) ([]EmailR
 	return items, nil
 }
 
+const claimPlacement = `-- name: ClaimPlacement :execrows
+UPDATE order_placements
+SET worker = $1, attempts = attempts + 1, waiting = '',
+    card_token = CASE WHEN $2::text <> '' THEN $2::text ELSE card_token END,
+    verification_token = CASE WHEN $3::text <> '' THEN $3::text ELSE verification_token END,
+    updated_at = now()
+WHERE channel_id = $4 AND client_order_id = $5 AND state = 'pending'
+  AND worker = $6 AND attempts = $7
+`
+
+type ClaimPlacementParams struct {
+	Worker            string      `json:"worker"`
+	CardToken         string      `json:"card_token"`
+	VerificationToken string      `json:"verification_token"`
+	ChannelID         pgtype.UUID `json:"channel_id"`
+	ClientOrderID     string      `json:"client_order_id"`
+	OldWorker         string      `json:"old_worker"`
+	OldAttempts       int32       `json:"old_attempts"`
+}
+
+// Take over a pending placement nobody works on (or a stale worker's), as long
+// as nobody else took it first (worker + attempts unchanged). New tokens (a
+// retry after 3-D Secure) replace the stored ones.
+func (q *Queries) ClaimPlacement(ctx context.Context, arg ClaimPlacementParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimPlacement,
+		arg.Worker,
+		arg.CardToken,
+		arg.VerificationToken,
+		arg.ChannelID,
+		arg.ClientOrderID,
+		arg.OldWorker,
+		arg.OldAttempts,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const clearCustomerDefaultAddress = `-- name: ClearCustomerDefaultAddress :exec
 UPDATE customer_addresses SET is_default = false WHERE customer_id = $1 AND is_default
 `
@@ -444,6 +483,18 @@ func (q *Queries) ClearStorePause(ctx context.Context, locationID pgtype.UUID) (
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const countActiveAgents = `-- name: CountActiveAgents :one
+SELECT count(*)::bigint FROM devices WHERE location_id = $1 AND kind = 'agent' AND revoked_at IS NULL
+`
+
+// The store has a Pi (an agent key not revoked): only then is "kitchen offline" checked.
+func (q *Queries) CountActiveAgents(ctx context.Context, locationID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveAgents, locationID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const countCustomerAddresses = `-- name: CountCustomerAddresses :one
@@ -2322,6 +2373,33 @@ func (q *Queries) FindDiagReportIDsByPrefix(ctx context.Context, prefix string) 
 	return items, nil
 }
 
+const finishPlacement = `-- name: FinishPlacement :execrows
+UPDATE order_placements
+SET state = $3, result = $4, worker = '', waiting = '', card_token = '', verification_token = '', updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2 AND state = 'pending'
+`
+
+type FinishPlacementParams struct {
+	ChannelID     pgtype.UUID `json:"channel_id"`
+	ClientOrderID string      `json:"client_order_id"`
+	State         string      `json:"state"`
+	Result        []byte      `json:"result"`
+}
+
+// A final state other than placed (refused / expired / voided): the tokens go.
+func (q *Queries) FinishPlacement(ctx context.Context, arg FinishPlacementParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishPlacement,
+		arg.ChannelID,
+		arg.ClientOrderID,
+		arg.State,
+		arg.Result,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const firstMenuViewOfKind = `-- name: FirstMenuViewOfKind :one
 SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at FROM menu_views WHERE location_id = $1 AND kind = $2 ORDER BY created_at ASC LIMIT 1
 `
@@ -3760,6 +3838,46 @@ func (q *Queries) GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID)
 	return items, nil
 }
 
+const getPlacement = `-- name: GetPlacement :one
+SELECT channel_id, client_order_id, tenant_id, location_id, body_hash, request, card_token, verification_token, customer_id, operator, expires_at, state, waiting, result, order_id, worker, attempts, charge_started, charge_cents, due_alert_at, due_alerted, created_at, updated_at FROM order_placements WHERE channel_id = $1 AND client_order_id = $2
+`
+
+type GetPlacementParams struct {
+	ChannelID     pgtype.UUID `json:"channel_id"`
+	ClientOrderID string      `json:"client_order_id"`
+}
+
+func (q *Queries) GetPlacement(ctx context.Context, arg GetPlacementParams) (OrderPlacement, error) {
+	row := q.db.QueryRow(ctx, getPlacement, arg.ChannelID, arg.ClientOrderID)
+	var i OrderPlacement
+	err := row.Scan(
+		&i.ChannelID,
+		&i.ClientOrderID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.BodyHash,
+		&i.Request,
+		&i.CardToken,
+		&i.VerificationToken,
+		&i.CustomerID,
+		&i.Operator,
+		&i.ExpiresAt,
+		&i.State,
+		&i.Waiting,
+		&i.Result,
+		&i.OrderID,
+		&i.Worker,
+		&i.Attempts,
+		&i.ChargeStarted,
+		&i.ChargeCents,
+		&i.DueAlertAt,
+		&i.DueAlerted,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getPrinterByID = `-- name: GetPrinterByID :one
 SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
 FROM printers WHERE id = $1
@@ -4562,6 +4680,82 @@ func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventPa
 		arg.SchemaVersion,
 	)
 	return err
+}
+
+const insertPlacement = `-- name: InsertPlacement :one
+
+INSERT INTO order_placements (channel_id, client_order_id, tenant_id, location_id, body_hash, request,
+    card_token, verification_token, customer_id, operator, expires_at, state, result, worker)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+ON CONFLICT (channel_id, client_order_id) DO NOTHING
+RETURNING channel_id, client_order_id, tenant_id, location_id, body_hash, request, card_token, verification_token, customer_id, operator, expires_at, state, waiting, result, order_id, worker, attempts, charge_started, charge_cents, due_alert_at, due_alerted, created_at, updated_at
+`
+
+type InsertPlacementParams struct {
+	ChannelID         pgtype.UUID        `json:"channel_id"`
+	ClientOrderID     string             `json:"client_order_id"`
+	TenantID          pgtype.UUID        `json:"tenant_id"`
+	LocationID        pgtype.UUID        `json:"location_id"`
+	BodyHash          string             `json:"body_hash"`
+	Request           []byte             `json:"request"`
+	CardToken         string             `json:"card_token"`
+	VerificationToken string             `json:"verification_token"`
+	CustomerID        pgtype.UUID        `json:"customer_id"`
+	Operator          []byte             `json:"operator"`
+	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
+	State             string             `json:"state"`
+	Result            []byte             `json:"result"`
+	Worker            string             `json:"worker"`
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Order placements (DURABILITY-PLAN.md: a channel order is a placement first)
+// ───────────────────────────────────────────────────────────────────────────
+// A new placement, or nothing when the key exists (then GetPlacement).
+func (q *Queries) InsertPlacement(ctx context.Context, arg InsertPlacementParams) (OrderPlacement, error) {
+	row := q.db.QueryRow(ctx, insertPlacement,
+		arg.ChannelID,
+		arg.ClientOrderID,
+		arg.TenantID,
+		arg.LocationID,
+		arg.BodyHash,
+		arg.Request,
+		arg.CardToken,
+		arg.VerificationToken,
+		arg.CustomerID,
+		arg.Operator,
+		arg.ExpiresAt,
+		arg.State,
+		arg.Result,
+		arg.Worker,
+	)
+	var i OrderPlacement
+	err := row.Scan(
+		&i.ChannelID,
+		&i.ClientOrderID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.BodyHash,
+		&i.Request,
+		&i.CardToken,
+		&i.VerificationToken,
+		&i.CustomerID,
+		&i.Operator,
+		&i.ExpiresAt,
+		&i.State,
+		&i.Waiting,
+		&i.Result,
+		&i.OrderID,
+		&i.Worker,
+		&i.Attempts,
+		&i.ChargeStarted,
+		&i.ChargeCents,
+		&i.DueAlertAt,
+		&i.DueAlerted,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const insertPrinterIPChange = `-- name: InsertPrinterIPChange :exec
@@ -6821,6 +7015,107 @@ func (q *Queries) ListOrderGeoByIDs(ctx context.Context, arg ListOrderGeoByIDsPa
 	return items, nil
 }
 
+const listParkedExpired = `-- name: ListParkedExpired :many
+SELECT channel_id, client_order_id, tenant_id, location_id, body_hash, request, card_token, verification_token, customer_id, operator, expires_at, state, waiting, result, order_id, worker, attempts, charge_started, charge_cents, due_alert_at, due_alerted, created_at, updated_at FROM order_placements
+WHERE state = 'pending' AND waiting <> '' AND COALESCE(expires_at, created_at + interval '30 minutes') < now()
+LIMIT 50
+`
+
+// Parked placements nobody came back for (their deadline, else 30 minutes).
+func (q *Queries) ListParkedExpired(ctx context.Context) ([]OrderPlacement, error) {
+	rows, err := q.db.Query(ctx, listParkedExpired)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrderPlacement
+	for rows.Next() {
+		var i OrderPlacement
+		if err := rows.Scan(
+			&i.ChannelID,
+			&i.ClientOrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.BodyHash,
+			&i.Request,
+			&i.CardToken,
+			&i.VerificationToken,
+			&i.CustomerID,
+			&i.Operator,
+			&i.ExpiresAt,
+			&i.State,
+			&i.Waiting,
+			&i.Result,
+			&i.OrderID,
+			&i.Worker,
+			&i.Attempts,
+			&i.ChargeStarted,
+			&i.ChargeCents,
+			&i.DueAlertAt,
+			&i.DueAlerted,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPlacementDueAlerts = `-- name: ListPlacementDueAlerts :many
+SELECT channel_id, client_order_id, tenant_id, location_id, body_hash, request, card_token, verification_token, customer_id, operator, expires_at, state, waiting, result, order_id, worker, attempts, charge_started, charge_cents, due_alert_at, due_alerted, created_at, updated_at FROM order_placements
+WHERE state = 'placed' AND NOT due_alerted AND due_alert_at <= now()
+LIMIT 50
+`
+
+func (q *Queries) ListPlacementDueAlerts(ctx context.Context) ([]OrderPlacement, error) {
+	rows, err := q.db.Query(ctx, listPlacementDueAlerts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrderPlacement
+	for rows.Next() {
+		var i OrderPlacement
+		if err := rows.Scan(
+			&i.ChannelID,
+			&i.ClientOrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.BodyHash,
+			&i.Request,
+			&i.CardToken,
+			&i.VerificationToken,
+			&i.CustomerID,
+			&i.Operator,
+			&i.ExpiresAt,
+			&i.State,
+			&i.Waiting,
+			&i.Result,
+			&i.OrderID,
+			&i.Worker,
+			&i.Attempts,
+			&i.ChargeStarted,
+			&i.ChargeCents,
+			&i.DueAlertAt,
+			&i.DueAlerted,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPlatformKeys = `-- name: ListPlatformKeys :many
 SELECT id, name, key_hash, key_prefix, revoked_at, last_used_at, created_at FROM platform_keys ORDER BY created_at
 `
@@ -7154,6 +7449,63 @@ func (q *Queries) ListSoldOutItems(ctx context.Context, locationID pgtype.UUID) 
 	for rows.Next() {
 		var i ListSoldOutItemsRow
 		if err := rows.Scan(&i.ID, &i.Name, &i.OutUntil); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStalePlacements = `-- name: ListStalePlacements :many
+SELECT channel_id, client_order_id, tenant_id, location_id, body_hash, request, card_token, verification_token, customer_id, operator, expires_at, state, waiting, result, order_id, worker, attempts, charge_started, charge_cents, due_alert_at, due_alerted, created_at, updated_at FROM order_placements
+WHERE state = 'pending' AND waiting = '' AND (worker <> $1 OR updated_at < $2)
+ORDER BY updated_at
+LIMIT 20
+`
+
+type ListStalePlacementsParams struct {
+	Worker string             `json:"worker"`
+	Before pgtype.Timestamptz `json:"before"`
+}
+
+// Pending placements whose worker is another main (restarted) or silent too long.
+func (q *Queries) ListStalePlacements(ctx context.Context, arg ListStalePlacementsParams) ([]OrderPlacement, error) {
+	rows, err := q.db.Query(ctx, listStalePlacements, arg.Worker, arg.Before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrderPlacement
+	for rows.Next() {
+		var i OrderPlacement
+		if err := rows.Scan(
+			&i.ChannelID,
+			&i.ClientOrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.BodyHash,
+			&i.Request,
+			&i.CardToken,
+			&i.VerificationToken,
+			&i.CustomerID,
+			&i.Operator,
+			&i.ExpiresAt,
+			&i.State,
+			&i.Waiting,
+			&i.Result,
+			&i.OrderID,
+			&i.Worker,
+			&i.Attempts,
+			&i.ChargeStarted,
+			&i.ChargeCents,
+			&i.DueAlertAt,
+			&i.DueAlerted,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -7627,6 +7979,34 @@ func (q *Queries) MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams
 	return items, nil
 }
 
+const markPlacementPlaced = `-- name: MarkPlacementPlaced :execrows
+UPDATE order_placements
+SET state = 'placed', order_id = $3, due_alert_at = $4, worker = '', waiting = '', result = NULL,
+    card_token = '', verification_token = '', updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2 AND state = 'pending'
+`
+
+type MarkPlacementPlacedParams struct {
+	ChannelID     pgtype.UUID        `json:"channel_id"`
+	ClientOrderID string             `json:"client_order_id"`
+	OrderID       pgtype.UUID        `json:"order_id"`
+	DueAlertAt    pgtype.Timestamptz `json:"due_alert_at"`
+}
+
+// In the order's own transaction: the key and its result together.
+func (q *Queries) MarkPlacementPlaced(ctx context.Context, arg MarkPlacementPlacedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markPlacementPlaced,
+		arg.ChannelID,
+		arg.ClientOrderID,
+		arg.OrderID,
+		arg.DueAlertAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const moveMenuCategory = `-- name: MoveMenuCategory :exec
 UPDATE menu_categories SET menu_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2
 `
@@ -7700,6 +8080,30 @@ func (q *Queries) MovePrinterIP(ctx context.Context, arg MovePrinterIPParams) (P
 		&i.MAC,
 	)
 	return i, err
+}
+
+const parkPlacement = `-- name: ParkPlacement :exec
+UPDATE order_placements SET waiting = $3, result = $4, worker = '', updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2 AND state = 'pending'
+`
+
+type ParkPlacementParams struct {
+	ChannelID     pgtype.UUID `json:"channel_id"`
+	ClientOrderID string      `json:"client_order_id"`
+	Waiting       string      `json:"waiting"`
+	Result        []byte      `json:"result"`
+}
+
+// Still pending, but nobody works on it until the caller comes back (3-D
+// Secure, or a temporary failure the caller may retry).
+func (q *Queries) ParkPlacement(ctx context.Context, arg ParkPlacementParams) error {
+	_, err := q.db.Exec(ctx, parkPlacement,
+		arg.ChannelID,
+		arg.ClientOrderID,
+		arg.Waiting,
+		arg.Result,
+	)
+	return err
 }
 
 const pendingEventsForHandler = `-- name: PendingEventsForHandler :many
@@ -7844,6 +8248,18 @@ DELETE FROM geo_external_work WHERE discard_at <= $1::timestamptz
 
 func (q *Queries) PruneExternalWork(ctx context.Context, now pgtype.Timestamptz) (int64, error) {
 	result, err := q.db.Exec(ctx, pruneExternalWork, now)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const prunePlacements = `-- name: PrunePlacements :execrows
+DELETE FROM order_placements WHERE state <> 'pending' AND created_at < $1
+`
+
+func (q *Queries) PrunePlacements(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, prunePlacements, createdAt)
 	if err != nil {
 		return 0, err
 	}
@@ -9268,6 +9684,20 @@ func (q *Queries) SetOrderGeoOutsideArea(ctx context.Context, arg SetOrderGeoOut
 	return result.RowsAffected(), nil
 }
 
+const setPlacementDueAlerted = `-- name: SetPlacementDueAlerted :exec
+UPDATE order_placements SET due_alerted = true WHERE channel_id = $1 AND client_order_id = $2
+`
+
+type SetPlacementDueAlertedParams struct {
+	ChannelID     pgtype.UUID `json:"channel_id"`
+	ClientOrderID string      `json:"client_order_id"`
+}
+
+func (q *Queries) SetPlacementDueAlerted(ctx context.Context, arg SetPlacementDueAlertedParams) error {
+	_, err := q.db.Exec(ctx, setPlacementDueAlerted, arg.ChannelID, arg.ClientOrderID)
+	return err
+}
+
 const setPrinterMAC = `-- name: SetPrinterMAC :exec
 UPDATE printers SET mac = $2, updated_at = now() WHERE id = $1
 `
@@ -9585,6 +10015,22 @@ func (q *Queries) SquareConnectionsToRefresh(ctx context.Context, refreshedAt pg
 		return nil, err
 	}
 	return items, nil
+}
+
+const startPlacementCharge = `-- name: StartPlacementCharge :exec
+UPDATE order_placements SET charge_started = true, charge_cents = $3, updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2
+`
+
+type StartPlacementChargeParams struct {
+	ChannelID     pgtype.UUID `json:"channel_id"`
+	ClientOrderID string      `json:"client_order_id"`
+	ChargeCents   int64       `json:"charge_cents"`
+}
+
+func (q *Queries) StartPlacementCharge(ctx context.Context, arg StartPlacementChargeParams) error {
+	_, err := q.db.Exec(ctx, startPlacementCharge, arg.ChannelID, arg.ClientOrderID, arg.ChargeCents)
+	return err
 }
 
 const touchChannel = `-- name: TouchChannel :exec

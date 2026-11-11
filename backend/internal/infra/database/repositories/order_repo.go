@@ -106,6 +106,16 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 			}
 			return fmt.Errorf("create channel order: %w", err)
 		}
+		if ch.Placement {
+			n, err := q.MarkPlacementPlaced(ctx, models.MarkPlacementPlacedParams{ChannelID: toPgUUID(ch.ID), ClientOrderID: ch.ClientOrderID,
+				OrderID: toPgUUID(uuid.UUID(o.ID())), DueAlertAt: pgTS(ch.PlacementDueCheck)})
+			if err != nil {
+				return fmt.Errorf("mark placement placed: %w", err)
+			}
+			if n != 1 {
+				return order.ErrPlacementGone
+			}
+		}
 		if h := ch.Hold; h != nil {
 			if err := q.InsertCardHold(ctx, models.InsertCardHoldParams{
 				OrderID: toPgUUID(uuid.UUID(o.ID())), TenantID: toPgUUID(uuid.UUID(o.TenantID())),

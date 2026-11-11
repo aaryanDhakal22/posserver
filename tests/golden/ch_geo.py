@@ -77,7 +77,9 @@ def _run(rec: Rec, admin: requests.Session, a: Store, sqs, fake: FakeGeo) -> Non
                                                                    "zip": "07002", "suite": "", "cross_streets": "", "buz": ""})
             rec.alias(o["order_id"], f"order_id:{name}")
             sqs.send_message(QueueUrl=SQS_QUEUE_URL, MessageBody=json.dumps(o), MessageAttributes=online_attrs())
-            f = s.wait_event("order", lambda d: d.get("source_event_id") == str(o["order_id"]), timeout=30)
+            # keep_others: its order.geo push can come before this order frame on a fast machine
+            f = s.wait_event("order", lambda d: d.get("source_event_id") == str(o["order_id"]), timeout=30,
+                             keep_others=True)
             return f["id"] if f else ""
 
         known = deliver("known", streets["known"])

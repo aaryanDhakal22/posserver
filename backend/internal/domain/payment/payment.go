@@ -90,6 +90,18 @@ type Gateway interface {
 }
 
 // Hold is an authorized card payment waiting to be captured.
+// KeyVoider is an optional Gateway upgrade: VoidByKey releases whatever a
+// Charge with that idempotency key made, without making anything (a
+// placement that expired after its card call — DURABILITY-PLAN.md). No
+// payment for the key is not an error.
+type KeyVoider interface {
+	VoidByKey(ctx context.Context, locationID uuid.UUID, idempotencyKey string) error
+}
+
+// ErrCanceled: the key's payment exists but was canceled (a retry can't
+// revive it — the channel places the order again under a new key).
+var ErrCanceled = errors.New("the card payment for this order was canceled")
+
 type Hold struct {
 	OrderID     uuid.UUID
 	LocationID  uuid.UUID
@@ -178,6 +190,16 @@ func (t *TestCard) Refund(_ context.Context, _ uuid.UUID, ref string, amountCent
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.refunds[ref] += amountCents
+	return nil
+}
+
+// VoidByKey refunds the test card's charge made with that key, if any.
+func (t *TestCard) VoidByKey(_ context.Context, _ uuid.UUID, key string) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if r, ok := t.charges[key]; ok {
+		t.refunds[r.Ref] += 1 // marked: nothing was captured for real
+	}
 	return nil
 }
 

@@ -4,7 +4,7 @@
 // GET /channel/v1/openapi.json and pytest validates every /channel/v1 answer
 // against it, so the document can't drift from what main does (Air doesn't
 // watch .json: change this file after editing the document.) Last: the
-// store status week (weborder stage 4).
+// order placements: 202 pending, by-key, expires_at (DURABILITY-PLAN.md).
 package channelapi
 
 import _ "embed"

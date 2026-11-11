@@ -29,11 +29,17 @@ type Querier interface {
 	// two minutes so a slow capture isn't picked up twice.
 	ClaimCardHolds(ctx context.Context, limit int32) ([]CardHold, error)
 	ClaimEmailReceipts(ctx context.Context, limit int32) ([]EmailReceipt, error)
+	// Take over a pending placement nobody works on (or a stale worker's), as long
+	// as nobody else took it first (worker + attempts unchanged). New tokens (a
+	// retry after 3-D Secure) replace the stored ones.
+	ClaimPlacement(ctx context.Context, arg ClaimPlacementParams) (int64, error)
 	ClearCustomerDefaultAddress(ctx context.Context, customerID pgtype.UUID) error
 	// Unflag the location's current receipt printer (one per location).
 	ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUID) error
 	ClearSitePrimary(ctx context.Context, locationID pgtype.UUID) error
 	ClearStorePause(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error)
+	// The store has a Pi (an agent key not revoked): only then is "kitchen offline" checked.
+	CountActiveAgents(ctx context.Context, locationID pgtype.UUID) (int64, error)
 	CountCustomerAddresses(ctx context.Context, customerID pgtype.UUID) (int64, error)
 	CountItemsForGroup(ctx context.Context, arg CountItemsForGroupParams) (int64, error)
 	// outbox.events.pending per store: one row per tenant (0 when drained), so a
@@ -158,6 +164,8 @@ type Querier interface {
 	ExpireOutUntil(ctx context.Context) (int64, error)
 	// The page links carry only the first 8 hex chars of a report id.
 	FindDiagReportIDsByPrefix(ctx context.Context, prefix string) ([]pgtype.UUID, error)
+	// A final state other than placed (refused / expired / voided): the tokens go.
+	FinishPlacement(ctx context.Context, arg FinishPlacementParams) (int64, error)
 	FirstMenuViewOfKind(ctx context.Context, arg FirstMenuViewOfKindParams) (MenuView, error)
 	GetActiveDeviceByKeyHash(ctx context.Context, keyHash string) (Device, error)
 	GetActiveOperatorTokenByHash(ctx context.Context, tokenHash string) (GetActiveOperatorTokenByHashRow, error)
@@ -213,6 +221,7 @@ type Querier interface {
 	GetOrderInScopeForUpdate(ctx context.Context, arg GetOrderInScopeForUpdateParams) (Order, error)
 	GetOrdersPageInScope(ctx context.Context, arg GetOrdersPageInScopeParams) ([]Order, error)
 	GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error)
+	GetPlacement(ctx context.Context, arg GetPlacementParams) (OrderPlacement, error)
 	GetPrinterByID(ctx context.Context, id pgtype.UUID) (Printer, error)
 	GetSiteDomain(ctx context.Context, host string) (SiteDomain, error)
 	GetSiteImage(ctx context.Context, arg GetSiteImageParams) (GetSiteImageRow, error)
@@ -253,6 +262,11 @@ type Querier interface {
 	// Outbox
 	// ───────────────────────────────────────────────────────────────────────────
 	InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventParams) error
+	// ───────────────────────────────────────────────────────────────────────────
+	// Order placements (DURABILITY-PLAN.md: a channel order is a placement first)
+	// ───────────────────────────────────────────────────────────────────────────
+	// A new placement, or nothing when the key exists (then GetPlacement).
+	InsertPlacement(ctx context.Context, arg InsertPlacementParams) (OrderPlacement, error)
 	InsertPrinterIPChange(ctx context.Context, arg InsertPrinterIPChangeParams) error
 	InsertSiteDomain(ctx context.Context, arg InsertSiteDomainParams) (SiteDomain, error)
 	InsertSiteImage(ctx context.Context, arg InsertSiteImageParams) (InsertSiteImageRow, error)
@@ -318,6 +332,9 @@ type Querier interface {
 	ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) ([]ModifierOption, error)
 	ListOptionsByLocation(ctx context.Context, locationID pgtype.UUID) ([]ModifierOption, error)
 	ListOrderGeoByIDs(ctx context.Context, arg ListOrderGeoByIDsParams) ([]ListOrderGeoByIDsRow, error)
+	// Parked placements nobody came back for (their deadline, else 30 minutes).
+	ListParkedExpired(ctx context.Context) ([]OrderPlacement, error)
+	ListPlacementDueAlerts(ctx context.Context) ([]OrderPlacement, error)
 	ListPlatformKeys(ctx context.Context) ([]PlatformKey, error)
 	// ─── Pricing + deals (main 3.0 step 4) ──────────────────────────────────────
 	ListPricingSettings(ctx context.Context, locationID pgtype.UUID) ([]PricingSetting, error)
@@ -336,6 +353,8 @@ type Querier interface {
 	ListRoutingByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListRoutingByLocationRow, error)
 	ListSiteDomains(ctx context.Context, locationID pgtype.UUID) ([]SiteDomain, error)
 	ListSoldOutItems(ctx context.Context, locationID pgtype.UUID) ([]ListSoldOutItemsRow, error)
+	// Pending placements whose worker is another main (restarted) or silent too long.
+	ListStalePlacements(ctx context.Context, arg ListStalePlacementsParams) ([]OrderPlacement, error)
 	// weborder stage 3: sold out from Quibase (through the Pi).
 	ListStockItems(ctx context.Context, locationID pgtype.UUID) ([]ListStockItemsRow, error)
 	ListStockOptions(ctx context.Context, locationID pgtype.UUID) ([]ListStockOptionsRow, error)
@@ -359,6 +378,8 @@ type Querier interface {
 	// Agent reliability + recovery (00009) -------------------------------------------
 	// Returns received_at of each newly acked order (orders.ack.latency).
 	MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams) ([]pgtype.Timestamptz, error)
+	// In the order's own transaction: the key and its result together.
+	MarkPlacementPlaced(ctx context.Context, arg MarkPlacementPlacedParams) (int64, error)
 	// The bank import: a category moves to another menu of the location.
 	MoveMenuCategory(ctx context.Context, arg MoveMenuCategoryParams) error
 	// The bank import (bankimport): an item moves to another category of the location.
@@ -367,6 +388,9 @@ type Querier interface {
 	// has the IP the Pi saw (a manager edit in between wins); an empty mac keeps
 	// the stored one.
 	MovePrinterIP(ctx context.Context, arg MovePrinterIPParams) (Printer, error)
+	// Still pending, but nobody works on it until the caller comes back (3-D
+	// Secure, or a temporary failure the caller may retry).
+	ParkPlacement(ctx context.Context, arg ParkPlacementParams) error
 	PendingEventsForHandler(ctx context.Context, arg PendingEventsForHandlerParams) ([]PendingEventsForHandlerRow, error)
 	PruneAgentBackups(ctx context.Context, locationID pgtype.UUID) error
 	PruneAppReleases(ctx context.Context, arg PruneAppReleasesParams) error
@@ -375,6 +399,7 @@ type Querier interface {
 	PruneDiagReports(ctx context.Context, receivedAt pgtype.Timestamptz) (int64, error)
 	PruneExternalStops(ctx context.Context, now pgtype.Timestamptz) (int64, error)
 	PruneExternalWork(ctx context.Context, now pgtype.Timestamptz) (int64, error)
+	PrunePlacements(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error)
 	PublishSiteDraft(ctx context.Context, arg PublishSiteDraftParams) (PublishSiteDraftRow, error)
 	// A final receipt only for an order that got a receipt when it was placed.
 	QueueFinalReceipt(ctx context.Context, orderID pgtype.UUID) (int64, error)
@@ -474,6 +499,7 @@ type Querier interface {
 	SetOrderCardPayment(ctx context.Context, arg SetOrderCardPaymentParams) error
 	// A new radius flipped the flag: re-push the row (the worker sends order.geo).
 	SetOrderGeoOutsideArea(ctx context.Context, arg SetOrderGeoOutsideAreaParams) (int64, error)
+	SetPlacementDueAlerted(ctx context.Context, arg SetPlacementDueAlertedParams) error
 	SetPrinterMAC(ctx context.Context, arg SetPrinterMACParams) error
 	SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptParams) (Printer, error)
 	SetSiteDomainVerified(ctx context.Context, arg SetSiteDomainVerifiedParams) (SiteDomain, error)
@@ -493,6 +519,7 @@ type Querier interface {
 	SettleAgentUpdateRequest(ctx context.Context, arg SettleAgentUpdateRequestParams) (int64, error)
 	SquareConnectionsByMerchant(ctx context.Context, merchantID string) ([]SquareConnection, error)
 	SquareConnectionsToRefresh(ctx context.Context, refreshedAt pgtype.Timestamptz) ([]SquareConnection, error)
+	StartPlacementCharge(ctx context.Context, arg StartPlacementChargeParams) error
 	TouchChannel(ctx context.Context, id pgtype.UUID) error
 	TouchDevice(ctx context.Context, id pgtype.UUID) error
 	TouchOperatorToken(ctx context.Context, id pgtype.UUID) error

@@ -34,6 +34,7 @@ import (
 	cardholdApp "quiccpos/main/internal/app/cardhold"
 	channelApp "quiccpos/main/internal/app/channel"
 	"quiccpos/main/internal/app/customers"
+	"quiccpos/main/internal/app/kitchen"
 	menuApp "quiccpos/main/internal/app/menu"
 	menuviewApp "quiccpos/main/internal/app/menuview"
 	"quiccpos/main/internal/app/onlinectl"
@@ -294,6 +295,10 @@ func main() {
 
 	// The notification port (3.0): problems with channel orders → the log and
 	// the store owner's phones (+ the admin's).
+	var devNotices *notify.Recorder // dev: tests read the owner notices
+	if cfg.AppConfig.AppEnv == "dev" {
+		devNotices = &notify.Recorder{}
+	}
 	notifier := notify.Fanout{notify.Log{Logger: lgr}, notify.Pushover{Pager: ownerPager, Devices: func(ctx context.Context, locationID uuid.UUID) ([]string, error) {
 		l, err := tenancyService.GetLocation(ctx, locationID)
 		if err != nil {
@@ -301,6 +306,9 @@ func main() {
 		}
 		return tenancyDomain.OwnerDevices(l.Config), nil
 	}}}
+	if devNotices != nil {
+		notifier = append(notifier, devNotices)
+	}
 	trackingService.Wire(svc, tenancyService, notifier)
 	go trackingService.RunMaintenance(ctx)
 	requester.RegisterInbound(diagApp.MsgDiagReport, diagService.HandleRPC)
@@ -399,6 +407,15 @@ func main() {
 		repositories.NewChannelOrderRepository(pool), receipts.StoreFuncs{Host: siteService.PrimaryHost, Reply: customerService.ReplyEmail},
 		squareRepo, mailSender, mailFrom, lgr)
 	go receiptService.Run(ctx)
+	// Placements (DURABILITY-PLAN.md): the key before any money moves, the
+	// work detached from the request, the sweeper, kitchen_offline.
+	orderPortService.SetPlacements(repositories.NewPlacementRepository(pool), uuid.NewString())
+	kitchenLiveness := kitchen.New(broker, printerCache, repositories.NewPlacementRepository(pool))
+	orderPortService.SetKitchen(kitchenLiveness)
+	orderPortService.SetSweeper(channelService, customerService)
+	orderPortService.SetMailer(receiptService)
+	orderPortService.SetMeters(&meters)
+	go orderPortService.Run(ctx)
 	cardHolds.OnAmountChanged(receiptService.QueueFinal)
 	floorService.OnCancelled(receiptService.QueueFinal)
 
@@ -432,45 +449,48 @@ func main() {
 	tLogger := lgr.With().Str("module", "transport").Logger()
 	transport.AddDefaultMiddlewares(e, cfg.OTELConfig.ServiceName, &tLogger)
 	transport.AddRoutes(e, transport.RouterDeps{
-		Service:         svc,
-		AuthService:     authService,
-		TenancyService:  tenancyService,
-		Broker:          broker,
-		Publisher:       broker,
-		AdminAPIKey:     cfg.AppConfig.AdminAPIKey,
-		Version:         version,
-		Commit:          commit,
-		Pool:            pool,
-		SQS:             sqsClient,
-		QueueURL:        cfg.SQSConfig.QueueURL,
-		Meters:          meters,
-		Logger:          tLogger,
-		SessionSigner:   sessionSigner,
-		Requester:       requester,
-		PrinterCache:    printerCache,
-		MenuService:     menuService,
-		FloorService:    floorService,
-		OperatorService: operatorService,
-		ChannelService:  channelService,
-		Site:            siteService,
-		Square:          squareService,
-		CardHolds:       cardHolds,
-		SquareFake:      sqFake,
-		Customers:       customerService,
-		Receipts:        receiptService,
-		FakeCodes:       fakeCodes,
-		FakeMail:        fakeMail,
-		MenuViewService: menuViewService,
-		BankImport:      bankImportService,
-		StoreStatus:     storeStatusService,
-		Pricing:         pricingService,
-		OrderPort:       orderPortService,
-		Tracking:        trackingService,
-		AgentSync:       agentSync,
-		Diag:            diagService,
-		Geo:             geoService,
-		AlertSender:     ownerPager,
-		AppEnv:          cfg.AppConfig.AppEnv,
+		Service:           svc,
+		AuthService:       authService,
+		TenancyService:    tenancyService,
+		Broker:            broker,
+		Publisher:         broker,
+		AdminAPIKey:       cfg.AppConfig.AdminAPIKey,
+		Version:           version,
+		Commit:            commit,
+		Pool:              pool,
+		SQS:               sqsClient,
+		QueueURL:          cfg.SQSConfig.QueueURL,
+		Meters:            meters,
+		Logger:            tLogger,
+		SessionSigner:     sessionSigner,
+		Requester:         requester,
+		PrinterCache:      printerCache,
+		MenuService:       menuService,
+		FloorService:      floorService,
+		OperatorService:   operatorService,
+		ChannelService:    channelService,
+		Site:              siteService,
+		Square:            squareService,
+		CardHolds:         cardHolds,
+		SquareFake:        sqFake,
+		Customers:         customerService,
+		Receipts:          receiptService,
+		FakeCodes:         fakeCodes,
+		FakeMail:          fakeMail,
+		MenuViewService:   menuViewService,
+		BankImport:        bankImportService,
+		StoreStatus:       storeStatusService,
+		Kitchen:           kitchenLiveness,
+		Pricing:           pricingService,
+		OrderPort:         orderPortService,
+		Tracking:          trackingService,
+		TrackPublicPerMin: handler.TrackPublicPerMin(),
+		AgentSync:         agentSync,
+		Diag:              diagService,
+		Geo:               geoService,
+		AlertSender:       ownerPager,
+		AppEnv:            cfg.AppConfig.AppEnv,
+		DevNotices:        devNotices,
 	})
 
 	serverLogger := lgr.With().Str("module", "server").Logger()

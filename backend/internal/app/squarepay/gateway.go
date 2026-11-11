@@ -108,12 +108,30 @@ func (g *Gateway) Charge(ctx context.Context, c payment.Charge) (payment.Result,
 	default:
 		return payment.Result{}, err
 	}
+	if p.Status == square.StatusCanceled || p.Status == "FAILED" {
+		// The same key again (a retry), but its payment was voided meanwhile.
+		return payment.Result{}, payment.ErrCanceled
+	}
 	status := payment.StatusAuthorized
 	if p.Status == square.StatusCompleted {
 		status = payment.StatusCaptured
 	}
 	return payment.Result{Gateway: GatewayName, Ref: p.ID, Status: status, Last4: p.Last4(), Brand: p.Brand(), AuthCode: p.AuthCode(),
 		Saved: saved, CustomerRef: customerRef}, nil
+}
+
+// VoidByKey cancels whatever CreatePayment made with the hold key built from
+// idempotencyKey (nothing there is fine).
+func (g *Gateway) VoidByKey(ctx context.Context, locationID uuid.UUID, idempotencyKey string) error {
+	tok, _, err := g.s.conn(ctx, locationID)
+	if err != nil {
+		return connErr(err)
+	}
+	err = g.client().CancelByIdempotencyKey(ctx, tok, key("hold", idempotencyKey))
+	if square.StatusOf(err) == 404 {
+		return nil
+	}
+	return err
 }
 
 // DisableSavedCard turns a customer's saved card off at Square.

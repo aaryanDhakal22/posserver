@@ -75,6 +75,7 @@ def test_sold_out_from_the_pi(admin, store, mgr) -> None:
 
 def test_cancel_after_accept_releases_the_hold(admin, store, mgr) -> None:
     _connect(mgr)
+    store.online()  # the Pi is there (it plays the floor below)
     m = _menu(mgr)
     web = _channel(admin, store, "web")
     o = _ok(_place(web, _order([_pizza(m)], method="card", token="cnon:card-nonce-ok")), 201)

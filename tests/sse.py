@@ -25,6 +25,7 @@ class SSEStream:
         if self.resp.status_code != 200:
             raise AssertionError(f"SSE connect failed: {self.resp.status_code} {self.resp.text}")
         self.frames: Queue = Queue()
+        self.kept: list[dict] = []  # frames a wait_event(keep_others=True) read past, for later waits
         self._stop = threading.Event()
         self._done = threading.Event()
         threading.Thread(target=self._read, daemon=True).start()
@@ -58,19 +59,26 @@ class SSEStream:
         except Empty as exc:
             raise AssertionError(f"no SSE frame within {timeout}s") from exc
 
-    def wait_event(self, event: str, predicate=lambda d: True, *, timeout: float = 20.0) -> dict | None:
-        """Return the decoded data of the first `event` frame matching predicate."""
+    def wait_event(self, event: str, predicate=lambda d: True, *, timeout: float = 20.0,
+                   keep_others: bool = False) -> dict | None:
+        """Return the decoded data of the first `event` frame matching predicate. Frames read past are
+        dropped, unless keep_others: then they're kept for the next waits (which look there first) —
+        for a frame that may arrive before the one being waited for (a fast main pushes order.geo
+        right behind, or ahead of, its order frame)."""
+        for i, f in enumerate(self.kept):
+            if f["event"] == event and predicate(d := json.loads(f["data"])):
+                del self.kept[i]
+                return d
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
                 f = self.frames.get(timeout=0.5)
             except Empty:
                 continue
-            if f["event"] != event:
-                continue
-            d = json.loads(f["data"])
-            if predicate(d):
+            if f["event"] == event and predicate(d := json.loads(f["data"])):
                 return d
+            if keep_others:
+                self.kept.append(f)
         return None
 
     def alive(self) -> bool:

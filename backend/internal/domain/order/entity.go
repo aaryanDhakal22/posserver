@@ -297,7 +297,16 @@ type ChannelRef struct {
 	Hold          *CardHold  // an online card hold to capture later (weborder stage 2)
 	CustomerID    *uuid.UUID // the signed-in customer's account (weborder stage 2)
 	Receipt       bool       // queue the email receipt (a web order with an email)
+	// Placement: the order ends a placement (DURABILITY-PLAN.md) — the save
+	// marks it placed in the same transaction and fails if it isn't pending
+	// any more. PlacementDueCheck: a scheduled order's Pi check (due − 30 min).
+	Placement         bool
+	PlacementDueCheck *time.Time
 }
+
+// ErrPlacementGone: the order's placement was finished elsewhere (the
+// sweeper voided it) while it was being saved; nothing was saved.
+var ErrPlacementGone = errors.New("order: its placement is no longer pending")
 
 // CardHold is an authorized card payment the order's channel took: main
 // captures it later (the driver's clock-out, Close batch, or DueAt).

@@ -144,6 +144,7 @@ class Store:
         _CREATED_TENANTS.add(self.tenant_id)
         self.location_id: str = r.json()["location"]["id"]
         self._key: dict | None = None
+        self._stream = None
 
     # -- device key (the agent's credential) --
     def mint_key(self, name: str = "test-agent") -> dict:
@@ -156,6 +157,15 @@ class Store:
         if self._key is None:
             self._key = self.mint_key()
         return self._key["api_key"]
+
+    def online(self):
+        """Hold the store's Pi stream open (main refuses channel orders with
+        kitchen_offline while a store with a Pi key has no live stream). Closed
+        when the store is deleted."""
+        if self._stream is None:
+            from sse import SSEStream  # noqa: PLC0415 (sse imports conftest)
+            self._stream = SSEStream(self.key)
+        return self._stream
 
     @property
     def device_id(self) -> str:
@@ -182,6 +192,9 @@ class Store:
     def delete(self) -> None:
         """Delete the store; a delete main refuses fails the test (a store
         that can't be deleted is a bug, not something to sweep later)."""
+        if self._stream is not None:
+            self._stream.close()
+            self._stream = None
         try:
             r = self.admin.delete(f"{ADMIN_V1}/tenants/{self.tenant_id}", timeout=10)
         except requests.RequestException:

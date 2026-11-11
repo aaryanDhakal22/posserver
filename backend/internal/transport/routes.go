@@ -43,6 +43,7 @@ import (
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/app/tracking"
+	"quiccpos/main/internal/domain/notify"
 	"quiccpos/main/internal/infra/mail"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
@@ -106,12 +107,17 @@ type RouterDeps struct {
 	OperatorService *operatorApp.Service
 	// Tracking follows channel orders (main 3.0).
 	Tracking *tracking.Service
+	// TrackPublicPerMin: /track/v1 lookups per IP and minute (0 = the default, 120).
+	TrackPublicPerMin int
 	// OrderPort places channel orders (main 3.0).
 	OrderPort *orderport.Service
 	// Pricing backs pricing settings, deals and quotes (main 3.0).
 	Pricing *pricingApp.Service
 	// StoreStatus backs a store's ordering status (main 3.0).
 	StoreStatus *storestatusApp.Service
+	// Kitchen answers whether a store's Pi can get an order now (kitchen_offline
+	// on /channel/v1/store, DURABILITY-PLAN.md).
+	Kitchen handler.KitchenCheck
 	// MenuViewService backs the menu bank + views (main 3.0).
 	MenuViewService *menuviewApp.Service
 	// BankImport applies / exports a store's bank document (weborder converter).
@@ -140,6 +146,8 @@ type RouterDeps struct {
 	AlertSender handler.AlertSender
 	// AppEnv gates dev-only routes (the geo test-provider override).
 	AppEnv string
+	// DevNotices records owner notices on dev (GET /admin/v1/dev/notices).
+	DevNotices *notify.Recorder
 }
 
 // RouteInfo is the JSON shape served at GET /__routes (shared across all
@@ -222,9 +230,17 @@ func routeTable(d RouterDeps) []routeDef {
 	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
 	bankDocH := handler.NewBankImportHandler(d.BankImport, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
+	if d.Kitchen != nil {
+		statusH.SetKitchen(d.Kitchen)
+	}
 	pricingH := handler.NewPricingHandler(d.Pricing, d.Logger)
 	orderPortH := handler.NewOrderPortHandler(d.OrderPort, d.Logger)
-	trackingH := handler.NewTrackingHandler(d.Tracking, d.Logger)
+	orderPortH.SetDev(d.AppEnv, d.DevNotices)
+	trackingH := handler.NewTrackingHandler(d.Tracking, d.TrackPublicPerMin, d.Logger)
+	if d.ChannelService != nil {
+		trackingH.SetSiteAuth(d.ChannelService.AuthenticateSite)
+	}
+	trackingH.SetDev(d.AppEnv)
 	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
@@ -337,6 +353,10 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", adminPrefix+"/dev/signin-code", "admin", "Dev only: the fake sign-in code for ?phone=", accountH.DevCode, admin),
 		def("GET", adminPrefix+"/dev/mail", "admin", "Dev only: fake mail sent ?to=", accountH.DevMail, admin),
 		def("POST", adminPrefix+"/dev/receipts/tick", "admin", "Dev only: send queued receipts now", accountH.DevReceiptsTick, admin),
+		def("POST", adminPrefix+"/dev/track-limit", "admin", "Dev only: a storefront's own per-customer /track/v1 limit ({key, per_min}; 0 = shared again)", trackingH.DevTrackLimit, admin),
+		def("POST", adminPrefix+"/dev/placements/sweep", "admin", "Dev only: run the placement sweeper once (nothing waits to go stale)", orderPortH.DevSweep, admin),
+		def("POST", adminPrefix+"/dev/placements/orphan", "admin", "Dev only: leave a pending placement as a main that died mid-work would", orderPortH.DevOrphan, admin),
+		def("GET", adminPrefix+"/dev/notices", "admin", "Dev only: the owner notices main sent ?location_id=", orderPortH.DevNotices, admin),
 
 		// Square → main (weborder stage 2): the owner comes back from Square; Square's events.
 		def("GET", "/square/oauth/callback", "none", "Square OAuth callback (state-checked) → the SPA", squareH.OAuthCallback),
@@ -496,7 +516,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", channelPrefix+"/operator/logout", "none", "An operator signs out (Bearer the sign-in)", operatorH.ChannelLogout),
 		def("GET", channelPrefix+"/me", "channel", "The channel behind the key and its store", channelH.Me, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/menu", "channel", "The channel's menu (ETag = menu version)", viewH.ChannelMenu, channelAuth, channelGzip),
-		def("POST", channelPrefix+"/orders", "channel", "Place an order (orders permission; idempotent on client_order_id)", orderPortH.Place, channelAuth, guest, channelGzip),
+		def("POST", channelPrefix+"/orders", "channel", "Place an order (orders permission; idempotent on client_order_id; 202 pending when main is still at work)", orderPortH.Place, channelAuth, guest, channelGzip),
 		// Website customer accounts (weborder stage 2): X-Customer-Session from /account/verify.
 		def("POST", channelPrefix+"/account/code", "channel", "Text (or call) a sign-in code {phone, channel sms|call}", accountH.SendCode, channelAuth, channelGzip),
 		def("POST", channelPrefix+"/account/verify", "channel", "Check the code → a customer session {phone, code, name?}", accountH.Verify, channelAuth, channelGzip),
@@ -511,6 +531,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", channelPrefix+"/account/orders", "channel+customer", "The account's orders, newest first (?before=&limit=)", accountH.Orders, channelAuth, member, channelGzip),
 		def("POST", channelPrefix+"/account/orders/:id/reorder", "channel+customer", "A past order as a new cart, priced today {type?}", accountH.Reorder, channelAuth, member, channelGzip),
 		def("GET", channelPrefix+"/orders", "channel", "This channel's orders, newest first (?before=&limit=)", orderPortH.List, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/orders/by-key/:key", "channel", "A placement by its client_order_id: {state pending|placed|refused|expired|voided, order?, error?, expires_at} | 404 unknown_key", orderPortH.ByKey, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/orders/:id", "channel", "One of this channel's orders", orderPortH.Get, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/orders/:id/status", "channel", "One of this channel's orders: its tracking state (track permission)", trackingH.Status, channelAuth, channelGzip),
 		// No gzip on the stream: the compressor would hold events back.

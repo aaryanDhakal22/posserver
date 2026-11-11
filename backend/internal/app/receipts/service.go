@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"html"
 	"strings"
 	"time"
 
@@ -319,4 +320,45 @@ func (f StoreFuncs) PrimaryHost(ctx context.Context, locationID uuid.UUID) strin
 }
 func (f StoreFuncs) ReplyEmail(ctx context.Context, locationID uuid.UUID) (string, error) {
 	return f.Reply(ctx, locationID)
+}
+
+// NotPlaced emails a customer that their order wasn't placed and that they
+// weren't charged (DURABILITY-PLAN.md: an order that expired or was undone
+// before it was saved — there is no order row to queue a receipt on). Sent in
+// the background, tried a few times; mail off = skipped.
+func (s *Service) NotPlaced(ctx context.Context, locationID uuid.UUID, to, name, why string) {
+	if s.sender == nil || strings.TrimSpace(to) == "" {
+		return
+	}
+	ctx = context.WithoutCancel(ctx)
+	go func() {
+		loc, err := s.locs.GetLocation(ctx, locationID)
+		if err != nil {
+			s.logger.Warn().Err(err).Msg("not-placed email: location gone")
+			return
+		}
+		reply, _ := s.store.ReplyEmail(ctx, locationID)
+		hi := "Hi"
+		if f := firstName(name); f != "" {
+			hi = "Hi " + f
+		}
+		phone := ""
+		if loc.Phone != "" {
+			phone = " Please call us at " + loc.Phone + " if you'd like to order."
+		}
+		text := fmt.Sprintf("%s,\n\nYour order from %s was NOT placed: %s.\n\nYou weren't charged — any hold on your card has been released.%s\n\n%s\n",
+			hi, loc.Name, why, phone, loc.Name)
+		html := "<p>" + html.EscapeString(hi) + ",</p><p>Your order from <b>" + html.EscapeString(loc.Name) + "</b> was <b>not placed</b>: " + html.EscapeString(why) +
+			".</p><p>You weren't charged — any hold on your card has been released." + html.EscapeString(phone) + "</p><p>" + html.EscapeString(loc.Name) + "</p>"
+		msg := mail.Message{FromName: loc.Name, FromAddress: s.from, ReplyTo: reply, To: strings.TrimSpace(to),
+			Subject: "Your order from " + loc.Name + " was not placed", Text: text, HTML: html}
+		for i := 0; i < 3; i++ {
+			if _, err := s.sender.Send(ctx, msg); err == nil {
+				return
+			} else if i == 2 {
+				s.logger.Error().Err(err).Msg("not-placed email failed")
+			}
+			time.Sleep(time.Duration(i+1) * 5 * time.Second)
+		}
+	}()
 }

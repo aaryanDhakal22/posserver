@@ -488,3 +488,8 @@ func (l *limiter) sweep() {
 		}
 	}
 }
+
+// ByID is one customer (the placement sweeper restores a signed-in order's account).
+func (s *Service) ByID(ctx context.Context, id uuid.UUID) (customer.Customer, error) {
+	return s.repo.Get(ctx, id)
+}

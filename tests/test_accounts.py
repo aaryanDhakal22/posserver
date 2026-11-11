@@ -223,6 +223,7 @@ def test_saved_cards(admin, store, mgr) -> None:
 
 def test_receipts(admin, store, mgr) -> None:
     _connect(mgr)
+    store.online()  # the Pi is there (it plays the floor below)
     m = _menu(mgr)
     # The storefront's way in, so receipts link to the store's host.
     pk = _ok(admin.post(f"{ADMIN_V1}/platform-keys", json={"name": "test receipts"}, timeout=5), 201)

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strconv"
@@ -22,11 +23,21 @@ import (
 // manager's /store/v1/me/{status,ordering,pause,hours-exceptions} (session)
 // and the channels' /channel/v1/store[/times,/delivery-check] (channel key).
 type StoreStatusHandler struct {
-	svc    *storestatusApp.Service
-	appEnv string
-	checks *ratelimit.Window // delivery checks per channel
-	logger zerolog.Logger
+	svc     *storestatusApp.Service
+	kitchen KitchenCheck // nil: kitchen_offline is always false
+	appEnv  string
+	checks  *ratelimit.Window // delivery checks per channel
+	logger  zerolog.Logger
 }
+
+// KitchenCheck answers whether a store's Pi can get an order now
+// (app/kitchen, DURABILITY-PLAN.md).
+type KitchenCheck interface {
+	Offline(ctx context.Context, tenantID, locationID uuid.UUID) (bool, time.Time, error)
+}
+
+// SetKitchen plugs in the Pi liveness check behind kitchen_offline on /channel/v1/store.
+func (h *StoreStatusHandler) SetKitchen(k KitchenCheck) { h.kitchen = k }
 
 // deliveryChecksPerMinute bounds geocoding per channel.
 const deliveryChecksPerMinute = 30
@@ -179,7 +190,19 @@ func (h *StoreStatusHandler) ChannelStore(c *echo.Context) error {
 	if err != nil {
 		return h.sErr(c, err)
 	}
-	return c.JSON(http.StatusOK, out)
+	// kitchen_offline: the store's Pi can't get an order now, so ASAP orders are
+	// refused (409 kitchen_offline) — the storefront says so before checkout.
+	// A failed check reads as online (placement checks again and refuses then).
+	off := false
+	if h.kitchen != nil {
+		if o, _, kerr := h.kitchen.Offline(c.Request().Context(), ch.TenantID, ch.LocationID); kerr == nil {
+			off = o
+		}
+	}
+	return c.JSON(http.StatusOK, struct {
+		*storestatusApp.Full
+		KitchenOffline bool `json:"kitchen_offline"`
+	}{out, off})
 }
 
 // GET /channel/v1/store/times?type=pickup|delivery&date=YYYY-MM-DD
