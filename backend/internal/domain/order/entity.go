@@ -165,6 +165,13 @@ type LineItem struct {
 	Notes     string
 	Children  []LineItem
 
+	// Half and half (modifier children of channel orders, migration 00032):
+	// Portion is "" (whole) | first | second; Mode is add | only | no |
+	// specialty ("" on lines from before, or from a vendor). Name keeps the
+	// readable text ("Pepperoni (1st half)") for Pis that don't read these.
+	Portion string
+	Mode    string
+
 	// Kitchen routing, stamped on top-level items when the order arrives
 	// (modifiers/children inherit their parent's). Zero values = not routed
 	// (orders that predate routing print as one full receipt).

@@ -115,6 +115,7 @@ func export(ctx context.Context, tx bankdoc.Tx) (*bankdoc.Document, error) {
 		}
 		doc.Menus = append(doc.Menus, dm)
 	}
+	exportHalfBases(bank, doc, item)
 	views, err := tx.Views(ctx)
 	if err != nil {
 		return nil, err

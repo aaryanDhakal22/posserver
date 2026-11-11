@@ -98,6 +98,9 @@ func (s *Service) Settings(ctx context.Context, locationID uuid.UUID) (pricing.S
 	if st.Tips.Presets == nil {
 		st.Tips.Presets = []int{}
 	}
+	if st.HalfToppingPrice == "" {
+		st.HalfToppingPrice = pricing.HalfFull // saved before half and half
+	}
 	return *st, over, nil
 }
 
@@ -213,7 +216,7 @@ func (s *Service) validDeal(ctx context.Context, locationID uuid.UUID, d *pricin
 	return nil
 }
 
-// itemFacts are the bank's item facts (category, tax), cached per version.
+// itemFacts are the bank's item facts (category, tax, plain pizza), cached per version.
 func (s *Service) itemFacts(ctx context.Context, locationID uuid.UUID) (factsAt, error) {
 	ver, err := s.views.Version(ctx, locationID)
 	if err != nil {
@@ -234,7 +237,7 @@ func (s *Service) itemFacts(ctx context.Context, locationID uuid.UUID) (factsAt,
 		for _, c := range m.Categories {
 			f.cats[c.ID.String()] = true
 			for _, it := range c.Items {
-				f.items[it.ID.String()] = pricing.ItemFacts{CategoryID: c.ID.String(), TaxBps: it.TaxRateBps}
+				f.items[it.ID.String()] = pricing.ItemFacts{CategoryID: c.ID.String(), TaxBps: it.TaxRateBps, HalfBase: pricing.HalfBaseOf(it.Attributes)}
 			}
 		}
 	}

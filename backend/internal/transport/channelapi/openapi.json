@@ -2896,9 +2896,21 @@
             "enum": [
               "",
               "whole",
+              "first",
+              "second",
               "left",
               "right"
-            ]
+            ],
+            "description": "whole (default) | first | second half, on a group with portions; left = first and right = second (older carts)"
+          },
+          "mode": {
+            "enum": [
+              "",
+              "add",
+              "only",
+              "no"
+            ],
+            "description": "add (default); only = that half (a whole pick: the whole pie) starts from the plain pizza with just its ONLY toppings; no = take it off (free)"
           }
         },
         "additionalProperties": false
@@ -2928,6 +2940,17 @@
             "items": {
               "$ref": "#/components/schemas/Pick"
             }
+          },
+          "halves": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 2,
+            "items": {
+              "$ref": "#/components/schemas/Half"
+            },
+            "description": "Half and half: up to two half-specialties, one per half. One costs that specialty's price; two cost the dearer + the cheaper's extra over its plain pizza at the store's half_specialty_off_pct % off"
           }
         },
         "additionalProperties": false
@@ -2955,6 +2978,17 @@
             "items": {
               "$ref": "#/components/schemas/Pick"
             }
+          },
+          "halves": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 2,
+            "items": {
+              "$ref": "#/components/schemas/Half"
+            },
+            "description": "Half and half: up to two half-specialties, one per half. One costs that specialty's price; two cost the dearer + the cheaper's extra over its plain pizza at the store's half_specialty_off_pct % off"
           },
           "qty": {
             "type": "integer",
@@ -3447,6 +3481,17 @@
               "stack",
               "single"
             ]
+          },
+          "half_topping_price": {
+            "enum": [
+              "full",
+              "half"
+            ],
+            "description": "A topping on a half: the full whole-pie price (default) or half of it, rounded up to the cent"
+          },
+          "half_specialty_off_pct": {
+            "type": "integer",
+            "description": "Two half-specialties: the cheaper one's extra over its plain pizza at this % off (0–100, default 0)"
           }
         },
         "additionalProperties": false
@@ -3480,6 +3525,10 @@
                 "tax_bps": {
                   "type": "integer",
                   "description": "0 = the store rate"
+                },
+                "half_base": {
+                  "type": "string",
+                  "description": "A specialty pizza's plain pizza (a bank item id); absent = the item is its own plain"
                 }
               },
               "additionalProperties": false
@@ -4917,6 +4966,27 @@
             "format": "date-time"
           }
         }
+      },
+      "Half": {
+        "type": "object",
+        "required": [
+          "item_id",
+          "half"
+        ],
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "description": "A specialty pizza: a menu item, priced at the line's size"
+          },
+          "half": {
+            "enum": [
+              1,
+              2
+            ],
+            "description": "1 = the 1st half, 2 = the 2nd"
+          }
+        },
+        "additionalProperties": false
       }
     }
   }

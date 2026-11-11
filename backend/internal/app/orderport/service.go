@@ -546,14 +546,12 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 			UnitPrice: order.Money(r.BaseCents), Notes: note}
 		total := r.BaseCents * int64(qty)
 		for k, o := range r.Options {
-			child := order.LineItem{ID: uuid.Must(uuid.NewV7()), ParentID: &li.ID, Position: k, Quantity: qty}
-			switch {
-			case o.RemovedDefault:
-				child.Name, child.Quantity = "NO "+o.Name, 1
-			case o.Portion != "":
-				child.Name, child.UnitPrice = fmt.Sprintf("%s (%s half)", o.Name, o.Portion), order.Money(o.PriceCents)
-			default:
-				child.Name, child.UnitPrice = o.Name, order.Money(o.PriceCents)
+			// The name reads on its own ("Pepperoni (1st half)", "NO Onion")
+			// for Pis that don't read portion / mode.
+			child := order.LineItem{ID: uuid.Must(uuid.NewV7()), ParentID: &li.ID, Position: k, Quantity: qty,
+				Name: o.Label, Portion: o.Portion, Mode: o.Mode, UnitPrice: order.Money(o.PriceCents)}
+			if o.RemovedDefault {
+				child.Quantity, child.UnitPrice = 1, 0
 			}
 			if o.Included {
 				child.UnitPrice = 0

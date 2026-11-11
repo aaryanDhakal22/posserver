@@ -118,7 +118,8 @@ type priced struct {
 	name     string
 	mods     []string
 	base     int64
-	extras   int64 // charged extras (after any free options)
+	halfUp   int64 // half and half: the pizza's price over the item's (may be below 0)
+	extras   int64 // charged extras (after any free options), with halfUp
 	unit     int64
 	bankItem string // deal eligibility ("" = none)
 	rateItem string // whose tax rate applies
@@ -137,18 +138,21 @@ type Resolved struct {
 	RateItem   string // the bank item whose tax / printer applies
 	SizeID     string
 	SizeName   string
-	BaseCents  int64 // the item's (size's) price
+	BaseCents  int64 // the item's (size's) price; half and half: the pizza's
 	UnitCents  int64 // with the charged options
 	Options    []ResolvedOption
 	Issues     []Issue
 }
 
-// ResolvedOption is one option on the item: picked, or a default left off.
+// ResolvedOption is one option on the item: a half-specialty, a pick, or a
+// default left off.
 type ResolvedOption struct {
 	Name           string
-	Portion        string // left | right | "" (whole)
-	PriceCents     int64  // for the item's size
-	RemovedDefault bool   // "NO x"
+	Label          string // how it reads: "Pepperoni (1st half)", "NO Onion", "Hawaiian (2nd half)"
+	Portion        string // first | second | "" (whole)
+	Mode           string // add | only | no | specialty
+	PriceCents     int64  // for the item's size (a half topping at the store's half price)
+	RemovedDefault bool   // "NO x" (a default left off, or a NO pick)
 	Included       bool   // one of a bundle step's included options (not charged)
 }
 
@@ -157,7 +161,52 @@ type ResolvedOption struct {
 func Resolve(ctx Context, sel Selection, free int) Resolved {
 	p := newEngine(ctx).price(sel, free)
 	return Resolved{Name: p.name, ChoiceName: p.choice, BankItem: p.bankItem, RateItem: p.rateItem, SizeID: p.size, SizeName: p.sizeName,
-		BaseCents: p.base, UnitCents: p.unit, Options: p.opts, Issues: p.issues}
+		BaseCents: p.base + p.halfUp, UnitCents: p.unit, Options: p.opts, Issues: p.issues}
+}
+
+// portionOf is a pick's portion: first | second | "" (whole); left / right
+// are older carts' first / second.
+func portionOf(s string) string {
+	switch s {
+	case PortionFirst, "left":
+		return PortionFirst
+	case PortionSecond, "right":
+		return PortionSecond
+	}
+	return PortionWhole
+}
+
+func modeOf(s string) string {
+	if s == ModeOnly || s == ModeNo {
+		return s
+	}
+	return ModeAdd
+}
+
+func halfOf(portion string) int {
+	if portion == PortionSecond {
+		return 2
+	}
+	return 1
+}
+
+// OptionLabel is how an option reads on a quote, an order line and an older
+// Pi's ticket: "Pepperoni", "Pepperoni (1st half)", "ONLY Ham (2nd half)",
+// "NO Onion".
+func OptionLabel(name, portion, mode string) string {
+	switch mode {
+	case ModeOnly:
+		name = "ONLY " + name
+	case ModeNo:
+		name = "NO " + name
+	}
+	switch portion {
+	case PortionFirst:
+		return name + " (1st half)"
+	case PortionSecond:
+		return name + " (2nd half)"
+	}
+	return name
 }
 
 type engine struct {
@@ -191,6 +240,92 @@ func (e *engine) rate(bankItem string) int {
 		return r
 	}
 	return e.ctx.Settings.TaxBps
+}
+
+// sizePrice is a menu item's price at a size ("" = an item without sizes).
+func sizePrice(it menuview.BuildItem, size string) (int64, bool) {
+	if len(it.Sizes) == 0 {
+		return it.PriceCents, size == ""
+	}
+	for _, z := range it.Sizes {
+		if z.SizeID.String() == size {
+			return z.PriceCents, true
+		}
+	}
+	return 0, false
+}
+
+// plainOf is the price, at a size, of a bank item's plain pizza (its
+// half_base, as this menu shows it); ok = false when it names none or the
+// menu doesn't have it at that size.
+func (e *engine) plainOf(bankItem, size string) (int64, string, bool) {
+	hb := e.ctx.Items[bankItem].HalfBase
+	if bankItem == "" || hb == "" {
+		return 0, "", false
+	}
+	it, ok := e.items[hb]
+	if !ok {
+		return 0, "", false
+	}
+	pr, ok := sizePrice(it, size)
+	return pr, hb, ok
+}
+
+// specialty is a half-specialty as priced on the line.
+type specialty struct {
+	name  string
+	key   string // its bank item (else "menu:" + its menu id)
+	bank  string
+	price int64
+}
+
+// halfPizza is what one half is: a key (same key = the same pizza), its
+// price at the line's size and its plain pizza's.
+type halfPizza struct {
+	key          string
+	price, plain int64
+}
+
+// halves prices a split pizza (the owner's rules): one pizza on both halves
+// costs its price; two different ones cost the dearer in full plus the
+// cheaper's extra over its plain pizza at HalfSpecialtyOffPct % off. A half
+// is its specialty, else the plain pizza when it is ONLY, else the item.
+func (e *engine) halves(p *priced, base int64, spec [3]*specialty, only [3]bool) int64 {
+	lineKey := p.bankItem
+	if lineKey == "" {
+		lineKey = "line"
+	}
+	linePlain, plainKey := base, lineKey
+	if pr, hb, ok := e.plainOf(p.bankItem, p.size); ok {
+		linePlain, plainKey = pr, hb
+	}
+	half := func(k int) halfPizza {
+		switch {
+		case spec[k] != nil:
+			plain := linePlain
+			if pr, _, ok := e.plainOf(spec[k].bank, p.size); ok {
+				plain = pr
+			}
+			return halfPizza{spec[k].key, spec[k].price, plain}
+		case only[k]:
+			return halfPizza{plainKey, linePlain, linePlain}
+		}
+		return halfPizza{lineKey, base, linePlain}
+	}
+	h1, h2 := half(1), half(2)
+	if h1.key == h2.key {
+		return h1.price
+	}
+	dear, cheap := h1, h2
+	if h2.price > h1.price {
+		dear, cheap = h2, h1
+	}
+	extra := cheap.price - cheap.plain
+	if extra < 0 {
+		extra = 0
+	}
+	off := min(max(e.ctx.Settings.HalfSpecialtyOffPct, 0), 100)
+	return dear.price + Pct(extra, (100-off)*100)
 }
 
 // price prices one configured item; the priciest `free` charged options are
@@ -246,6 +381,68 @@ func (e *engine) price(sel Selection, free int) priced {
 	if soldOut {
 		p.issues = append(p.issues, Issue{Code: IssueSoldOut, Message: p.name + " is sold out right now."})
 	}
+	// Half-specialties: a specialty pizza on a half, at the line's size.
+	var spec [3]*specialty
+	if len(sel.Halves) > 0 {
+		split := false
+		for _, gid := range it.ModifierGroupIDs {
+			if g, ok := e.groups[gid.String()]; ok && g.Portions {
+				split = true
+			}
+		}
+		if !split {
+			p.issues = append(p.issues, Issue{Code: IssueOptionRules, Message: it.Name + " can't be split in halves."})
+		}
+		for _, h := range sel.Halves {
+			if !split {
+				break
+			}
+			if h.Half != 1 && h.Half != 2 {
+				p.issues = append(p.issues, Issue{Code: IssueOptionRules, Message: it.Name + ": a half is 1 or 2."})
+				continue
+			}
+			if spec[h.Half] != nil {
+				p.issues = append(p.issues, Issue{Code: IssueOptionRules, Message: it.Name + ": one specialty per half."})
+				continue
+			}
+			s, ok := e.items[h.ItemID]
+			if !ok {
+				p.issues = append(p.issues, Issue{Code: IssueUnknownItem, Message: it.Name + ": a half's pizza is no longer on the menu."})
+				continue
+			}
+			if len(s.Choices) > 0 {
+				p.issues = append(p.issues, Issue{Code: IssueOptionRules, Message: s.Name + " can't be a half."})
+				continue
+			}
+			pr, ok := sizePrice(s, p.size)
+			if !ok {
+				p.issues = append(p.issues, Issue{Code: IssueUnknownSize, Message: s.Name + " doesn't come in that size."})
+				continue
+			}
+			if s.SoldOut {
+				p.issues = append(p.issues, Issue{Code: IssueSoldOut, Message: s.Name + " is sold out right now."})
+			}
+			sp := &specialty{name: s.Name, key: "menu:" + s.ID, price: pr}
+			if len(s.Anchor.ItemIDs) > 0 {
+				sp.bank = s.Anchor.ItemIDs[0].String()
+				sp.key = sp.bank
+			}
+			spec[h.Half] = sp
+		}
+		for k := 1; k <= 2; k++ {
+			if s := spec[k]; s != nil {
+				por := PortionFirst
+				if k == 2 {
+					por = PortionSecond
+				}
+				label := OptionLabel(s.name, por, ModeAdd)
+				p.mods = append(p.mods, label)
+				p.opts = append(p.opts, ResolvedOption{Name: s.name, Label: label, Portion: por, Mode: ModeSpecialty})
+			}
+		}
+	}
+	halfPrice := e.ctx.Settings.HalfToppingPrice == HalfHalf
+	var only [3]bool
 	extras := []int64{}
 	for _, gid := range it.ModifierGroupIDs {
 		g, ok := e.groups[gid.String()]
@@ -258,7 +455,9 @@ func (e *engine) price(sel Selection, free int) priced {
 				picks = append(picks, pk)
 			}
 		}
-		seen := map[string]bool{}
+		seen := map[string]bool{}  // options picked (any portion or mode)
+		twice := map[string]bool{} // option + portion + mode
+		count := 0                 // picks that put something on (NO doesn't count)
 		for _, pk := range picks {
 			var o *menuview.BuildOption
 			for i := range g.Options {
@@ -270,19 +469,25 @@ func (e *engine) price(sel Selection, free int) priced {
 				p.issues = append(p.issues, Issue{Code: IssueUnknownOpt, Message: it.Name + ": an option is no longer available."})
 				continue
 			}
-			if seen[pk.OptionID] && !g.AllowMultiple {
+			por, mode := PortionWhole, modeOf(pk.Mode)
+			if g.Portions {
+				por = portionOf(pk.Portion)
+			}
+			key := pk.OptionID + "/" + por + "/" + mode
+			if twice[key] && !g.AllowMultiple {
 				p.issues = append(p.issues, Issue{Code: IssueOptionRules, Message: it.Name + ": " + o.Name + " only once."})
 			}
+			twice[key] = true
 			seen[pk.OptionID] = true
-			if o.SoldOut {
-				p.issues = append(p.issues, Issue{Code: IssueSoldOut, Message: o.Name + " is sold out right now."})
+			if mode != ModeNo {
+				count++
+				if o.SoldOut {
+					p.issues = append(p.issues, Issue{Code: IssueSoldOut, Message: o.Name + " is sold out right now."})
+				}
 			}
-			half := ""
-			if g.Portions && (pk.Portion == "left" || pk.Portion == "right") {
-				half = " (" + pk.Portion + " half)"
-			}
-			if !o.IsDefault || half != "" {
-				p.mods = append(p.mods, o.Name+half)
+			label := OptionLabel(o.Name, por, mode)
+			if !o.IsDefault || por != PortionWhole || mode != ModeAdd {
+				p.mods = append(p.mods, label)
 			}
 			price := o.PriceCents
 			for _, op := range o.Prices {
@@ -290,14 +495,23 @@ func (e *engine) price(sel Selection, free int) priced {
 					price = op.PriceCents
 				}
 			}
+			switch {
+			case mode == ModeNo:
+				price = 0
+			case por != PortionWhole && halfPrice:
+				price = (price + 1) / 2 // half the whole-pie price, rounded up to the cent
+			}
 			if price > 0 {
 				extras = append(extras, price)
 			}
-			portion := ""
-			if half != "" {
-				portion = pk.Portion
+			if mode == ModeOnly {
+				if por == PortionWhole {
+					only[1], only[2] = true, true
+				} else {
+					only[halfOf(por)] = true
+				}
 			}
-			p.opts = append(p.opts, ResolvedOption{Name: o.Name, Portion: portion, PriceCents: price})
+			p.opts = append(p.opts, ResolvedOption{Name: o.Name, Label: label, Portion: por, Mode: mode, PriceCents: price, RemovedDefault: mode == ModeNo})
 		}
 		// "NO onions": a default left off in a pick-many group (in a pick-one
 		// group the choice replaces it).
@@ -305,7 +519,7 @@ func (e *engine) price(sel Selection, free int) priced {
 			for _, o := range g.Options {
 				if o.IsDefault && !seen[o.ID.String()] {
 					p.mods = append(p.mods, "NO "+o.Name)
-					p.opts = append(p.opts, ResolvedOption{Name: o.Name, RemovedDefault: true})
+					p.opts = append(p.opts, ResolvedOption{Name: o.Name, Label: "NO " + o.Name, Mode: ModeNo, RemovedDefault: true})
 				}
 			}
 		}
@@ -313,20 +527,26 @@ func (e *engine) price(sel Selection, free int) priced {
 		if g.Required && min < 1 {
 			min = 1
 		}
-		if len(picks) < min {
+		if count < min {
 			what := strconv.Itoa(min)
 			if min == 1 {
 				what = "a"
 			}
 			p.issues = append(p.issues, Issue{Code: IssueOptionRules, Message: fmt.Sprintf("%s: choose %s %s.", it.Name, what, strings.ToLower(g.Name))})
 		}
-		if g.MaxSelect > 0 && len(picks) > g.MaxSelect {
+		if g.MaxSelect > 0 && count > g.MaxSelect {
 			p.issues = append(p.issues, Issue{Code: IssueOptionRules, Message: fmt.Sprintf("%s: up to %d %s.", it.Name, g.MaxSelect, strings.ToLower(g.Name))})
 		}
 	}
 	for _, pk := range sel.Options {
 		if !containsGroup(it.ModifierGroupIDs, pk.GroupID) {
 			p.issues = append(p.issues, Issue{Code: IssueUnknownOpt, Message: it.Name + ": an option doesn't belong to this item."})
+			break
+		}
+	}
+	for k := 1; k <= 2; k++ {
+		if spec[k] != nil && only[k] {
+			p.issues = append(p.issues, Issue{Code: IssueOptionRules, Message: fmt.Sprintf("%s: a half with a specialty can't be ONLY.", it.Name)})
 			break
 		}
 	}
@@ -349,7 +569,11 @@ func (e *engine) price(sel Selection, free int) priced {
 			p.opts[i].Included = true
 		}
 	}
+	if spec[1] != nil || spec[2] != nil || only[1] || only[2] {
+		p.halfUp = e.halves(&p, base, spec, only) - base
+	}
 	p.base = base
+	p.extras += p.halfUp
 	p.unit = base + p.extras
 	return p
 }

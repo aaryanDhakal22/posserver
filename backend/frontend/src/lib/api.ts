@@ -710,6 +710,8 @@ export interface PricingFees {
 export interface PricingTips { enabled: boolean; presets: number[]; default_pct: number }
 export interface PricingStore {
   tax_bps: number; stacking: 'best' | 'stack' | 'single'; fees: PricingFees; tips: PricingTips; card_fee: { mode: string; bps: number };
+  /** Half and half: a topping on a half at full or half price; the cheaper of two half-specialties' extra over plain at this % off. */
+  half_topping_price: 'full' | 'half'; half_specialty_off_pct: number;
 }
 export interface PricingKind { fees: PricingFees | null; tips: PricingTips | null; card_fee: { mode: string; bps: number } | null }
 export interface PricingBody { store: PricingStore; kinds: Record<string, PricingKind> }

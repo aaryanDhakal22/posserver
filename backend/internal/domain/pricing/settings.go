@@ -17,14 +17,20 @@ type Fees struct {
 	DeliveryMinCents      int64  `json:"delivery_min_cents"`
 }
 
-// StoreSettings are a store's pricing defaults; TaxBps and Stacking are
-// store-wide, the rest each channel kind may replace (KindOverride).
+// StoreSettings are a store's pricing defaults; TaxBps, Stacking and the
+// half-and-half pair are store-wide, the rest each channel kind may replace
+// (KindOverride).
 type StoreSettings struct {
 	TaxBps   int     `json:"tax_bps"`
 	Stacking string  `json:"stacking"`
 	Fees     Fees    `json:"fees"`
 	Tips     Tips    `json:"tips"`
 	CardFee  CardFee `json:"card_fee"`
+	// Half and half: a topping on a half at full (default) or half price;
+	// the cheaper of two half-specialties' extra over plain at this % off
+	// (default 0).
+	HalfToppingPrice    string `json:"half_topping_price"`
+	HalfSpecialtyOffPct int    `json:"half_specialty_off_pct"`
 }
 
 // KindOverride replaces whole sets for one channel kind (nil = the store's).
@@ -38,7 +44,7 @@ type KindOverride struct {
 // tips off, no card fee, the best single discount.
 func DefaultStore() StoreSettings {
 	return StoreSettings{TaxBps: 600, Stacking: StackBest, Tips: Tips{Presets: []int{15, 18, 20}, DefaultPct: 18},
-		CardFee: CardFee{Mode: CardFeeNone}}
+		CardFee: CardFee{Mode: CardFeeNone}, HalfToppingPrice: HalfFull}
 }
 
 // DefaultOverrides: the website takes tips (the owner, 2026-11-02).
@@ -64,9 +70,12 @@ func Effective(s StoreSettings, o KindOverride) Settings {
 	if t.Presets == nil {
 		t.Presets = []int{}
 	}
+	if s.HalfToppingPrice == "" {
+		s.HalfToppingPrice = HalfFull
+	}
 	return Settings{TaxBps: s.TaxBps, Stacking: s.Stacking, ServiceFeeCents: f.ServiceFeeCents, ServiceFeeBps: f.ServiceFeeBps,
 		DeliveryFeeCents: f.DeliveryFeeCents, FreeDeliveryOverCents: f.FreeDeliveryOverCents, DeliveryMinCents: f.DeliveryMinCents,
-		Tips: t, CardFee: c}
+		Tips: t, CardFee: c, HalfToppingPrice: s.HalfToppingPrice, HalfSpecialtyOffPct: s.HalfSpecialtyOffPct}
 }
 
 var ErrBadSettings = errors.New("bad pricing settings")
@@ -83,6 +92,15 @@ func (s *StoreSettings) Validate() error {
 	}
 	if s.Stacking != StackBest && s.Stacking != StackAll && s.Stacking != StackSingle {
 		return bad("stacking must be best, stack or single")
+	}
+	if s.HalfToppingPrice == "" {
+		s.HalfToppingPrice = HalfFull
+	}
+	if s.HalfToppingPrice != HalfFull && s.HalfToppingPrice != HalfHalf {
+		return bad("half_topping_price must be full or half")
+	}
+	if s.HalfSpecialtyOffPct < 0 || s.HalfSpecialtyOffPct > 100 {
+		return bad("half_specialty_off_pct must be 0–100")
 	}
 	return validSets(&s.Fees, &s.Tips, &s.CardFee)
 }

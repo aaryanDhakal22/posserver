@@ -353,6 +353,8 @@ type LineItem struct {
 	MenuItemID     pgtype.UUID `json:"menu_item_id"`
 	PrinterID      pgtype.UUID `json:"printer_id"`
 	Routing        string      `json:"routing"`
+	Portion        string      `json:"portion"`
+	Mode           string      `json:"mode"`
 }
 
 type Location struct {

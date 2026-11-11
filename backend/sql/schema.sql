@@ -142,7 +142,10 @@ CREATE TABLE line_items (
     size              text     NOT NULL DEFAULT '',
     menu_item_id      uuid,
     printer_id        uuid,
-    routing           text     NOT NULL DEFAULT ''
+    routing           text     NOT NULL DEFAULT '',
+    -- migration 00032: half and half on modifier children
+    portion           text     NOT NULL DEFAULT '',
+    mode              text     NOT NULL DEFAULT ''
 );
 CREATE INDEX idx_line_items_order_id ON line_items(order_id);
 CREATE INDEX idx_line_items_parent_id ON line_items(parent_id);

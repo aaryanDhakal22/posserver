@@ -18,13 +18,15 @@ export interface BuildGroup {
   id: string; name: string; required: boolean; min_select: number; max_select: number; allow_multiple: boolean; portions: boolean; options: BuildOption[];
 }
 export interface Menu { categories: { items: BuildItem[] }[]; modifier_groups: BuildGroup[] }
-export interface ItemFacts { category_id: string; tax_bps: number }
+export interface ItemFacts { category_id: string; tax_bps: number; half_base?: string }
 export interface Settings {
   tax_bps: number; service_fee_cents: number; service_fee_bps: number;
   delivery_fee_cents: number; free_delivery_over_cents: number | null; delivery_min_cents: number;
   tips: { enabled: boolean; presets: number[]; default_pct: number };
   card_fee: { mode: 'none' | 'surcharge' | 'cash_discount' | string; bps: number };
   stacking: 'best' | 'stack' | 'single' | string;
+  /** Half and half: a topping on a half at full ('' too) or half price; the cheaper half-specialty's extra over plain at this % off. */
+  half_topping_price?: 'full' | 'half' | string; half_specialty_off_pct?: number;
 }
 export interface Eligible { items: string[] | null; categories: string[] | null; sizes: string[] | null }
 export interface Slot { label: string; eligible: Eligible; included_options: number }
@@ -39,8 +41,11 @@ export interface Context {
   menu: Menu; items: Record<string, ItemFacts>; settings: Settings; deals: Deal[] | null; timezone: string;
   types: { pickup: boolean; delivery: boolean };
 }
-export interface Pick { group_id: string; option_id: string; portion?: string }
-export interface Selection { item_id: string; choice_id?: string; size_id?: string; options?: Pick[] | null }
+/** portion: whole ('' too) | first | second (older carts: left = first, right = second); mode: add ('' too) | only | no. */
+export interface Pick { group_id: string; option_id: string; portion?: string; mode?: string }
+/** A specialty pizza (a menu item) on half 1 or 2, priced at the line's size. */
+export interface Half { item_id: string; half: number }
+export interface Selection { item_id: string; choice_id?: string; size_id?: string; options?: Pick[] | null; halves?: Half[] | null }
 export interface Line extends Selection { qty?: number; note?: string; deal_id?: string; picks?: Selection[] | null }
 export interface Cart {
   type: string; payment?: string; lines: Line[] | null; code?: string;
@@ -115,10 +120,38 @@ function matches(el: Eligible, u: Unit): boolean {
 }
 
 interface Priced {
-  name: string; mods: string[]; base: number; extras: number; unit: number; bankItem: string; rateItem: string; size: string; issues: Issue[];
+  name: string; mods: string[]; base: number; halfUp: number; extras: number; unit: number; bankItem: string; rateItem: string; size: string; issues: Issue[];
 }
 
 const issueOf = (code: string, message: string): Issue => ({ code, message, line: null });
+
+/** A pick's portion: first | second | '' (whole); left / right are older carts' first / second. */
+function portionOf(s: string | undefined): string {
+  if (s === 'first' || s === 'left') return 'first';
+  if (s === 'second' || s === 'right') return 'second';
+  return '';
+}
+
+const modeOf = (s: string | undefined): string => (s === 'only' || s === 'no' ? s : 'add');
+
+/** How an option reads: "Pepperoni (1st half)", "ONLY Ham (2nd half)", "NO Onion". */
+export function optionLabel(name: string, portion: string, mode: string): string {
+  if (mode === 'only') name = 'ONLY ' + name;
+  else if (mode === 'no') name = 'NO ' + name;
+  if (portion === 'first') return name + ' (1st half)';
+  if (portion === 'second') return name + ' (2nd half)';
+  return name;
+}
+
+/** A menu item's price at a size ('' = an item without sizes); null = not in that size. */
+function sizePrice(it: BuildItem, size: string): number | null {
+  if (!(it.sizes ?? []).length) return size === '' ? it.price_cents : null;
+  for (const z of it.sizes) if (z.size_id === size) return z.price_cents;
+  return null;
+}
+
+interface Specialty { name: string; key: string; bank: string; price: number }
+interface HalfPizza { key: string; price: number; plain: number }
 
 class Engine {
   items = new Map<string, BuildItem>();
@@ -136,10 +169,48 @@ class Engine {
     const r = this.ctx.items?.[bankItem]?.tax_bps ?? 0;
     return r > 0 ? r : this.ctx.settings.tax_bps;
   }
+  /** A bank item's plain pizza (its half_base, as this menu shows it) at a size, with its id; null = none. */
+  plainOf(bankItem: string, size: string): { price: number; id: string } | null {
+    const hb = this.ctx.items?.[bankItem]?.half_base ?? '';
+    if (bankItem === '' || hb === '') return null;
+    const it = this.items.get(hb);
+    if (!it) return null;
+    const pr = sizePrice(it, size);
+    return pr === null ? null : { price: pr, id: hb };
+  }
+  /** A split pizza's price: one pizza on both halves costs its price; two cost the dearer + the cheaper's extra over plain at X % off. */
+  halves(p: Priced, base: number, spec: (Specialty | null)[], only: boolean[]): number {
+    const lineKey = p.bankItem === '' ? 'line' : p.bankItem;
+    let linePlain = base, plainKey = lineKey;
+    const lp = this.plainOf(p.bankItem, p.size);
+    if (lp) {
+      linePlain = lp.price;
+      plainKey = lp.id;
+    }
+    const half = (k: number): HalfPizza => {
+      const s = spec[k];
+      if (s) {
+        const sp = this.plainOf(s.bank, p.size);
+        return { key: s.key, price: s.price, plain: sp ? sp.price : linePlain };
+      }
+      if (only[k]) return { key: plainKey, price: linePlain, plain: linePlain };
+      return { key: lineKey, price: base, plain: linePlain };
+    };
+    const h1 = half(1), h2 = half(2);
+    if (h1.key === h2.key) return h1.price;
+    let dear = h1, cheap = h2;
+    if (h2.price > h1.price) {
+      dear = h2;
+      cheap = h1;
+    }
+    const extra = Math.max(cheap.price - cheap.plain, 0);
+    const off = Math.min(Math.max(Math.trunc(this.ctx.settings.half_specialty_off_pct ?? 0), 0), 100);
+    return dear.price + pct(extra, (100 - off) * 100);
+  }
   price(sel: Selection, free: number): Priced {
     const it = this.items.get(sel.item_id);
-    if (!it) return { name: 'Unknown item', mods: [], base: 0, extras: 0, unit: 0, bankItem: '', rateItem: '', size: '', issues: [issueOf('unknown_item', 'An item in your order is no longer on the menu.')] };
-    const p: Priced = { name: it.name, mods: [], base: 0, extras: 0, unit: 0, bankItem: '', rateItem: '', size: '', issues: [] };
+    if (!it) return { name: 'Unknown item', mods: [], base: 0, halfUp: 0, extras: 0, unit: 0, bankItem: '', rateItem: '', size: '', issues: [issueOf('unknown_item', 'An item in your order is no longer on the menu.')] };
+    const p: Priced = { name: it.name, mods: [], base: 0, halfUp: 0, extras: 0, unit: 0, bankItem: '', rateItem: '', size: '', issues: [] };
     let sizes = it.sizes ?? [], base = it.price_cents, soldOut = it.sold_out;
     const anchor = it.anchor?.item_ids ?? [];
     if (it.choices?.length) {
@@ -175,14 +246,59 @@ class Engine {
       return p;
     }
     if (soldOut) p.issues.push(issueOf('sold_out', `${p.name} is sold out right now.`));
+    const groupIds = it.modifier_group_ids ?? [];
+    // Half-specialties: a specialty pizza on a half, at the line's size.
+    const spec: (Specialty | null)[] = [null, null, null];
+    const halves = sel.halves ?? [];
+    if (halves.length) {
+      let split = false;
+      for (const gid of groupIds) if (this.groups.get(gid)?.portions) split = true;
+      if (!split) p.issues.push(issueOf('option_rules', `${it.name} can't be split in halves.`));
+      for (const h of halves) {
+        if (!split) break;
+        if (h.half !== 1 && h.half !== 2) {
+          p.issues.push(issueOf('option_rules', `${it.name}: a half is 1 or 2.`));
+          continue;
+        }
+        if (spec[h.half]) {
+          p.issues.push(issueOf('option_rules', `${it.name}: one specialty per half.`));
+          continue;
+        }
+        const s = this.items.get(h.item_id);
+        if (!s) {
+          p.issues.push(issueOf('unknown_item', `${it.name}: a half's pizza is no longer on the menu.`));
+          continue;
+        }
+        if (s.choices?.length) {
+          p.issues.push(issueOf('option_rules', `${s.name} can't be a half.`));
+          continue;
+        }
+        const pr = sizePrice(s, p.size);
+        if (pr === null) {
+          p.issues.push(issueOf('unknown_size', `${s.name} doesn't come in that size.`));
+          continue;
+        }
+        if (s.sold_out) p.issues.push(issueOf('sold_out', `${s.name} is sold out right now.`));
+        const anchor = s.anchor?.item_ids ?? [];
+        const bank = anchor.length ? anchor[0] : '';
+        spec[h.half] = { name: s.name, key: bank !== '' ? bank : 'menu:' + s.id, bank, price: pr };
+      }
+      for (const k of [1, 2]) {
+        const s = spec[k];
+        if (s) p.mods.push(optionLabel(s.name, k === 1 ? 'first' : 'second', 'add'));
+      }
+    }
+    const halfPrice = this.ctx.settings.half_topping_price === 'half';
+    const only = [false, false, false];
     const extras: number[] = [];
     const opts = sel.options ?? [];
-    const groupIds = it.modifier_group_ids ?? [];
     for (const gid of groupIds) {
       const g = this.groups.get(gid);
       if (!g) continue;
       const picks = opts.filter((pk) => pk.group_id === g.id);
-      const seen = new Set<string>();
+      const seen = new Set<string>(); // options picked (any portion or mode)
+      const twice = new Set<string>(); // option + portion + mode
+      let count = 0; // picks that put something on (NO doesn't count)
       for (const pk of picks) {
         let o: BuildOption | undefined;
         for (const x of g.options ?? []) if (x.id === pk.option_id) o = x;
@@ -190,21 +306,33 @@ class Engine {
           p.issues.push(issueOf('unknown_option', `${it.name}: an option is no longer available.`));
           continue;
         }
-        if (seen.has(pk.option_id) && !g.allow_multiple) p.issues.push(issueOf('option_rules', `${it.name}: ${o.name} only once.`));
+        const por = g.portions ? portionOf(pk.portion) : '';
+        const mode = modeOf(pk.mode);
+        const key = `${pk.option_id}/${por}/${mode}`;
+        if (twice.has(key) && !g.allow_multiple) p.issues.push(issueOf('option_rules', `${it.name}: ${o.name} only once.`));
+        twice.add(key);
         seen.add(pk.option_id);
-        if (o.sold_out) p.issues.push(issueOf('sold_out', `${o.name} is sold out right now.`));
-        const half = g.portions && (pk.portion === 'left' || pk.portion === 'right') ? ` (${pk.portion} half)` : '';
-        if (!o.is_default || half !== '') p.mods.push(o.name + half);
+        if (mode !== 'no') {
+          count++;
+          if (o.sold_out) p.issues.push(issueOf('sold_out', `${o.name} is sold out right now.`));
+        }
+        if (!o.is_default || por !== '' || mode !== 'add') p.mods.push(optionLabel(o.name, por, mode));
         let price = o.price_cents;
         for (const op of o.prices ?? []) if (p.size !== '' && op.size_id === p.size) price = op.price_cents;
+        if (mode === 'no') price = 0;
+        else if (por !== '' && halfPrice) price = Math.floor((price + 1) / 2); // half the whole-pie price, rounded up
         if (price > 0) extras.push(price);
+        if (mode === 'only') {
+          if (por === '') only[1] = only[2] = true;
+          else only[por === 'second' ? 2 : 1] = true;
+        }
       }
       // "NO onions": a default left off in a pick-many group.
       if (g.max_select !== 1) for (const o of g.options ?? []) if (o.is_default && !seen.has(o.id)) p.mods.push('NO ' + o.name);
       let min = g.min_select;
       if (g.required && min < 1) min = 1;
-      if (picks.length < min) p.issues.push(issueOf('option_rules', `${it.name}: choose ${min === 1 ? 'a' : String(min)} ${g.name.toLowerCase()}.`));
-      if (g.max_select > 0 && picks.length > g.max_select) p.issues.push(issueOf('option_rules', `${it.name}: up to ${g.max_select} ${g.name.toLowerCase()}.`));
+      if (count < min) p.issues.push(issueOf('option_rules', `${it.name}: choose ${min === 1 ? 'a' : String(min)} ${g.name.toLowerCase()}.`));
+      if (g.max_select > 0 && count > g.max_select) p.issues.push(issueOf('option_rules', `${it.name}: up to ${g.max_select} ${g.name.toLowerCase()}.`));
     }
     for (const pk of opts) {
       if (!groupIds.includes(pk.group_id)) {
@@ -212,11 +340,19 @@ class Engine {
         break;
       }
     }
+    for (const k of [1, 2]) {
+      if (spec[k] && only[k]) {
+        p.issues.push(issueOf('option_rules', `${it.name}: a half with a specialty can't be ONLY.`));
+        break;
+      }
+    }
     extras.sort((a, b) => b - a);
     extras.forEach((x, i) => {
       if (i >= free) p.extras += x;
     });
+    if (spec[1] || spec[2] || only[1] || only[2]) p.halfUp = this.halves(p, base, spec, only) - base;
     p.base = base;
+    p.extras += p.halfUp;
     p.unit = base + p.extras;
     return p;
   }

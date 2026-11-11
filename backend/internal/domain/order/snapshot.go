@@ -113,6 +113,10 @@ type LineItemDTO struct {
 	LineTotal int64         `json:"line_total_cents"`
 	Notes     string        `json:"notes,omitempty"`
 	Children  []LineItemDTO `json:"children,omitempty"`
+	// Half and half (modifier children): "" (whole) | first | second, and
+	// add | only | no | specialty. Absent on older and vendor orders.
+	Portion string `json:"portion,omitempty"`
+	Mode    string `json:"mode,omitempty"`
 	// Kitchen routing (top-level items): the matched menu item, the station
 	// printer to print on, and how it was matched (matched|unmatched|unassigned).
 	MenuItemID string `json:"menu_item_id,omitempty"`
@@ -246,6 +250,8 @@ func toItemsDTO(items []LineItem) []LineItemDTO {
 			LineTotal: int64(it.LineTotal),
 			Notes:     it.Notes,
 			Children:  toItemsDTO(it.Children),
+			Portion:   it.Portion,
+			Mode:      it.Mode,
 			Routing:   string(it.Routing),
 		}
 		if it.MenuItemID != nil {

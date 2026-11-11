@@ -23,6 +23,8 @@
   let tips = $state<TipsForm>(tipsForm(null));
   let kinds = $state<Record<string, KindForm>>({});
   let cardFee = $state({ mode: 'none', bps: 0 });
+  let halfTopping = $state<'full' | 'half'>('full');
+  let halfOff = $state('0');
   let kept: PricingBody['kinds'] = {}; // kinds this card doesn't edit (vendor) stay as they are
 
   function feesForm(f: PricingFees | null): FeesForm {
@@ -42,6 +44,8 @@
       fees = feesForm(b.store.fees);
       tips = tipsForm(b.store.tips);
       cardFee = b.store.card_fee;
+      halfTopping = b.store.half_topping_price === 'half' ? 'half' : 'full';
+      halfOff = String(b.store.half_specialty_off_pct ?? 0);
       for (const k of KINDS) {
         const o = b.kinds[k];
         kinds[k] = { ownFees: !!o?.fees, fees: feesForm(o?.fees ?? b.store.fees), ownTips: !!o?.tips, tips: tipsForm(o?.tips ?? b.store.tips) };
@@ -79,7 +83,8 @@
     let body: PricingBody;
     try {
       body = {
-        store: { tax_bps: Math.round((parseFloat(tax) || 0) * 100), stacking, fees: feesOf(fees, 'Store'), tips: tipsOf(tips), card_fee: cardFee },
+        store: { tax_bps: Math.round((parseFloat(tax) || 0) * 100), stacking, fees: feesOf(fees, 'Store'), tips: tipsOf(tips), card_fee: cardFee,
+          half_topping_price: halfTopping, half_specialty_off_pct: Math.round(parseFloat(halfOff) || 0) },
         kinds: { ...kept }
       };
       for (const k of KINDS) {
@@ -143,6 +148,20 @@
           </div>
         </div>
         <p class="help !mt-0">Items use their own tax rate when they have one (item panel), else this. Delivery fees aren't taxed; the online fee is.</p>
+        <div class="flex flex-wrap gap-4 items-end">
+          <div class="flex-1 min-w-[220px]">
+            <label class="lbl" for="pr-half">A topping on half a pizza</label>
+            <select id="pr-half" class="field" bind:value={halfTopping}>
+              <option value="full">Full price</option>
+              <option value="half">Half price (rounded up)</option>
+            </select>
+          </div>
+          <div>
+            <label class="lbl" for="pr-halfoff">2 specialties: cheaper half's extra, % off</label>
+            <input id="pr-halfoff" class="field mono text-right !w-24" inputmode="numeric" bind:value={halfOff} />
+          </div>
+        </div>
+        <p class="help !mt-0">Half and half: one specialty on a half costs that specialty's price; two cost the dearer one plus the cheaper one's extra over its plain pizza, at this % off.</p>
         <div class="subcard p-3.5 flex flex-col gap-3">
           <span class="lbl !mb-0">Store fees and tips</span>
           {@render feeFields(fees, 'pr-st')}

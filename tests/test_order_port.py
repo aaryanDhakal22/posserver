@@ -127,7 +127,7 @@ def test_place_cash_pickup(admin, store, mgr) -> None:
     assert frame["source"] == "operator" and frame["status"] == "received"
     pz, wg = frame["items"]
     assert (pz["name"], pz["size"], pz["quantity"], pz["unit_price_cents"]) == ("Cheese Pizza", "16 X-Large", 2, 1599)
-    assert [(c["name"], c["quantity"], c["unit_price_cents"]) for c in pz["children"]] == [("Pepperoni (left half)", 2, 225)]
+    assert [(c["name"], c["quantity"], c["unit_price_cents"]) for c in pz["children"]] == [("Pepperoni (1st half)", 2, 225)]
     assert pz["line_total_cents"] == 2 * 1824 and pz["printer_id"] == m["printer_pizza"]["id"] and pz["routing"] == "matched"
     assert pz["menu_item_id"] == m["pizza"]["id"]
     assert wg["printer_id"] == m["printer_fryer"]["id"] and wg["children"][0]["name"] == "BBQ"
@@ -139,7 +139,7 @@ def test_place_cash_pickup(admin, store, mgr) -> None:
 
     # Read back: own channel only.
     got = check(requests.get(f"{CH_V1}/orders/{o['id']}", headers=op, timeout=5), "getOrder")
-    assert got["id"] == o["id"] and got["lines"][0]["mods"] == ["Pepperoni (left half)"]
+    assert got["id"] == o["id"] and got["lines"][0]["mods"] == ["Pepperoni (1st half)"]
     listed = check(requests.get(f"{CH_V1}/orders", headers=op, timeout=5), "listOrders")
     assert [x["id"] for x in listed] == [o["id"]]
     other = _channel(admin, store, "counter")

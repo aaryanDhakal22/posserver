@@ -290,6 +290,9 @@ func (a *applier) run(ctx context.Context) error {
 		return err
 	}
 	a.refsFromBank()
+	if err := a.applyHalfBases(ctx); err != nil {
+		return err
+	}
 	if err := a.applyViews(ctx); err != nil {
 		return err
 	}

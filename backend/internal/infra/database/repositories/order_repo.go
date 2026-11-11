@@ -383,6 +383,8 @@ func insertLineItemTree(ctx context.Context, q *models.Queries, orderID order.ID
 		MenuItemID:     optPgUUID(item.MenuItemID),
 		PrinterID:      optPgUUID(item.PrinterID),
 		Routing:        string(item.Routing),
+		Portion:        item.Portion,
+		Mode:           item.Mode,
 	}); err != nil {
 		return err
 	}
@@ -638,6 +640,8 @@ func buildItemTree(rows []models.LineItem) []order.LineItem {
 			Notes:     row.Notes,
 			Size:      row.Size,
 			Routing:   order.Routing(row.Routing),
+			Portion:   row.Portion,
+			Mode:      row.Mode,
 		}
 		if row.MenuItemID.Valid {
 			id := uuid.UUID(row.MenuItemID.Bytes)

@@ -31,6 +31,20 @@ type Menu struct {
 type ItemFacts struct {
 	CategoryID string `json:"category_id"`
 	TaxBps     int    `json:"tax_bps"` // 0 = the store rate
+	// HalfBase is a specialty pizza's plain pizza (a bank item id; the item's
+	// `half_base_item` attribute): "the extra over plain" when it is the
+	// cheaper of two half-specialties. "" = the item is its own plain.
+	HalfBase string `json:"half_base,omitempty"`
+}
+
+// HalfBaseAttr is the menu item attribute naming a specialty pizza's plain
+// pizza (a bank item id). The bank document sets it by name (`half_base`).
+const HalfBaseAttr = "half_base_item"
+
+// HalfBaseOf reads an item's plain pizza from its attributes ("" = none).
+func HalfBaseOf(attrs map[string]any) string {
+	s, _ := attrs[HalfBaseAttr].(string)
+	return s
 }
 
 type Types struct {
@@ -57,7 +71,19 @@ type Settings struct {
 	// (bundles + every automatic deal + a code), single (one deal per order:
 	// a bundle line rules out automatic deals and codes).
 	Stacking string `json:"stacking"`
+	// Half and half (store-wide): a topping on a half costs the full price
+	// (HalfFull, "" too) or half of it rounded up to the cent (HalfHalf); the
+	// cheaper of two half-specialties adds its extra over the plain pizza at
+	// HalfSpecialtyOffPct % off.
+	HalfToppingPrice    string `json:"half_topping_price"`
+	HalfSpecialtyOffPct int    `json:"half_specialty_off_pct"`
 }
+
+// Half topping price modes.
+const (
+	HalfFull = "full"
+	HalfHalf = "half"
+)
 
 type Tips struct {
 	Enabled    bool  `json:"enabled"`
@@ -159,14 +185,42 @@ type Selection struct {
 	ChoiceID string `json:"choice_id"` // a combined item: the bank item picked
 	SizeID   string `json:"size_id"`
 	Options  []Pick `json:"options"`
+	// Halves are up to two half-specialties: a specialty pizza (a menu item)
+	// on the 1st or 2nd half, priced at the line's size.
+	Halves []Half `json:"halves,omitempty"`
+}
+
+// Half is a specialty pizza on one half of the line's pizza.
+type Half struct {
+	ItemID string `json:"item_id"` // a menu item's id
+	Half   int    `json:"half"`    // 1 | 2
 }
 
 // Pick is one chosen modifier option.
 type Pick struct {
 	GroupID  string `json:"group_id"`
 	OptionID string `json:"option_id"`
-	Portion  string `json:"portion"` // whole (default) | left | right
+	// Portion: whole (default, "" too) | first | second, on a group with
+	// portions (elsewhere it is whole). Older carts' left = first, right =
+	// second.
+	Portion string `json:"portion"`
+	// Mode: add (default, "" too) | only (that half — the whole pie for a
+	// whole pick — starts from the plain pizza with just its ONLY toppings) |
+	// no (take it off; free).
+	Mode string `json:"mode,omitempty"`
 }
+
+// Portions and modes (picks, resolved options and order lines).
+const (
+	PortionWhole  = ""
+	PortionFirst  = "first"
+	PortionSecond = "second"
+
+	ModeAdd       = "add"
+	ModeOnly      = "only"
+	ModeNo        = "no"
+	ModeSpecialty = "specialty" // a resolved half-specialty (never in a pick)
+)
 
 // Line is a cart line: an item (Selection) or a bundle deal (DealID + Picks).
 type Line struct {

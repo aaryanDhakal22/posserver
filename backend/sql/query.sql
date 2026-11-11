@@ -249,9 +249,9 @@ INSERT INTO orders (
 -- name: CreateLineItem :exec
 INSERT INTO line_items (
     id, order_id, parent_id, position, sku, name, quantity, unit_price_cents, line_total_cents, notes,
-    size, menu_item_id, printer_id, routing
+    size, menu_item_id, printer_id, routing, portion, mode
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 );
 
 -- name: CreatePayment :exec
@@ -407,7 +407,7 @@ WHERE tenant_id = $1 AND location_id = $2;
 
 -- name: GetLineItemsByOrderID :many
 SELECT id, order_id, parent_id, position, sku, name, quantity, unit_price_cents, line_total_cents, notes,
-       size, menu_item_id, printer_id, routing
+       size, menu_item_id, printer_id, routing, portion, mode
 FROM line_items WHERE order_id = $1
 ORDER BY parent_id NULLS FIRST, position;
 

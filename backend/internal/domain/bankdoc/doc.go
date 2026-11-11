@@ -105,6 +105,10 @@ type Item struct {
 	SKU         string      `json:"sku"`
 	Sizes       *[]ItemSize `json:"sizes,omitempty"`
 	Groups      *[]string   `json:"groups,omitempty"`
+	// HalfBase names a specialty pizza's plain pizza (another item), for
+	// half-and-half pricing (the item's half_base_item attribute). nil =
+	// keep, "" = none.
+	HalfBase *string `json:"half_base,omitempty"`
 }
 
 // ItemSize is a size an item comes in.
