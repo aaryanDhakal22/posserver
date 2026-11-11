@@ -18,7 +18,6 @@
 
 from __future__ import annotations
 
-import json
 import secrets
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo

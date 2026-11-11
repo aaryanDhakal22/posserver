@@ -2541,32 +2541,6 @@ func (q *Queries) GetAgentState(ctx context.Context, locationID pgtype.UUID) (Ag
 	return i, err
 }
 
-const getAgentUpdate = `-- name: GetAgentUpdate :one
-SELECT id, tenant_id, location_id, action, requested_by, force, state, from_version, to_version,
-       error, requested_at, updated_at
-FROM agent_updates WHERE id = $1
-`
-
-func (q *Queries) GetAgentUpdate(ctx context.Context, id pgtype.UUID) (AgentUpdate, error) {
-	row := q.db.QueryRow(ctx, getAgentUpdate, id)
-	var i AgentUpdate
-	err := row.Scan(
-		&i.ID,
-		&i.TenantID,
-		&i.LocationID,
-		&i.Action,
-		&i.RequestedBy,
-		&i.Force,
-		&i.State,
-		&i.FromVersion,
-		&i.ToVersion,
-		&i.Error,
-		&i.RequestedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const getAppReleaseAPK = `-- name: GetAppReleaseAPK :one
 SELECT apk FROM app_releases WHERE app = $1 AND version_code = $2
 `
@@ -9067,20 +9041,6 @@ func (q *Queries) SetChannelKey(ctx context.Context, arg SetChannelKeyParams) (C
 		&i.ViewID,
 	)
 	return i, err
-}
-
-const setChannelOrderCustomer = `-- name: SetChannelOrderCustomer :exec
-UPDATE channel_orders SET customer_id = $2 WHERE order_id = $1
-`
-
-type SetChannelOrderCustomerParams struct {
-	OrderID    pgtype.UUID `json:"order_id"`
-	CustomerID pgtype.UUID `json:"customer_id"`
-}
-
-func (q *Queries) SetChannelOrderCustomer(ctx context.Context, arg SetChannelOrderCustomerParams) error {
-	_, err := q.db.Exec(ctx, setChannelOrderCustomer, arg.OrderID, arg.CustomerID)
-	return err
 }
 
 const setChannelView = `-- name: SetChannelView :one

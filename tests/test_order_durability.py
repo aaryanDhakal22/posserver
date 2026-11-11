@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 import pytest
 import requests
 
-from conftest import ADMIN_V1, MAIN_BASE_URL, STORE_V1, wait_until
+from conftest import ADMIN_V1, MAIN_BASE_URL, wait_until
 from openapi import check
 from test_order_port import _channel, _menu, _ok, _order, _pizza, _place
 from test_square import _connect, _fake_payment, _fake_square_on, _hold  # noqa: F401 (fixture)

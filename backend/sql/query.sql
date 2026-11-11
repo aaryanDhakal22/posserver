@@ -987,11 +987,6 @@ SET state        = EXCLUDED.state,
     updated_at   = now()
 WHERE agent_updates.location_id = EXCLUDED.location_id;
 
--- name: GetAgentUpdate :one
-SELECT id, tenant_id, location_id, action, requested_by, force, state, from_version, to_version,
-       error, requested_at, updated_at
-FROM agent_updates WHERE id = $1;
-
 -- name: ListAgentUpdates :many
 SELECT id, tenant_id, location_id, action, requested_by, force, state, from_version, to_version,
        error, requested_at, updated_at
@@ -1923,9 +1918,6 @@ SELECT * FROM channel_orders WHERE customer_id = $1 AND created_at < $2 ORDER BY
 
 -- name: GetChannelOrderForCustomer :one
 SELECT * FROM channel_orders WHERE order_id = $1 AND customer_id = $2;
-
--- name: SetChannelOrderCustomer :exec
-UPDATE channel_orders SET customer_id = $2 WHERE order_id = $1;
 
 -- name: GetSiteReplyEmail :one
 SELECT reply_email FROM site_settings WHERE location_id = $1;

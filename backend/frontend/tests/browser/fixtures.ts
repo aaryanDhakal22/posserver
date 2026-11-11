@@ -170,8 +170,3 @@ export function png(w = 64, h = 64): Buffer {
     chunk('IEND', Buffer.alloc(0))
   ]);
 }
-
-/** Waits for the page's autosave to land (the "Saved" state on Store › Website). */
-export async function settled(page: Page) {
-  await page.waitForLoadState('networkidle');
-}

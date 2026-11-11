@@ -11,9 +11,7 @@ version: "3"
 vars:
   # Dev secrets come from a gitignored service-token file (no doppler login).
   DOPPLER_TOKEN_FILE: .doppler-dev-main
-  DEV_CONFIG: ./docker/docker-compose.dev.yml
   COMPOSE: "docker compose -f ./docker/docker-compose.dev.yml"
-  ENV_FILE: .env
   MIGRATIONS_DIR: backend/internal/migrate/sql
   API_BASE: "http://localhost:1323"
 

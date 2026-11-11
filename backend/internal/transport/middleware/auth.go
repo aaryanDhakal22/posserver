@@ -10,7 +10,6 @@ import (
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/observability"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v5"
 	"github.com/rs/zerolog"
@@ -125,8 +124,3 @@ func ScopeFromContext(ctx context.Context) order.Scope {
 		LocationID: order.LocationID(d.LocationID),
 	}
 }
-
-// IsZeroUUID is a small predicate shared by handlers that need to distinguish
-// "auth middleware did not run" from "device legitimately resolves to the
-// nil UUID" (which never happens, but explicit is better than implicit).
-func IsZeroUUID(u uuid.UUID) bool { return u == uuid.Nil }

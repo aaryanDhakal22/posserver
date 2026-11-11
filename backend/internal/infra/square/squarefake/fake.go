@@ -50,7 +50,6 @@ type Fake struct {
 	customers map[string]map[string]any   // id → customer
 	cards     map[string]map[string]any   // id → card
 	fail      map[string][]failure        // op → queued failures
-	calls     map[string]int              // op → calls (tests read it)
 	revoked   map[string]bool             // merchant → revoked
 	locations map[string][]map[string]any // merchant → locations
 }
@@ -73,7 +72,7 @@ func New(appID, appSecret string) *Fake {
 	return &Fake{AppID: appID, AppSecret: appSecret, codes: map[string]bool{}, access: map[string]string{}, refresh: map[string]string{},
 		payments: map[string]*payment{}, byKey: map[string]string{}, refunds: map[string]map[string]any{},
 		customers: map[string]map[string]any{}, cards: map[string]map[string]any{}, fail: map[string][]failure{},
-		calls: map[string]int{}, revoked: map[string]bool{}, locations: map[string][]map[string]any{}}
+		revoked: map[string]bool{}, locations: map[string][]map[string]any{}}
 }
 
 func id(prefix string) string {
@@ -90,13 +89,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func sqErr(w http.ResponseWriter, status int, category, code, detail string) {
 	writeJSON(w, status, map[string]any{"errors": []map[string]string{{"category": category, "code": code, "detail": detail}}})
-}
-
-// Calls is how many times op was called.
-func (f *Fake) Calls(op string) int {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.calls[op]
 }
 
 // FailNext makes the next count calls of op fail with code/status.
@@ -121,7 +113,6 @@ func (f *Fake) Payment(id string) (map[string]any, bool) {
 
 // failed pops a queued failure for op (callers hold mu).
 func (f *Fake) failed(w http.ResponseWriter, op string) bool {
-	f.calls[op]++
 	q := f.fail[op]
 	if len(q) == 0 {
 		return false

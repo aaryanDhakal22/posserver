@@ -77,9 +77,6 @@ var (
 	unknownAttrs  = pair(TenantUnknown, TenantUnknown)
 )
 
-// UnroutedAttrs is the store label pair for a measurement with no store.
-func UnroutedAttrs() []attribute.KeyValue { return unroutedAttrs }
-
 // StoreAttrs returns the [tenant, location] attributes for a tenant id
 // (TenantUnrouted for uuid.Nil).
 func StoreAttrs(ctx context.Context, tenantID uuid.UUID) []attribute.KeyValue {

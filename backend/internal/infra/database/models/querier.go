@@ -172,7 +172,6 @@ type Querier interface {
 	GetActiveTabletTokenByHash(ctx context.Context, tokenHash string) (GetActiveTabletTokenByHashRow, error)
 	GetAgentBackupData(ctx context.Context, id pgtype.UUID) (GetAgentBackupDataRow, error)
 	GetAgentState(ctx context.Context, locationID pgtype.UUID) (AgentState, error)
-	GetAgentUpdate(ctx context.Context, id pgtype.UUID) (AgentUpdate, error)
 	GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKParams) ([]byte, error)
 	GetCardHold(ctx context.Context, orderID pgtype.UUID) (CardHold, error)
 	GetCardHoldByRef(ctx context.Context, arg GetCardHoldByRefParams) (CardHold, error)
@@ -464,7 +463,6 @@ type Querier interface {
 	SetCardHoldAddedTip(ctx context.Context, arg SetCardHoldAddedTipParams) (int64, error)
 	SetCategoryPosition(ctx context.Context, arg SetCategoryPositionParams) error
 	SetChannelKey(ctx context.Context, arg SetChannelKeyParams) (Channel, error)
-	SetChannelOrderCustomer(ctx context.Context, arg SetChannelOrderCustomerParams) error
 	SetChannelView(ctx context.Context, arg SetChannelViewParams) (Channel, error)
 	SetCustomerSquareID(ctx context.Context, arg SetCustomerSquareIDParams) error
 	SetDiagReportResolved(ctx context.Context, arg SetDiagReportResolvedParams) (int64, error)

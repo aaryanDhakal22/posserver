@@ -23,7 +23,6 @@ import json
 import os
 import secrets
 import time
-import uuid
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -309,18 +308,6 @@ def publish(sqs):
     return _publish
 
 
-@pytest.fixture
-def purged_queue(sqs):
-    """Opt-in: start from an empty dev queue. Dev-only by construction (the
-    sqs fixture skips elsewhere). ElasticMQ rate-limits purges; on cooldown we
-    just carry on — tests don't depend on an empty queue for correctness."""
-    try:
-        sqs.purge_queue(QueueUrl=SQS_QUEUE_URL)
-    except Exception:  # noqa: BLE001
-        pass
-    yield
-
-
 def wait_order(api_key: str, source_event_id: int | str, *, timeout: float = 30.0) -> dict:
     """Poll main's scoped by-source lookup until the order lands."""
     def _get():
@@ -369,7 +356,3 @@ def vendor_order(order_id: int, *, store_name: str, store_id: int | None,
     if store_id is not None:
         o["store_id"] = store_id
     return o
-
-
-def new_uuid() -> str:
-    return str(uuid.uuid4())
