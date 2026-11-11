@@ -22,7 +22,8 @@ type PlacementRepository struct {
 	box  TextBox // nil: card tokens are stored as given
 }
 
-// TextBox seals the card token a placement keeps while it is in flight
+// TextBox seals the card token and the buyer's 3-D Secure verification token a
+// placement keeps while it is in flight
 // (squarepay.Service: SQUARE_TOKEN_KEY, the stored OAuth tokens' key). Open
 // must return a value it never sealed unchanged (plaintext rows from before).
 type TextBox interface {
@@ -40,16 +41,24 @@ func (r *PlacementRepository) sealToken(t string) (string, error) {
 	return r.box.SealText(t)
 }
 
-// opened is p with its card token opened.
+// opened is p with its card + verification tokens opened.
 func (r *PlacementRepository) opened(p Placement) (Placement, error) {
-	if r.box == nil || p.CardToken == "" {
+	if r.box == nil {
 		return p, nil
 	}
-	t, err := r.box.OpenText(p.CardToken)
-	if err != nil {
-		return Placement{}, fmt.Errorf("placement %s: card token: %w", p.ClientOrderID, err)
+	for _, f := range []struct {
+		name string
+		v    *string
+	}{{"card token", &p.CardToken}, {"verification token", &p.VerificationToken}} {
+		if *f.v == "" {
+			continue
+		}
+		t, err := r.box.OpenText(*f.v)
+		if err != nil {
+			return Placement{}, fmt.Errorf("placement %s: %s: %w", p.ClientOrderID, f.name, err)
+		}
+		*f.v = t
 	}
-	p.CardToken = t
 	return p, nil
 }
 
@@ -64,7 +73,7 @@ func (r *PlacementRepository) openedAll(ps []Placement, err error) ([]Placement,
 		if o, oerr := r.opened(ps[i]); oerr == nil {
 			ps[i] = o
 		} else {
-			ps[i].CardToken = ""
+			ps[i].CardToken, ps[i].VerificationToken = "", ""
 		}
 	}
 	return ps, nil
@@ -140,9 +149,13 @@ func (r *PlacementRepository) Insert(ctx context.Context, p Placement) (Placemen
 	if err != nil {
 		return Placement{}, false, err
 	}
+	verification, err := r.sealToken(p.VerificationToken)
+	if err != nil {
+		return Placement{}, false, err
+	}
 	row, err := q.InsertPlacement(ctx, models.InsertPlacementParams{ChannelID: toPgUUID(p.ChannelID), ClientOrderID: p.ClientOrderID,
 		TenantID: toPgUUID(p.TenantID), LocationID: toPgUUID(p.LocationID), BodyHash: p.BodyHash, Request: p.Request,
-		CardToken: token, VerificationToken: p.VerificationToken, CustomerID: pgIDPtr(p.CustomerID), Operator: p.Operator,
+		CardToken: token, VerificationToken: verification, CustomerID: pgIDPtr(p.CustomerID), Operator: p.Operator,
 		ExpiresAt: pgTS(p.ExpiresAt), State: p.State, Result: p.Result, Worker: p.Worker})
 	if err == nil {
 		got, err := r.opened(placementOf(row))
@@ -167,6 +180,10 @@ func (r *PlacementRepository) Get(ctx context.Context, channelID uuid.UUID, key 
 // Claim takes a pending placement over for worker; false = someone else did.
 func (r *PlacementRepository) Claim(ctx context.Context, p Placement, worker, cardToken, verificationToken string) (bool, error) {
 	cardToken, err := r.sealToken(cardToken)
+	if err != nil {
+		return false, err
+	}
+	verificationToken, err = r.sealToken(verificationToken)
 	if err != nil {
 		return false, err
 	}

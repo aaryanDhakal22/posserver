@@ -46,4 +46,16 @@ func TestPlacementTokenBox(t *testing.T) {
 	if err != nil || ps[0].CardToken != "a" || ps[1].CardToken != "" || ps[2].CardToken != "plain" {
 		t.Fatalf("openedAll = %+v, %v", ps, err)
 	}
+	// The 3-D Secure verification token is sealed and opened the same way.
+	p, err = r.opened(Placement{CardToken: "sealed:c", VerificationToken: "sealed:v"})
+	if err != nil || p.CardToken != "c" || p.VerificationToken != "v" {
+		t.Fatalf("opened with verification = %+v, %v", p, err)
+	}
+	if _, err := r.opened(Placement{VerificationToken: "sealed:bad"}); err == nil {
+		t.Fatal("a verification token that can't be opened was read")
+	}
+	ps, _ = r.openedAll([]Placement{{CardToken: "sealed:c", VerificationToken: "sealed:bad"}}, nil)
+	if ps[0].CardToken != "" || ps[0].VerificationToken != "" {
+		t.Fatalf("openedAll left a half-opened row: %+v", ps[0])
+	}
 }
