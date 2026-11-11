@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
+from gatemark import intentional, intentional_sleep
 from conftest import ADMIN_V1, STORE_V1, store_key, wait_order, wait_until
 from sse import SSEStream
 
@@ -138,16 +139,18 @@ def test_unacked_orders_are_resent_until_acked(store, publish) -> None:
         publish(o)
         first = s.wait_event("order", lambda d: d.get("source_event_id") == str(o["order_id"]), timeout=30)
         assert first, "order never arrived"
-        again = s.wait_event("order", lambda d: d.get("id") == first["id"], timeout=25)
+        with intentional("main's redelivery timer (ORDER_REDELIVER_AFTER, 10 s)"):
+            again = s.wait_event("order", lambda d: d.get("id") == first["id"], timeout=25)
         assert again, "an unacked order must be re-sent"
 
         r = _rpc(store.key, "order.ack", {"order_ids": [first["id"]]})
         assert r.status_code == 200, r.text
         assert r.json()["payload"]["acked"] == 1
-        time.sleep(1)
+        intentional_sleep(1, "the ack lands before the stream is drained")
         s.drain()
-        assert s.wait_event("order", lambda d: d.get("id") == first["id"], timeout=15) is None, \
-            "an acked order is not re-sent"
+        with intentional("absence: an acked order is not re-sent (15 s)"):
+            assert s.wait_event("order", lambda d: d.get("id") == first["id"], timeout=15) is None, \
+                "an acked order is not re-sent"
 
 
 def test_backups_keep_the_newest_two(admin, store) -> None:

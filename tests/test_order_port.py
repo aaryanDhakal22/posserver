@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 import pytest
 import requests
 
+from gatemark import intentional
 from conftest import ADMIN_V1, MAIN_BASE_URL, STORE_V1, wait_order, wait_until
 from openapi import check
 from sse import SSEStream
@@ -119,7 +120,8 @@ def test_place_cash_pickup(admin, store, mgr) -> None:
         # Placing it again: the same order, nothing new for the Pi.
         again = _place(op, body)
         assert again.status_code == 200 and check(again, "placeOrder")["id"] == o["id"]
-        assert s.wait_event("order", lambda d: d.get("id") != o["id"], timeout=3) is None  # waits on purpose
+        with intentional("absence: placing it again sends the Pi nothing new"):
+            assert s.wait_event("order", lambda d: d.get("id") != o["id"], timeout=3) is None  # waits on purpose
 
     # The Pi got an ordinary Snapshot.
     assert frame["source"] == "operator" and frame["status"] == "received"

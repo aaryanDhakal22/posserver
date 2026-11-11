@@ -5,6 +5,7 @@ import json
 
 import requests
 
+from gatemark import intentional
 from conftest import API_V1, STORE_V1
 from sse import SSEStream
 
@@ -51,7 +52,8 @@ def test_no_cross_tenant_leak(publish, make_store) -> None:
         assert s.next()["event"] == "store_config"
         o = a.order()
         publish(o)
-        leaked = s.wait_event("order", lambda d: d.get("source_event_id") == str(o["order_id"]), timeout=10)
+        with intentional("absence: store B's stream must not get store A's order (10 s)"):
+            leaked = s.wait_event("order", lambda d: d.get("source_event_id") == str(o["order_id"]), timeout=10)
         assert leaked is None, f"store B's stream received store A's order: {leaked}"
 
 

@@ -28,6 +28,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 import requests
 
+from gatemark import intentional
 from conftest import ADMIN_V1, IS_DEV, STORE_V1, store_key, wait_order, wait_until
 from sse import SSEStream
 
@@ -313,15 +314,17 @@ def test_delivery_order_is_located_routed_and_pushed_with_times(admin, store, pu
         assert pair[0]["to_s"] != pair[0]["from_s"]  # both directions, not a copy
 
         # Acked: not pushed again.
-        assert s.wait_event("command", lambda d: d.get("type") == "order.geo", timeout=6) is None
+        with intentional("absence: an acked order.geo is not pushed again"):
+            assert s.wait_event("command", lambda d: d.get("type") == "order.geo", timeout=6) is None
 
     # A pickup order gets no geo work at all.
     with SSEStream(store.key) as s:
         p = store.order()
         publish(p)
         pid = wait_order(store.key, p["order_id"])["id"]
-        assert s.wait_event("command", lambda d: d.get("type") == "order.geo" and d["payload"]["order_id"] == pid,
-                            timeout=6) is None
+        with intentional("absence: a pickup gets no order.geo"):
+            assert s.wait_event("command", lambda d: d.get("type") == "order.geo" and d["payload"]["order_id"] == pid,
+                                timeout=6) is None
 
 
 def test_outside_area_and_not_found(admin, store, publish, fake_geo) -> None:
