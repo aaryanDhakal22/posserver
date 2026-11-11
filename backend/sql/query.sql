@@ -1844,17 +1844,29 @@ SELECT * FROM card_holds WHERE location_id = $1 AND payment_ref = $2;
 -- weborder stage 2: customer accounts + email receipts.
 
 -- name: UpsertCustomerByPhone :one
-INSERT INTO customers (tenant_id, location_id, phone, name)
-VALUES ($1, $2, $3, $4)
+-- Website sign-in: a name typed there fills an empty one (with its first +
+-- last split, name_source web); an existing name is kept.
+INSERT INTO customers (tenant_id, location_id, phone, name, first_name, last_name, name_source, source)
+VALUES (sqlc.arg(tenant_id), sqlc.arg(location_id), sqlc.arg(phone), sqlc.arg(name), sqlc.arg(first_name), sqlc.arg(last_name),
+        CASE WHEN sqlc.arg(name)::text = '' THEN '' ELSE 'web' END, 'web')
 ON CONFLICT (location_id, phone) DO UPDATE SET last_seen_at = now(),
-    name = CASE WHEN customers.name = '' THEN EXCLUDED.name ELSE customers.name END
+    name        = CASE WHEN customers.name = '' THEN EXCLUDED.name ELSE customers.name END,
+    first_name  = CASE WHEN customers.name = '' THEN EXCLUDED.first_name ELSE customers.first_name END,
+    last_name   = CASE WHEN customers.name = '' THEN EXCLUDED.last_name ELSE customers.last_name END,
+    name_source = CASE WHEN customers.name = '' AND EXCLUDED.name <> '' THEN 'web' ELSE customers.name_source END
 RETURNING *, (xmax = 0) AS created;
 
 -- name: GetCustomer :one
 SELECT * FROM customers WHERE id = $1;
 
 -- name: UpdateCustomerProfile :one
-UPDATE customers SET name = $2, email = $3, updated_at = now() WHERE id = $1 RETURNING *;
+-- The website's profile: a name it sends is the customer's own (name_source web).
+-- When it didn't change the name, first + last stay as they are.
+UPDATE customers SET name = sqlc.arg(name), email = sqlc.arg(email),
+    first_name  = CASE WHEN sqlc.arg(name_set)::bool THEN sqlc.arg(first_name) ELSE first_name END,
+    last_name   = CASE WHEN sqlc.arg(name_set)::bool THEN sqlc.arg(last_name) ELSE last_name END,
+    name_source = CASE WHEN sqlc.arg(name_set)::bool THEN 'web' ELSE name_source END, updated_at = now()
+WHERE id = sqlc.arg(id) RETURNING *;
 
 -- name: SetCustomerSquareID :exec
 UPDATE customers SET square_customer_id = $2, updated_at = now() WHERE id = $1;
@@ -1925,6 +1937,47 @@ SELECT * FROM channel_orders WHERE customer_id = $1 AND created_at < $2 ORDER BY
 
 -- name: GetChannelOrderForCustomer :one
 SELECT * FROM channel_orders WHERE order_id = $1 AND customer_id = $2;
+
+-- Terminal stage 0c: the bulk import + the Pi's change feed.
+
+-- name: ListCustomersByPhones :many
+SELECT * FROM customers WHERE location_id = $1 AND phone = ANY(sqlc.arg(phones)::text[]);
+
+-- name: ListAddressesOfCustomers :many
+SELECT * FROM customer_addresses WHERE customer_id = ANY(sqlc.arg(ids)::uuid[]) ORDER BY customer_id, is_default DESC, created_at;
+
+-- name: InsertImportedCustomer :one
+INSERT INTO customers (tenant_id, location_id, phone, name, first_name, last_name, notes, source, name_source, notes_source)
+VALUES (sqlc.arg(tenant_id), sqlc.arg(location_id), sqlc.arg(phone), sqlc.arg(name), sqlc.arg(first_name), sqlc.arg(last_name),
+        sqlc.arg(notes), 'import',
+        CASE WHEN sqlc.arg(name)::text = '' THEN '' ELSE 'import' END,
+        CASE WHEN sqlc.arg(notes)::text = '' THEN '' ELSE 'import' END)
+RETURNING *;
+
+-- name: UpdateImportedCustomer :exec
+UPDATE customers SET name = $2, first_name = $3, last_name = $4, name_source = $5, notes = $6, notes_source = $7
+WHERE id = $1;
+
+-- name: FillCustomerAddress :exec
+-- The import fills an existing address's blank fields (never overwrites).
+UPDATE customer_addresses SET line2 = $2, city = $3, state = $4, zip = $5, notes = $6, label = $7 WHERE id = $1;
+
+-- name: CustomerChanges :many
+-- The Pi's change feed: customers changed and customers deleted at the store
+-- after the cursor (ts, id), oldest first.
+SELECT * FROM (
+    SELECT c.id, c.updated_at AS at, false AS deleted FROM customers c
+    WHERE c.location_id = sqlc.arg(location_id) AND (c.updated_at, c.id) > (sqlc.arg(after_at)::timestamptz, sqlc.arg(after_id)::uuid)
+    UNION ALL
+    SELECT t.customer_id, t.deleted_at, true FROM customer_tombstones t
+    WHERE t.location_id = sqlc.arg(location_id) AND (t.deleted_at, t.customer_id) > (sqlc.arg(after_at)::timestamptz, sqlc.arg(after_id)::uuid)
+) ch ORDER BY at, id LIMIT sqlc.arg(max_rows);
+
+-- name: ListCustomersByIDs :many
+SELECT * FROM customers WHERE id = ANY(sqlc.arg(ids)::uuid[]);
+
+-- name: PruneCustomerTombstones :execrows
+DELETE FROM customer_tombstones WHERE deleted_at < $1;
 
 -- name: GetSiteReplyEmail :one
 SELECT reply_email FROM site_settings WHERE location_id = $1;

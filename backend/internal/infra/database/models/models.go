@@ -137,6 +137,12 @@ type Customer struct {
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 	LastSeenAt       pgtype.Timestamptz `json:"last_seen_at"`
+	FirstName        string             `json:"first_name"`
+	LastName         string             `json:"last_name"`
+	Notes            string             `json:"notes"`
+	Source           string             `json:"source"`
+	NameSource       string             `json:"name_source"`
+	NotesSource      string             `json:"notes_source"`
 }
 
 type CustomerAddress struct {
@@ -172,6 +178,12 @@ type CustomerSession struct {
 	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+}
+
+type CustomerTombstone struct {
+	CustomerID pgtype.UUID        `json:"customer_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	DeletedAt  pgtype.Timestamptz `json:"deleted_at"`
 }
 
 type Deal struct {

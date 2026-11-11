@@ -40,6 +40,17 @@ type Customer struct {
 	Email            string    `json:"email"`
 	SquareCustomerID string    `json:"-"`
 	CreatedAt        time.Time `json:"created_at"`
+
+	// Terminal stage 0c (migration 00035). Not on the website's JSON: the
+	// website keeps `name`; first + last are the counter's (names.go has how
+	// they stay in step). Notes are the store's, not the customer's.
+	FirstName   string    `json:"-"`
+	LastName    string    `json:"-"`
+	Notes       string    `json:"-"`
+	Source      string    `json:"-"` // web | counter | import: where the account was made
+	NameSource  string    `json:"-"` // who last wrote the name ('' | web | counter | import)
+	NotesSource string    `json:"-"` // who last wrote the notes
+	UpdatedAt   time.Time `json:"-"`
 }
 
 // Address is a saved delivery address.

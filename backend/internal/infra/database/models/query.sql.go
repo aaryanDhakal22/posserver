@@ -1620,7 +1620,7 @@ const customerBySession = `-- name: CustomerBySession :one
 UPDATE customer_sessions s SET last_used_at = now(), expires_at = GREATEST(s.expires_at, $3::timestamptz)
 FROM customers c
 WHERE s.token_hash = $1 AND s.location_id = $2 AND s.expires_at > now() AND c.id = s.customer_id
-RETURNING c.id, c.tenant_id, c.location_id, c.phone, c.name, c.email, c.square_customer_id, c.created_at, c.updated_at, c.last_seen_at
+RETURNING c.id, c.tenant_id, c.location_id, c.phone, c.name, c.email, c.square_customer_id, c.created_at, c.updated_at, c.last_seen_at, c.first_name, c.last_name, c.notes, c.source, c.name_source, c.notes_source
 `
 
 type CustomerBySessionParams struct {
@@ -1644,8 +1644,64 @@ func (q *Queries) CustomerBySession(ctx context.Context, arg CustomerBySessionPa
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastSeenAt,
+		&i.FirstName,
+		&i.LastName,
+		&i.Notes,
+		&i.Source,
+		&i.NameSource,
+		&i.NotesSource,
 	)
 	return i, err
+}
+
+const customerChanges = `-- name: CustomerChanges :many
+SELECT id, at, deleted FROM (
+    SELECT c.id, c.updated_at AS at, false AS deleted FROM customers c
+    WHERE c.location_id = $1 AND (c.updated_at, c.id) > ($2::timestamptz, $3::uuid)
+    UNION ALL
+    SELECT t.customer_id, t.deleted_at, true FROM customer_tombstones t
+    WHERE t.location_id = $1 AND (t.deleted_at, t.customer_id) > ($2::timestamptz, $3::uuid)
+) ch ORDER BY at, id LIMIT $4
+`
+
+type CustomerChangesParams struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	AfterAt    pgtype.Timestamptz `json:"after_at"`
+	AfterID    pgtype.UUID        `json:"after_id"`
+	MaxRows    int32              `json:"max_rows"`
+}
+
+type CustomerChangesRow struct {
+	ID      pgtype.UUID        `json:"id"`
+	At      pgtype.Timestamptz `json:"at"`
+	Deleted bool               `json:"deleted"`
+}
+
+// The Pi's change feed: customers changed and customers deleted at the store
+// after the cursor (ts, id), oldest first.
+func (q *Queries) CustomerChanges(ctx context.Context, arg CustomerChangesParams) ([]CustomerChangesRow, error) {
+	rows, err := q.db.Query(ctx, customerChanges,
+		arg.LocationID,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CustomerChangesRow
+	for rows.Next() {
+		var i CustomerChangesRow
+		if err := rows.Scan(&i.ID, &i.At, &i.Deleted); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const deferExternalStopPush = `-- name: DeferExternalStopPush :exec
@@ -2353,6 +2409,34 @@ func (q *Queries) ExpireOutUntil(ctx context.Context) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const fillCustomerAddress = `-- name: FillCustomerAddress :exec
+UPDATE customer_addresses SET line2 = $2, city = $3, state = $4, zip = $5, notes = $6, label = $7 WHERE id = $1
+`
+
+type FillCustomerAddressParams struct {
+	ID    pgtype.UUID `json:"id"`
+	Line2 string      `json:"line2"`
+	City  string      `json:"city"`
+	State string      `json:"state"`
+	Zip   string      `json:"zip"`
+	Notes string      `json:"notes"`
+	Label string      `json:"label"`
+}
+
+// The import fills an existing address's blank fields (never overwrites).
+func (q *Queries) FillCustomerAddress(ctx context.Context, arg FillCustomerAddressParams) error {
+	_, err := q.db.Exec(ctx, fillCustomerAddress,
+		arg.ID,
+		arg.Line2,
+		arg.City,
+		arg.State,
+		arg.Zip,
+		arg.Notes,
+		arg.Label,
+	)
+	return err
+}
+
 const findDiagReportIDsByPrefix = `-- name: FindDiagReportIDsByPrefix :many
 SELECT id FROM diag_reports WHERE id::text LIKE $1::text || '%' ORDER BY received_at DESC LIMIT 2
 `
@@ -2765,7 +2849,7 @@ func (q *Queries) GetChannelOrderForCustomer(ctx context.Context, arg GetChannel
 }
 
 const getCustomer = `-- name: GetCustomer :one
-SELECT id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at FROM customers WHERE id = $1
+SELECT id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, first_name, last_name, notes, source, name_source, notes_source FROM customers WHERE id = $1
 `
 
 func (q *Queries) GetCustomer(ctx context.Context, id pgtype.UUID) (Customer, error) {
@@ -2782,6 +2866,12 @@ func (q *Queries) GetCustomer(ctx context.Context, id pgtype.UUID) (Customer, er
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastSeenAt,
+		&i.FirstName,
+		&i.LastName,
+		&i.Notes,
+		&i.Source,
+		&i.NameSource,
+		&i.NotesSource,
 	)
 	return i, err
 }
@@ -4554,6 +4644,57 @@ func (q *Queries) InsertEmailReceipt(ctx context.Context, arg InsertEmailReceipt
 	return err
 }
 
+const insertImportedCustomer = `-- name: InsertImportedCustomer :one
+INSERT INTO customers (tenant_id, location_id, phone, name, first_name, last_name, notes, source, name_source, notes_source)
+VALUES ($1, $2, $3, $4, $5, $6,
+        $7, 'import',
+        CASE WHEN $4::text = '' THEN '' ELSE 'import' END,
+        CASE WHEN $7::text = '' THEN '' ELSE 'import' END)
+RETURNING id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, first_name, last_name, notes, source, name_source, notes_source
+`
+
+type InsertImportedCustomerParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	Phone      string      `json:"phone"`
+	Name       string      `json:"name"`
+	FirstName  string      `json:"first_name"`
+	LastName   string      `json:"last_name"`
+	Notes      string      `json:"notes"`
+}
+
+func (q *Queries) InsertImportedCustomer(ctx context.Context, arg InsertImportedCustomerParams) (Customer, error) {
+	row := q.db.QueryRow(ctx, insertImportedCustomer,
+		arg.TenantID,
+		arg.LocationID,
+		arg.Phone,
+		arg.Name,
+		arg.FirstName,
+		arg.LastName,
+		arg.Notes,
+	)
+	var i Customer
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Phone,
+		&i.Name,
+		&i.Email,
+		&i.SquareCustomerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastSeenAt,
+		&i.FirstName,
+		&i.LastName,
+		&i.Notes,
+		&i.Source,
+		&i.NameSource,
+		&i.NotesSource,
+	)
+	return i, err
+}
+
 const insertItemSize = `-- name: InsertItemSize :exec
 INSERT INTO menu_item_sizes (tenant_id, location_id, item_id, size_id, price_cents, kitchen_name, position)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -4941,6 +5082,42 @@ func (q *Queries) LatestChannelEvent(ctx context.Context, channelID pgtype.UUID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const listAddressesOfCustomers = `-- name: ListAddressesOfCustomers :many
+SELECT id, customer_id, label, line1, line2, city, state, zip, notes, is_default, created_at FROM customer_addresses WHERE customer_id = ANY($1::uuid[]) ORDER BY customer_id, is_default DESC, created_at
+`
+
+func (q *Queries) ListAddressesOfCustomers(ctx context.Context, ids []pgtype.UUID) ([]CustomerAddress, error) {
+	rows, err := q.db.Query(ctx, listAddressesOfCustomers, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CustomerAddress
+	for rows.Next() {
+		var i CustomerAddress
+		if err := rows.Scan(
+			&i.ID,
+			&i.CustomerID,
+			&i.Label,
+			&i.Line1,
+			&i.Line2,
+			&i.City,
+			&i.State,
+			&i.Zip,
+			&i.Notes,
+			&i.IsDefault,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAgentBackups = `-- name: ListAgentBackups :many
@@ -5645,6 +5822,95 @@ func (q *Queries) ListCustomerOrders(ctx context.Context, arg ListCustomerOrders
 			&i.AlertedAt,
 			&i.OperatorID,
 			&i.CustomerID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCustomersByIDs = `-- name: ListCustomersByIDs :many
+SELECT id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, first_name, last_name, notes, source, name_source, notes_source FROM customers WHERE id = ANY($1::uuid[])
+`
+
+func (q *Queries) ListCustomersByIDs(ctx context.Context, ids []pgtype.UUID) ([]Customer, error) {
+	rows, err := q.db.Query(ctx, listCustomersByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Customer
+	for rows.Next() {
+		var i Customer
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Phone,
+			&i.Name,
+			&i.Email,
+			&i.SquareCustomerID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.LastSeenAt,
+			&i.FirstName,
+			&i.LastName,
+			&i.Notes,
+			&i.Source,
+			&i.NameSource,
+			&i.NotesSource,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCustomersByPhones = `-- name: ListCustomersByPhones :many
+
+SELECT id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, first_name, last_name, notes, source, name_source, notes_source FROM customers WHERE location_id = $1 AND phone = ANY($2::text[])
+`
+
+type ListCustomersByPhonesParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Phones     []string    `json:"phones"`
+}
+
+// Terminal stage 0c: the bulk import + the Pi's change feed.
+func (q *Queries) ListCustomersByPhones(ctx context.Context, arg ListCustomersByPhonesParams) ([]Customer, error) {
+	rows, err := q.db.Query(ctx, listCustomersByPhones, arg.LocationID, arg.Phones)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Customer
+	for rows.Next() {
+		var i Customer
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Phone,
+			&i.Name,
+			&i.Email,
+			&i.SquareCustomerID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.LastSeenAt,
+			&i.FirstName,
+			&i.LastName,
+			&i.Notes,
+			&i.Source,
+			&i.NameSource,
+			&i.NotesSource,
 		); err != nil {
 			return nil, err
 		}
@@ -8213,6 +8479,18 @@ func (q *Queries) PruneCustomerSessions(ctx context.Context) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const pruneCustomerTombstones = `-- name: PruneCustomerTombstones :execrows
+DELETE FROM customer_tombstones WHERE deleted_at < $1
+`
+
+func (q *Queries) PruneCustomerTombstones(ctx context.Context, deletedAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneCustomerTombstones, deletedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const pruneDiagReports = `-- name: PruneDiagReports :execrows
 DELETE FROM diag_reports WHERE received_at < $1
 `
@@ -10191,17 +10469,33 @@ func (q *Queries) UpdateCustomerAddress(ctx context.Context, arg UpdateCustomerA
 }
 
 const updateCustomerProfile = `-- name: UpdateCustomerProfile :one
-UPDATE customers SET name = $2, email = $3, updated_at = now() WHERE id = $1 RETURNING id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at
+UPDATE customers SET name = $1, email = $2,
+    first_name  = CASE WHEN $3::bool THEN $4 ELSE first_name END,
+    last_name   = CASE WHEN $3::bool THEN $5 ELSE last_name END,
+    name_source = CASE WHEN $3::bool THEN 'web' ELSE name_source END, updated_at = now()
+WHERE id = $6 RETURNING id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, first_name, last_name, notes, source, name_source, notes_source
 `
 
 type UpdateCustomerProfileParams struct {
-	ID    pgtype.UUID `json:"id"`
-	Name  string      `json:"name"`
-	Email string      `json:"email"`
+	Name      string      `json:"name"`
+	Email     string      `json:"email"`
+	NameSet   bool        `json:"name_set"`
+	FirstName string      `json:"first_name"`
+	LastName  string      `json:"last_name"`
+	ID        pgtype.UUID `json:"id"`
 }
 
+// The website's profile: a name it sends is the customer's own (name_source web).
+// When it didn't change the name, first + last stay as they are.
 func (q *Queries) UpdateCustomerProfile(ctx context.Context, arg UpdateCustomerProfileParams) (Customer, error) {
-	row := q.db.QueryRow(ctx, updateCustomerProfile, arg.ID, arg.Name, arg.Email)
+	row := q.db.QueryRow(ctx, updateCustomerProfile,
+		arg.Name,
+		arg.Email,
+		arg.NameSet,
+		arg.FirstName,
+		arg.LastName,
+		arg.ID,
+	)
 	var i Customer
 	err := row.Scan(
 		&i.ID,
@@ -10214,6 +10508,12 @@ func (q *Queries) UpdateCustomerProfile(ctx context.Context, arg UpdateCustomerP
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastSeenAt,
+		&i.FirstName,
+		&i.LastName,
+		&i.Notes,
+		&i.Source,
+		&i.NameSource,
+		&i.NotesSource,
 	)
 	return i, err
 }
@@ -10265,6 +10565,34 @@ func (q *Queries) UpdateDeal(ctx context.Context, arg UpdateDealParams) (Deal, e
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const updateImportedCustomer = `-- name: UpdateImportedCustomer :exec
+UPDATE customers SET name = $2, first_name = $3, last_name = $4, name_source = $5, notes = $6, notes_source = $7
+WHERE id = $1
+`
+
+type UpdateImportedCustomerParams struct {
+	ID          pgtype.UUID `json:"id"`
+	Name        string      `json:"name"`
+	FirstName   string      `json:"first_name"`
+	LastName    string      `json:"last_name"`
+	NameSource  string      `json:"name_source"`
+	Notes       string      `json:"notes"`
+	NotesSource string      `json:"notes_source"`
+}
+
+func (q *Queries) UpdateImportedCustomer(ctx context.Context, arg UpdateImportedCustomerParams) error {
+	_, err := q.db.Exec(ctx, updateImportedCustomer,
+		arg.ID,
+		arg.Name,
+		arg.FirstName,
+		arg.LastName,
+		arg.NameSource,
+		arg.Notes,
+		arg.NotesSource,
+	)
+	return err
 }
 
 const updateLocationDetails = `-- name: UpdateLocationDetails :one
@@ -10954,11 +11282,15 @@ func (q *Queries) UpsertAgentUpdateStatus(ctx context.Context, arg UpsertAgentUp
 
 const upsertCustomerByPhone = `-- name: UpsertCustomerByPhone :one
 
-INSERT INTO customers (tenant_id, location_id, phone, name)
-VALUES ($1, $2, $3, $4)
+INSERT INTO customers (tenant_id, location_id, phone, name, first_name, last_name, name_source, source)
+VALUES ($1, $2, $3, $4, $5, $6,
+        CASE WHEN $4::text = '' THEN '' ELSE 'web' END, 'web')
 ON CONFLICT (location_id, phone) DO UPDATE SET last_seen_at = now(),
-    name = CASE WHEN customers.name = '' THEN EXCLUDED.name ELSE customers.name END
-RETURNING id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, (xmax = 0) AS created
+    name        = CASE WHEN customers.name = '' THEN EXCLUDED.name ELSE customers.name END,
+    first_name  = CASE WHEN customers.name = '' THEN EXCLUDED.first_name ELSE customers.first_name END,
+    last_name   = CASE WHEN customers.name = '' THEN EXCLUDED.last_name ELSE customers.last_name END,
+    name_source = CASE WHEN customers.name = '' AND EXCLUDED.name <> '' THEN 'web' ELSE customers.name_source END
+RETURNING id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, first_name, last_name, notes, source, name_source, notes_source, (xmax = 0) AS created
 `
 
 type UpsertCustomerByPhoneParams struct {
@@ -10966,6 +11298,8 @@ type UpsertCustomerByPhoneParams struct {
 	LocationID pgtype.UUID `json:"location_id"`
 	Phone      string      `json:"phone"`
 	Name       string      `json:"name"`
+	FirstName  string      `json:"first_name"`
+	LastName   string      `json:"last_name"`
 }
 
 type UpsertCustomerByPhoneRow struct {
@@ -10979,16 +11313,26 @@ type UpsertCustomerByPhoneRow struct {
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 	LastSeenAt       pgtype.Timestamptz `json:"last_seen_at"`
+	FirstName        string             `json:"first_name"`
+	LastName         string             `json:"last_name"`
+	Notes            string             `json:"notes"`
+	Source           string             `json:"source"`
+	NameSource       string             `json:"name_source"`
+	NotesSource      string             `json:"notes_source"`
 	Created          bool               `json:"created"`
 }
 
 // weborder stage 2: customer accounts + email receipts.
+// Website sign-in: a name typed there fills an empty one (with its first +
+// last split, name_source web); an existing name is kept.
 func (q *Queries) UpsertCustomerByPhone(ctx context.Context, arg UpsertCustomerByPhoneParams) (UpsertCustomerByPhoneRow, error) {
 	row := q.db.QueryRow(ctx, upsertCustomerByPhone,
 		arg.TenantID,
 		arg.LocationID,
 		arg.Phone,
 		arg.Name,
+		arg.FirstName,
+		arg.LastName,
 	)
 	var i UpsertCustomerByPhoneRow
 	err := row.Scan(
@@ -11002,6 +11346,12 @@ func (q *Queries) UpsertCustomerByPhone(ctx context.Context, arg UpsertCustomerB
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastSeenAt,
+		&i.FirstName,
+		&i.LastName,
+		&i.Notes,
+		&i.Source,
+		&i.NameSource,
+		&i.NotesSource,
 		&i.Created,
 	)
 	return i, err

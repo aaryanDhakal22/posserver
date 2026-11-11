@@ -97,6 +97,9 @@ type Querier interface {
 	CreateTenant(ctx context.Context, arg CreateTenantParams) (Tenant, error)
 	// A live session's customer; the session is renewed (90 days from now) as it is read.
 	CustomerBySession(ctx context.Context, arg CustomerBySessionParams) (Customer, error)
+	// The Pi's change feed: customers changed and customers deleted at the store
+	// after the cursor (ts, id), oldest first.
+	CustomerChanges(ctx context.Context, arg CustomerChangesParams) ([]CustomerChangesRow, error)
 	DeferExternalStopPush(ctx context.Context, arg DeferExternalStopPushParams) error
 	DeferOrderGeoPush(ctx context.Context, arg DeferOrderGeoPushParams) error
 	DeleteAppRelease(ctx context.Context, arg DeleteAppReleaseParams) (int64, error)
@@ -162,6 +165,8 @@ type Querier interface {
 	EnsureStoreOrdering(ctx context.Context, arg EnsureStoreOrderingParams) error
 	// An item 86'd until a time comes back at that time (any location).
 	ExpireOutUntil(ctx context.Context) (int64, error)
+	// The import fills an existing address's blank fields (never overwrites).
+	FillCustomerAddress(ctx context.Context, arg FillCustomerAddressParams) error
 	// The page links carry only the first 8 hex chars of a report id.
 	FindDiagReportIDsByPrefix(ctx context.Context, prefix string) ([]pgtype.UUID, error)
 	// A final state other than placed (refused / expired / voided): the tokens go.
@@ -254,6 +259,7 @@ type Querier interface {
 	InsertDiagReport(ctx context.Context, arg InsertDiagReportParams) (int64, error)
 	InsertDriver(ctx context.Context, arg InsertDriverParams) error
 	InsertEmailReceipt(ctx context.Context, arg InsertEmailReceiptParams) error
+	InsertImportedCustomer(ctx context.Context, arg InsertImportedCustomerParams) (Customer, error)
 	InsertItemSize(ctx context.Context, arg InsertItemSizeParams) error
 	InsertOptionPrice(ctx context.Context, arg InsertOptionPriceParams) error
 	InsertOrderGeo(ctx context.Context, arg InsertOrderGeoParams) (int64, error)
@@ -277,6 +283,7 @@ type Querier interface {
 	LastDiagPage(ctx context.Context, arg LastDiagPageParams) (pgtype.Timestamptz, error)
 	LastFloorEventAt(ctx context.Context, arg LastFloorEventAtParams) (pgtype.Timestamptz, error)
 	LatestChannelEvent(ctx context.Context, channelID pgtype.UUID) (int64, error)
+	ListAddressesOfCustomers(ctx context.Context, ids []pgtype.UUID) ([]CustomerAddress, error)
 	ListAgentBackups(ctx context.Context, locationID pgtype.UUID) ([]ListAgentBackupsRow, error)
 	ListAgentHealth(ctx context.Context) ([]ListAgentHealthRow, error)
 	ListAgentUpdates(ctx context.Context, arg ListAgentUpdatesParams) ([]AgentUpdate, error)
@@ -294,6 +301,9 @@ type Querier interface {
 	ListCustomerAddresses(ctx context.Context, customerID pgtype.UUID) ([]CustomerAddress, error)
 	ListCustomerCards(ctx context.Context, customerID pgtype.UUID) ([]CustomerCard, error)
 	ListCustomerOrders(ctx context.Context, arg ListCustomerOrdersParams) ([]ChannelOrder, error)
+	ListCustomersByIDs(ctx context.Context, ids []pgtype.UUID) ([]Customer, error)
+	// Terminal stage 0c: the bulk import + the Pi's change feed.
+	ListCustomersByPhones(ctx context.Context, arg ListCustomersByPhonesParams) ([]Customer, error)
 	ListDeals(ctx context.Context, locationID pgtype.UUID) ([]Deal, error)
 	ListDeliveryRuns(ctx context.Context, arg ListDeliveryRunsParams) ([]DeliveryRun, error)
 	ListDevicesByLocation(ctx context.Context, locationID pgtype.UUID) ([]Device, error)
@@ -396,6 +406,7 @@ type Querier interface {
 	PruneAppReleases(ctx context.Context, arg PruneAppReleasesParams) error
 	PruneChannelEvents(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error)
 	PruneCustomerSessions(ctx context.Context) (int64, error)
+	PruneCustomerTombstones(ctx context.Context, deletedAt pgtype.Timestamptz) (int64, error)
 	PruneDiagReports(ctx context.Context, receivedAt pgtype.Timestamptz) (int64, error)
 	PruneExternalStops(ctx context.Context, now pgtype.Timestamptz) (int64, error)
 	PruneExternalWork(ctx context.Context, now pgtype.Timestamptz) (int64, error)
@@ -532,8 +543,11 @@ type Querier interface {
 	TrackingLink(ctx context.Context, orderID pgtype.UUID) (TrackingLinkRow, error)
 	UpdateChannel(ctx context.Context, arg UpdateChannelParams) (Channel, error)
 	UpdateCustomerAddress(ctx context.Context, arg UpdateCustomerAddressParams) (CustomerAddress, error)
+	// The website's profile: a name it sends is the customer's own (name_source web).
+	// When it didn't change the name, first + last stay as they are.
 	UpdateCustomerProfile(ctx context.Context, arg UpdateCustomerProfileParams) (Customer, error)
 	UpdateDeal(ctx context.Context, arg UpdateDealParams) (Deal, error)
+	UpdateImportedCustomer(ctx context.Context, arg UpdateImportedCustomerParams) error
 	// Updates the editable surface of a location in one shot. Pass current values
 	// for fields you don't want to change — there's no partial-update semantics.
 	UpdateLocationDetails(ctx context.Context, arg UpdateLocationDetailsParams) (Location, error)
@@ -558,6 +572,8 @@ type Querier interface {
 	// started on the Pi itself); only the reporting location's row is touched.
 	UpsertAgentUpdateStatus(ctx context.Context, arg UpsertAgentUpdateStatusParams) error
 	// weborder stage 2: customer accounts + email receipts.
+	// Website sign-in: a name typed there fills an empty one (with its first +
+	// last split, name_source web); an existing name is kept.
 	UpsertCustomerByPhone(ctx context.Context, arg UpsertCustomerByPhoneParams) (UpsertCustomerByPhoneRow, error)
 	// A driver.shift event (clock-in, then the clock-out for the same shift id),
 	// keyed per location.

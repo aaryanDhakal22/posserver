@@ -938,6 +938,16 @@ CREATE TABLE customers (
     created_at         timestamptz NOT NULL DEFAULT now(),
     updated_at         timestamptz NOT NULL DEFAULT now(),
     last_seen_at       timestamptz NOT NULL DEFAULT now(),
+    -- 00035 (terminal stage 0c): the counter's first + last name (`name` stays the
+    -- website's full name, kept in step by main), the store's notes, where the
+    -- account came from, who last wrote the name / notes (the import never
+    -- overwrites the website's or the counter's).
+    first_name         text        NOT NULL DEFAULT '',
+    last_name          text        NOT NULL DEFAULT '',
+    notes              text        NOT NULL DEFAULT '',
+    source             text        NOT NULL DEFAULT 'web' CHECK (source IN ('web', 'counter', 'import')),
+    name_source        text        NOT NULL DEFAULT '' CHECK (name_source IN ('', 'web', 'counter', 'import')),
+    notes_source       text        NOT NULL DEFAULT '' CHECK (notes_source IN ('', 'web', 'counter', 'import')),
     UNIQUE (location_id, phone),
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
 );
@@ -957,6 +967,17 @@ CREATE TABLE customer_addresses (
 );
 CREATE INDEX idx_customer_addresses_customer ON customer_addresses (customer_id);
 CREATE UNIQUE INDEX idx_customer_addresses_default ON customer_addresses (customer_id) WHERE is_default;
+
+-- 00035: the Pi's change feed (GET /store/v1/agent/customers?since=) pages by
+-- (updated_at, id); an address change bumps its customer's updated_at
+-- (trigger), a deleted customer leaves a tombstone (kept 90 days).
+CREATE INDEX idx_customers_changes ON customers (location_id, updated_at, id);
+CREATE TABLE customer_tombstones (
+    customer_id uuid        PRIMARY KEY,
+    location_id uuid        NOT NULL,
+    deleted_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_customer_tombstones_changes ON customer_tombstones (location_id, deleted_at, customer_id);
 
 CREATE TABLE customer_sessions (
     token_hash   text        PRIMARY KEY,

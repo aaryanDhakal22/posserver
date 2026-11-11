@@ -224,6 +224,7 @@ func routeTable(d RouterDeps) []routeDef {
 	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
 	siteH := handler.NewSiteHandler(d.Site, d.Logger)
 	squareH := handler.NewSquareHandler(d.Square, d.CardHolds, d.AppEnv, d.Logger)
+	customersH := handler.NewCustomersHandler(d.Customers, d.TenancyService.GetLocation, d.Logger)
 	accountH := handler.NewAccountHandler(d.Customers, d.OrderPort, d.Receipts, d.FakeCodes, d.FakeMail, d.AppEnv, d.Logger)
 	guest := appMiddleware.CustomerAuth(d.Customers.Authenticate, false)
 	member := appMiddleware.CustomerAuth(d.Customers.Authenticate, true)
@@ -345,6 +346,9 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", adminPrefix+"/locations/:id/site-domains", "admin", "Add a host {host, primary} (platform subdomains verified at once)", siteH.AdminAddDomain, admin),
 		def("PATCH", adminPrefix+"/site-domains/:host", "admin", "Mark a host verified {verified}", siteH.AdminVerifyDomain, admin),
 
+		// Customers (terminal stage 0c): the bulk import (SoftTouch converter, admin only).
+		def("POST", adminPrefix+"/locations/:id/customers/import", "admin", "Upsert ≤ 5,000 customers by phone (NDJSON or JSON; ?dry_run=1) → counts", customersH.Import, admin),
+
 		// Online card holds (weborder stage 2).
 		def("GET", adminPrefix+"/card-holds/:order_id", "admin", "An order's card hold", squareH.AdminHold, admin),
 		def("POST", adminPrefix+"/card-holds/:order_id/capture", "admin", "Capture an order's card hold now", squareH.AdminCapture, admin),
@@ -383,6 +387,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/agent/rpc", "device", "Duplex channel: agent→main replies + reports — agent keys only", agentRPCH.Handle, device, agentOnly),
 		def("GET", storePrefix+"/agent/app/latest", "device", "Newest tablet-app release (?app=quibase; 204 none) — agent keys only", appRelH.Latest, device, agentOnly),
 		def("GET", storePrefix+"/agent/app/releases/:code/apk", "device", "Download a tablet-app APK (?app=quibase) — agent keys only", appRelH.APK, device, agentOnly),
+		def("GET", storePrefix+"/agent/customers", "device", "The store's customer changes for the Pi's offline copy (?since=<cursor>&limit) — agent keys only", customersH.Feed, device, agentOnly),
 		def("POST", storePrefix+"/agent/revoke", "device", "Agent self-revoke (kills its own key) — agent keys only", storeH.AgentSelfRevoke, device, agentOnly),
 		def("POST", storePrefix+"/agent/tablet-tokens", "device", "Mint a tablet's diagnostics report token {tablet_id, tablet_name} — agent keys only", diagH.MintTabletToken, device, agentOnly),
 		def("DELETE", storePrefix+"/agent/tablet-tokens/:tablet_id", "device", "Revoke a tablet's report token (idempotent) — agent keys only", diagH.RevokeTabletToken, device, agentOnly),

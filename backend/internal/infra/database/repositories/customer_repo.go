@@ -23,7 +23,9 @@ func NewCustomerRepository(pool *pgxpool.Pool) *CustomerRepository {
 
 func customerOf(r models.Customer) customer.Customer {
 	return customer.Customer{ID: idOf(r.ID), TenantID: idOf(r.TenantID), LocationID: idOf(r.LocationID), Phone: r.Phone,
-		Name: r.Name, Email: r.Email, SquareCustomerID: r.SquareCustomerID, CreatedAt: r.CreatedAt.Time}
+		Name: r.Name, Email: r.Email, SquareCustomerID: r.SquareCustomerID, CreatedAt: r.CreatedAt.Time,
+		FirstName: r.FirstName, LastName: r.LastName, Notes: r.Notes, Source: r.Source, NameSource: r.NameSource,
+		NotesSource: r.NotesSource, UpdatedAt: r.UpdatedAt.Time}
 }
 
 func addressOf(r models.CustomerAddress) customer.Address {
@@ -47,13 +49,16 @@ func (r *CustomerRepository) SignIn(ctx context.Context, tenantID, locationID uu
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := models.New(tx)
+	first, last := customer.SplitName(name)
 	row, err := q.UpsertCustomerByPhone(ctx, models.UpsertCustomerByPhoneParams{TenantID: pgID(tenantID), LocationID: pgID(locationID),
-		Phone: phone, Name: name})
+		Phone: phone, Name: name, FirstName: first, LastName: last})
 	if err != nil {
 		return customer.Customer{}, false, 0, err
 	}
-	c := customer.Customer{ID: idOf(row.ID), TenantID: idOf(row.TenantID), LocationID: idOf(row.LocationID), Phone: row.Phone,
-		Name: row.Name, Email: row.Email, SquareCustomerID: row.SquareCustomerID, CreatedAt: row.CreatedAt.Time}
+	c := customerOf(models.Customer{ID: row.ID, TenantID: row.TenantID, LocationID: row.LocationID, Phone: row.Phone, Name: row.Name,
+		Email: row.Email, SquareCustomerID: row.SquareCustomerID, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		LastSeenAt: row.LastSeenAt, FirstName: row.FirstName, LastName: row.LastName, Notes: row.Notes, Source: row.Source,
+		NameSource: row.NameSource, NotesSource: row.NotesSource})
 	joined, err := q.JoinGuestOrders(ctx, models.JoinGuestOrdersParams{LocationID: pgID(locationID), CustomerPhone: phone, CustomerID: pgID(c.ID)})
 	if err != nil {
 		return c, false, 0, err
@@ -91,8 +96,12 @@ func (r *CustomerRepository) Get(ctx context.Context, id uuid.UUID) (customer.Cu
 	return customerOf(row), nil
 }
 
-func (r *CustomerRepository) UpdateProfile(ctx context.Context, id uuid.UUID, name, email string) (customer.Customer, error) {
-	row, err := models.New(r.pool).UpdateCustomerProfile(ctx, models.UpdateCustomerProfileParams{ID: pgID(id), Name: name, Email: email})
+// UpdateProfile saves the website's profile; nameSet = the customer sent a
+// name (it becomes theirs: first + last follow it, name_source web).
+func (r *CustomerRepository) UpdateProfile(ctx context.Context, id uuid.UUID, name, email string, nameSet bool) (customer.Customer, error) {
+	first, last := customer.SplitName(name)
+	row, err := models.New(r.pool).UpdateCustomerProfile(ctx, models.UpdateCustomerProfileParams{ID: pgID(id), Name: name, Email: email,
+		FirstName: first, LastName: last, NameSet: nameSet})
 	if err != nil {
 		return customer.Customer{}, err
 	}

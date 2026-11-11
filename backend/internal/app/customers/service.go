@@ -39,7 +39,7 @@ type Repo interface {
 	EndSession(ctx context.Context, tokenHash string) error
 	PruneSessions(ctx context.Context) (int64, error)
 	Get(ctx context.Context, id uuid.UUID) (customer.Customer, error)
-	UpdateProfile(ctx context.Context, id uuid.UUID, name, email string) (customer.Customer, error)
+	UpdateProfile(ctx context.Context, id uuid.UUID, name, email string, nameSet bool) (customer.Customer, error)
 	SetSquareID(ctx context.Context, id uuid.UUID, squareID string) error
 	Delete(ctx context.Context, id uuid.UUID) error
 	Addresses(ctx context.Context, customerID uuid.UUID) ([]customer.Address, error)
@@ -53,6 +53,12 @@ type Repo interface {
 	Order(ctx context.Context, customerID, orderID uuid.UUID) (repositories.ChannelOrder, error)
 	ReplyEmail(ctx context.Context, locationID uuid.UUID) (string, error)
 	SetReplyEmail(ctx context.Context, tenantID, locationID uuid.UUID, email string) error
+	// Terminal stage 0c (import.go): the bulk import's transaction (commit
+	// false = a dry run, rolled back) and the Pi's change feed.
+	Import(ctx context.Context, commit bool, fn func(customer.ImportTx) error) error
+	Changes(ctx context.Context, locationID uuid.UUID, afterAt time.Time, afterID uuid.UUID, limit int) ([]customer.Change, error)
+	ByIDs(ctx context.Context, ids []uuid.UUID) ([]customer.Customer, map[uuid.UUID][]customer.Address, error)
+	PruneTombstones(ctx context.Context, before time.Time) (int64, error)
 }
 
 // CardRemover turns a saved card off at the processor (Square).
@@ -242,6 +248,9 @@ func (s *Service) RunPrune(ctx context.Context) {
 		if n, err := s.repo.PruneSessions(ctx); err == nil && n > 0 {
 			s.logger.Debug().Int64("sessions", n).Msg("expired customer sessions pruned")
 		}
+		if n, err := s.repo.PruneTombstones(ctx, s.now().Add(-TombstoneKeep)); err == nil && n > 0 {
+			s.logger.Debug().Int64("tombstones", n).Msg("old customer deletions forgotten")
+		}
 		s.limiter.sweep()
 		select {
 		case <-ctx.Done():
@@ -298,7 +307,7 @@ func (s *Service) UpdateProfile(ctx context.Context, c customer.Customer, name, 
 			return c, customer.ErrBadEmail
 		}
 	}
-	return s.repo.UpdateProfile(ctx, c.ID, n, e)
+	return s.repo.UpdateProfile(ctx, c.ID, n, e, name != nil && n != c.Name)
 }
 
 func cleanAddress(a customer.Address) (customer.Address, error) {
