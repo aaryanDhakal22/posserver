@@ -30,10 +30,7 @@ func Run(ctx context.Context, dsn string) error {
 	if err := goose.SetDialect("postgres"); err != nil {
 		return err
 	}
-	// Allow missing: migration numbers are handed out to parallel work
-	// sessions, so a dev database may have run 00035 before 00033 lands;
-	// goose then applies the late lower one instead of refusing to start.
-	return goose.UpContext(ctx, db, "sql", goose.WithAllowMissing())
+	return goose.UpContext(ctx, db, "sql")
 }
 
 // ErrV1Database: the database belongs to the v1 server (old schema). v1's
