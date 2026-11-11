@@ -522,7 +522,7 @@
               {:else if open === blk.id && blk.id === 'picks'}
                 <div class="blk-edit">
                   {#each pickItems as it, j (it.id)}
-                    <div class="pick"><span class="grow">{it.name}{#if it.category}<span class="text-muted"> · {it.category}</span>{/if}</span>
+                    <div class="pick"><span class="grow">{it.name}{#if it.category}<span class="text-muted">{` · ${it.category}`}</span>{/if}</span>
                       <button type="button" class="mini" aria-label="Up" disabled={j === 0} onclick={() => doc!.picks.splice(j - 1, 0, ...doc!.picks.splice(j, 1))}>↑</button>
                       <button type="button" class="mini" aria-label="Remove {it.name}" onclick={() => doc!.picks.splice(j, 1)}>×</button>
                     </div>
