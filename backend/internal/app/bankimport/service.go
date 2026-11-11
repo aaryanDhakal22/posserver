@@ -73,7 +73,7 @@ type Result struct {
 }
 
 // Kinds counted in a Result.
-var kinds = []string{"sizes", "groups", "options", "menus", "categories", "items", "views", "entries", "deals"}
+var kinds = []string{"sizes", "groups", "options", "menus", "categories", "items", "views", "entries", "deals", "layouts"}
 
 type Service struct {
 	repo   Repo
@@ -211,6 +211,9 @@ func checkShape(doc *bankdoc.Document) error {
 		if strings.TrimSpace(v.Name) == "" {
 			return bad(p, "view name is required")
 		}
+		if v.Layout != nil && v.Kind != string(menuview.KindCounter) {
+			return bad(p+".layout", "only a counter view has a layout")
+		}
 	}
 	deals := map[string]string{}
 	for i, d := range doc.Deals {
@@ -291,6 +294,9 @@ func (a *applier) run(ctx context.Context) error {
 		return err
 	}
 	if err := a.applyDeals(ctx); err != nil {
+		return err
+	}
+	if err := a.applyLayouts(ctx); err != nil {
 		return err
 	}
 	return a.attention(ctx)

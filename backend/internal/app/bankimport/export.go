@@ -119,6 +119,14 @@ func export(ctx context.Context, tx bankdoc.Tx) (*bankdoc.Document, error) {
 	if err != nil {
 		return nil, err
 	}
+	deals, err := tx.Deals(ctx)
+	if err != nil {
+		return nil, err
+	}
+	dealName := map[string]string{}
+	for _, d := range deals {
+		dealName[d.ID] = d.Name
+	}
 	for _, v := range views {
 		dv := bankdoc.View{Kind: string(v.Kind), Name: v.Name, Rules: bankdoc.Rules{MarkupBps: v.Rules.MarkupBps, Round: v.Rules.Round,
 			RequirePhoto: v.Rules.RequirePhoto, HiddenCategories: []string{}}, Entries: []bankdoc.Entry{}}
@@ -132,11 +140,17 @@ func export(ctx context.Context, tx bankdoc.Tx) (*bankdoc.Document, error) {
 		for _, e := range entries {
 			dv.Entries = append(dv.Entries, exportEntry(e, item, size))
 		}
+		if v.HasLayout {
+			l, err := tx.Layout(ctx, v.ID)
+			if err != nil {
+				return nil, err
+			}
+			if l != nil {
+				dl := exportLayout(*l, bank, item, cat, size, group, dealName)
+				dv.Layout = &dl
+			}
+		}
 		doc.Views = append(doc.Views, dv)
-	}
-	deals, err := tx.Deals(ctx)
-	if err != nil {
-		return nil, err
 	}
 	for _, d := range deals {
 		names := func(e *pricing.Eligible) {

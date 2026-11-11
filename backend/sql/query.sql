@@ -1460,6 +1460,13 @@ RETURNING *;
 -- name: DeleteMenuView :execrows
 DELETE FROM menu_views WHERE id = $1;
 
+-- name: GetMenuViewLayout :one
+SELECT layout FROM menu_views WHERE id = $1;
+
+-- name: SetMenuViewLayout :execrows
+UPDATE menu_views SET layout = $2, updated_at = now()
+WHERE id = $1 AND kind = 'counter';
+
 -- name: CreateMenuViewEntry :one
 INSERT INTO menu_view_entries (tenant_id, location_id, view_id, kind, anchor, display_name, description, photo, category,
     position, hidden, price_override_cents, extra)

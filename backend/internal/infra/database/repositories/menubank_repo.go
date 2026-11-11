@@ -293,7 +293,7 @@ func (r *MenuBankRepository) SetGroupBank(ctx context.Context, tenantID, locatio
 
 func viewOf(row models.MenuView) (*menuview.View, error) {
 	v := &menuview.View{ID: idOf(row.ID), TenantID: idOf(row.TenantID), LocationID: idOf(row.LocationID),
-		Kind: menuview.Kind(row.Kind), Name: row.Name, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time}
+		Kind: menuview.Kind(row.Kind), Name: row.Name, HasLayout: row.Layout != nil, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time}
 	if err := json.Unmarshal(row.Rules, &v.Rules); err != nil {
 		return nil, fmt.Errorf("view %s rules: %w", v.ID, err)
 	}

@@ -67,6 +67,9 @@ type Repo interface {
 	DeleteEntry(ctx context.Context, id uuid.UUID) (bool, error)
 	CachedBuild(ctx context.Context, viewID uuid.UUID) (json.RawMessage, int64, bool, error)
 	SaveBuild(ctx context.Context, viewID uuid.UUID, version int64, build json.RawMessage) error
+	Layout(ctx context.Context, viewID uuid.UUID) (*menuview.Layout, error)
+	SetLayout(ctx context.Context, viewID uuid.UUID, l *menuview.Layout) error
+	DealNames(ctx context.Context, locationID uuid.UUID) (map[string]string, error)
 }
 
 // Unmatched lists vendor names recent orders carried that nothing routed
@@ -610,7 +613,11 @@ func (s *Service) Compile(ctx context.Context, v *menuview.View) (menuview.Build
 			}
 		}
 	}
-	return menuview.Compile(bank, *v, entries, unmatched), nil
+	b := menuview.Compile(bank, *v, entries, unmatched)
+	if err := s.resolveLayout(ctx, v, bank, &b); err != nil {
+		return menuview.Build{}, err
+	}
+	return b, nil
 }
 
 // --- vendor routing --------------------------------------------------------------

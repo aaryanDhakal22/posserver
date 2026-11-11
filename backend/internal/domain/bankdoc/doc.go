@@ -114,12 +114,42 @@ type ItemSize struct {
 	KitchenName string `json:"kitchen_name"`
 }
 
-// View is a view of the bank and its entries (replaced as a whole).
+// View is a view of the bank and its entries (replaced as a whole). Layout
+// is a counter view's layout (nil = keep the one it has; clear it with
+// DELETE …/views/:id/layout).
 type View struct {
 	Kind    string  `json:"kind"`
 	Name    string  `json:"name"`
 	Rules   Rules   `json:"rules"`
 	Entries []Entry `json:"entries"`
+	Layout  *Layout `json:"layout,omitempty"`
+}
+
+// Layout is a counter layout (menuview.Layout) by names: flows are keyed by
+// item name, actions and steps name items, sizes, categories, groups,
+// options and deals.
+type Layout = menuview.LayoutOf[LayoutAction, LayoutStep]
+
+// LayoutAction is a menuview.Action by names (Option is a name within Group).
+type LayoutAction struct {
+	Type     string `json:"type"`
+	Item     string `json:"item,omitempty"`
+	Size     string `json:"size,omitempty"`
+	Category string `json:"category,omitempty"`
+	Deal     string `json:"deal,omitempty"`
+	Name     string `json:"name,omitempty"` // function
+	Group    string `json:"group,omitempty"`
+	Option   string `json:"option,omitempty"`
+	State    string `json:"state,omitempty"`
+}
+
+// LayoutStep is a menuview.Step with a size name.
+type LayoutStep struct {
+	Screen        string `json:"screen"`
+	Size          string `json:"size,omitempty"`
+	RequiredCount int    `json:"required_count"`
+	Forced        bool   `json:"forced"`
+	Prompt        string `json:"prompt"`
 }
 
 // Rules are menuview.Rules with category names.
@@ -217,6 +247,8 @@ type Tx interface {
 	CreateView(ctx context.Context, kind menuview.Kind, name string, rules menuview.Rules) (uuid.UUID, error)
 	UpdateView(ctx context.Context, id uuid.UUID, name string, rules menuview.Rules) error
 	ReplaceEntries(ctx context.Context, view menuview.View, entries []menuview.Entry) error
+	Layout(ctx context.Context, viewID uuid.UUID) (*menuview.Layout, error)
+	SetLayout(ctx context.Context, viewID uuid.UUID, l *menuview.Layout) error
 
 	CreateDeal(ctx context.Context, d pricing.StoreDeal) error
 	UpdateDeal(ctx context.Context, id uuid.UUID, d pricing.StoreDeal) error

@@ -681,8 +681,11 @@ CREATE TABLE menu_views (
     rules       jsonb       NOT NULL DEFAULT '{}'::jsonb,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now(),
+    -- 00031: the counter screen's layout (TERMINAL-PLAN.md 0a); NULL = none.
+    layout      jsonb,
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE,
-    UNIQUE (id, tenant_id)
+    UNIQUE (id, tenant_id),
+    CONSTRAINT menu_views_layout_counter CHECK (layout IS NULL OR (kind = 'counter' AND jsonb_typeof(layout) = 'object'))
 );
 CREATE INDEX idx_menu_views_location ON menu_views (location_id);
 

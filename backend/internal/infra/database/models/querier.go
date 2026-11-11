@@ -203,6 +203,7 @@ type Querier interface {
 	GetMenuView(ctx context.Context, id pgtype.UUID) (MenuView, error)
 	GetMenuViewBuild(ctx context.Context, viewID pgtype.UUID) (MenuViewBuild, error)
 	GetMenuViewEntry(ctx context.Context, id pgtype.UUID) (MenuViewEntry, error)
+	GetMenuViewLayout(ctx context.Context, id pgtype.UUID) ([]byte, error)
 	GetModifierGroupByID(ctx context.Context, arg GetModifierGroupByIDParams) (ModifierGroup, error)
 	GetOperatorAuthByUsername(ctx context.Context, username string) (GetOperatorAuthByUsernameRow, error)
 	GetOperatorByID(ctx context.Context, id pgtype.UUID) (GetOperatorByIDRow, error)
@@ -488,6 +489,7 @@ type Querier interface {
 	SetLocationPin(ctx context.Context, arg SetLocationPinParams) (Location, error)
 	SetMenuPosition(ctx context.Context, arg SetMenuPositionParams) error
 	SetMenuSizePosition(ctx context.Context, arg SetMenuSizePositionParams) error
+	SetMenuViewLayout(ctx context.Context, arg SetMenuViewLayoutParams) (int64, error)
 	SetOperatorPassword(ctx context.Context, arg SetOperatorPasswordParams) error
 	SetOptionBank(ctx context.Context, arg SetOptionBankParams) (int64, error)
 	SetOptionPosition(ctx context.Context, arg SetOptionPositionParams) error

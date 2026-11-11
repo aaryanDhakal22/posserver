@@ -1087,7 +1087,7 @@ const createMenuView = `-- name: CreateMenuView :one
 
 INSERT INTO menu_views (tenant_id, location_id, kind, name, rules)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, tenant_id, location_id, kind, name, rules, created_at, updated_at
+RETURNING id, tenant_id, location_id, kind, name, rules, created_at, updated_at, layout
 `
 
 type CreateMenuViewParams struct {
@@ -1117,6 +1117,7 @@ func (q *Queries) CreateMenuView(ctx context.Context, arg CreateMenuViewParams) 
 		&i.Rules,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Layout,
 	)
 	return i, err
 }
@@ -2401,7 +2402,7 @@ func (q *Queries) FinishPlacement(ctx context.Context, arg FinishPlacementParams
 }
 
 const firstMenuViewOfKind = `-- name: FirstMenuViewOfKind :one
-SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at FROM menu_views WHERE location_id = $1 AND kind = $2 ORDER BY created_at ASC LIMIT 1
+SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at, layout FROM menu_views WHERE location_id = $1 AND kind = $2 ORDER BY created_at ASC LIMIT 1
 `
 
 type FirstMenuViewOfKindParams struct {
@@ -2421,6 +2422,7 @@ func (q *Queries) FirstMenuViewOfKind(ctx context.Context, arg FirstMenuViewOfKi
 		&i.Rules,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Layout,
 	)
 	return i, err
 }
@@ -3249,7 +3251,7 @@ func (q *Queries) GetMenuVersion(ctx context.Context, locationID pgtype.UUID) (G
 }
 
 const getMenuView = `-- name: GetMenuView :one
-SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at FROM menu_views WHERE id = $1
+SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at, layout FROM menu_views WHERE id = $1
 `
 
 func (q *Queries) GetMenuView(ctx context.Context, id pgtype.UUID) (MenuView, error) {
@@ -3264,6 +3266,7 @@ func (q *Queries) GetMenuView(ctx context.Context, id pgtype.UUID) (MenuView, er
 		&i.Rules,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Layout,
 	)
 	return i, err
 }
@@ -3310,6 +3313,17 @@ func (q *Queries) GetMenuViewEntry(ctx context.Context, id pgtype.UUID) (MenuVie
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getMenuViewLayout = `-- name: GetMenuViewLayout :one
+SELECT layout FROM menu_views WHERE id = $1
+`
+
+func (q *Queries) GetMenuViewLayout(ctx context.Context, id pgtype.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getMenuViewLayout, id)
+	var layout []byte
+	err := row.Scan(&layout)
+	return layout, err
 }
 
 const getModifierGroupByID = `-- name: GetModifierGroupByID :one
@@ -6571,7 +6585,7 @@ func (q *Queries) ListMenuViewEntries(ctx context.Context, viewID pgtype.UUID) (
 }
 
 const listMenuViews = `-- name: ListMenuViews :many
-SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at FROM menu_views WHERE location_id = $1 ORDER BY created_at ASC
+SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at, layout FROM menu_views WHERE location_id = $1 ORDER BY created_at ASC
 `
 
 func (q *Queries) ListMenuViews(ctx context.Context, locationID pgtype.UUID) ([]MenuView, error) {
@@ -6592,6 +6606,7 @@ func (q *Queries) ListMenuViews(ctx context.Context, locationID pgtype.UUID) ([]
 			&i.Rules,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Layout,
 		); err != nil {
 			return nil, err
 		}
@@ -9477,6 +9492,24 @@ func (q *Queries) SetMenuSizePosition(ctx context.Context, arg SetMenuSizePositi
 	return err
 }
 
+const setMenuViewLayout = `-- name: SetMenuViewLayout :execrows
+UPDATE menu_views SET layout = $2, updated_at = now()
+WHERE id = $1 AND kind = 'counter'
+`
+
+type SetMenuViewLayoutParams struct {
+	ID     pgtype.UUID `json:"id"`
+	Layout []byte      `json:"layout"`
+}
+
+func (q *Queries) SetMenuViewLayout(ctx context.Context, arg SetMenuViewLayoutParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setMenuViewLayout, arg.ID, arg.Layout)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setOperatorPassword = `-- name: SetOperatorPassword :exec
 UPDATE operators SET password_hash = $2, updated_at = now() WHERE id = $1
 `
@@ -10466,7 +10499,7 @@ func (q *Queries) UpdateMenuSize(ctx context.Context, arg UpdateMenuSizeParams) 
 const updateMenuView = `-- name: UpdateMenuView :one
 UPDATE menu_views SET name = $2, rules = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, kind, name, rules, created_at, updated_at
+RETURNING id, tenant_id, location_id, kind, name, rules, created_at, updated_at, layout
 `
 
 type UpdateMenuViewParams struct {
@@ -10487,6 +10520,7 @@ func (q *Queries) UpdateMenuView(ctx context.Context, arg UpdateMenuViewParams) 
 		&i.Rules,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Layout,
 	)
 	return i, err
 }

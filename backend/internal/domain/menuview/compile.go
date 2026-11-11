@@ -30,6 +30,8 @@ type Build struct {
 	ModifierGroups []BuildGroup     `json:"modifier_groups"`
 	Maps           []BuildMap       `json:"maps,omitempty"`
 	NeedsAttention []NeedsAttention `json:"needs_attention"`
+	// Layout is a counter view's layout (ResolveLayout), absent without one.
+	Layout *BuildLayout `json:"layout,omitempty"`
 }
 
 type BuildView struct {

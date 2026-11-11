@@ -66,8 +66,10 @@ type View struct {
 	Kind       Kind      `json:"kind"`
 	Name       string    `json:"name"`
 	Rules      Rules     `json:"rules"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	// HasLayout: a counter view with a counter layout (GET …/views/:id/layout).
+	HasLayout bool      `json:"has_layout"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Entry kinds.

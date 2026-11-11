@@ -462,6 +462,7 @@ type MenuView struct {
 	Rules      []byte             `json:"rules"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	Layout     []byte             `json:"layout"`
 }
 
 type MenuViewBuild struct {
