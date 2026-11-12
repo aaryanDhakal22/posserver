@@ -345,7 +345,8 @@ func (r *OrderRepository) AddCounterPayment(ctx context.Context, sc order.Scope,
 	return result, flags, nil
 }
 
-// ChangeCounterOrder replaces a counter order's line items and money with
+// ChangeCounterOrder replaces a counter order's line items, money and
+// fulfillment (type + address: a takeout moved to a delivery or back) with
 // o's (the Pi's order.changed, a kitchen change after SEND): applied,
 // duplicate (the event was seen), stale (a newer change is applied already:
 // at is older than orders.money_changed_at, M-12), not_found (no such order
@@ -410,9 +411,16 @@ func (r *OrderRepository) ChangeCounterOrder(ctx context.Context, sc order.Scope
 		if at.IsZero() {
 			at = time.Now()
 		}
+		// The fulfillment follows too (agent §2.10d): a takeout moved to a delivery (its address) or back.
+		var addr []byte
+		if a := o.Fulfillment().Address; a != nil {
+			addr, _ = json.Marshal(a)
+		}
 		if _, err := tx.Exec(ctx, `UPDATE orders SET subtotal_cents = $2, tax_cents = $3, tip_cents = $4, total_cents = $5,
-			fees = $6, discounts = $7, money_changed_at = $8, updated_at = now() WHERE id = $1`,
-			orderID, int64(m.Subtotal), int64(m.Tax), int64(m.Tip), int64(m.Total), fees, discounts, at.UTC()); err != nil {
+			fees = $6, discounts = $7, money_changed_at = $8, fulfillment_type = $9, fulfillment_address = $10, updated_at = now()
+			WHERE id = $1`,
+			orderID, int64(m.Subtotal), int64(m.Tax), int64(m.Tip), int64(m.Total), fees, discounts, at.UTC(),
+			string(o.Fulfillment().Type), addr); err != nil {
 			return "", nil, fmt.Errorf("update money: %w", err)
 		}
 		afterZ := false

@@ -321,6 +321,34 @@ def test_order_changed_replaces_lines_and_money(store, publish) -> None:
     assert res == {foreign["event_id"]: "invalid", v["event_id"]: "applied", late["event_id"]: "invalid"}
 
 
+def test_order_changed_moves_the_type(store) -> None:
+    """A sent takeout moved to a delivery and back (agent §2.10d `type`): order.changed's snapshot carries the
+    new fulfillment (a delivery's address, the fee) and main follows it (TERMINAL-FLOWS TYPE-10 / TYPE-11: main
+    kept the placed type before, so its read model said "pickup" for a delivery)."""
+    oid = _uuid7()
+    money = {"subtotal_cents": 1299, "tax_cents": 78, "tip_cents": 0, "fees": [], "discounts": [], "total_cents": 1377}
+    item = {"id": str(uuid.uuid4()), "position": 0, "name": "Cheese Pizza", "quantity": 1, "unit_price_cents": 1299,
+            "line_total_cents": 1299, "routing": "matched"}
+    snap = _snapshot(oid, fulfillment={"type": "pickup"}, items=[item], money=money,
+                     payments=[{"id": str(uuid.uuid4()), "method": "cash", "amount_cents": 1377, "at": _now()}])
+    ev = _placed(snap)
+    assert _send(store.key, [ev]) == {ev["event_id"]: "applied"}
+    addr = {"line1": "12 Sample Road", "line2": "Apt 3", "city": "Towson", "state": "MD", "postal_code": "21204", "country": "US"}
+    moved = {**snap, "fulfillment": {"type": "delivery", "address": addr},
+             "money": {**money, "fees": [{"type": "delivery", "label": "Delivery fee", "amount_cents": 400, "driver_cents": 300}],
+                       "total_cents": 1777}}
+    ch = {"event_id": str(uuid.uuid4()), "type": "order.changed", "order_id": oid, "at": _now(), "snapshot": moved}
+    assert _send(store.key, [ch]) == {ch["event_id"]: "applied"}
+    got = _get(store.key, oid)
+    assert got["fulfillment"]["type"] == "delivery" and got["fulfillment"]["address"]["line1"] == "12 Sample Road", got["fulfillment"]
+    assert got["money"]["total_cents"] == 1777
+    back = {**ch, "event_id": str(uuid.uuid4()), "at": _now(), "snapshot": {**snap}}
+    assert _send(store.key, [back]) == {back["event_id"]: "applied"}
+    got = _get(store.key, oid)
+    assert got["fulfillment"]["type"] == "pickup" and not got["fulfillment"].get("address"), got["fulfillment"]
+    assert got["money"]["total_cents"] == 1377
+
+
 def test_coupon_lines_keep_their_coupon(store) -> None:
     """A coupon re-prices its lines (the owner, 2026-11-12; migration 00048): the Pi's counter order lines
     carry `coupon` + `coupon_no`, main stores them, and they come back on the order (absent on other lines)."""

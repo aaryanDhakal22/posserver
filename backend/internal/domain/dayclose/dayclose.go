@@ -287,8 +287,17 @@ func (c Check) Matches() bool {
 // Balanced: the Pi's Z balances and main agrees.
 func (c Check) Balanced() bool { return c.PiDifference == 0 && c.Matches() }
 
+// NotCounterTenders are the Z's tenders that are no counter payment, so main
+// has no payment row to check them against: the cash a driver collected at
+// the door (the Pi's "driver_cash": the order's balance, never an
+// order.payment) and the money an online order arrived paid with ("online").
+// They stay on the Z; main's check leaves them out (TERMINAL-FLOWS PAY-22 day:
+// every batch with a cash delivery was flagged z_mismatch by its driver cash).
+var NotCounterTenders = map[string]bool{"driver_cash": true, "online": true}
+
 // CheckZ compares a Z report's tenders (net_cents) with main's net per
-// method (Σ amount + tip of the batch's counter payments).
+// method (Σ amount + tip of the batch's counter payments). The tenders in
+// NotCounterTenders are not compared.
 func CheckZ(report json.RawMessage, mainNet map[string]int64) Check {
 	var r struct {
 		Tenders *[]struct {
@@ -308,6 +317,9 @@ func CheckZ(report json.RawMessage, mainNet map[string]int64) Check {
 	seen := map[string]bool{}
 	var piSum, mainSum int64
 	for _, t := range *r.Tenders {
+		if NotCounterTenders[t.Tender] {
+			continue
+		}
 		seen[t.Tender] = true
 		c.Tenders = append(c.Tenders, TenderCheck{Tender: t.Tender, PiCents: t.NetCents, MainCents: mainNet[t.Tender]})
 		piSum += t.NetCents

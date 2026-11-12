@@ -106,3 +106,24 @@ func TestParseZAndSummary(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckZLeavesDriverCashAndOnlineOut(t *testing.T) {
+	// A day with a cash delivery (the driver collected $17.77 at the door: no payment row) and an online
+	// order that arrived paid: main has only the counter payments; the check still matches.
+	report := json.RawMessage(`{"tenders": [{"tender": "cash", "net_cents": 5317}, {"tender": "square_app", "net_cents": 3860},
+		{"tender": "online", "net_cents": 1500}, {"tender": "driver_cash", "net_cents": 2177}], "reconcile": {"difference_cents": 0}}`)
+	c := CheckZ(report, map[string]int64{"cash": 5317, "square_app": 3860})
+	if !c.Checked || !c.Matches() || !c.Balanced() || c.MainDifference == nil || *c.MainDifference != 0 {
+		t.Fatalf("check: %+v diff %v", c, c.MainDifference)
+	}
+	for _, tc := range c.Tenders {
+		if NotCounterTenders[tc.Tender] {
+			t.Fatalf("%s compared: %+v", tc.Tender, c.Tenders)
+		}
+	}
+	// A real mismatch on a counter tender is still caught.
+	c = CheckZ(report, map[string]int64{"cash": 5000, "square_app": 3860})
+	if c.Matches() || *c.MainDifference != -317 {
+		t.Fatalf("mismatch: %+v %v", c, *c.MainDifference)
+	}
+}
