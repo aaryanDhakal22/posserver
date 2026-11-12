@@ -15,6 +15,7 @@
 package transport
 
 import (
+	"context"
 	"io"
 	"io/fs"
 	"mime"
@@ -28,6 +29,7 @@ import (
 	cardholdApp "quiccpos/main/internal/app/cardhold"
 	channelApp "quiccpos/main/internal/app/channel"
 	"quiccpos/main/internal/app/customers"
+	daycloseApp "quiccpos/main/internal/app/dayclose"
 	diagApp "quiccpos/main/internal/app/diag"
 	geoApp "quiccpos/main/internal/app/geo"
 	menuApp "quiccpos/main/internal/app/menu"
@@ -45,6 +47,7 @@ import (
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/app/tracking"
 	"quiccpos/main/internal/domain/notify"
+	siteDom "quiccpos/main/internal/domain/site"
 	"quiccpos/main/internal/infra/mail"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
@@ -151,6 +154,8 @@ type RouterDeps struct {
 	DevNotices *notify.Recorder
 	// Staff backs the counter terminal's staff + terminal settings (TERMINAL-PLAN 0d).
 	Staff *staffApp.Service
+	// DayClose backs the Pi's drawer sessions + Z reports (terminal Stage 2).
+	DayClose *daycloseApp.Service
 }
 
 // RouteInfo is the JSON shape served at GET /__routes (shared across all
@@ -207,6 +212,12 @@ func routeTable(d RouterDeps) []routeDef {
 	storeSession := appMiddleware.StoreSessionAuth(d.SessionSigner)
 	operatorAuth := appMiddleware.OperatorAuth(d.OperatorService, d.Meters)
 	channelAuth := appMiddleware.ChannelAuth(d.ChannelService)
+	// The storefront as itself (no store host): only the Square OAuth relay.
+	var platformKeyAuth func(context.Context, string) (siteDom.PlatformKey, error)
+	if d.Site != nil {
+		platformKeyAuth = d.Site.Authenticate
+	}
+	platformAuth := appMiddleware.PlatformAuth(platformKeyAuth)
 	// The channel API alone is gzipped (a menu is large); legacy routes are
 	// left byte-for-byte as deployed clients know them.
 	channelGzip := echomw.GzipWithConfig(echomw.GzipConfig{MinLength: 1024})
@@ -235,6 +246,7 @@ func routeTable(d RouterDeps) []routeDef {
 	bankDocH := handler.NewBankImportHandler(d.BankImport, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
 	staffH := handler.NewStaffHandler(d.Staff, d.MenuViewService, d.Pricing, d.MenuService, d.Logger)
+	dayCloseH := handler.NewDayCloseHandler(d.DayClose, d.Logger)
 	if d.Kitchen != nil {
 		statusH.SetKitchen(d.Kitchen)
 	}
@@ -369,6 +381,7 @@ func routeTable(d RouterDeps) []routeDef {
 
 		// Square → main (weborder stage 2): the owner comes back from Square; Square's events.
 		def("GET", "/square/oauth/callback", "none", "Square OAuth callback (state-checked) → the SPA", squareH.OAuthCallback),
+		def("POST", "/square/oauth/forward", "platform", "The storefront relays Square's OAuth redirect {code, state, error} (platform key + the signed state) → {result, redirect}", squareH.OAuthForward, platformAuth),
 		def("POST", "/square/webhook", "none", "Square webhooks (HMAC-signed)", squareH.Webhook),
 
 		// Web app (compiled SvelteKit SPA) — served under /app; /admin + /store
@@ -473,6 +486,10 @@ func routeTable(d RouterDeps) []routeDef {
 		def("PATCH", storePrefix+"/me/staff/:id", "store-session", "Change a person {first_name, last_name, role, limits, active, pin}", staffH.MeUpdate, storeSession),
 		def("POST", storePrefix+"/me/staff/:id/pin", "store-session", "Reset a person's PIN {pin}", staffH.MeResetPin, storeSession),
 		def("DELETE", storePrefix+"/me/staff/:id", "store-session", "Delete a person", staffH.MeDelete, storeSession),
+		def("GET", storePrefix+"/me/reports/z", "store-session", "The Pi's Z reports (one per closed batch), newest first: ?date=YYYY-MM-DD = that business date, none = the newest 30", dayCloseH.MeZList, storeSession),
+		def("GET", storePrefix+"/me/reports/z/:id", "store-session", "One Z report as the Pi sent it", dayCloseH.MeZ, storeSession),
+		def("GET", storePrefix+"/me/drawers", "store-session", "Cash drawer sessions (per terminal + cashier), newest first: ?date=YYYY-MM-DD = opened that store-local date, none = the newest 50", dayCloseH.MeDrawers, storeSession),
+		def("GET", storePrefix+"/me/drawers/:id", "store-session", "One drawer session with its pay-ins / pay-outs", dayCloseH.MeDrawer, storeSession),
 		def("GET", storePrefix+"/me/terminal/settings", "store-session", "The store's terminal settings (role limits, auto-lock, counter start, receipt auto-Done, batch auto-close time)", staffH.MeSettings, storeSession),
 		def("PUT", storePrefix+"/me/terminal/settings", "store-session", "Replace the terminal settings", staffH.MeSaveSettings, storeSession),
 		def("GET", storePrefix+"/me/pricing", "store-session", "Pricing settings: the store's + each channel kind's sets", pricingH.MePricing, storeSession),

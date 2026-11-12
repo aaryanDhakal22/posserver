@@ -145,6 +145,43 @@ func (h *SquareHandler) OAuthCallback(c *echo.Context) error {
 	return c.Redirect(http.StatusFound, to)
 }
 
+// POST /square/oauth/forward {code, state, error} — the storefront relays
+// Square's redirect when SQUARE_REDIRECT_URL is its own public
+// /square/oauth/callback (main stays private; DURABILITY-PLAN.md step 6).
+// PlatformAuth has checked the storefront's key; the signed state names the
+// store and nothing is exchanged unless it checks out. Answers {result,
+// redirect}: the storefront sends the manager's browser to redirect (Store ›
+// Payments with ?square=result). The code is never logged.
+func (h *SquareHandler) OAuthForward(c *echo.Context) error {
+	var b struct {
+		Code  string `json:"code"`
+		State string `json:"state"`
+		Error string `json:"error"`
+	}
+	if err := json.NewDecoder(io.LimitReader(c.Request().Body, 8<<10)).Decode(&b); err != nil || b.State == "" || len(b.Code) > 1024 || len(b.State) > 512 || len(b.Error) > 256 {
+		return c.JSON(http.StatusBadRequest, errCode("send {code, state} (or {state, error}) from Square's redirect", "bad_request"))
+	}
+	lid, result, err := h.svc.Finish(c.Request().Context(), b.Code, b.State, b.Error)
+	out := map[string]any{"result": result, "redirect": h.svc.ReturnURL(result)}
+	status := http.StatusOK
+	switch {
+	case err == nil, errors.Is(err, squarepay.ErrDenied):
+	case errors.Is(err, squarepay.ErrBadState):
+		status, out["code"] = http.StatusBadRequest, "bad_state"
+	case errors.Is(err, squarepay.ErrDisabled):
+		status, out["code"] = http.StatusServiceUnavailable, "square_disabled"
+	case errors.Is(err, squarepay.ErrUnknownPlace):
+		status, out["code"] = http.StatusNotFound, "not_found"
+	default:
+		status, out["code"] = http.StatusBadGateway, "square_error"
+	}
+	if err != nil {
+		out["error"] = err.Error()
+		h.logger.Warn().Err(err).Str("location_id", lid.String()).Str("result", result).Msg("square oauth forward")
+	}
+	return c.JSON(status, out)
+}
+
 // POST /square/webhook — Square's events (signature checked).
 func (h *SquareHandler) Webhook(c *echo.Context) error {
 	body, err := io.ReadAll(io.LimitReader(c.Request().Body, 1<<20))

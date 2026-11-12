@@ -219,29 +219,53 @@ func (s *Service) ConnectURL(locationID uuid.UUID) (string, error) {
 	return s.client.AuthorizeURL(s.state(locationID), s.cfg.RedirectURL, s.cfg.Env == "production"), nil
 }
 
-// Callback finishes the OAuth flow: it stores the connection and picks the
-// Square location when the account has exactly one that takes cards. It
-// returns the store and where to send the owner.
+// Callback finishes the OAuth flow when Square sends the owner straight to
+// main (GET /square/oauth/callback): see Finish. It returns the store and
+// where to send the owner.
 func (s *Service) Callback(ctx context.Context, code, state, errParam string) (uuid.UUID, string, error) {
-	back := strings.TrimRight(s.cfg.AppURL, "/") + "/app/store/payments?square="
+	lid, result, err := s.Finish(ctx, code, state, errParam)
+	return lid, s.ReturnURL(result), err
+}
+
+// OAuth results: the ?square= flag Store › Payments shows.
+const (
+	ResultConnected = "connected"
+	ResultExpired   = "expired" // a forged, damaged or > 15 min old state
+	ResultDenied    = "denied"  // the owner said no on Square's page
+	ResultError     = "error"
+)
+
+// ReturnURL is Store › Payments with the result flag (SQUARE_APP_URL + the SPA path).
+func (s *Service) ReturnURL(result string) string {
+	return strings.TrimRight(s.cfg.AppURL, "/") + "/app/store/payments?square=" + result
+}
+
+// Finish completes the OAuth flow for either way Square's redirect reaches
+// main: straight (Callback) or relayed by the storefront (POST
+// /square/oauth/forward, DURABILITY-PLAN.md step 6). The signed state names
+// the store; nothing is exchanged unless it checks out. It stores the
+// connection (tokens sealed with SQUARE_TOKEN_KEY) and picks the Square
+// location when the account has exactly one that takes cards. The code is
+// never logged.
+func (s *Service) Finish(ctx context.Context, code, state, errParam string) (uuid.UUID, string, error) {
 	if !s.Enabled() {
-		return uuid.Nil, back + "error", ErrDisabled
+		return uuid.Nil, ResultError, ErrDisabled
 	}
 	lid, err := s.checkState(state)
 	if err != nil {
-		return uuid.Nil, back + "expired", err
+		return uuid.Nil, ResultExpired, err
 	}
 	if errParam != "" || code == "" {
-		return lid, back + "denied", ErrDenied
+		return lid, ResultDenied, ErrDenied
 	}
 	loc, err := s.locs.GetLocation(ctx, lid)
 	if err != nil {
-		return lid, back + "error", ErrUnknownPlace
+		return lid, ResultError, ErrUnknownPlace
 	}
 	tok, err := s.client.ExchangeCode(ctx, code, s.cfg.RedirectURL)
 	if err != nil {
 		s.logger.Error().Err(err).Str("location_id", lid.String()).Msg("square code exchange failed")
-		return lid, back + "error", err
+		return lid, ResultError, err
 	}
 	sqLoc := ""
 	if ls, err := s.client.Locations(ctx, tok.AccessToken); err == nil {
@@ -257,18 +281,18 @@ func (s *Service) Callback(ctx context.Context, code, state, errParam string) (u
 	}
 	accessEnc, err := s.seal(tok.AccessToken)
 	if err != nil {
-		return lid, back + "error", err
+		return lid, ResultError, err
 	}
 	refreshEnc, err := s.seal(tok.RefreshToken)
 	if err != nil {
-		return lid, back + "error", err
+		return lid, ResultError, err
 	}
 	if _, err := s.repo.Upsert(ctx, repositories.SquareConnection{LocationID: loc.ID, TenantID: loc.TenantID, MerchantID: tok.MerchantID,
 		SquareLocationID: sqLoc, AccessEnc: accessEnc, RefreshEnc: refreshEnc, ExpiresAt: tok.Expires()}); err != nil {
-		return lid, back + "error", err
+		return lid, ResultError, err
 	}
 	s.logger.Info().Str("location_id", lid.String()).Str("merchant_id", tok.MerchantID).Bool("location_picked", sqLoc != "").Msg("square connected")
-	return lid, back + "connected", nil
+	return lid, ResultConnected, nil
 }
 
 // Status is the Square card on Store › Payments.

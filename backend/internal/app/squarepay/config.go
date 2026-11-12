@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 
@@ -19,8 +20,14 @@ import (
 //	                              (unset: fake on dev, off elsewhere; fake is never allowed in prod)
 //	SQUARE_APP_ID / _APP_SECRET   the Square app (sandbox or production)
 //	SQUARE_TOKEN_KEY              64 hex chars: encrypts stores' Square tokens
-//	SQUARE_REDIRECT_URL           the OAuth callback registered in the app (…/square/oauth/callback)
-//	SQUARE_APP_URL                where the owner lands afterwards (main's public URL; "" = relative)
+//	SQUARE_REDIRECT_URL           the OAuth callback registered in the app (…/square/oauth/callback):
+//	                              main's own, or — main on a private network — the storefront's,
+//	                              which relays code + state to POST /square/oauth/forward
+//	                              (DURABILITY-PLAN.md step 6). Connect Square and the code
+//	                              exchange both use it.
+//	SQUARE_APP_URL                where the owner lands afterwards: main's URL as the manager's
+//	                              browser reaches it ("" = relative, only right when the
+//	                              redirect is main's own)
 //	SQUARE_WEBHOOK_SIGNATURE_KEY  + SQUARE_WEBHOOK_URL: the webhook subscription
 //	SQUARE_BASE_URL               override Square's API host
 //
@@ -51,6 +58,13 @@ func FromEnv(appEnv string, lg zerolog.Logger) (Config, http.Handler) {
 		}
 		if cfg.RedirectURL == "" {
 			cfg.RedirectURL = local + "/square/oauth/callback"
+		}
+		if cfg.AppURL == "" {
+			// main's own origin (the fake runs inside main): absolute, so the
+			// storefront's relay can send the browser back too.
+			if u, err := url.Parse(cfg.BaseURL); err == nil && u.Scheme != "" && u.Host != "" {
+				cfg.AppURL = u.Scheme + "://" + u.Host
+			}
 		}
 		if len(cfg.TokenKey) != 32 {
 			sum := sha256.Sum256([]byte("quicc dev fake square token key"))
