@@ -25,6 +25,7 @@
   import Switch from '$lib/ui/Switch.svelte';
   import Skeleton from '$lib/ui/Skeleton.svelte';
   import EmptyState from '$lib/ui/EmptyState.svelte';
+  import CallcenterCard from '$lib/components/store/CallcenterCard.svelte';
   import SegmentedControl from '$lib/ui/SegmentedControl.svelte';
   import MenuButton from '$lib/ui/MenuButton.svelte';
 
@@ -36,8 +37,13 @@
   const ROLES: { value: StaffRole; label: string; tone: Tone }[] = [
     { value: 'cashier', label: 'Cashier', tone: 'info' },
     { value: 'manager', label: 'Manager', tone: 'brand' },
-    { value: 'driver', label: 'Driver', tone: 'mute' }
+    { value: 'driver', label: 'Driver', tone: 'mute' },
+    { value: 'callcenter', label: 'Call center', tone: 'ok' }
   ];
+  // A role change to Call center needs a new 4-digit PIN with it, and the edit
+  // dialog has no PIN boxes: an existing person keeps the three store roles
+  // (add a call-center agent as a new person).
+  const rolesFor = (p: Staff | null) => (p && p.role !== 'callcenter' ? ROLES.filter((r) => r.value !== 'callcenter') : ROLES);
   const roleOf = (r: string) => ROLES.find((x) => x.value === r) ?? { value: r, label: r, tone: 'mute' as Tone };
   const TABS = [
     { value: 'info', label: 'Info' },
@@ -88,12 +94,13 @@
     e instanceof ApiError && e.code === 'pin_taken'
       ? 'Someone else here already uses that PIN. Pick a different one.'
       : e instanceof ApiError && e.code === 'bad_pin'
-        ? 'A PIN is 2 to 4 digits.'
+        ? 'A PIN is 2 to 4 digits (4 for a call-center agent).'
         : e instanceof ApiError && e.code === 'pin_required'
           ? 'Give them a new PIN.'
           : '';
   /** The PIN pair's problem, or '' when it's fine. */
-  function checkPin(pin: string, confirm: string): string {
+  function checkPin(pin: string, confirm: string, role = ''): string {
+    if (role === 'callcenter' && !/^\d{4}$/.test(pin)) return 'A call-center agent’s PIN is exactly 4 digits.';
     if (!PIN_RE.test(pin)) return 'A PIN is 2 to 4 digits.';
     if (pin !== confirm) return 'The two PINs don’t match.';
     return '';
@@ -150,6 +157,8 @@
         return 'Can do everything on the terminal, with no limits. Their PIN approves what a cashier can’t do.';
       case 'driver':
         return 'Gets the driver view: their deliveries, tips and driver report. No refunds or discounts.';
+      case 'callcenter':
+        return 'Takes phone orders in the call-center app only (their 4-digit PIN doesn’t work on the store’s terminals). No refunds, discounts or price changes; orders show “Call center - Name”.';
       default:
         return `Takes orders and payments. Without a manager: refunds up to ${dollars(d.refund ?? 0)}, discounts up to ${d.discount}% (Cashier limits below).`;
     }
@@ -181,7 +190,7 @@
       document.getElementById('st-first')?.focus();
       return;
     }
-    if (!editing && (pinErr = checkPin(form.pin, form.pin2))) {
+    if (!editing && (pinErr = checkPin(form.pin, form.pin2, form.role))) {
       document.getElementById('st-pin')?.focus();
       return;
     }
@@ -194,7 +203,8 @@
     saving = true;
     const name = form.first.trim();
     try {
-      const body: Record<string, unknown> = { first_name: name, last_name: form.last.trim(), role: form.role, limits };
+      const body: Record<string, unknown> = { first_name: name, last_name: form.last.trim(), role: form.role,
+        limits: form.role === 'callcenter' ? {} : limits };
       if (!editing) {
         await storeApi('/me/staff', { method: 'POST', body: JSON.stringify({ ...body, pin: form.pin }) });
         toast.success(`${name} added`);
@@ -232,7 +242,7 @@
   async function savePin(e: SubmitEvent) {
     e.preventDefault();
     if (!pinFor || pinSaving) return;
-    if ((newPinErr = checkPin(newPin, newPin2))) return;
+    if ((newPinErr = checkPin(newPin, newPin2, pinFor.role))) return;
     pinSaving = true;
     const p = pinFor;
     try {
@@ -826,6 +836,8 @@
       </div>
     {/if}
   </form>
+
+  <CallcenterCard agents={staff?.filter((p) => p.role === 'callcenter' && p.active).length ?? 0} />
 </div>
 
 <Dialog bind:open title={!editing ? 'Add a person' : `Edit ${editing.first_name}`} width={500}>
@@ -840,7 +852,7 @@
     </div>
     <div>
       <span class="lbl">Role</span>
-      <SegmentedControl label="Role" options={ROLES} bind:value={form.role} />
+      <SegmentedControl label="Role" options={rolesFor(editing)} bind:value={form.role} />
       <p class="help" data-testid="role-blurb">{roleBlurb(form.role)}</p>
     </div>
     {#if !editing}
@@ -848,7 +860,7 @@
     {:else}
       <p class="help !mt-0">To give {editing.first_name} a new PIN, use the PIN button in the list.</p>
     {/if}
-    <div class="subcard p-3 flex flex-col gap-3">
+    <div class="subcard p-3 flex flex-col gap-3" class:hidden={form.role === 'callcenter'}>
       <label class="sw-row">
         <Switch bind:checked={ownLimits} label="Own limits for this person" />Own limits for this person
       </label>

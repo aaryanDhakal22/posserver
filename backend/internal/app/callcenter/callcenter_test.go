@@ -229,6 +229,9 @@ func (f *fakePi) PublishCommand(_ context.Context, _ sseBroker.Scope, data []byt
 	return f.streams
 }
 func (f *fakePi) Request(_ context.Context, _ sseBroker.Scope, typ string, payload any, _ time.Duration) (rpc.Envelope, error) {
+	if f.streams == 0 {
+		return rpc.Envelope{}, rpc.ErrAgentOffline // the requester's own answer (it counts it)
+	}
 	req := payload.(RelayRequest)
 	f.calls = append(f.calls, req)
 	out, err := f.answer(req)

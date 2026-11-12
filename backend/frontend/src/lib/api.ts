@@ -905,7 +905,7 @@ export interface SiteDomain {
 }
 
 // --- Store › Staff (counter terminal staff + terminal settings, contract §2.5zb) ---
-export type StaffRole = 'cashier' | 'manager' | 'driver';
+export type StaffRole = 'cashier' | 'manager' | 'driver' | 'callcenter';
 export interface StaffLimits { refund_cents?: number; discount_pct?: number }
 export interface StaffEffective { refund_cents: number | null; discount_pct: number | null }
 export interface Staff {
@@ -927,6 +927,21 @@ export interface TerminalSettings {
   void_reasons: string[];
   /** Send to phone: a charge on a cashier's phone nobody finishes expires after this (agent §2.10z). */
   phone_charge_timeout_seconds: number;
+  /** The call-center app asks for the PIN again after this long idle (contract §2.5zh). */
+  callcenter_idle_lock_minutes?: number;
+}
+/** A browser the store's login opened the call-center app on. */
+export interface CallcenterDevice {
+  id: string; name: string; created_at: string; last_seen_at: string | null;
+  staff_id?: string; staff_name?: string; revoked_at?: string;
+}
+export interface CallcenterReportRow {
+  day: string; staff_id: string; staff_name: string; orders: number; voided: number; pickup: number; delivery: number;
+  sales_cents: number; card_cents: number; tips_cents: number;
+}
+export interface CallcenterReport {
+  from: string; to: string; timezone: string; rows: CallcenterReportRow[];
+  totals: { orders: number; voided: number; sales_cents: number; card_cents: number; tips_cents: number };
 }
 /** The owner's defaults (main's staff.DefaultSettings): a field main doesn't send yet shows these. */
 export const TERMINAL_DEFAULTS: TerminalSettings = {
@@ -937,5 +952,6 @@ export const TERMINAL_DEFAULTS: TerminalSettings = {
   cashier_payout_cents: 2000, default_pickup_minutes: 15, area_codes: ['410', '443', '667'], drawer_start_cents: 10000,
   waste_reasons: ['Never picked up', 'Made wrong / remade', 'Customer complaint', 'Burnt / dropped'],
   void_reasons: ['Customer cancelled', 'Wrong order', 'Duplicate', 'Took too long', 'Other'],
-  phone_charge_timeout_seconds: 180
+  phone_charge_timeout_seconds: 180,
+  callcenter_idle_lock_minutes: 15
 };

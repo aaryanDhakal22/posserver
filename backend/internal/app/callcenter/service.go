@@ -412,10 +412,16 @@ func (s *Service) pinFailed(ctx context.Context, d Device) (revoked bool) {
 		return false
 	}
 	if n >= pinRevokeAfter {
+		// The message is matched by an alert rule: keep the words.
 		s.logger.Warn().Str("device_id", d.ID.String()).Str("location_id", d.LocationID.String()).Int("wrong_pins", n).
-			Msg("callcenter device revoked: PIN guessing")
+			Msg("callcenter: device revoked (PIN guessing)")
 		_, _ = s.Revoke(context.WithoutCancel(ctx), d.TenantID, d.LocationID, d.ID)
 		return true
+	}
+	if until != nil {
+		// The message is matched by an alert rule: keep the words. Never the PIN.
+		s.logger.Warn().Str("device_id", d.ID.String()).Str("location_id", d.LocationID.String()).Int("wrong_pins", n).
+			Time("locked_until", *until).Msg("callcenter: PIN lockout")
 	}
 	return false
 }
@@ -667,9 +673,10 @@ type RelayReply struct {
 // ErrOffline: no live stream, no answer in time, an older Pi, or the Pi's
 // relay is full.
 func (s *Service) Relay(ctx context.Context, d Device, staffID uuid.UUID, method, path, query string, headers map[string]string, body []byte) (RelayReply, error) {
-	if !s.waitStream(ctx, d.Scope()) {
-		return RelayReply{}, ErrOffline
-	}
+	// A reconnecting Pi gets a moment. With no stream after it the request
+	// still goes to the requester, which answers "offline" at once and counts
+	// it (rpc.offline{type="terminal.relay"}: the alert reads that series).
+	s.waitStream(ctx, d.Scope())
 	// The menu is large (1 MB+): the Pi uploads it once per version per main
 	// process. main asks with the ETag it holds and serves its copy on 304.
 	menu := method == "GET" && path == "menu"
