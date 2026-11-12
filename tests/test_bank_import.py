@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 import requests
@@ -285,3 +286,120 @@ def test_other_store_untouched(mgr, make_store):
     assert res["counts"]["items"]["deleted"] == 6
     assert len(_items(_ok(o_mgr.get(f"{MENU}/bank", timeout=5)))) == 6
     o_mgr.close()
+
+
+# --- renames through `was` (MENU-PLAN M1) -------------------------------------------------------
+
+
+def _renamed() -> dict:
+    """_doc with a size, a group, an option, the menu, a category and an item
+    renamed through `was`; every other reference names the new names."""
+    raw = json.dumps(_doc())
+    for old, new in (('"12 Medium"', '"12 Med"'), ('"Cheese Pizza"', '"Plain Cheese"'), ('"Mushrooms"', '"Mushroom"'),
+                     ('"Spice"', '"Spice Level"')):
+        raw = raw.replace(old, new)
+    doc = json.loads(raw)
+    doc["sizes"][1]["was"] = ["12 medium"]
+    doc["groups"][0]["options"][1]["was"] = ["Mushrooms"]
+    doc["groups"][1]["was"] = ["Spice"]
+    doc["menus"][0].update(name="Everything", was=["Main"])
+    desi = doc["menus"][0]["categories"][1]
+    desi.update(name="Indian", was=["Desi"])  # its printer is still "Desi"
+    doc["menus"][0]["categories"][0]["items"][0]["was"] = ["Cheese Pizza"]
+    return doc
+
+
+def _row_ids(bank: dict) -> dict[str, str]:
+    out = {f"size:{s['name']}": s["id"] for s in bank["sizes"]}
+    for g in bank["groups"].values():
+        out[f"group:{g['name']}"] = g["id"]
+        out.update({f"option:{o['name']}": o["id"] for o in g["options"]})
+    for m in bank["menus"]:
+        out[f"menu:{m['name']}"] = m["id"]
+        for c in m["categories"]:
+            out[f"category:{c['name']}"] = c["id"]
+            out.update({f"item:{it['name']}": it["id"] for it in c["items"]})
+    return out
+
+
+def test_renames_keep_ids(mgr, store, publish):
+    printers = _printers(mgr)
+    _ok(mgr.post(APPLY, json=_doc(), timeout=15))
+    before = _row_ids(_ok(mgr.get(f"{MENU}/bank", timeout=5)))
+    dry = _ok(mgr.post(APPLY, params={"dry_run": 1, "prune": 1}, json=_renamed(), timeout=15))
+    for line in ('size "12 Medium" renamed to "12 Med"', 'group "Spice" renamed to "Spice Level"',
+                 'option "Mushrooms" of "Pizza Toppings" renamed to "Mushroom"', 'menu "Main" renamed to "Everything"',
+                 'category "Desi" renamed to "Indian"', 'item "Cheese Pizza" renamed to "Plain Cheese"'):
+        assert line in dry["changes"], dry["changes"]
+    assert all(c["deleted"] == 0 for k, c in dry["counts"].items() if k != "entries"), dry["counts"]
+    assert _row_ids(_ok(mgr.get(f"{MENU}/bank", timeout=5))) == before, "a dry run writes nothing"
+
+    res = _ok(mgr.post(APPLY, params={"prune": 1}, json=_renamed(), timeout=15))
+    assert res["counts"]["items"]["created"] == 0 and res["counts"]["items"]["deleted"] == 0
+    bank = _ok(mgr.get(f"{MENU}/bank", timeout=5))
+    after = _row_ids(bank)
+    for old, new in (("size:12 Medium", "size:12 Med"), ("group:Spice", "group:Spice Level"), ("option:Mushrooms", "option:Mushroom"),
+                     ("menu:Main", "menu:Everything"), ("category:Desi", "category:Indian"), ("item:Cheese Pizza", "item:Plain Cheese")):
+        assert after.get(new) == before[old], (old, new)
+        assert old not in after
+    assert _cats(bank)["Indian"]["default_printer_id"] == printers["Desi"]
+
+    # Views and deals still point at the same rows (by id); the web view builds.
+    views = {(v["kind"], v["name"]): v for v in _ok(mgr.get(f"{MENU}/views", timeout=5))}
+    web = _ok(mgr.get(f"{MENU}/views/{views[('web', 'Web')]['id']}/build", timeout=5))
+    plain = next(it for c in web["categories"] for it in c["items"] if it["id"] == before["item:Cheese Pizza"])
+    assert {s["size_id"] for s in plain["sizes"]} >= {before["size:12 Medium"]}
+    deals = {d["name"]: d for d in _ok(mgr.get(f"{STORE_V1}/me/deals", timeout=5))}
+    assert deals["2 Medium Cheese"]["slots"][0]["eligible"]["items"] == [before["item:Cheese Pizza"]]
+    # The Brygid map keeps routing the vendor's name to the renamed item's printer.
+    o = store.order(items=[_line("(12 Medium) Regular Tomato  Cheese")])
+    publish(o)
+    li = wait_order(store.key, o["order_id"])["items"][0]
+    assert li["routing"] == "matched" and li["printer_id"] == printers["Pizza"], li
+
+    # Applying it again changes nothing; the export names the new names and never writes was.
+    again = _ok(mgr.post(APPLY, params={"prune": 1}, json=_renamed(), timeout=15))
+    assert _changed(again) == 0, again["changes"]
+    exported = _ok(mgr.get(EXPORT, timeout=10))
+    assert '"was"' not in json.dumps(exported)
+    assert [s["name"] for s in exported["sizes"]] == ["10 Small", "12 Med", "14 Large"]
+
+
+@pytest.mark.parametrize("edit, path, msg", [
+    # a was naming two store rows: two items named the same (one added below)
+    ("dup", "menus[0].categories[3].items[0].was[0]", "matches 2 items"),
+    # a store row claimed by a was and another row's own name
+    (lambda d: d["menus"][0]["categories"][2]["items"].append({"name": "Cheesecake", "price_cents": 1, "was": ["Cheesecake Oreo"]}),
+     "menus[0].categories[2].items[2].was", "also matched by menus[0].categories[2].items[1]"),
+    # two rows' was claiming one store row
+    (lambda d: (d["sizes"].append({"name": "Medium", "short": "", "was": ["12 Medium"]}),
+                d["sizes"].__setitem__(1, {"name": "M12", "short": "", "was": ["12 Medium"]})),
+     "sizes[3].was", 'size "12 Medium" is also matched by sizes[1]'),
+    # was names that point at two different rows
+    (lambda d: d["groups"][1].update(name="Heat", was=["Spice", "Pizza Toppings"]), "groups[1].was", "two different groups"),
+    # a was naming a row of another kind / an option of another group
+    (lambda d: d["menus"][0]["categories"][2]["items"].append({"name": "Sweets", "price_cents": 1, "was": ["Desserts"]}),
+     "menus[0].categories[2].items[2].was[0]", 'names a category, not an item'),
+    (lambda d: d["groups"][1]["options"].append({"name": "Extra Hot", "price_cents": 0, "was": ["Pepperoni"]}),
+     "groups[1].options[2].was[0]", 'names an option of group "Pizza Toppings"'),
+    (lambda d: d["sizes"][0].update(was=[""]), "sizes[0].was[0]", "can't be empty"),
+])
+def test_rename_conflicts_are_400(mgr, edit, path, msg):
+    _printers(mgr)
+    _ok(mgr.post(APPLY, json=_doc(), timeout=15))
+    if edit == "dup":
+        # The editor allows two items of one name; a was naming both is refused.
+        bank = _ok(mgr.get(f"{MENU}/bank", timeout=5))
+        drinks = _cats(bank)["Drinks"]
+        _ok(mgr.post(f"{MENU}/categories/{drinks['id']}/items", json={"name": "Can Soda", "price_cents": 150}, timeout=5), 201)
+        doc = _doc()
+        doc["menus"][0]["categories"][3]["items"][0] = {"name": "Soda Can", "price_cents": 150, "was": ["Can Soda"]}
+    else:
+        doc = _doc()
+        edit(doc)
+    v0 = _ok(mgr.get(f"{MENU}/bank", timeout=5))["version"]
+    r = mgr.post(APPLY, json=doc, timeout=15)
+    assert r.status_code == 400, r.text
+    body = r.json()
+    assert body["code"] == "bad_document" and body["error"].startswith(path) and msg in body["error"], body
+    assert _ok(mgr.get(f"{MENU}/bank", timeout=5))["version"] == v0

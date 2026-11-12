@@ -81,6 +81,8 @@ test('families: add, bulk assign with the no-family filter, rename, mod classes,
   await page.getByRole('radio', { name: /Mod families/ }).click();
   await page.getByLabel('New family name').fill('Pizza Topping');
   await page.getByRole('button', { name: 'Add family' }).click();
+  // Wait for it: the add clears the name field when it lands, which raced the next fill.
+  await expect(famRow(page, 'Pizza Topping')).toBeVisible();
   await page.getByLabel('New family name').fill('Premium Topping');
   await page.getByLabel('New family class').selectOption('premium');
   await page.getByRole('button', { name: 'Add family' }).click();
@@ -95,6 +97,8 @@ test('families: add, bulk assign with the no-family filter, rename, mod classes,
   await expect(page.getByText('1 with no family yet')).toBeVisible();
   await page.getByLabel('Class of Premium Topping').selectOption('unpriced');
   await expect(famRow(page, 'Premium Topping')).toContainText('Unpriced');
+  // The select shows the class at once; wait for main to have saved it.
+  await expect.poll(async () => (await listing(store)).families.find((f) => f.name === 'Premium Topping')!.class).toBe('unpriced');
   got = await listing(store);
   const prem = got.families.find((f) => f.name === 'Premium Topping')!;
   expect(prem.class).toBe('unpriced');

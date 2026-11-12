@@ -86,6 +86,16 @@ func loadBank(ctx context.Context, q *models.Queries, locationID uuid.UUID) (*me
 	if err != nil {
 		return nil, err
 	}
+	driverTicket, err := optionsOnDriverTicket(ctx, q.Raw(), locationID)
+	if err != nil {
+		return nil, err
+	}
+	regular := map[uuid.UUID]bool{}
+	for _, f := range fams {
+		if f.Kind == menu.FamilyMod && f.Class == menu.ClassRegular {
+			regular[f.ID] = true
+		}
+	}
 	b := &menu.Bank{LocationID: locationID, Version: ver.Version, Sizes: []menu.Size{}, Menus: []menu.BankMenu{},
 		Groups: map[uuid.UUID]menu.BankGroup{}, Families: fams}
 	famOf := func(m map[uuid.UUID]uuid.UUID, id uuid.UUID) *uuid.UUID {
@@ -108,8 +118,10 @@ func loadBank(ctx context.Context, q *models.Queries, locationID uuid.UUID) (*me
 		if prices == nil {
 			prices = []menu.OptionPrice{}
 		}
+		fam := famOf(optFam, idOf(o.ID))
 		optsByGroup[g] = append(optsByGroup[g], menu.BankOption{ModifierOption: toDomainOption(o), IsDefault: o.IsDefault,
-			KitchenName: o.KitchenName, Prices: prices, FamilyID: famOf(optFam, idOf(o.ID))})
+			KitchenName: o.KitchenName, Prices: prices, FamilyID: fam, ShowOnDriverTicket: driverTicket[idOf(o.ID)],
+			CountsForCoupons: fam != nil && regular[*fam]})
 	}
 	for _, g := range groups {
 		o := optsByGroup[idOf(g.ID)]

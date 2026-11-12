@@ -16,6 +16,7 @@ menu, served in the view's build and carried by the bank document by names.
 from __future__ import annotations
 
 import copy
+import json
 
 import pytest
 import requests
@@ -406,3 +407,133 @@ def test_another_stores_view_is_404(make_store):
     finally:
         ma.close()
         mb.close()
+
+
+# --- size chooser screens (MENU-PLAN M2) ----------------------------------------------------------
+
+
+def _chooser_doc() -> dict:
+    """_bank_doc + a counter layout whose Hawaiian button has no size: its flow
+    starts with a size chooser screen ("Pizza Size")."""
+    doc = _bank_doc()
+    lay = _names_layout()
+    lay["tabs"][0]["buttons"][1]["action"] = {"type": "item", "item": "Hawaiian Pizza"}
+    lay["screens"].append({"name": "Pizza Size", "prompt": "Which size?", "grid": {"rows": 1, "cols": 2}, "pages": [{"name": "Size"}],
+                           "buttons": [
+                               {"page": 0, "row": 0, "col": 0, "caption": "", "color": "", "font_color": "", "font_size": 0,
+                                "action": {"type": "size", "size": "12 Medium"}},
+                               {"page": 0, "row": 0, "col": 1, "caption": "XL", "color": "", "font_color": "", "font_size": 0,
+                                "action": {"type": "size", "size": "16 X-Large"}}]})
+    lay["flows"]["Hawaiian Pizza"] = [
+        {"screen": "Pizza Size", "required_count": 1, "forced": True, "prompt": "Size?"},
+        {"screen": "12\" Pizza Toppings", "required_count": 0, "forced": False, "prompt": ""},
+    ]
+    doc["views"] = [{"kind": "counter", "name": "Counter", "rules": {"round": "none"}, "entries": [], "layout": lay}]
+    return doc
+
+
+def test_size_chooser_round_trip(mgr):
+    _ok(mgr.post(APPLY, json=_chooser_doc(), timeout=15))
+    ids = Ids(mgr)
+    counter = {(v["kind"], v["name"]): v for v in _ok(mgr.get(f"{MENU}/views", timeout=5))}[("counter", "Counter")]
+    stored = _ok(mgr.get(f"{MENU}/views/{counter['id']}/layout", timeout=5))
+    size_btns = stored["screens"][3]["buttons"]
+    assert size_btns[0]["action"] == {"type": "size", "size_id": ids.size["12 Medium"]}
+    assert stored["tabs"][0]["buttons"][1]["action"] == {"type": "item", "item_id": ids.item["Hawaiian Pizza"]}
+
+    build = _ok(mgr.get(f"{MENU}/views/{counter['id']}/build", timeout=5))
+    bl = build["layout"]
+    haw = bl["tabs"][0]["buttons"][1]
+    assert haw["caption"] == "Hawaiian Pizza" and haw["action"]["label"] == "Hawaiian Pizza"
+    assert "price_cents" not in haw["action"] and "size_name" not in haw["action"] and not haw["action"].get("missing")
+    chooser = bl["screens"][3]["buttons"]
+    assert chooser[0]["caption"] == "12 Medium"
+    assert chooser[0]["action"]["type"] == "size" and chooser[0]["action"]["size_id"] == ids.size["12 Medium"]
+    assert chooser[0]["action"]["label"] == "12 Medium" and chooser[0]["action"]["size_name"] == "12 Medium"
+    assert "price_cents" not in chooser[0]["action"], "the price comes from the line's item"
+    assert chooser[1]["caption"] == "XL" and chooser[1]["action"]["size_name"] == "16 X-Large"
+    assert bl["flows"][ids.item["Hawaiian Pizza"]][0]["screen"] == "Pizza Size"
+    # The terminal prices the chosen size from the item's own sizes in the build.
+    haw_item = next(it for c in build["categories"] for it in c["items"] if it["id"] == ids.item["Hawaiian Pizza"])
+    assert {s["size_id"]: s["price_cents"] for s in haw_item["sizes"]} == {ids.size["12 Medium"]: 1499, ids.size["16 X-Large"]: 1999}
+    assert not [n for n in build["needs_attention"] if n["code"].startswith("layout_")]
+
+    exported = _ok(mgr.get(EXPORT, timeout=10))
+    ev = next(v for v in exported["views"] if v["kind"] == "counter")["layout"]
+    assert ev["screens"][3]["buttons"][0]["action"] == {"type": "size", "size": "12 Medium"}
+    assert ev["tabs"][0]["buttons"][1]["action"] == {"type": "item", "item": "Hawaiian Pizza"}
+    again = _ok(mgr.post(APPLY, json=exported, timeout=15))
+    assert sum(c["created"] + c["updated"] + c["deleted"] for c in again["counts"].values()) == 0, again["changes"]
+
+    # A size that goes away: the chooser button is missing and needs attention.
+    _ok(mgr.delete(f"{MENU}/sizes/{ids.size['16 X-Large']}", timeout=5), 204)
+    build = _ok(mgr.get(f"{MENU}/views/{counter['id']}/build", timeout=5))
+    assert build["layout"]["screens"][3]["buttons"][1]["action"]["missing"] is True
+    assert "layout_size_missing" in {n["code"] for n in build["needs_attention"]}
+
+
+@pytest.mark.parametrize("edit,path,msg", [
+    # a size button belongs on a screen
+    (lambda l: l["tabs"][0]["buttons"][5].update(action={"type": "size", "size": "12 Medium"}),
+     "views[0].layout.tabs[0].buttons[5].action.type", "must be one of"),
+    (lambda l: l["screens"][3]["buttons"][0]["action"].update(size="20 Party"),
+     "views[0].layout.screens[3].buttons[0].action.size", "unknown size"),
+    (lambda l: l["screens"][3]["buttons"][0]["action"].pop("size"),
+     "views[0].layout.screens[3].buttons[0].action.size_id", "size_id is required"),
+    (lambda l: l["screens"][3]["buttons"][0]["action"].update(item="Can Soda"),
+     "views[0].layout.screens[3].buttons[0].action.item_id", "doesn't belong"),
+    # the chooser isn't the flow's first step: the sizeless button needs its size again
+    (lambda l: l["flows"]["Hawaiian Pizza"].reverse(),
+     "views[0].layout.tabs[0].buttons[1].action.size_id", "size_id is required"),
+])
+def test_size_chooser_bad(mgr, edit, path, msg):
+    doc = _chooser_doc()
+    edit(doc["views"][0]["layout"])
+    r = _ok(mgr.post(APPLY, json=doc, timeout=15), 400)
+    assert r["code"] == "bad_document" and r["error"].startswith(path) and msg in r["error"], r
+    assert _ok(mgr.get(f"{MENU}/bank", timeout=5))["menus"] == [], "all or nothing"
+
+
+def test_size_chooser_by_ids_route(mgr):
+    """PUT …/layout takes the size action by id (422 lists a bad one)."""
+    ids, views = _setup(mgr)
+    counter = views[("counter", "Counter")]
+    url = f"{MENU}/views/{counter['id']}/layout"
+    names = _chooser_doc()["views"][0]["layout"]
+    lay = ids.layout({**names, "screens": [s for s in names["screens"] if s["name"] != "Pizza Size"]})
+    lay["screens"].append({"name": "Pizza Size", "prompt": "", "grid": {"rows": 1, "cols": 1}, "pages": [{"name": "Size"}],
+                           "buttons": [{"page": 0, "row": 0, "col": 0, "caption": "", "color": "", "font_color": "", "font_size": 0,
+                                        "action": {"type": "size", "size_id": ids.size["16 X-Large"]}}]})
+    assert _ok(mgr.put(url, json=lay, timeout=10)) == lay
+    lay["screens"][-1]["buttons"][0]["action"]["size_id"] = "00000000-0000-0000-0000-000000000009"
+    body = _ok(mgr.put(url, json=lay, timeout=10), 422)
+    assert any(p["path"] == "screens[3].buttons[0].action.size_id" and "store's sizes" in p["message"] for p in body["problems"]), body
+
+
+def test_renames_keep_the_layout(mgr):
+    """MENU-PLAN M1: an item and a size renamed through `was` keep their ids, so
+    the counter layout (and its flows) still resolve; the document names the new
+    names only."""
+    _ok(mgr.post(APPLY, json=_chooser_doc(), timeout=15))
+    before = Ids(mgr)
+    exported = _ok(mgr.get(EXPORT, timeout=10))
+    raw = json.dumps(exported).replace('"Cheese Pizza"', '"Cheese"').replace('"12 Medium"', '"12 Med"')
+    doc = json.loads(raw)
+    next(s for s in doc["sizes"] if s["name"] == "12 Med")["was"] = ["12 Medium"]
+    pizza = next(c for c in doc["menus"][0]["categories"] if c["name"] == "Pizza")
+    next(it for it in pizza["items"] if it["name"] == "Cheese")["was"] = ["cheese pizza"]
+    dry = _ok(mgr.post(APPLY, params={"dry_run": 1, "prune": 1}, json=doc, timeout=15))
+    assert 'size "12 Medium" renamed to "12 Med"' in dry["changes"] and 'item "Cheese Pizza" renamed to "Cheese"' in dry["changes"], dry["changes"]
+    assert all(c["deleted"] == 0 for k, c in dry["counts"].items() if k != "entries"), dry["counts"]
+    _ok(mgr.post(APPLY, params={"prune": 1}, json=doc, timeout=15))
+    after = Ids(mgr)
+    assert after.item["Cheese"] == before.item["Cheese Pizza"] and after.size["12 Med"] == before.size["12 Medium"]
+    counter = {(v["kind"], v["name"]): v for v in _ok(mgr.get(f"{MENU}/views", timeout=5))}[("counter", "Counter")]
+    build = _ok(mgr.get(f"{MENU}/views/{counter['id']}/build", timeout=5))
+    assert not [n for n in build["needs_attention"] if n["code"].startswith("layout_")], build["needs_attention"]
+    b0 = build["layout"]["tabs"][0]["buttons"][0]["action"]
+    assert b0["label"] == "Cheese" and b0["size_name"] == "12 Med" and b0["item_id"] == before.item["Cheese Pizza"]
+    assert build["layout"]["screens"][3]["buttons"][0]["caption"] == "12 Med"
+    assert before.item["Cheese Pizza"] in build["layout"]["flows"]
+    again = _ok(mgr.post(APPLY, params={"prune": 1}, json=doc, timeout=15))
+    assert again["changes"] == [], again["changes"]

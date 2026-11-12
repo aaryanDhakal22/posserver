@@ -134,9 +134,21 @@ func checkShape(doc *bankdoc.Document) error {
 		seen[n] = path
 		return nil
 	}
+	// was: the names a row had before (renames, M1).
+	was := func(path string, names []string) error {
+		for i, w := range names {
+			if bankdoc.Norm(w) == "" {
+				return bad(fmt.Sprintf("%s.was[%d]", path, i), "a was name can't be empty")
+			}
+		}
+		return nil
+	}
 	sizes := map[string]string{}
 	for i, z := range doc.Sizes {
 		if err := uniq(fmt.Sprintf("sizes[%d]", i), "size", sizes, z.Name); err != nil {
+			return err
+		}
+		if err := was(fmt.Sprintf("sizes[%d]", i), z.Was); err != nil {
 			return err
 		}
 	}
@@ -146,6 +158,9 @@ func checkShape(doc *bankdoc.Document) error {
 		if err := uniq(p, "group", groups, g.Name); err != nil {
 			return err
 		}
+		if err := was(p, g.Was); err != nil {
+			return err
+		}
 		if g.MinSelect < 0 || g.MaxSelect < 0 || (g.MaxSelect > 0 && g.MinSelect > g.MaxSelect) || (g.Required && g.MinSelect < 1) {
 			return bad(p, "min/max select don't fit (required needs min_select ≥ 1)")
 		}
@@ -153,6 +168,9 @@ func checkShape(doc *bankdoc.Document) error {
 		for j, op := range g.Options {
 			q := fmt.Sprintf("%s.options[%d]", p, j)
 			if err := uniq(q, "option", opts, op.Name); err != nil {
+				return err
+			}
+			if err := was(q, op.Was); err != nil {
 				return err
 			}
 			if op.PriceCents < 0 {
@@ -171,14 +189,23 @@ func checkShape(doc *bankdoc.Document) error {
 		if err := uniq(p, "menu", menus, m.Name); err != nil {
 			return err
 		}
+		if err := was(p, m.Was); err != nil {
+			return err
+		}
 		for j, c := range m.Categories {
 			q := fmt.Sprintf("%s.categories[%d]", p, j)
 			if err := uniq(q, "category", cats, c.Name); err != nil {
 				return err
 			}
+			if err := was(q, c.Was); err != nil {
+				return err
+			}
 			for k, it := range c.Items {
 				r := fmt.Sprintf("%s.items[%d]", q, k)
 				if err := uniq(r, "item", items, it.Name); err != nil {
+					return err
+				}
+				if err := was(r, it.Was); err != nil {
 					return err
 				}
 				if it.PriceCents < 0 || it.TaxRateBps < 0 || it.TaxRateBps > 10000 {
@@ -251,6 +278,9 @@ type applier struct {
 	menus    map[string]uuid.UUID
 	cats     map[string]uuid.UUID
 	items    map[string]uuid.UUID
+
+	names   map[string]map[string]bool // kind → the store's norm names before the apply (renames' wrong-kind check)
+	matched map[string]*match          // document path → its store row (menus, categories, items)
 }
 
 func (a *applier) change(kind, what string, created bool, fields []string) {
@@ -291,6 +321,7 @@ func (a *applier) run(ctx context.Context) error {
 			a.printers[bankdoc.Norm(p.Name)] = p.ID
 		}
 	}
+	a.indexNames()
 	steps := []func(context.Context) error{a.applySizes, a.applyGroups, a.applyTree}
 	for _, f := range steps {
 		if err := f(ctx); err != nil {
@@ -323,18 +354,28 @@ func (a *applier) run(ctx context.Context) error {
 // --- sizes ---
 
 func (a *applier) applySizes(ctx context.Context) error {
-	have := map[string]menu.Size{}
+	byID := map[uuid.UUID]menu.Size{}
+	m := newMatcher("size", a.otherKinds("size"))
 	for _, z := range a.bank.Sizes {
-		if _, dup := have[bankdoc.Norm(z.Name)]; !dup {
-			have[bankdoc.Norm(z.Name)] = z
-		}
+		byID[z.ID] = z
+		m.add(z.ID, z.Name)
+	}
+	docs := make([]docRow, len(a.doc.Sizes))
+	for i, z := range a.doc.Sizes {
+		docs[i] = docRow{path: fmt.Sprintf("sizes[%d]", i), name: z.Name, was: z.Was}
+	}
+	got, err := m.resolve(docs)
+	if err != nil {
+		return err
 	}
 	a.sizes = map[string]uuid.UUID{}
+	kept := map[uuid.UUID]bool{}
 	for i, z := range a.doc.Sizes {
 		n := bankdoc.Norm(z.Name)
 		name, short := strings.TrimSpace(z.Name), strings.TrimSpace(z.Short)
 		what := fmt.Sprintf("size %q", name)
-		if cur, ok := have[n]; ok {
+		if got[i] != nil {
+			cur := byID[got[i].id]
 			var f []string
 			f = diff(f, "name", cur.Name, name)
 			f = diff(f, "short", cur.Short, short)
@@ -344,8 +385,9 @@ func (a *applier) applySizes(ctx context.Context) error {
 					return fmt.Errorf("%s: %w", what, err)
 				}
 			}
-			a.change("sizes", what, false, f)
+			a.changed("sizes", what, f, got[i], fmt.Sprintf("size %q renamed to %q", got[i].from, name))
 			a.sizes[n] = cur.ID
+			kept[cur.ID] = true
 			continue
 		}
 		id, err := a.tx.CreateSize(ctx, name, short, i)
@@ -357,7 +399,7 @@ func (a *applier) applySizes(ctx context.Context) error {
 	}
 	for _, z := range a.bank.Sizes {
 		n := bankdoc.Norm(z.Name)
-		if id, ok := a.sizes[n]; ok && id == z.ID {
+		if kept[z.ID] {
 			continue
 		}
 		if a.o.Prune {
@@ -391,17 +433,27 @@ func (a *applier) applyGroups(ctx context.Context) error {
 		}
 		return ids[i].String() < ids[j].String()
 	})
-	have := map[string]menu.BankGroup{}
+	seen := map[string]bool{}
+	m := newMatcher("group", a.otherKinds("group"))
 	for _, id := range ids {
 		g := a.bank.Groups[id]
 		n := bankdoc.Norm(g.Name)
-		if _, dup := have[n]; dup {
+		if seen[n] {
 			a.warn("two modifier groups are named %q; the document matches the older one", g.Name)
-			continue
 		}
-		have[n] = g
+		seen[n] = true
+		m.add(id, g.Name)
+	}
+	docs := make([]docRow, len(a.doc.Groups))
+	for i, g := range a.doc.Groups {
+		docs[i] = docRow{path: fmt.Sprintf("groups[%d]", i), name: g.Name, was: g.Was}
+	}
+	got, err := m.resolve(docs)
+	if err != nil {
+		return err
 	}
 	a.groups = map[string]uuid.UUID{}
+	kept := map[uuid.UUID]bool{}
 	for i, dg := range a.doc.Groups {
 		path := fmt.Sprintf("groups[%d]", i)
 		n := bankdoc.Norm(dg.Name)
@@ -409,7 +461,11 @@ func (a *applier) applyGroups(ctx context.Context) error {
 		what := fmt.Sprintf("group %q", name)
 		row := bankdoc.GroupRow{ModifierGroup: menu.ModifierGroup{Name: name, Required: dg.Required, MinSelect: dg.MinSelect,
 			MaxSelect: dg.MaxSelect, AllowMultiple: dg.AllowMultiple}, Portions: dg.Portions}
-		cur, ok := have[n]
+		var cur menu.BankGroup
+		ok := got[i] != nil
+		if ok {
+			cur = a.bank.Groups[got[i].id]
+		}
 		var gid uuid.UUID
 		if ok {
 			gid = cur.ID
@@ -426,7 +482,7 @@ func (a *applier) applyGroups(ctx context.Context) error {
 					return fmt.Errorf("%s: %w", what, err)
 				}
 			}
-			a.change("groups", what, false, f)
+			a.changed("groups", what, f, got[i], fmt.Sprintf("group %q renamed to %q", got[i].from, name))
 		} else {
 			id, err := a.tx.CreateGroup(ctx, row)
 			if err != nil {
@@ -436,6 +492,7 @@ func (a *applier) applyGroups(ctx context.Context) error {
 			a.change("groups", what, true, nil)
 		}
 		a.groups[n] = gid
+		kept[gid] = true
 		if err := a.applyOptions(ctx, path, name, gid, cur.Options, dg.Options); err != nil {
 			return err
 		}
@@ -443,7 +500,7 @@ func (a *applier) applyGroups(ctx context.Context) error {
 	for _, id := range ids {
 		g := a.bank.Groups[id]
 		n := bankdoc.Norm(g.Name)
-		if got, ok := a.groups[n]; ok && got == id {
+		if kept[id] {
 			continue
 		}
 		if a.o.Prune {
@@ -459,11 +516,32 @@ func (a *applier) applyGroups(ctx context.Context) error {
 }
 
 func (a *applier) applyOptions(ctx context.Context, gpath, gname string, gid uuid.UUID, cur []menu.BankOption, doc []bankdoc.Option) error {
-	have := map[string]menu.BankOption{}
-	for _, o := range cur {
-		if _, dup := have[bankdoc.Norm(o.Name)]; !dup {
-			have[bankdoc.Norm(o.Name)] = o
+	byID := map[uuid.UUID]menu.BankOption{}
+	m := newMatcher("option", func(n string) string {
+		// An option of another group (options are matched within their group).
+		for _, g := range a.bank.Groups {
+			if g.ID == gid {
+				continue
+			}
+			for _, o := range g.Options {
+				if bankdoc.Norm(o.Name) == n {
+					return fmt.Sprintf("an option of group %q", g.Name)
+				}
+			}
 		}
+		return ""
+	})
+	for _, o := range cur {
+		byID[o.ID] = o
+		m.add(o.ID, o.Name)
+	}
+	docs := make([]docRow, len(doc))
+	for j, do := range doc {
+		docs[j] = docRow{path: fmt.Sprintf("%s.options[%d]", gpath, j), name: do.Name, was: do.Was}
+	}
+	got, err := m.resolve(docs)
+	if err != nil {
+		return err
 	}
 	kept := map[uuid.UUID]bool{}
 	for j, do := range doc {
@@ -480,10 +558,12 @@ func (a *applier) applyOptions(ctx context.Context, gpath, gname string, gid uui
 		}
 		row := bankdoc.OptionRow{ModifierOption: menu.ModifierOption{GroupID: gid, Name: name, PriceDeltaCents: do.PriceCents,
 			InStock: true, Position: j}, IsDefault: do.IsDefault, KitchenName: strings.TrimSpace(do.KitchenName)}
-		c, ok := have[bankdoc.Norm(name)]
-		if !ok {
+		if got[j] == nil {
 			if do.InStock != nil {
 				row.InStock = *do.InStock
+			}
+			if do.ShowOnDriverTicket != nil {
+				row.ShowOnDriverTicket = *do.ShowOnDriverTicket
 			}
 			id, err := a.tx.CreateOption(ctx, row)
 			if err != nil {
@@ -497,11 +577,16 @@ func (a *applier) applyOptions(ctx context.Context, gpath, gname string, gid uui
 			a.change("options", what, true, nil)
 			continue
 		}
+		c := byID[got[j].id]
 		kept[c.ID] = true
 		row.ID = c.ID
 		row.InStock = c.InStock
 		if do.InStock != nil {
 			row.InStock = *do.InStock
+		}
+		row.ShowOnDriverTicket = c.ShowOnDriverTicket
+		if do.ShowOnDriverTicket != nil {
+			row.ShowOnDriverTicket = *do.ShowOnDriverTicket
 		}
 		var f []string
 		f = diff(f, "name", c.Name, name)
@@ -510,6 +595,7 @@ func (a *applier) applyOptions(ctx context.Context, gpath, gname string, gid uui
 		f = diff(f, "position", c.Position, j)
 		f = diff(f, "is_default", c.IsDefault, do.IsDefault)
 		f = diff(f, "kitchen_name", c.KitchenName, row.KitchenName)
+		f = diff(f, "show_on_driver_ticket", c.ShowOnDriverTicket, row.ShowOnDriverTicket)
 		if len(f) > 0 {
 			if err := a.tx.UpdateOption(ctx, row); err != nil {
 				return fmt.Errorf("%s: %w", what, err)
@@ -521,7 +607,7 @@ func (a *applier) applyOptions(ctx context.Context, gpath, gname string, gid uui
 			}
 			f = append(f, "size prices")
 		}
-		a.change("options", what, false, f)
+		a.changed("options", what, f, got[j], fmt.Sprintf("option %q of %q renamed to %q", got[j].from, gname, name))
 	}
 	if a.o.Prune {
 		for _, o := range cur {
@@ -552,28 +638,75 @@ func (a *applier) printer(path string, name *string, cur *uuid.UUID) (*uuid.UUID
 	return &id, nil
 }
 
-func (a *applier) applyTree(ctx context.Context) error {
-	haveMenu := map[string]menu.Menu{}
-	haveCat := map[string]menu.Category{}
-	haveItem := map[string]menu.BankItem{}
+// matchTree matches the document's menus, categories and items to the
+// store's (own name first, else `was`) into a.matched by document path.
+func (a *applier) matchTree() error {
+	mm, mc, mi := newMatcher("menu", a.otherKinds("menu")), newMatcher("category", a.otherKinds("category")), newMatcher("item", a.otherKinds("item"))
+	seenM, seenC, seenI := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, m := range a.bank.Menus {
-		if _, dup := haveMenu[bankdoc.Norm(m.Name)]; dup {
+		if seenM[bankdoc.Norm(m.Name)] {
 			a.warn("two menus are named %q; the document matches the first", m.Name)
-		} else {
-			haveMenu[bankdoc.Norm(m.Name)] = m.Menu
 		}
+		seenM[bankdoc.Norm(m.Name)] = true
+		mm.add(m.ID, m.Name)
 		for _, c := range m.Categories {
-			if _, dup := haveCat[bankdoc.Norm(c.Name)]; dup {
+			if seenC[bankdoc.Norm(c.Name)] {
 				a.warn("two categories are named %q; the document matches the first", c.Name)
-			} else {
-				haveCat[bankdoc.Norm(c.Name)] = c.Category
 			}
+			seenC[bankdoc.Norm(c.Name)] = true
+			mc.add(c.ID, c.Name)
 			for _, it := range c.Items {
-				if _, dup := haveItem[bankdoc.Norm(it.Name)]; dup {
+				if seenI[bankdoc.Norm(it.Name)] {
 					a.warn("two items are named %q; the document matches the first", it.Name)
-				} else {
-					haveItem[bankdoc.Norm(it.Name)] = it
 				}
+				seenI[bankdoc.Norm(it.Name)] = true
+				mi.add(it.ID, it.Name)
+			}
+		}
+	}
+	var dm, dc, di []docRow
+	for i, m := range a.doc.Menus {
+		p := fmt.Sprintf("menus[%d]", i)
+		dm = append(dm, docRow{path: p, name: m.Name, was: m.Was})
+		for j, c := range m.Categories {
+			q := fmt.Sprintf("%s.categories[%d]", p, j)
+			dc = append(dc, docRow{path: q, name: c.Name, was: c.Was})
+			for k, it := range c.Items {
+				di = append(di, docRow{path: fmt.Sprintf("%s.items[%d]", q, k), name: it.Name, was: it.Was})
+			}
+		}
+	}
+	a.matched = map[string]*match{}
+	for _, x := range []struct {
+		m    *matcher
+		rows []docRow
+	}{{mm, dm}, {mc, dc}, {mi, di}} {
+		got, err := x.m.resolve(x.rows)
+		if err != nil {
+			return err
+		}
+		for i, r := range x.rows {
+			if got[i] != nil {
+				a.matched[r.path] = got[i]
+			}
+		}
+	}
+	return nil
+}
+
+func (a *applier) applyTree(ctx context.Context) error {
+	if err := a.matchTree(); err != nil {
+		return err
+	}
+	haveMenu := map[uuid.UUID]menu.Menu{}
+	haveCat := map[uuid.UUID]menu.Category{}
+	haveItem := map[uuid.UUID]menu.BankItem{}
+	for _, m := range a.bank.Menus {
+		haveMenu[m.ID] = m.Menu
+		for _, c := range m.Categories {
+			haveCat[c.ID] = c.Category
+			for _, it := range c.Items {
+				haveItem[it.ID] = it
 			}
 		}
 	}
@@ -582,7 +715,9 @@ func (a *applier) applyTree(ctx context.Context) error {
 		name := strings.TrimSpace(dm.Name)
 		what := fmt.Sprintf("menu %q", name)
 		m := menu.Menu{Name: name, Description: dm.Description, Available: true, Position: i}
-		if cur, ok := haveMenu[bankdoc.Norm(name)]; ok {
+		mt := a.matched[fmt.Sprintf("menus[%d]", i)]
+		if mt != nil {
+			cur := haveMenu[mt.id]
 			m.ID, m.Available = cur.ID, cur.Available
 			if dm.Available != nil {
 				m.Available = *dm.Available
@@ -597,7 +732,7 @@ func (a *applier) applyTree(ctx context.Context) error {
 					return fmt.Errorf("%s: %w", what, err)
 				}
 			}
-			a.change("menus", what, false, f)
+			a.changed("menus", what, f, mt, fmt.Sprintf("menu %q renamed to %q", mt.from, name))
 		} else {
 			if dm.Available != nil {
 				m.Available = *dm.Available
@@ -619,24 +754,32 @@ func (a *applier) applyTree(ctx context.Context) error {
 	if !a.o.Prune {
 		return nil
 	}
+	keptIDs := func(m map[string]uuid.UUID) map[uuid.UUID]bool {
+		out := map[uuid.UUID]bool{}
+		for _, id := range m {
+			out[id] = true
+		}
+		return out
+	}
+	keptMenus, keptCats, keptItems := keptIDs(a.menus), keptIDs(a.cats), keptIDs(a.items)
 	for _, m := range a.bank.Menus {
 		for _, c := range m.Categories {
 			for _, it := range c.Items {
-				if id, ok := a.items[bankdoc.Norm(it.Name)]; !ok || id != it.ID {
+				if !keptItems[it.ID] {
 					if err := a.tx.DeleteItem(ctx, it.ID); err != nil {
 						return err
 					}
 					a.deleted("items", fmt.Sprintf("item %q", it.Name))
 				}
 			}
-			if id, ok := a.cats[bankdoc.Norm(c.Name)]; !ok || id != c.ID {
+			if !keptCats[c.ID] {
 				if err := a.tx.DeleteCategory(ctx, c.ID); err != nil {
 					return err
 				}
 				a.deleted("categories", fmt.Sprintf("category %q", c.Name))
 			}
 		}
-		if id, ok := a.menus[bankdoc.Norm(m.Name)]; !ok || id != m.ID {
+		if !keptMenus[m.ID] {
 			if err := a.tx.DeleteMenu(ctx, m.ID); err != nil {
 				return err
 			}
@@ -647,11 +790,16 @@ func (a *applier) applyTree(ctx context.Context) error {
 }
 
 func (a *applier) applyCategory(ctx context.Context, path string, menuID uuid.UUID, pos int, dc bankdoc.Category,
-	haveCat map[string]menu.Category, haveItem map[string]menu.BankItem) error {
+	haveCat map[uuid.UUID]menu.Category, haveItem map[uuid.UUID]menu.BankItem) error {
 	name := strings.TrimSpace(dc.Name)
 	what := fmt.Sprintf("category %q", name)
 	c := menu.Category{MenuID: menuID, Name: name, Description: dc.Description, Available: true, Position: pos}
-	cur, ok := haveCat[bankdoc.Norm(name)]
+	mt := a.matched[path]
+	var cur menu.Category
+	ok := mt != nil
+	if ok {
+		cur = haveCat[mt.id]
+	}
 	var err error
 	if ok {
 		c.ID, c.Available = cur.ID, cur.Available
@@ -678,7 +826,7 @@ func (a *applier) applyCategory(ctx context.Context, path string, menuID uuid.UU
 				return fmt.Errorf("%s: %w", what, err)
 			}
 		}
-		a.change("categories", what, false, f)
+		a.changed("categories", what, f, mt, fmt.Sprintf("category %q renamed to %q", mt.from, name))
 	} else {
 		if dc.Available != nil {
 			c.Available = *dc.Available
@@ -703,10 +851,15 @@ func (a *applier) applyCategory(ctx context.Context, path string, menuID uuid.UU
 	return nil
 }
 
-func (a *applier) applyItem(ctx context.Context, path string, catID uuid.UUID, pos int, di bankdoc.Item, haveItem map[string]menu.BankItem) error {
+func (a *applier) applyItem(ctx context.Context, path string, catID uuid.UUID, pos int, di bankdoc.Item, haveItem map[uuid.UUID]menu.BankItem) error {
 	name := strings.TrimSpace(di.Name)
 	what := fmt.Sprintf("item %q", name)
-	cur, exists := haveItem[bankdoc.Norm(name)]
+	mt := a.matched[path]
+	var cur menu.BankItem
+	exists := mt != nil
+	if exists {
+		cur = haveItem[mt.id]
+	}
 	it := menu.Item{CategoryID: catID, Name: name, Description: di.Description, PriceCents: di.PriceCents, TaxRateBps: di.TaxRateBps,
 		InStock: true, Tags: []string{}, Position: pos, Attributes: map[string]any{}}
 	extra := menu.ItemExtra{KitchenName: strings.TrimSpace(di.KitchenName), SKU: strings.TrimSpace(di.SKU), Sizes: []menu.ItemSize{}}
@@ -809,7 +962,7 @@ func (a *applier) applyItem(ctx context.Context, path string, catID uuid.UUID, p
 		}
 		fb = append(fb, "modifier groups")
 	}
-	a.change("items", what, false, append(f, fb...))
+	a.changed("items", what, append(f, fb...), mt, fmt.Sprintf("item %q renamed to %q", mt.from, name))
 	a.items[bankdoc.Norm(name)] = it.ID
 	return nil
 }

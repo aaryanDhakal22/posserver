@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -9,6 +10,8 @@ import (
 	"time"
 
 	menuApp "quiccpos/main/internal/app/menu"
+	"quiccpos/main/internal/app/optionflags"
+	menuDom "quiccpos/main/internal/domain/menu"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
@@ -19,8 +22,13 @@ import (
 // cookie via meScope). Every mutation is ownership-checked in the service.
 type MenuHandler struct {
 	svc    *menuApp.Service
+	flags  *optionflags.Service // option switches (00046); nil = not offered
 	logger zerolog.Logger
 }
+
+// SetOptionFlags plugs in the options' "Show on driver ticket" / "Counts for
+// coupons" switches (set once at startup).
+func (h *MenuHandler) SetOptionFlags(f *optionflags.Service) { h.flags = f }
 
 func NewMenuHandler(svc *menuApp.Service, logger zerolog.Logger) *MenuHandler {
 	return &MenuHandler{svc: svc, logger: logger.With().Str("module", "menu-handler").Logger()}
@@ -406,7 +414,19 @@ func (h *MenuHandler) MeListOptions(c *echo.Context) error {
 	if err != nil {
 		return h.mErr(c, err)
 	}
-	return c.JSON(http.StatusOK, rows)
+	if h.flags == nil {
+		return c.JSON(http.StatusOK, rows)
+	}
+	flags, err := h.flags.Group(c.Request().Context(), lid, gid)
+	if err != nil {
+		return h.flagErr(c, err)
+	}
+	out := make([]optionOut, 0, len(rows))
+	for _, o := range rows {
+		f := flags[o.ID]
+		out = append(out, optionOut{ModifierOption: o, ShowOnDriverTicket: f.ShowOnDriverTicket, CountsForCoupons: f.CountsForCoupons})
+	}
+	return c.JSON(http.StatusOK, out)
 }
 
 func (h *MenuHandler) MeCreateOption(c *echo.Context) error {
@@ -418,6 +438,10 @@ func (h *MenuHandler) MeCreateOption(c *echo.Context) error {
 	var req struct {
 		Name            string `json:"name"`
 		PriceDeltaCents int64  `json:"price_delta_cents"`
+		// CountsForCoupons: absent = on in a topping group (one of its
+		// options is in a regular family), else no family.
+		CountsForCoupons   *bool `json:"counts_for_coupons"`
+		ShowOnDriverTicket *bool `json:"show_on_driver_ticket"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
@@ -426,11 +450,24 @@ func (h *MenuHandler) MeCreateOption(c *echo.Context) error {
 	if err != nil {
 		return h.mErr(c, err)
 	}
-	return c.JSON(http.StatusCreated, o)
+	if h.flags == nil {
+		return c.JSON(http.StatusCreated, o)
+	}
+	ctx := c.Request().Context()
+	if req.ShowOnDriverTicket != nil && *req.ShowOnDriverTicket {
+		if err := h.flags.SetDriverTicket(ctx, lid, o.ID, true); err != nil {
+			return h.flagErr(c, err)
+		}
+	}
+	f, err := h.flags.NewOption(ctx, tid, lid, gid, o.ID, req.CountsForCoupons)
+	if err != nil {
+		return h.flagErr(c, err)
+	}
+	return c.JSON(http.StatusCreated, optionOut{ModifierOption: *o, ShowOnDriverTicket: f.ShowOnDriverTicket, CountsForCoupons: f.CountsForCoupons})
 }
 
 func (h *MenuHandler) MeUpdateOption(c *echo.Context) error {
-	tid, _, _ := meScope(c)
+	tid, lid, _ := meScope(c)
 	optID, ok := idParam(c, "optId")
 	if !ok {
 		return c.JSON(http.StatusBadRequest, errResp("optId must be a uuid"))
@@ -439,6 +476,8 @@ func (h *MenuHandler) MeUpdateOption(c *echo.Context) error {
 		Name            string `json:"name"`
 		PriceDeltaCents int64  `json:"price_delta_cents"`
 		InStock         bool   `json:"in_stock"`
+		// ShowOnDriverTicket: absent keeps it.
+		ShowOnDriverTicket *bool `json:"show_on_driver_ticket"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
@@ -447,7 +486,66 @@ func (h *MenuHandler) MeUpdateOption(c *echo.Context) error {
 	if err != nil {
 		return h.mErr(c, err)
 	}
-	return c.JSON(http.StatusOK, o)
+	if h.flags == nil {
+		return c.JSON(http.StatusOK, o)
+	}
+	ctx := c.Request().Context()
+	if req.ShowOnDriverTicket != nil {
+		if err := h.flags.SetDriverTicket(ctx, lid, o.ID, *req.ShowOnDriverTicket); err != nil {
+			return h.flagErr(c, err)
+		}
+	}
+	f, err := h.flags.Option(ctx, lid, o.GroupID, o.ID)
+	if err != nil {
+		return h.flagErr(c, err)
+	}
+	return c.JSON(http.StatusOK, optionOut{ModifierOption: *o, ShowOnDriverTicket: f.ShowOnDriverTicket, CountsForCoupons: f.CountsForCoupons})
+}
+
+// optionOut is an option as Store › Menu's option routes answer it: the
+// legacy fields plus its two switches (00046).
+type optionOut struct {
+	menuDom.ModifierOption
+	ShowOnDriverTicket bool `json:"show_on_driver_ticket"`
+	CountsForCoupons   bool `json:"counts_for_coupons"`
+}
+
+func (h *MenuHandler) flagErr(c *echo.Context, err error) error {
+	switch {
+	case errors.Is(err, optionflags.ErrNotFound):
+		return c.JSON(http.StatusNotFound, errCode(err.Error(), "not_found"))
+	case errors.Is(err, menuDom.ErrFamilyNameTaken):
+		return c.JSON(http.StatusConflict, errCode("a mod family of that name has another class", "name_taken"))
+	}
+	h.logger.Error().Err(err).Msg("option flags")
+	return c.JSON(http.StatusInternalServerError, errCode("option flags failed", "internal"))
+}
+
+// PUT /store/v1/me/menu/modifier-groups/:id/options/:optId/coupons {counts}
+// — "Counts for coupons": on moves the option into the group's regular
+// family, off into its premium family (menu.CouponFamily); answers the
+// option's flags.
+func (h *MenuHandler) MeOptionCoupons(c *echo.Context) error {
+	tid, lid, _ := meScope(c)
+	gid, ok1 := idParam(c, "id")
+	optID, ok2 := idParam(c, "optId")
+	if !ok1 || !ok2 {
+		return c.JSON(http.StatusBadRequest, errResp("id and optId must be uuids"))
+	}
+	if h.flags == nil {
+		return c.JSON(http.StatusNotFound, errResp("not found"))
+	}
+	var req struct {
+		Counts *bool `json:"counts"`
+	}
+	if err := echo.BindBody(c, &req); err != nil || req.Counts == nil {
+		return c.JSON(http.StatusBadRequest, errCode("body is {counts: true|false}", "bad_body"))
+	}
+	f, err := h.flags.SetCounts(c.Request().Context(), tid, lid, gid, optID, *req.Counts)
+	if err != nil {
+		return h.flagErr(c, err)
+	}
+	return c.JSON(http.StatusOK, f)
 }
 
 func (h *MenuHandler) MeDeleteOption(c *echo.Context) error {

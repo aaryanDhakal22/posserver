@@ -50,6 +50,12 @@ func ResolveLayout(b *Build, bank *menu.Bank, v View, deals map[string]string, l
 	for _, z := range b.Sizes {
 		sizes[z.ID] = z.Name
 	}
+	storeSizes := map[uuid.UUID]string{}
+	if bank != nil {
+		for _, z := range bank.Sizes {
+			storeSizes[z.ID] = z.Name
+		}
+	}
 	c := compiler{bank: bank, rules: v.Rules, build: b, groupSeen: map[uuid.UUID]bool{}}
 	for _, g := range b.ModifierGroups {
 		c.groupSeen[g.ID] = true
@@ -87,6 +93,11 @@ func ResolveLayout(b *Build, bank *menu.Bank, v View, deals map[string]string, l
 				break
 			}
 			out.Label, out.SoldOut = bi.Name, bi.SoldOut
+			if a.SizeID == nil && len(bi.Sizes) > 0 {
+				// A sized item sold through its size chooser (M2): the price
+				// comes with the size picked there.
+				break
+			}
 			price := bi.PriceCents
 			if a.SizeID != nil {
 				found := false
@@ -101,6 +112,21 @@ func ResolveLayout(b *Build, bank *menu.Bank, v View, deals map[string]string, l
 				}
 			}
 			out.PriceCents = &price
+		case ActSize:
+			// A size chooser button: no price (it depends on the line's
+			// item; the terminal reads it from the item's sizes).
+			if a.SizeID == nil {
+				out.Missing = true
+				break
+			}
+			name, ok := storeSizes[*a.SizeID]
+			if !ok {
+				name, ok = sizes[*a.SizeID]
+			}
+			out.Label, out.SizeName, out.Missing = name, name, !ok
+			if !ok {
+				gone("layout_size_missing", a.SizeID.String(), "", "a counter layout size chooser button sets a size that no longer exists")
+			}
 		case ActCategory:
 			if a.CategoryID != nil {
 				out.Label, out.Missing = categoryLabel(bank, cats, *a.CategoryID)
@@ -183,7 +209,7 @@ func captions(bs []ButtonOf[BuildAction]) {
 	for i := range bs {
 		if bs[i].Caption == "" {
 			bs[i].Caption = bs[i].Action.Label
-			if bs[i].Action.SizeName != "" && bs[i].Caption != "" {
+			if bs[i].Action.SizeName != "" && bs[i].Caption != "" && bs[i].Action.Type != ActSize {
 				bs[i].Caption = bs[i].Action.SizeName + " " + bs[i].Caption
 			}
 		}

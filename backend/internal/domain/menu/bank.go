@@ -97,6 +97,13 @@ type BankOption struct {
 	KitchenName string        `json:"kitchen_name"`
 	Prices      []OptionPrice `json:"prices"`
 	FamilyID    *uuid.UUID    `json:"family_id"` // a mod family (nil = no family yet)
+	// ShowOnDriverTicket (00046): the choice prints on the delivery (driver)
+	// ticket even at $0 (drinks, desserts, sides); notes stay off it.
+	ShowOnDriverTicket bool `json:"show_on_driver_ticket"`
+	// CountsForCoupons: its mod family's class is regular, so a coupon's
+	// free toppings can include it (read-only here; set through the
+	// option's coupons route, which moves it between families).
+	CountsForCoupons bool `json:"counts_for_coupons"`
 }
 
 // FamilyByID finds a store family.

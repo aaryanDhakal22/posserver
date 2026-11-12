@@ -2259,6 +2259,10 @@
           },
           "sold_out": {
             "type": "boolean"
+          },
+          "show_on_driver_ticket": {
+            "type": "boolean",
+            "description": "Print this choice on the delivery (driver) ticket even at $0; present only when true"
           }
         },
         "additionalProperties": false

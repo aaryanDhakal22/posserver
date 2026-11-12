@@ -16,6 +16,12 @@
 //   - A view's entries are replaced by the document's (views are generated).
 //   - Nothing is deleted unless the import is asked to prune; views are never
 //     deleted (channels point at them).
+//   - Renames (MENU-PLAN M1): a size, group, option (within its group), menu,
+//     category or item may list the names it had before in `was`. A document
+//     row that matches no store row by its own name matches the one a `was`
+//     name names, which is renamed in place (same id, so a Pi's or a view's
+//     references survive). The rest of the document names rows by their new
+//     names only. Export never writes `was`.
 package bankdoc
 
 import (
@@ -60,8 +66,9 @@ type Family struct {
 
 // Size is a store size ("12 Medium", short "12\"").
 type Size struct {
-	Name  string `json:"name"`
-	Short string `json:"short"`
+	Name  string   `json:"name"`
+	Short string   `json:"short"`
+	Was   []string `json:"was,omitempty"`
 }
 
 // Group is a reusable modifier group.
@@ -73,6 +80,7 @@ type Group struct {
 	AllowMultiple bool     `json:"allow_multiple"`
 	Portions      bool     `json:"portions"` // halves
 	Options       []Option `json:"options"`
+	Was           []string `json:"was,omitempty"`
 }
 
 // Option is one choice of a group. Prices maps size names to the option's
@@ -86,6 +94,11 @@ type Option struct {
 	Prices      map[string]int64 `json:"prices,omitempty"`
 	// Family: a mod family's name (absent keeps, "" = none).
 	Family *string `json:"family,omitempty"`
+	// ShowOnDriverTicket: the choice prints on the delivery (driver) ticket
+	// even at $0 (drinks, desserts, sides). nil = keep, new rows false;
+	// export writes it only when true.
+	ShowOnDriverTicket *bool    `json:"show_on_driver_ticket,omitempty"`
+	Was                []string `json:"was,omitempty"` // older names within its group
 }
 
 // Menu → Category → Item is the bank's tree.
@@ -94,18 +107,20 @@ type Menu struct {
 	Description string     `json:"description"`
 	Available   *bool      `json:"available,omitempty"`
 	Categories  []Category `json:"categories"`
+	Was         []string   `json:"was,omitempty"`
 }
 
 // Category: Printer names the store printer (nil = keep, "" = none).
 // NoKitchenTicket: its items without a printer of their own get no station
 // ticket (receipt only; nil = keep, new rows false).
 type Category struct {
-	Name            string  `json:"name"`
-	Description     string  `json:"description"`
-	Available       *bool   `json:"available,omitempty"`
-	Printer         *string `json:"printer,omitempty"`
-	NoKitchenTicket *bool   `json:"no_kitchen_ticket,omitempty"`
-	Items           []Item  `json:"items"`
+	Name            string   `json:"name"`
+	Description     string   `json:"description"`
+	Available       *bool    `json:"available,omitempty"`
+	Printer         *string  `json:"printer,omitempty"`
+	NoKitchenTicket *bool    `json:"no_kitchen_ticket,omitempty"`
+	Items           []Item   `json:"items"`
+	Was             []string `json:"was,omitempty"`
 }
 
 // Item is one bank item. Printer nil = keep ("" = inherit the category's);
@@ -135,7 +150,8 @@ type Item struct {
 	// false.
 	NoKitchenTicket *bool `json:"no_kitchen_ticket,omitempty"`
 	// Family: an item family's name (absent keeps, "" = none).
-	Family *string `json:"family,omitempty"`
+	Family *string  `json:"family,omitempty"`
+	Was    []string `json:"was,omitempty"`
 }
 
 // ItemSize is a size an item comes in.
@@ -161,7 +177,8 @@ type View struct {
 // options and deals.
 type Layout = menuview.LayoutOf[LayoutAction, LayoutStep]
 
-// LayoutAction is a menuview.Action by names (Option is a name within Group).
+// LayoutAction is a menuview.Action by names (Option is a name within Group;
+// a screen's size button names a store size: {type: "size", size}).
 type LayoutAction struct {
 	Type     string `json:"type"`
 	Item     string `json:"item,omitempty"`
@@ -238,8 +255,9 @@ type GroupRow struct {
 // OptionRow is a modifier option with its bank fields.
 type OptionRow struct {
 	menu.ModifierOption
-	IsDefault   bool
-	KitchenName string
+	IsDefault          bool
+	KitchenName        string
+	ShowOnDriverTicket bool
 }
 
 // Tx is everything the import reads and writes, inside one transaction that

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { storeApi, toCents, centsInput, type ModifierGroup, type ModifierOption, type MenuSize, type BankGroup } from '$lib/api';
+  import { storeApi, toCents, centsInput, type ModifierGroup, type ModifierOption, type MenuSize, type BankGroup, type OptionFlags } from '$lib/api';
   import { confirmDialog } from '$lib/confirm.svelte';
   import { toast } from '$lib/toast.svelte';
   import Button from '$lib/ui/Button.svelte';
@@ -53,7 +53,9 @@
   let selected = $state<ModifierGroup | null>(null);
   let options = $state<ModifierOption[]>([]);
   let newGroupName = $state('');
-  let newOpt = $state({ name: '', price: '0.00' });
+  let newOpt = $state({ name: '', price: '0.00', counts: false });
+  // A topping group: one of its options already counts for coupons, so a new one does too unless switched off.
+  const toppingGroup = $derived(options.some((o) => o.counts_for_coupons));
   // option id → the unparseable price text typed into its row (blocks saving it)
   let badDelta = $state<Record<string, string>>({});
   const badPrice = (raw: string) => `Price “${raw}” isn't a valid amount — use e.g. 1.50, -0.50 or 0. Not saved.`;
@@ -65,6 +67,7 @@
     selected = { ...g };
     badDelta = {};
     options = await storeApi<ModifierOption[]>(`/me/menu/modifier-groups/${g.id}/options`);
+    newOpt = { name: '', price: '0.00', counts: options.some((o) => o.counts_for_coupons) };
     await loadBank(g.id);
   }
   onMount(() => load().catch((e) => toast.error(e)));
@@ -129,11 +132,11 @@
     try {
       await storeApi(`/me/menu/modifier-groups/${selected.id}/options`, {
         method: 'POST',
-        body: JSON.stringify({ name: newOpt.name.trim(), price_delta_cents: delta })
+        body: JSON.stringify({ name: newOpt.name.trim(), price_delta_cents: delta, counts_for_coupons: newOpt.counts })
       });
       const added = newOpt.name.trim();
-      newOpt = { name: '', price: '0.00' };
       options = await storeApi<ModifierOption[]>(`/me/menu/modifier-groups/${selected.id}/options`);
+      newOpt = { name: '', price: '0.00', counts: toppingGroup };
       await loadBank(selected.id);
       toast.success(`“${added}” added`);
     } catch (err) {
@@ -150,15 +153,28 @@
     delete badDelta[o.id];
     o.price_delta_cents = c;
   }
-  async function saveOption(o: ModifierOption) {
+  async function saveOption(o: ModifierOption, msg = 'Option saved') {
     if (badDelta[o.id] !== undefined) return toast.error(badPrice(badDelta[o.id]));
     try {
-      await storeApi(`/me/menu/modifier-groups/${o.group_id}/options/${o.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({ name: o.name, price_delta_cents: o.price_delta_cents, in_stock: o.in_stock })
-      });
-      toast.success('Option saved');
+      const body: Record<string, unknown> = { name: o.name, price_delta_cents: o.price_delta_cents, in_stock: o.in_stock };
+      if (o.show_on_driver_ticket !== undefined) body.show_on_driver_ticket = o.show_on_driver_ticket;
+      await storeApi(`/me/menu/modifier-groups/${o.group_id}/options/${o.id}`, { method: 'PATCH', body: JSON.stringify(body) });
+      toast.success(msg);
     } catch (err) {
+      toast.error(err);
+    }
+  }
+  async function setCoupons(o: ModifierOption, counts: boolean) {
+    try {
+      const f = await storeApi<OptionFlags>(`/me/menu/modifier-groups/${o.group_id}/options/${o.id}/coupons`, {
+        method: 'PUT',
+        body: JSON.stringify({ counts })
+      });
+      o.counts_for_coupons = f.counts_for_coupons;
+      const where = f.family_name ? ` (family “${f.family_name}”)` : '';
+      toast.success(f.counts_for_coupons ? `“${o.name}” counts for coupons${where}` : `“${o.name}” no longer counts for coupons${where}`);
+    } catch (err) {
+      o.counts_for_coupons = !counts;
       toast.error(err);
     }
   }
@@ -216,28 +232,58 @@
         </div>
 
         <div class="pt-4 border-t border-border">
-          <span class="lbl" id="mg-opts">Options</span>
-          <ul class="flex flex-col gap-2" aria-labelledby="mg-opts">
+          <span class="lbl !mb-0.5" id="mg-opts">Options</span>
+          <dl class="help !mt-0 mb-2 grid grid-cols-1 sm:grid-cols-[auto_1fr] gap-x-3 gap-y-0.5">
+            <dt class="font-semibold">Show on driver ticket</dt>
+            <dd class="m-0">Print this choice on the delivery ticket even when it costs $0 (drinks, desserts, sides). Notes stay off the driver's copy.</dd>
+            <dt class="font-semibold">Counts for coupons</dt>
+            <dd class="m-0">A coupon's free toppings can include this one. Off for premium toppings like steak or shrimp.</dd>
+          </dl>
+          <ul class="flex flex-col gap-3" aria-labelledby="mg-opts">
             {#each options as o (o.id)}
-              <li class="flex flex-wrap items-center gap-2">
-                <input class="field flex-1 min-w-[160px]" bind:value={o.name} aria-label="Option name" />
-                <input
-                  class="field mono text-right !w-24"
-                  value={centsInput(o.price_delta_cents)}
-                  aria-invalid={badDelta[o.id] !== undefined || undefined}
-                  aria-label="Price change for {o.name} ($)"
-                  onchange={(e) => setDelta(o, e.currentTarget.value)}
-                />
-                <Switch
-                  checked={o.in_stock}
-                  label="{o.name} in stock"
-                  onchange={(v) => {
-                    o.in_stock = v;
-                    saveOption(o);
-                  }}
-                />
-                <Button size="sm" onclick={() => saveOption(o)}>Save</Button>
-                <Button size="sm" variant="ghost" icon="trash" aria-label="Delete {o.name}" onclick={() => deleteOption(o)} />
+              <li class="flex flex-col gap-1.5" data-testid="option-row">
+                <div class="flex flex-wrap items-center gap-2">
+                  <input class="field flex-1 min-w-[160px]" bind:value={o.name} aria-label="Option name" />
+                  <input
+                    class="field mono text-right !w-24"
+                    value={centsInput(o.price_delta_cents)}
+                    aria-invalid={badDelta[o.id] !== undefined || undefined}
+                    aria-label="Price change for {o.name} ($)"
+                    onchange={(e) => setDelta(o, e.currentTarget.value)}
+                  />
+                  <Switch
+                    checked={o.in_stock}
+                    label="{o.name} in stock"
+                    onchange={(v) => {
+                      o.in_stock = v;
+                      saveOption(o);
+                    }}
+                  />
+                  <Button size="sm" onclick={() => saveOption(o)}>Save</Button>
+                  <Button size="sm" variant="ghost" icon="trash" aria-label="Delete {o.name}" onclick={() => deleteOption(o)} />
+                </div>
+                <div class="flex flex-wrap items-center gap-x-5 gap-y-1 text-[13px]">
+                  <label class="flex items-center gap-2">
+                    <Switch
+                      checked={o.show_on_driver_ticket ?? false}
+                      label="Show {o.name} on driver ticket"
+                      onchange={(v) => {
+                        o.show_on_driver_ticket = v;
+                        saveOption(o, v ? `“${o.name}” prints on the driver ticket` : `“${o.name}” stays off the driver ticket`);
+                      }}
+                    />Show on driver ticket
+                  </label>
+                  <label class="flex items-center gap-2">
+                    <Switch
+                      checked={o.counts_for_coupons ?? false}
+                      label="{o.name} counts for coupons"
+                      onchange={(v) => {
+                        o.counts_for_coupons = v;
+                        setCoupons(o, v);
+                      }}
+                    />Counts for coupons
+                  </label>
+                </div>
               </li>
             {:else}
               <li class="text-[13px] text-muted">No options yet.</li>
@@ -246,6 +292,9 @@
           <form class="flex flex-wrap gap-2 mt-3" onsubmit={addOption}>
             <input class="field flex-1 min-w-[160px]" placeholder="Option name" aria-label="New option name" bind:value={newOpt.name} />
             <input class="field mono text-right !w-24" aria-label="New option price change ($)" bind:value={newOpt.price} />
+            <label class="flex items-center gap-2 text-[13px]">
+              <Switch bind:checked={newOpt.counts} label="New option counts for coupons" />Counts for coupons
+            </label>
             <Button type="submit" icon="plus">Add option</Button>
           </form>
         </div>

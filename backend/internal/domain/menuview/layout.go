@@ -95,7 +95,8 @@ type ButtonOf[A any] struct {
 
 // Action types: a tab button sells an item (+ size), opens a category or a
 // deal, or runs a function; a screen button picks an option, sets the
-// half-and-half state, or picks an item (a combo's drink).
+// half-and-half state, picks an item (a combo's drink) or sets the line's
+// size (a size chooser screen, MENU-PLAN M2).
 const (
 	ActItem     = "item"
 	ActCategory = "category"
@@ -104,6 +105,7 @@ const (
 	ActOption   = "option"
 	ActState    = "state"
 	ActItemPick = "item_pick"
+	ActSize     = "size"
 )
 
 // States of a screen's state buttons (WHOLE, 1ST HALF ADD/ONLY, 2ND HALF
@@ -368,12 +370,19 @@ type layoutValidator struct {
 	refs  LayoutRefs
 	items map[uuid.UUID]*menu.BankItem
 	cats  map[uuid.UUID]bool
+	sizes map[uuid.UUID]bool
+	// choosers: items whose flow starts with a size chooser (a tab button
+	// may sell them without a size).
+	choosers map[uuid.UUID]bool
 }
 
 func (v *layoutValidator) index() {
-	v.items, v.cats = map[uuid.UUID]*menu.BankItem{}, map[uuid.UUID]bool{}
+	v.items, v.cats, v.sizes = map[uuid.UUID]*menu.BankItem{}, map[uuid.UUID]bool{}, map[uuid.UUID]bool{}
 	if v.refs.Bank == nil {
 		return
+	}
+	for _, z := range v.refs.Bank.Sizes {
+		v.sizes[z.ID] = true
 	}
 	for mi := range v.refs.Bank.Menus {
 		for ci := range v.refs.Bank.Menus[mi].Categories {
@@ -388,6 +397,12 @@ func (v *layoutValidator) index() {
 
 func (v *layoutValidator) run(l *Layout) {
 	p := v.p
+	v.choosers = map[uuid.UUID]bool{}
+	for k := range SizeChoosers(l) {
+		if id, err := uuid.Parse(k); err == nil {
+			v.choosers[id] = true
+		}
+	}
 	stripOK := p.grid("tab_strip", l.TabStrip, MaxGridSide, MaxGridSide)
 	if len(l.Tabs) > MaxTabs {
 		p.add("tabs", "at most %d tabs", MaxTabs)
@@ -580,7 +595,7 @@ func (v *layoutValidator) gridButtons(path string, g Grid, pages []Page, buttons
 
 func (v *layoutValidator) action(path string, a Action, screen bool) {
 	p := v.p
-	allowed := map[bool][]string{false: {ActItem, ActCategory, ActDeal, ActFunction}, true: {ActOption, ActState, ActItemPick}}[screen]
+	allowed := map[bool][]string{false: {ActItem, ActCategory, ActDeal, ActFunction}, true: {ActOption, ActState, ActItemPick, ActSize}}[screen]
 	ok := false
 	for _, t := range allowed {
 		ok = ok || t == a.Type
@@ -604,7 +619,16 @@ func (v *layoutValidator) action(path string, a Action, screen bool) {
 	switch a.Type {
 	case ActItem:
 		extra("category_id", a.CategoryID != nil)
-		v.item(path, a.ItemID, a.SizeID)
+		v.item(path, a.ItemID, a.SizeID, true)
+	case ActSize:
+		extra("item_id", a.ItemID != nil)
+		extra("category_id", a.CategoryID != nil)
+		switch {
+		case a.SizeID == nil:
+			p.add(path+".size_id", "size_id is required")
+		case !v.sizes[*a.SizeID]:
+			p.add(path+".size_id", "size %s is not one of this store's sizes", *a.SizeID)
+		}
 	case ActItemPick:
 		if (a.ItemID == nil) == (a.CategoryID == nil) {
 			p.add(path, "an item_pick needs item_id or category_id (not both)")
@@ -614,7 +638,7 @@ func (v *layoutValidator) action(path string, a Action, screen bool) {
 			extra("size_id", a.SizeID != nil)
 			v.category(path+".category_id", a.CategoryID)
 		} else {
-			v.item(path, a.ItemID, a.SizeID)
+			v.item(path, a.ItemID, a.SizeID, false)
 		}
 	case ActCategory:
 		extra("item_id", a.ItemID != nil)
@@ -669,8 +693,9 @@ func (v *layoutValidator) action(path string, a Action, screen bool) {
 }
 
 // item checks an item reference: it exists; a sized item needs one of its
-// sizes, an unsized one takes none.
-func (v *layoutValidator) item(path string, itemID, sizeID *uuid.UUID) {
+// sizes, an unsized one takes none. A tab button (chooser true) may leave a
+// sized item's size out when the item's flow starts with a size chooser.
+func (v *layoutValidator) item(path string, itemID, sizeID *uuid.UUID, chooser bool) {
 	p := v.p
 	if itemID == nil {
 		p.add(path+".item_id", "item_id is required")
@@ -682,8 +707,9 @@ func (v *layoutValidator) item(path string, itemID, sizeID *uuid.UUID) {
 		return
 	}
 	switch {
+	case len(it.Sizes) > 0 && sizeID == nil && chooser && v.choosers[*itemID]:
 	case len(it.Sizes) > 0 && sizeID == nil:
-		p.add(path+".size_id", "%q comes in sizes: size_id is required", it.Name)
+		p.add(path+".size_id", "%q comes in sizes: size_id is required (or start its flow with a size chooser screen)", it.Name)
 	case len(it.Sizes) == 0 && sizeID != nil:
 		p.add(path+".size_id", "%q has no sizes", it.Name)
 	case sizeID != nil && !itemHasSize(it, *sizeID):
@@ -706,6 +732,35 @@ func (v *layoutValidator) funcName(path, name string) {
 	case len(name) > maxFunctionName || !funcRe.MatchString(name):
 		v.p.add(path, "function name must be lower case letters, digits, _ . - (≤ %d)", maxFunctionName)
 	}
+}
+
+// SizeChoosers lists the flow keys (item ids) whose flow starts with a size
+// chooser: the first step without a size_id names a screen that has at
+// least one size button. Such an item's tab button may omit its size; the
+// terminal shows the chooser first and the line takes the size picked there.
+func SizeChoosers(l *Layout) map[string]bool {
+	screens := map[string]bool{}
+	for _, sc := range l.Screens {
+		for _, b := range sc.Buttons {
+			if b.Action.Type == ActSize {
+				screens[normKey(sc.Name)] = true
+				break
+			}
+		}
+	}
+	out := map[string]bool{}
+	for k, steps := range l.Flows {
+		for _, st := range steps {
+			if st.SizeID != nil {
+				continue
+			}
+			if screens[normKey(st.Screen)] {
+				out[k] = true
+			}
+			break
+		}
+	}
+	return out
 }
 
 func itemHasSize(it *menu.BankItem, sizeID uuid.UUID) bool {

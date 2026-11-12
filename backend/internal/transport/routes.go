@@ -36,6 +36,7 @@ import (
 	menuApp "quiccpos/main/internal/app/menu"
 	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
+	"quiccpos/main/internal/app/optionflags"
 	orderSvc "quiccpos/main/internal/app/order"
 	"quiccpos/main/internal/app/orderport"
 	pricingApp "quiccpos/main/internal/app/pricing"
@@ -157,6 +158,9 @@ type RouterDeps struct {
 	Staff *staffApp.Service
 	// Families backs Store › Menu › Families (00045).
 	Families *familiesApp.Service
+	// OptionFlags backs the options' "Show on driver ticket" / "Counts for
+	// coupons" switches (00046).
+	OptionFlags *optionflags.Service
 	// DayClose backs the Pi's drawer sessions + Z reports (terminal Stage 2).
 	DayClose *daycloseApp.Service
 }
@@ -237,6 +241,9 @@ func routeTable(d RouterDeps) []routeDef {
 	agentRPCH := handler.NewAgentRPCHandler(d.Requester, d.Logger)
 	printerStatusH := handler.NewPrinterStatusHandler(d.PrinterCache, d.Requester, d.Meters, d.Logger)
 	menuH := handler.NewMenuHandler(d.MenuService, d.Logger)
+	if d.OptionFlags != nil {
+		menuH.SetOptionFlags(d.OptionFlags)
+	}
 	floorH := handler.NewFloorHandler(d.Service, d.FloorService, d.Logger)
 	operatorH := handler.NewOperatorHandler(d.OperatorService, d.MenuService, d.Meters, d.Logger)
 	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
@@ -478,6 +485,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/me/menu/modifier-groups/:id/options/reorder", "store-session", "Reorder options", menuH.MeReorderOptions, storeSession),
 		def("PATCH", storePrefix+"/me/menu/modifier-groups/:id/options/:optId", "store-session", "Edit an option", menuH.MeUpdateOption, storeSession),
 		def("DELETE", storePrefix+"/me/menu/modifier-groups/:id/options/:optId", "store-session", "Delete an option", menuH.MeDeleteOption, storeSession),
+		def("PUT", storePrefix+"/me/menu/modifier-groups/:id/options/:optId/coupons", "store-session", "Counts for coupons {counts}: moves the option into the group's regular / premium family", menuH.MeOptionCoupons, storeSession),
 		// Store status (main 3.0).
 		def("GET", storePrefix+"/me/status", "store-session", "The store status channels see (open/paused/closed, types, sold out)", statusH.MeStatus, storeSession),
 		def("GET", storePrefix+"/me/ordering", "store-session", "Ordering settings (types, ETAs, scheduling, pause) + hours exceptions", statusH.MeOrdering, storeSession),

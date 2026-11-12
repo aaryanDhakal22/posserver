@@ -364,6 +364,7 @@ CREATE TABLE modifier_options (
     kitchen_name      text        NOT NULL DEFAULT '',
     out_hold          boolean     NOT NULL DEFAULT false, -- 00028
     family_id         uuid        REFERENCES menu_families(id) ON DELETE SET NULL, -- 00045
+    show_on_driver_ticket boolean NOT NULL DEFAULT false, -- 00046
     FOREIGN KEY (group_id, tenant_id) REFERENCES modifier_groups(id, tenant_id) ON DELETE CASCADE,
     UNIQUE (id, tenant_id)
 );

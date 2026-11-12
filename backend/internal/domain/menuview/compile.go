@@ -105,6 +105,9 @@ type BuildOption struct {
 	Prices     []menu.OptionPrice `json:"prices"`
 	IsDefault  bool               `json:"is_default"`
 	SoldOut    bool               `json:"sold_out"`
+	// ShowOnDriverTicket: print the choice on the delivery (driver) ticket
+	// even at $0 (00046; the Pi reads it from the counter build).
+	ShowOnDriverTicket bool `json:"show_on_driver_ticket,omitempty"`
 }
 
 // BuildMap is one vendor name → bank item mapping (vendor views).
@@ -486,7 +489,7 @@ func (c *compiler) groups(ids []uuid.UUID) []uuid.UUID {
 				prices = append(prices, menu.OptionPrice{SizeID: p.SizeID, PriceCents: c.optionPrice(p.PriceCents)})
 			}
 			bg.Options = append(bg.Options, BuildOption{ID: o.ID, Name: o.Name, PriceCents: c.optionPrice(o.PriceDeltaCents),
-				Prices: prices, IsDefault: o.IsDefault, SoldOut: !o.InStock})
+				Prices: prices, IsDefault: o.IsDefault, SoldOut: !o.InStock, ShowOnDriverTicket: o.ShowOnDriverTicket})
 		}
 		c.build.ModifierGroups = append(c.build.ModifierGroups, bg)
 	}

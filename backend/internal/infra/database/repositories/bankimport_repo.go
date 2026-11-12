@@ -293,6 +293,11 @@ func (t *bankTx) CreateOption(ctx context.Context, o bankdoc.OptionRow) (uuid.UU
 		KitchenName: o.KitchenName, GroupID: pgID(o.GroupID)}); err != nil {
 		return uuid.Nil, err
 	}
+	if o.ShowOnDriverTicket {
+		if _, err := setDriverTicket(ctx, t.q.Raw(), t.loc, idOf(row.ID), true); err != nil {
+			return uuid.Nil, err
+		}
+	}
 	return idOf(row.ID), nil
 }
 
@@ -303,6 +308,9 @@ func (t *bankTx) UpdateOption(ctx context.Context, o bankdoc.OptionRow) error {
 	}
 	if _, err := t.q.SetOptionBank(ctx, models.SetOptionBankParams{ID: pgID(o.ID), TenantID: t.T(), IsDefault: o.IsDefault,
 		KitchenName: o.KitchenName, GroupID: pgID(o.GroupID)}); err != nil {
+		return err
+	}
+	if _, err := setDriverTicket(ctx, t.q.Raw(), t.loc, o.ID, o.ShowOnDriverTicket); err != nil {
 		return err
 	}
 	return t.q.SetOptionPosition(ctx, models.SetOptionPositionParams{ID: pgID(o.ID), TenantID: t.T(), Position: i32(o.Position)})
