@@ -193,10 +193,14 @@ def test_channel_quote(admin, store, mgr) -> None:
     _ok(mgr.patch(f"{MENU}/items/{m['soda']['id']}", json={**m["soda"], "in_stock": False}, timeout=5))
     _ok(mgr.put(f"{ME}/ordering", json={"pickup_enabled": True, "delivery_enabled": False, "pickup_eta_minutes": 20,
                                         "delivery_eta_minutes": 45, "schedule_days": 7}, timeout=5))
-    q = _quote(counter, [_line(m["wings"]["id"]), _line("nope"), _line(m["soda"]["id"])], type="delivery")
+    q = _quote(web, [_line(m["wings"]["id"]), _line("nope"), _line(m["soda"]["id"])], type="delivery")
     codes = [e["code"] for e in q["errors"]]
     assert codes == ["option_rules", "unknown_item", "sold_out", "type_off"], q["errors"]
     assert q["errors"][0]["line"] == 0 and q["errors"][3]["line"] is None
+    # The counter: no sauce is a warning (the terminal's screen asked; 2026-11-11), the rest still errors.
+    q = _quote(counter, [_line(m["wings"]["id"]), _line("nope"), _line(m["soda"]["id"])], type="delivery")
+    assert [e["code"] for e in q["errors"]] == ["unknown_item", "sold_out", "type_off"], q["errors"]
+    assert [(w["code"], w["line"]) for w in q["line_warnings"]] == [("option_rules", 0)]
 
     # A vendor feed doesn't price carts; a bad body is a 400.
     vendor = _channel(admin, store, "vendor")

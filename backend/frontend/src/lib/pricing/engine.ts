@@ -45,6 +45,10 @@ export interface Context {
   open_prices?: boolean;
   /** A line's price_cents may also replace a set price (an item price change; only the Pi's counter sets it). */
   price_overrides?: boolean;
+  /** The counter terminal: a missed required group is a warning (the line still sells) and a cart may carry custom lines. */
+  counter?: boolean;
+  /** An allow_multiple group's option at most this many times on the same portion + mode (0 = no cap; the Pi's topping_max_count). */
+  max_repeat?: number;
 }
 /** portion: whole ('' too) | first | second (older carts: left = first, right = second); mode: add ('' too) | only | no. */
 export interface Pick { group_id: string; option_id: string; portion?: string; mode?: string }
@@ -52,7 +56,8 @@ export interface Pick { group_id: string; option_id: string; portion?: string; m
 export interface Half { item_id: string; half: number }
 /** price_cents: an open-price item's price (0–MAX_OPEN_PRICE_CENTS); on any other item a price change, taken only with price_overrides (it replaces the item's price at its size, half and half: the pizza's; options still add). */
 export interface Selection { item_id: string; choice_id?: string; size_id?: string; options?: Pick[] | null; halves?: Half[] | null; price_cents?: number | null }
-export interface Line extends Selection { qty?: number; note?: string; deal_id?: string; picks?: Selection[] | null }
+/** custom (the counter only): a free line, name (1–60 characters, blank = "Open item") at price_cents (0–999,999), the store's tax rate, no deals. */
+export interface Line extends Selection { qty?: number; note?: string; deal_id?: string; picks?: Selection[] | null; custom?: boolean; name?: string }
 export interface Cart {
   type: string; payment?: string; lines: Line[] | null; code?: string;
   tip_cents?: number | null; tip_pct?: number | null; first_order?: boolean | null;
@@ -61,6 +66,8 @@ export interface QuoteLine {
   index: number; name: string; mods: string[]; qty: number; unit_cents: number; total_cents: number; regular_cents: number | null; deal_id: string;
   /** A price change: the item's own price the line's price_cents replaced. */
   list_cents?: number;
+  /** A custom line. */
+  custom?: boolean;
 }
 export interface Discount { type: string; deal_id: string; label: string; amount_cents: number }
 export interface Issue { code: string; message: string; line: number | null }
@@ -68,6 +75,8 @@ export interface Quote {
   lines: QuoteLine[]; subtotal_cents: number; discounts: Discount[]; delivery_fee_cents: number; service_fee_cents: number;
   tax_cents: number; tip_cents: number; card_fee_cents: number; total_cents: number; saved_cents: number;
   errors: Issue[]; warnings: string[]; nudges: string[];
+  /** Warnings about a line, with its index (the counter's missed required group); each message is in warnings too. */
+  line_warnings?: Issue[];
 }
 
 /** amount × bps / 10000, half up (half away from zero below zero). */
@@ -129,12 +138,18 @@ function matches(el: Eligible, u: Unit): boolean {
 
 interface Priced {
   name: string; mods: string[]; base: number; halfUp: number; extras: number; unit: number; bankItem: string; rateItem: string; size: string; issues: Issue[];
+  /** The counter's warnings (a missed required group). */
+  soft?: Issue[];
   /** A price change: the price the line's own replaced. */
   list?: number;
 }
 
 /** An open price's ceiling ($10,000). */
 export const MAX_OPEN_PRICE_CENTS = 1_000_000;
+/** A custom line's price ceiling ($9,999.99), name length and blank name. */
+export const MAX_CUSTOM_CENTS = 999_999;
+export const MAX_CUSTOM_NAME = 60;
+export const CUSTOM_LINE_NAME = 'Open item';
 
 const issueOf = (code: string, message: string): Issue => ({ code, message, line: null });
 
@@ -324,6 +339,8 @@ class Engine {
       const picks = opts.filter((pk) => pk.group_id === g.id);
       const seen = new Set<string>(); // options picked (any portion or mode)
       const twice = new Set<string>(); // option + portion + mode
+      const reps = new Map<string, number>(); // option + portion + mode → picks so far
+      const modAt = new Map<string, number>(); // option + portion + mode → its p.mods index
       let count = 0; // picks that put something on (NO doesn't count)
       for (const pk of picks) {
         let o: BuildOption | undefined;
@@ -337,12 +354,26 @@ class Engine {
         const key = `${pk.option_id}/${por}/${mode}`;
         if (twice.has(key) && !g.allow_multiple) p.issues.push(issueOf('option_rules', `${it.name}: ${o.name} only once.`));
         twice.add(key);
+        const n = (reps.get(key) ?? 0) + 1;
+        reps.set(key, n);
+        const maxRepeat = Math.trunc(this.ctx.max_repeat ?? 0);
+        if (g.allow_multiple && maxRepeat > 0 && n === maxRepeat + 1) p.issues.push(issueOf('option_rules', `${it.name}: up to ${maxRepeat}× ${o.name}.`));
         seen.add(pk.option_id);
         if (mode !== 'no') {
           count++;
           if (o.sold_out) p.issues.push(issueOf('sold_out', `${o.name} is sold out right now.`));
         }
-        if (!o.is_default || por !== '' || mode !== 'add') p.mods.push(optionLabel(o.name, por, mode));
+        const label = optionLabel(o.name, por, mode);
+        // A repeat (allow_multiple: a double / triple) reads once, "2× Pepperoni".
+        const at = modAt.get(key);
+        if (at !== undefined && g.allow_multiple) p.mods[at] = `${n}× ${label}`;
+        else if (n > 1 && g.allow_multiple) {
+          modAt.set(key, p.mods.length);
+          p.mods.push(`${n}× ${label}`);
+        } else if (!o.is_default || por !== '' || mode !== 'add') {
+          modAt.set(key, p.mods.length);
+          p.mods.push(label);
+        }
         let price = o.price_cents;
         for (const op of o.prices ?? []) if (p.size !== '' && op.size_id === p.size) price = op.price_cents;
         if (mode === 'no') price = 0;
@@ -357,7 +388,12 @@ class Engine {
       if (g.max_select !== 1) for (const o of g.options ?? []) if (o.is_default && !seen.has(o.id)) p.mods.push('NO ' + o.name);
       let min = g.min_select;
       if (g.required && min < 1) min = 1;
-      if (count < min) p.issues.push(issueOf('option_rules', `${it.name}: choose ${min === 1 ? 'a' : String(min)} ${g.name.toLowerCase()}.`));
+      if (count < min) {
+        const is = issueOf('option_rules', `${it.name}: choose ${min === 1 ? 'a' : String(min)} ${g.name.toLowerCase()}.`);
+        // The counter: the cashier's screen asked; the line still sells.
+        if (this.ctx.counter) (p.soft ??= []).push(is);
+        else p.issues.push(is);
+      }
       if (g.max_select > 0 && count > g.max_select) p.issues.push(issueOf('option_rules', `${it.name}: up to ${g.max_select} ${g.name.toLowerCase()}.`));
     }
     for (const pk of opts) {
@@ -407,6 +443,12 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
   const nudge = (m: string) => {
     if (!q.nudges.includes(m)) q.nudges.push(m);
   };
+  const warn = (is: Issue, line: number) => {
+    if (!q.warnings.includes(is.message)) q.warnings.push(is.message);
+    const lw = (q.line_warnings ??= []);
+    if (lw.some((x) => x.code === is.code && x.message === is.message && x.line === line)) return;
+    lw.push({ code: is.code, message: is.message, line });
+  };
   const units: Unit[] = [];
   const lineTax: { total: number; rate: number }[] = [];
   let hasBundle = false;
@@ -415,9 +457,26 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
     let qty = Math.trunc(line.qty ?? 0);
     if (qty < 1) qty = 1;
     if (qty > 50) qty = 50;
+    if (line.custom) {
+      // A custom line (Quicc Add): the cashier's name and price, the store's tax rate, no deals.
+      const name = (line.name ?? '').trim() || CUSTOM_LINE_NAME;
+      const own = line.price_cents;
+      let unit = 0;
+      if (!ctx.counter) issue('custom_line', "A custom item can't be ordered here.", i);
+      else if ([...name].length > MAX_CUSTOM_NAME) issue('custom_line', `A custom item's name is at most ${MAX_CUSTOM_NAME} characters.`, i);
+      else if (own == null || !Number.isInteger(own) || own < 0 || own > MAX_CUSTOM_CENTS) issue('custom_line', `${name}: a price is $0.00 to ${money(MAX_CUSTOM_CENTS)}.`, i);
+      else unit = own;
+      const mods: string[] = [];
+      const note = (line.note ?? '').trim();
+      if (note) mods.push(`“${note}”`);
+      q.lines.push({ index: i, name, mods, qty, unit_cents: unit, total_cents: unit * qty, regular_cents: null, deal_id: '', custom: true });
+      lineTax.push({ total: unit * qty, rate: st.tax_bps });
+      return;
+    }
     if (!line.deal_id) {
       const p = e.price(line, 0);
       for (const is of p.issues) issue(is.code, is.message, i);
+      for (const is of p.soft ?? []) warn(is, i);
       const mods = [...p.mods];
       const note = (line.note ?? '').trim();
       if (note) mods.push(`“${note}”`);
@@ -448,6 +507,7 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
       }
       const p = e.price(picks[k], slot.included_options ?? 0);
       for (const is of p.issues) issue(is.code, is.message, i);
+      for (const is of p.soft ?? []) warn(is, i);
       if (p.list != null) issue('open_price', `${d!.name}: a combo's items keep their prices.`, i);
       if (p.issues.length === 0 && !matches(slot.eligible, { price: 0, item: p.bankItem, category: e.category(p.bankItem), size: p.size }))
         issue('deal_slot', `${d!.name}: ${p.name} doesn't fit “${slot.label}”.`, i);

@@ -79,6 +79,7 @@ type Settings struct {
 	CardTips            bool    `json:"card_tips"`              // the Square Reader offers tips
 	CardTipPercents     []int   `json:"card_tip_percents"`      // the Reader's tip choices
 	EmployeeMealPct     int     `json:"employee_meal_pct"`      // the Employee meal discount
+	ToppingMaxCount     int     `json:"topping_max_count"`      // tap again = one more of a topping, up to this many (2×, 3×; the Pi caps a repeated option)
 
 	// Drawers + phone orders (2026-11-11).
 	CashierPayoutCents   int64    `json:"cashier_payout_cents"`   // a cashier's drawer pay-out without a manager's PIN (the Pi reads it)
@@ -102,6 +103,7 @@ var ButtonFonts = []string{"barlow", "barlow_condensed", "barlow_semi_condensed"
 // Ranges of the terminal app's settings.
 const (
 	MaxOutOfAreaMarginMi = 10
+	MaxToppingCount      = 10
 	MaxCardTipPercents   = 6
 	MaxPayoutCents       = 100_000
 	MaxPickupMinutes     = 240
@@ -127,14 +129,15 @@ const DefaultAutoCloseBatchAt = "04:00"
 // the app lands on Info with History hidden, Barlow buttons without prices
 // or clicks, a cashier lowers a price up to 20 %, deliveries up to 1 mile
 // past the radius go, no name on a paid counter order, no card tips (15 /
-// 18 / 20 % when on), the employee meal is 50 % off, a cashier pays out up
+// 18 / 20 % when on), the employee meal is 50 % off, a topping goes on up
+// to 3 times (tap again = 2×, 3×), a cashier pays out up
 // to $20 from the drawer, a pickup is quoted 15 minutes, the area codes are
 // 410 / 443 / 667, drivers may claim a delivery nobody took after 45 minutes.
 func DefaultSettings() Settings {
 	return Settings{CashierRefundCents: 0, CashierDiscountPct: 10, AutoLockMinutes: 5, CounterStart: 1, ReceiptAutoDoneSeconds: 15,
 		AutoCloseBatchAt: DefaultAutoCloseBatchAt,
 		DefaultTab:       "info", ButtonFont: "barlow", CashierPriceDropPct: 20, OutOfAreaMarginMi: 1,
-		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: 50,
+		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: 50, ToppingMaxCount: 3,
 		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes(),
 		DriverClaimAfterMinutes: 45}
 }
@@ -229,6 +232,8 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: card_tip_percents needs 1–%d values", ErrBadSettings, MaxCardTipPercents)
 	case s.EmployeeMealPct < 0 || s.EmployeeMealPct > 100:
 		return fmt.Errorf("%w: employee_meal_pct must be 0–100", ErrBadSettings)
+	case s.ToppingMaxCount < 1 || s.ToppingMaxCount > MaxToppingCount:
+		return fmt.Errorf("%w: topping_max_count must be 1–%d", ErrBadSettings, MaxToppingCount)
 	case s.CashierPayoutCents < 0 || s.CashierPayoutCents > MaxPayoutCents:
 		return fmt.Errorf("%w: cashier_payout_cents must be 0–%d", ErrBadSettings, MaxPayoutCents)
 	case s.DefaultPickupMinutes < 0 || s.DefaultPickupMinutes > MaxPickupMinutes:

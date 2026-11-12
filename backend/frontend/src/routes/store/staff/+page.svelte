@@ -204,7 +204,7 @@
   type SettingsForm = {
     refund: string; discount: string; lock: string; counterStart: string; receiptDone: string;
     autoClose: boolean; autoCloseAt: string; defaultTab: string; showHistory: boolean; font: string;
-    priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean;
+    priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean; toppingMax: string;
     cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string; claimAfter: string;
   };
   let sf = $state<SettingsForm | null>(null);
@@ -219,6 +219,7 @@
       autoClose: s.auto_close_batch_at !== '', autoCloseAt: s.auto_close_batch_at || '04:00',
       defaultTab: s.default_tab, showHistory: s.show_history, font: s.button_font, priceDrop: String(s.cashier_price_drop_pct),
       clickSound: s.click_sound, pricesOnButtons: s.prices_on_buttons, margin: String(s.out_of_area_margin_mi),
+      toppingMax: String(s.topping_max_count),
       nameOnPaid: s.name_on_paid_counter, cardTips: s.card_tips, tipPercents: (s.card_tip_percents ?? []).join(', '),
       meal: String(s.employee_meal_pct), payout: centsInput(s.cashier_payout_cents),
       pickupMinutes: String(s.default_pickup_minutes), areaCodes: (s.area_codes ?? []).join(', '),
@@ -265,6 +266,7 @@
       card_tips: f.cardTips,
       card_tip_percents: percents,
       employee_meal_pct: int(f.meal, 'The employee meal discount', 0, 100),
+      topping_max_count: int(f.toppingMax, 'The most of one topping', 1, 10),
       cashier_payout_cents: payout,
       default_pickup_minutes: int(f.pickupMinutes, 'The pickup time', 0, 240),
       driver_claim_after_minutes: int(f.claimAfter, 'The drivers\' Dispatch wait', 0, 480),
@@ -447,6 +449,7 @@
           <div class="grid gap-3 grid-cols-2 sm:grid-cols-3">
             <div><label class="lbl" for="ts-start">Counter numbers start at</label><input id="ts-start" class="field mono text-right" inputmode="numeric" bind:value={sf.counterStart} /></div>
             <div><label class="lbl" for="ts-meal">Employee meal (% off)</label><input id="ts-meal" class="field mono text-right" inputmode="numeric" bind:value={sf.meal} /></div>
+            <div><label class="lbl" for="ts-topping">Most of one topping (×)</label><input id="ts-topping" class="field mono text-right" inputmode="numeric" bind:value={sf.toppingMax} /></div>
             <div><label class="lbl" for="ts-margin">Out-of-area margin (mi)</label><input id="ts-margin" class="field mono text-right" inputmode="decimal" bind:value={sf.margin} /></div>
             <div><label class="lbl" for="ts-pickup">Pickup ready in (min)</label><input id="ts-pickup" class="field mono text-right" inputmode="numeric" bind:value={sf.pickupMinutes} /></div>
             <div class="col-span-2"><label class="lbl" for="ts-area">Area codes</label><input id="ts-area" class="field mono" bind:value={sf.areaCodes} /></div>

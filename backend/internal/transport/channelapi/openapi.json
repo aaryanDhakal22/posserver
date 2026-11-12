@@ -2996,7 +2996,7 @@
           },
           "price_cents": {
             "type": "integer",
-            "description": "An open-price item's price (the counter only, 0–1000000); refused on any other item"
+            "description": "An open-price item's price (the counter only, 0–1000000); a custom line's price (0–999999); refused on any other item"
           },
           "qty": {
             "type": "integer",
@@ -3017,6 +3017,14 @@
             "items": {
               "$ref": "#/components/schemas/Selection"
             }
+          },
+          "custom": {
+            "type": "boolean",
+            "description": "A custom line (the counter only; any other channel answers custom_line): name + price_cents, no menu item, taxed at the store rate, never in a deal"
+          },
+          "name": {
+            "type": "string",
+            "description": "A custom line's name (1–60 characters after trimming; blank = \"Open item\")"
           }
         },
         "additionalProperties": false
@@ -3114,6 +3122,10 @@
           },
           "deal_id": {
             "type": "string"
+          },
+          "custom": {
+            "type": "boolean",
+            "description": "A custom line (absent otherwise)"
           }
         },
         "additionalProperties": false
@@ -3156,7 +3168,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "description": "empty, unknown_item, unknown_size, unknown_option, option_rules, sold_out, deal_ended, deal_unavailable, deal_slot, code_invalid, code_minimum, code_first_order, code_not_combinable, type_off, bad_type, delivery_minimum, open_price"
+            "description": "empty, unknown_item, unknown_size, unknown_option, option_rules, sold_out, deal_ended, deal_unavailable, deal_slot, code_invalid, code_minimum, code_first_order, code_not_combinable, type_off, bad_type, delivery_minimum, open_price, custom_line"
           },
           "message": {
             "type": "string",
@@ -3242,6 +3254,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "line_warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Issue"
+            },
+            "description": "Warnings about a line, with its index; each message is in warnings too. Today: the counter's missed required group / min_select (code option_rules), which other channels get as an error. Absent when there are none"
           }
         },
         "additionalProperties": false

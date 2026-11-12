@@ -304,7 +304,8 @@ func (s *Service) Context(ctx context.Context, tenantID, locationID uuid.UUID, k
 		return nil, 0, err
 	}
 	return &pricing.Context{Menu: m, Items: f.items, Settings: pricing.Effective(st, over[kind]), Deals: deals, Timezone: l.Timezone,
-		Types: pricing.Types{Pickup: ord.PickupEnabled, Delivery: ord.DeliveryEnabled}, OpenPrices: kind == string(menuview.KindCounter)}, version, nil
+		Types: pricing.Types{Pickup: ord.PickupEnabled, Delivery: ord.DeliveryEnabled}, OpenPrices: kind == string(menuview.KindCounter),
+		Counter: kind == string(menuview.KindCounter)}, version, nil
 }
 
 // Quote prices a cart for a channel of a kind.

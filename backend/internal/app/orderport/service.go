@@ -545,11 +545,12 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 		li := order.LineItem{ID: uuid.Must(uuid.NewV7()), Position: pos, Name: name, Size: r.SizeName, Quantity: qty,
 			UnitPrice: order.Money(r.BaseCents), Notes: note}
 		total := r.BaseCents * int64(qty)
-		for k, o := range r.Options {
+		// A double / triple topping is one child "2x Pepperoni" at its price × 2.
+		for k, o := range pricing.FoldRepeats(r.Options) {
 			// The name reads on its own ("Pepperoni (1st half)", "NO Onion")
 			// for Pis that don't read portion / mode.
 			child := order.LineItem{ID: uuid.Must(uuid.NewV7()), ParentID: &li.ID, Position: k, Quantity: qty,
-				Name: o.Label, Portion: o.Portion, Mode: o.Mode, UnitPrice: order.Money(o.PriceCents)}
+				Name: o.Label, Portion: o.Portion, Mode: o.Mode, UnitPrice: order.Money(o.PriceCents * int64(o.Count))}
 			if o.RemovedDefault {
 				child.Quantity, child.UnitPrice = 1, 0
 			}
@@ -569,6 +570,12 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 	}
 	for i, l := range req.Lines {
 		qty := min(max(l.Qty, 1), 50)
+		if l.Custom { // a counter channel's custom line: the quote's name and price, no menu item (prints on every station)
+			ql := q.Lines[i]
+			lines = append(lines, built{item: order.LineItem{ID: uuid.Must(uuid.NewV7()), Position: len(lines), SKU: order.SKUCustom, Name: ql.Name,
+				Quantity: qty, UnitPrice: order.Money(ql.UnitCents), LineTotal: order.Money(ql.TotalCents), Notes: strings.TrimSpace(l.Note)}})
+			continue
+		}
 		if l.DealID == "" {
 			lines = append(lines, lineOf(pricing.Resolve(*pctx, l.Selection, 0), qty, strings.TrimSpace(l.Note), len(lines)))
 			continue

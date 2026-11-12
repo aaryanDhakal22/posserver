@@ -21,6 +21,11 @@ const SourceCounter Source = "counter"
 // FulfillmentCounter is a walk-in sale at the counter.
 const FulfillmentCounter FulfillmentType = "counter"
 
+// SKUCustom marks a custom line (the terminal's Quicc Add, pricing
+// Line.Custom): a free name and price, no menu item, printed on every
+// station. The Pi sets it; main keeps it like any SKU.
+const SKUCustom = "custom"
+
 // Counter payment methods.
 var CounterMethods = map[string]bool{"cash": true, "card": true, "square_app": true, "manual_card": true, "comp": true, "other": true}
 
