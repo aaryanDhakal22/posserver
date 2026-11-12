@@ -205,7 +205,7 @@
     refund: string; discount: string; lock: string; counterStart: string; receiptDone: string;
     autoClose: boolean; autoCloseAt: string; defaultTab: string; showHistory: boolean; font: string;
     priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean;
-    cardTips: boolean; tipPercents: string; meal: string;
+    cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string;
   };
   let sf = $state<SettingsForm | null>(null);
   let sErr = $state('');
@@ -220,7 +220,8 @@
       defaultTab: s.default_tab, showHistory: s.show_history, font: s.button_font, priceDrop: String(s.cashier_price_drop_pct),
       clickSound: s.click_sound, pricesOnButtons: s.prices_on_buttons, margin: String(s.out_of_area_margin_mi),
       nameOnPaid: s.name_on_paid_counter, cardTips: s.card_tips, tipPercents: (s.card_tip_percents ?? []).join(', '),
-      meal: String(s.employee_meal_pct)
+      meal: String(s.employee_meal_pct), payout: centsInput(s.cashier_payout_cents),
+      pickupMinutes: String(s.default_pickup_minutes), areaCodes: (s.area_codes ?? []).join(', ')
     };
   }
 
@@ -240,6 +241,11 @@
     if (tips.length < 1 || tips.length > 6) throw new Error('Card tips need 1–6 percentages.');
     const percents = tips.map((x) => int(x, 'A card tip choice', 0, 100));
     if (f.autoClose && !/^([01]\d|2[0-3]):[0-5]\d$/.test(f.autoCloseAt)) throw new Error('The auto-close time must be HH:MM.');
+    const payout = toCents(f.payout);
+    if (payout === null || payout < 0 || payout > 100_000) throw new Error('The cashier pay-out limit must be $0–$1,000.');
+    const codes = [...new Set(f.areaCodes.split(',').map((x) => x.trim()).filter(Boolean))];
+    if (codes.length < 1 || codes.length > 20 || codes.some((c) => !/^[2-9]\d\d$/.test(c)))
+      throw new Error('Area codes: 1–20 three-digit codes, separated by commas.');
     return {
       cashier_refund_cents: refund,
       cashier_discount_pct: int(f.discount, 'The cashier discount limit', 0, 100),
@@ -257,7 +263,10 @@
       name_on_paid_counter: f.nameOnPaid,
       card_tips: f.cardTips,
       card_tip_percents: percents,
-      employee_meal_pct: int(f.meal, 'The employee meal discount', 0, 100)
+      employee_meal_pct: int(f.meal, 'The employee meal discount', 0, 100),
+      cashier_payout_cents: payout,
+      default_pickup_minutes: int(f.pickupMinutes, 'The pickup time', 0, 240),
+      area_codes: codes
     };
   }
 
@@ -400,8 +409,9 @@
             <div><label class="lbl" for="ts-refund">Refund up to ($)</label><input id="ts-refund" class="field mono text-right" inputmode="decimal" bind:value={sf.refund} /></div>
             <div><label class="lbl" for="ts-discount">Discount up to (%)</label><input id="ts-discount" class="field mono text-right" inputmode="numeric" bind:value={sf.discount} /></div>
             <div><label class="lbl" for="ts-drop">Lower a price by up to (%)</label><input id="ts-drop" class="field mono text-right" inputmode="numeric" bind:value={sf.priceDrop} /></div>
+            <div><label class="lbl" for="ts-payout">Pay out of the drawer up to ($)</label><input id="ts-payout" class="field mono text-right" inputmode="decimal" bind:value={sf.payout} /></div>
           </div>
-          <p class="help !mt-0">Above these a manager's PIN is needed. A cashier may always raise an item's price.</p>
+          <p class="help !mt-0">Above these a manager's PIN is needed. A cashier may always raise an item's price or pay cash into the drawer.</p>
         </div>
 
         <div class="subcard p-3.5 flex flex-col gap-3">
@@ -436,9 +446,11 @@
             <div><label class="lbl" for="ts-start">Counter numbers start at</label><input id="ts-start" class="field mono text-right" inputmode="numeric" bind:value={sf.counterStart} /></div>
             <div><label class="lbl" for="ts-meal">Employee meal (% off)</label><input id="ts-meal" class="field mono text-right" inputmode="numeric" bind:value={sf.meal} /></div>
             <div><label class="lbl" for="ts-margin">Out-of-area margin (mi)</label><input id="ts-margin" class="field mono text-right" inputmode="decimal" bind:value={sf.margin} /></div>
+            <div><label class="lbl" for="ts-pickup">Pickup ready in (min)</label><input id="ts-pickup" class="field mono text-right" inputmode="numeric" bind:value={sf.pickupMinutes} /></div>
+            <div class="col-span-2"><label class="lbl" for="ts-area">Area codes</label><input id="ts-area" class="field mono" bind:value={sf.areaCodes} /></div>
           </div>
           <label class="flex items-center gap-2.5"><Switch bind:checked={sf.nameOnPaid} label="Ask a name for a paid counter order" />Ask a name for a paid counter order</label>
-          <p class="help !mt-0">The margin: a delivery up to this far past the delivery area is taken without a warning.</p>
+          <p class="help !mt-0">The margin: a delivery up to this far past the delivery area is taken without a warning. Pickup ready in: the time a pickup is quoted. Area codes: the store's local area codes (the terminal uses them for phone numbers).</p>
         </div>
 
         <div class="subcard p-3.5 flex flex-col gap-3">

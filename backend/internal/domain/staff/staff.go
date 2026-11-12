@@ -79,6 +79,11 @@ type Settings struct {
 	CardTips            bool    `json:"card_tips"`              // the Square Reader offers tips
 	CardTipPercents     []int   `json:"card_tip_percents"`      // the Reader's tip choices
 	EmployeeMealPct     int     `json:"employee_meal_pct"`      // the Employee meal discount
+
+	// Drawers + phone orders (2026-11-11).
+	CashierPayoutCents   int64    `json:"cashier_payout_cents"`   // a cashier's drawer pay-out without a manager's PIN (the Pi reads it)
+	DefaultPickupMinutes int      `json:"default_pickup_minutes"` // a pickup's quoted minutes on the terminal
+	AreaCodes            []string `json:"area_codes"`             // the store's local area codes (the terminal reads them for phone numbers)
 }
 
 // DefaultTabs are the tabs a login may land on (the terminal's names;
@@ -94,7 +99,18 @@ var ButtonFonts = []string{"barlow", "barlow_condensed", "barlow_semi_condensed"
 const (
 	MaxOutOfAreaMarginMi = 10
 	MaxCardTipPercents   = 6
+	MaxPayoutCents       = 100_000
+	MaxPickupMinutes     = 240
+	MaxAreaCodes         = 20
 )
+
+// DefaultAreaCodes are Lombardi's (Baltimore County): 410, 443, 667.
+func DefaultAreaCodes() []string { return []string{"410", "443", "667"} }
+
+// ValidAreaCode: three digits, the first 2–9 (a NANP area code).
+func ValidAreaCode(c string) bool {
+	return len(c) == 3 && c[0] >= '2' && c[0] <= '9' && c[1] >= '0' && c[1] <= '9' && c[2] >= '0' && c[2] <= '9'
+}
 
 // DefaultAutoCloseBatchAt is the batch auto-close time (the owner: on by
 // default at 4:00 am).
@@ -106,12 +122,15 @@ const DefaultAutoCloseBatchAt = "04:00"
 // the app lands on Info with History hidden, Barlow buttons without prices
 // or clicks, a cashier lowers a price up to 20 %, deliveries up to 1 mile
 // past the radius go, no name on a paid counter order, no card tips (15 /
-// 18 / 20 % when on), the employee meal is 50 % off.
+// 18 / 20 % when on), the employee meal is 50 % off, a cashier pays out up
+// to $20 from the drawer, a pickup is quoted 15 minutes, the area codes are
+// 410 / 443 / 667.
 func DefaultSettings() Settings {
 	return Settings{CashierRefundCents: 0, CashierDiscountPct: 10, AutoLockMinutes: 5, CounterStart: 1, ReceiptAutoDoneSeconds: 15,
 		AutoCloseBatchAt: DefaultAutoCloseBatchAt,
 		DefaultTab:       "info", ButtonFont: "barlow", CashierPriceDropPct: 20, OutOfAreaMarginMi: 1,
-		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: 50}
+		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: 50,
+		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes()}
 }
 
 // Ranges.
@@ -204,6 +223,17 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: card_tip_percents needs 1–%d values", ErrBadSettings, MaxCardTipPercents)
 	case s.EmployeeMealPct < 0 || s.EmployeeMealPct > 100:
 		return fmt.Errorf("%w: employee_meal_pct must be 0–100", ErrBadSettings)
+	case s.CashierPayoutCents < 0 || s.CashierPayoutCents > MaxPayoutCents:
+		return fmt.Errorf("%w: cashier_payout_cents must be 0–%d", ErrBadSettings, MaxPayoutCents)
+	case s.DefaultPickupMinutes < 0 || s.DefaultPickupMinutes > MaxPickupMinutes:
+		return fmt.Errorf("%w: default_pickup_minutes must be 0–%d", ErrBadSettings, MaxPickupMinutes)
+	case len(s.AreaCodes) < 1 || len(s.AreaCodes) > MaxAreaCodes:
+		return fmt.Errorf("%w: area_codes needs 1–%d codes", ErrBadSettings, MaxAreaCodes)
+	}
+	for _, c := range s.AreaCodes {
+		if !ValidAreaCode(c) {
+			return fmt.Errorf("%w: area_codes are 3 digits, the first 2–9 (%q)", ErrBadSettings, c)
+		}
 	}
 	for _, p := range s.CardTipPercents {
 		if p < 0 || p > 100 {
@@ -213,12 +243,27 @@ func (s Settings) Validate() error {
 	return nil
 }
 
-// Normalize: a null tip list = the default one; the margin keeps one
-// decimal. (The repository decodes a stored row over DefaultSettings, so
+// Normalize: a null tip list / area-code list = the default one; the
+// margin keeps one decimal; area codes are trimmed and deduped. (The repository decodes a stored row over DefaultSettings, so
 // fields saved before they existed read as their defaults.)
 func (s *Settings) Normalize() {
 	if s.CardTipPercents == nil {
 		s.CardTipPercents = []int{15, 18, 20}
+	}
+	if s.AreaCodes == nil {
+		s.AreaCodes = DefaultAreaCodes()
+	} else {
+		// Trimmed, repeats dropped (the first one kept), order kept.
+		seen := make(map[string]bool, len(s.AreaCodes))
+		codes := make([]string, 0, len(s.AreaCodes))
+		for _, c := range s.AreaCodes {
+			c = strings.TrimSpace(c)
+			if !seen[c] {
+				seen[c] = true
+				codes = append(codes, c)
+			}
+		}
+		s.AreaCodes = codes
 	}
 	s.OutOfAreaMarginMi = math.Round(s.OutOfAreaMarginMi*10) / 10
 }

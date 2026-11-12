@@ -99,8 +99,18 @@ test('terminal settings: every field saves, a bad value is refused in the page',
   await page.getByRole('switch', { name: 'Ask for a tip on the card reader' }).click();
   await page.getByLabel('Choices (%)').fill('10, 15, 20, 25');
   await page.getByLabel('At (store time)').fill('03:30');
+  await expect(page.getByLabel('Pay out of the drawer up to ($)')).toHaveValue('20.00');
+  await expect(page.getByLabel('Pickup ready in (min)')).toHaveValue('15');
+  await expect(page.getByLabel('Area codes')).toHaveValue('410, 443, 667');
+  await page.getByLabel('Pay out of the drawer up to ($)').fill('35');
+  await page.getByLabel('Pickup ready in (min)').fill('20');
+  await page.getByLabel('Area codes').fill('410, 443, 410, 202');
 
   // A bad value never leaves the page.
+  await page.getByLabel('Area codes').fill('410, 12');
+  await page.getByRole('button', { name: 'Save terminal settings' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'Area codes' })).toBeVisible();
+  await page.getByLabel('Area codes').fill('410, 443, 410, 202');
   await page.getByLabel('Lock after idle (min)').fill('0');
   await page.getByRole('button', { name: 'Save terminal settings' }).click();
   await expect(page.getByRole('alert').filter({ hasText: 'Auto-lock' })).toBeVisible();
@@ -113,7 +123,8 @@ test('terminal settings: every field saves, a bad value is refused in the page',
       cashier_refund_cents: 2000, cashier_discount_pct: 12, cashier_price_drop_pct: 25, default_tab: 'takeout',
       button_font: 'barlow_condensed', auto_lock_minutes: 7, receipt_auto_done_seconds: 0, show_history: true,
       prices_on_buttons: true, click_sound: true, counter_start: 100, employee_meal_pct: 40, out_of_area_margin_mi: 1.5,
-      name_on_paid_counter: true, card_tips: true, card_tip_percents: [10, 15, 20, 25], auto_close_batch_at: '03:30'
+      name_on_paid_counter: true, card_tips: true, card_tip_percents: [10, 15, 20, 25], auto_close_batch_at: '03:30',
+      cashier_payout_cents: 3500, default_pickup_minutes: 20, area_codes: ['410', '443', '202']
     });
 
   // Auto-close off saves "".
@@ -125,6 +136,7 @@ test('terminal settings: every field saves, a bad value is refused in the page',
   await page.reload();
   await expect(page.getByLabel('After login, open')).toHaveValue('takeout');
   await expect(page.getByLabel('Out-of-area margin (mi)')).toHaveValue('1.5');
+  await expect(page.getByLabel('Area codes')).toHaveValue('410, 443, 202');
 });
 
 test('pricing: the delivery fee is a store share + a driver share', async ({ page, store, open }) => {

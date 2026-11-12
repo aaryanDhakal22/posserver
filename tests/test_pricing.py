@@ -80,6 +80,8 @@ def _quote(hdr, lines, **cart) -> dict:
 def test_settings(admin, store, mgr) -> None:
     got = _ok(mgr.get(f"{ME}/pricing", timeout=5))
     assert got["store"]["tax_bps"] == 600 and got["store"]["stacking"] == "best" and got["kinds"]["web"]["tips"]["enabled"] is True
+    # A new store delivers for $4: $3 of it the driver's, $1 the store's (the owner, 2026-11-11).
+    assert got["store"]["fees"]["delivery_fee_cents"] == 400 and got["store"]["fees"]["delivery_driver_cents"] == 300
     body = {"store": {"tax_bps": 600, "stacking": "stack", "fees": {"service_fee_cents": 0, "service_fee_bps": 0, "delivery_fee_cents": 299,
                                                                    "free_delivery_over_cents": 3000, "delivery_min_cents": 1000},
                       "tips": {"enabled": False, "presets": [], "default_pct": 0}, "card_fee": {"mode": "none", "bps": 0}},

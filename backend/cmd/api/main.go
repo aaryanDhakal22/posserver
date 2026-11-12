@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"quiccpos/main/internal/app/agentsync"
+	daycloseApp "quiccpos/main/internal/app/dayclose"
 	diagApp "quiccpos/main/internal/app/diag"
 	floorApp "quiccpos/main/internal/app/floor"
 	geoApp "quiccpos/main/internal/app/geo"
@@ -347,6 +348,9 @@ func main() {
 	// Pi's counter orders / payments / voids / journal, menu.changed pushes.
 	staffService := staffApp.NewService(repositories.NewStaffRepository(pool), broker, lgr)
 	floorService.OnCounter(repo, staffService)
+	// Drawers per cashier shift + the Z report (terminal Stage 2): drawer.* / z.report from the Pi.
+	dayCloseService := daycloseApp.NewService(repositories.NewDayCloseRepository(pool), repositories.NoRows, lgr)
+	floorService.OnDayClose(dayCloseService)
 	floorService.OnCounterPlaced(geoService.OnOrderCreated)
 	go staffService.WatchMenus(ctx, menuBankRepo, broker)
 	// Quibase's online-ordering controls through the Pi (weborder stage 3): pause + sold out.
@@ -509,6 +513,7 @@ func main() {
 		AppEnv:            cfg.AppConfig.AppEnv,
 		DevNotices:        devNotices,
 		Staff:             staffService,
+		DayClose:          dayCloseService,
 	})
 
 	serverLogger := lgr.With().Str("module", "server").Logger()

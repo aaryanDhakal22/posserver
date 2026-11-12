@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"quiccpos/main/internal/app/customers"
+	"quiccpos/main/internal/app/dayclose"
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/domain/staff"
 
@@ -198,6 +199,20 @@ func (s *Service) applyCustomer(ctx context.Context, sc order.Scope, eid uuid.UU
 	res, err := s.customers.ApplyCounterEvent(ctx, uuid.UUID(sc.TenantID), uuid.UUID(sc.LocationID), eid, ev.Type, ev.Customer, ev.Set)
 	if errors.Is(err, customers.ErrBadCounterCustomer) {
 		return s.invalid(ctx, sc, eid, ev, err)
+	}
+	return res, err
+}
+
+// applyDayClose stores the Pi's drawer sessions, pay-ins / pay-outs and Z
+// reports (terminal Stage 2, contract §2.5zb).
+func (s *Service) applyDayClose(ctx context.Context, sc order.Scope, eid uuid.UUID, ev event) (string, error) {
+	if s.dayClose == nil {
+		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
+	}
+	res, err := s.dayClose.Apply(ctx, sc, eid, dayclose.Event{Type: ev.Type, Drawer: ev.Drawer, Movement: ev.Movement, Report: ev.Report})
+	var ref *dayclose.Refused
+	if errors.As(err, &ref) {
+		return s.invalid(ctx, sc, eid, ev, ref.Err)
 	}
 	return res, err
 }

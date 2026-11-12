@@ -150,6 +150,27 @@ def test_terminal_app_settings(store, mgr) -> None:
         assert _ok(mgr.put(SETTINGS, json={"button_font": font}, timeout=5))["button_font"] == font
 
 
+def test_drawer_and_phone_settings(store, mgr) -> None:
+    """cashier_payout_cents, default_pickup_minutes, area_codes (terminal Stage 2): defaults, ranges, kept when a save
+    leaves them out, trimmed + deduped, sent to the Pi."""
+    st = _ok(mgr.get(SETTINGS, timeout=5))
+    assert (st["cashier_payout_cents"], st["default_pickup_minutes"], st["area_codes"]) == (2000, 15, ["410", "443", "667"])
+    assert _config(store.key)["settings"]["area_codes"] == ["410", "443", "667"]
+    saved = _ok(mgr.put(SETTINGS, json={"cashier_payout_cents": 3500, "default_pickup_minutes": 20,
+                                        "area_codes": ["410", " 202", "410", "301"]}, timeout=5))
+    assert (saved["cashier_payout_cents"], saved["default_pickup_minutes"], saved["area_codes"]) == (3500, 20, ["410", "202", "301"])
+    # A save that leaves them out keeps them; null area codes = the defaults.
+    kept = _ok(mgr.put(SETTINGS, json={"auto_lock_minutes": 6}, timeout=5))
+    assert (kept["cashier_payout_cents"], kept["default_pickup_minutes"], kept["area_codes"]) == (3500, 20, ["410", "202", "301"])
+    assert _ok(mgr.put(SETTINGS, json={"area_codes": None}, timeout=5))["area_codes"] == ["410", "443", "667"]
+    for bad in ({"cashier_payout_cents": -1}, {"cashier_payout_cents": 100_001}, {"default_pickup_minutes": -1},
+                {"default_pickup_minutes": 241}, {"area_codes": []}, {"area_codes": ["41"]}, {"area_codes": ["110"]},
+                {"area_codes": ["4100"]}, {"area_codes": [str(200 + i) for i in range(21)]}):
+        assert _code(mgr.put(SETTINGS, json=bad, timeout=5), 400) == "bad_settings", bad
+    cfg = _config(store.key)["settings"]
+    assert (cfg["cashier_payout_cents"], cfg["default_pickup_minutes"], cfg["area_codes"]) == (3500, 20, ["410", "443", "667"])
+
+
 def test_terminal_config_for_the_pi(store, mgr) -> None:
     empty = _config(store.key)
     assert empty["version"] == 0 and empty["staff"] == [] and empty["settings"]["auto_lock_minutes"] == 5

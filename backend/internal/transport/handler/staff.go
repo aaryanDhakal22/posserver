@@ -186,6 +186,7 @@ func (h *StaffHandler) MeSaveSettings(c *echo.Context) error {
 	}
 	st := cur
 	st.CardTipPercents = append([]int(nil), cur.CardTipPercents...)
+	st.AreaCodes = append([]string(nil), cur.AreaCodes...)
 	if !decodeStrict(c, &st) {
 		return badBody(c)
 	}

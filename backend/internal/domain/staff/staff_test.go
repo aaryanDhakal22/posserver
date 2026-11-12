@@ -1,6 +1,7 @@
 package staff
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 )
@@ -61,6 +62,15 @@ func TestSettingsValidate(t *testing.T) {
 		func(s *Settings) { s.CardTipPercents = []int{1, 2, 3, 4, 5, 6, 7} },
 		func(s *Settings) { s.CardTipPercents = []int{15, 101} },
 		func(s *Settings) { s.EmployeeMealPct = -1 },
+		func(s *Settings) { s.CashierPayoutCents = -1 },
+		func(s *Settings) { s.CashierPayoutCents = 100_001 },
+		func(s *Settings) { s.DefaultPickupMinutes = -1 },
+		func(s *Settings) { s.DefaultPickupMinutes = 241 },
+		func(s *Settings) { s.AreaCodes = []string{} },
+		func(s *Settings) { s.AreaCodes = []string{"41"} },
+		func(s *Settings) { s.AreaCodes = []string{"110"} },
+		func(s *Settings) { s.AreaCodes = []string{"41a"} },
+		func(s *Settings) { s.AreaCodes = []string{"4100"} },
 	} {
 		s := DefaultSettings()
 		f(&s)
@@ -102,5 +112,35 @@ func TestTerminalAppDefaults(t *testing.T) {
 	s.Normalize()
 	if !reflect.DeepEqual(s.CardTipPercents, []int{15, 18, 20}) || s.OutOfAreaMarginMi != 1.3 {
 		t.Fatalf("normalize: %+v", s)
+	}
+}
+
+func TestDrawerAndPhoneDefaults(t *testing.T) {
+	d := DefaultSettings()
+	if d.CashierPayoutCents != 2000 || d.DefaultPickupMinutes != 15 || !reflect.DeepEqual(d.AreaCodes, []string{"410", "443", "667"}) {
+		t.Fatalf("defaults: %+v", d)
+	}
+	s := DefaultSettings()
+	s.AreaCodes = nil
+	s.Normalize()
+	if !reflect.DeepEqual(s.AreaCodes, []string{"410", "443", "667"}) {
+		t.Fatalf("null area codes = the defaults: %v", s.AreaCodes)
+	}
+	s.AreaCodes = []string{" 202", "410", "202", "301"}
+	s.Normalize()
+	if !reflect.DeepEqual(s.AreaCodes, []string{"202", "410", "301"}) || s.Validate() != nil {
+		t.Fatalf("trimmed + deduped: %v", s.AreaCodes)
+	}
+	many := make([]string, 21)
+	for i := range many {
+		many[i] = fmt.Sprintf("%d", 200+i)
+	}
+	s.AreaCodes = many
+	if s.Validate() == nil {
+		t.Fatal("21 area codes accepted")
+	}
+	s.AreaCodes, s.CashierPayoutCents, s.DefaultPickupMinutes = []string{"212"}, 0, 0
+	if err := s.Validate(); err != nil {
+		t.Fatal(err)
 	}
 }

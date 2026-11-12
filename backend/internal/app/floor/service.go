@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"time"
 
+	"quiccpos/main/internal/app/dayclose"
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/domain/staff"
 	sseBroker "quiccpos/main/internal/infra/sse"
@@ -72,6 +73,11 @@ type event struct {
 	// customer.upsert (terminal 1d): the customer + which fields it sets.
 	Customer json.RawMessage `json:"customer"`
 	Set      []string        `json:"set"`
+	// Drawers + the Z report (terminal Stage 2): drawer.opened / .closed's
+	// drawer, drawer.movement's movement, z.report's report.
+	Drawer   json.RawMessage `json:"drawer"`
+	Movement json.RawMessage `json:"movement"`
+	Report   json.RawMessage `json:"report"`
 	Drivers  []struct {
 		ID       string `json:"id"`
 		Name     string `json:"name"`
@@ -111,7 +117,14 @@ type Journal interface {
 	AddJournal(ctx context.Context, tenantID, locationID uuid.UUID, entries []staff.JournalEntry) (int, error)
 }
 
+// DayClose stores the Pi's drawer sessions and Z reports (the dayclose
+// service): a *dayclose.Refused error is answered invalid.
+type DayClose interface {
+	Apply(ctx context.Context, sc order.Scope, eventID uuid.UUID, ev dayclose.Event) (string, error)
+}
+
 type Service struct {
+	dayClose  DayClose
 	counter   CounterOrders
 	journal   Journal
 	customers Customers
@@ -150,6 +163,10 @@ func (s *Service) OnCounter(c CounterOrders, j Journal) { s.counter, s.journal =
 // OnCustomers plugs in the counter's customers (nil = customer.upsert is
 // answered invalid, as by an older main).
 func (s *Service) OnCustomers(c Customers) { s.customers = c }
+
+// OnDayClose plugs in drawers + Z reports (nil = drawer.* / z.report are
+// answered invalid, as by an older main).
+func (s *Service) OnDayClose(d DayClose) { s.dayClose = d }
 
 // OnCounterPlaced is told after a counter order was stored (the geo worker
 // locates a counter delivery).
@@ -291,6 +308,8 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 		return s.applyJournal(ctx, sc, eid, ev)
 	case "customer.upsert":
 		return s.applyCustomer(ctx, sc, eid, ev)
+	case dayclose.EventDrawerOpened, dayclose.EventDrawerMovement, dayclose.EventDrawerClosed, dayclose.EventZReport:
+		return s.applyDayClose(ctx, sc, eid, ev)
 	default:
 		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 	}
