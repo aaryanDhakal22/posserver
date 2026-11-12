@@ -43,6 +43,14 @@ func NewCallcenterHandler(svc *callcenterApp.Service, tenancy *tenancyApp.Servic
 		logger: lg.With().Str("module", "callcenter-handler").Logger()}
 }
 
+// clip cuts s to at most n bytes (what a caller typed never bloats a log row).
+func clip(s string, n int) string {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
+}
+
 func ccErr(c *echo.Context, status int, code, msg string) error {
 	return c.JSON(status, errCode(msg, code))
 }
@@ -58,6 +66,7 @@ func (h *CallcenterHandler) note(c *echo.Context, d *callcenterApp.Device, actio
 		actor.Kind = "callcenter"
 		actor.IP = c.RealIP()
 	}
+	actor.RequestID = clip(actor.RequestID, 64) // a caller's X-Request-ID never bloats the audit log
 	entity := ""
 	if d != nil {
 		actor.ID, actor.TenantID, actor.LocationID = d.ID.String(), d.TenantID.String(), d.LocationID.String()
@@ -81,7 +90,7 @@ func (h *CallcenterHandler) device(c *echo.Context) (callcenterApp.Device, bool,
 	tok := strings.TrimSpace(strings.TrimPrefix(c.Request().Header.Get("Authorization"), "Bearer "))
 	d, err := h.svc.Authenticate(c.Request().Context(), tok)
 	if errors.Is(err, callcenterApp.ErrDeviceRequired) {
-		return d, false, ccErr(c, http.StatusUnauthorized, "device_required", "Sign in with the store's login.")
+		return d, false, ccErr(c, http.StatusUnauthorized, "device_required", "Sign in with the call-center login.")
 	}
 	if err != nil {
 		h.logger.Error().Err(err).Msg("callcenter auth")
@@ -113,27 +122,23 @@ func (h *CallcenterHandler) Login(c *echo.Context) error {
 	if err := c.Bind(&req); err != nil || strings.TrimSpace(req.Username) == "" || req.Password == "" {
 		return ccErr(c, http.StatusBadRequest, "bad_request", "username and password are required")
 	}
+	// The call center's OWN shared login (Store › Staff sets it), with its own
+	// limiter: the store manager's login is refused here (it opens Store pages
+	// and links a Pi), and failures here never lock the manager out.
 	if stop, err := h.logins.throttledCode(c, req.Username); stop {
 		return err
 	}
-	tenant, err := h.tenancy.AuthenticateTenant(ctx, req.Username, req.Password)
+	tid, lid, err := h.svc.CheckLogin(ctx, req.Username, req.Password)
 	if err != nil {
-		if errors.Is(err, tenancyApp.ErrInvalidCredentials) {
+		if errors.Is(err, callcenterApp.ErrInvalidCredentials) {
 			h.logins.failed(req.Username)
-			h.note(c, nil, "callcenter.login.failed", http.StatusUnauthorized, map[string]string{"username": strings.TrimSpace(req.Username)})
-			return ccErr(c, http.StatusUnauthorized, "invalid_credentials", "Wrong store login or password.")
+			h.note(c, nil, "callcenter.login.failed", http.StatusUnauthorized, map[string]string{"username": clip(strings.TrimSpace(req.Username), 64)})
+			return ccErr(c, http.StatusUnauthorized, "invalid_credentials", "Wrong call-center login or password.")
 		}
 		return h.fail(c, err, "callcenter login")
 	}
 	h.logins.succeeded(req.Username)
-	loc, err := h.tenancy.PrimaryLocation(ctx, tenant.ID)
-	if err != nil {
-		if errors.Is(err, tenancyApp.ErrNoPrimaryLocation) {
-			return ccErr(c, http.StatusConflict, "no_location", "This store has no location yet.")
-		}
-		return h.fail(c, err, "callcenter login")
-	}
-	tok, d, err := h.svc.NewDevice(ctx, tenant.ID, loc.ID, req.DeviceName)
+	tok, d, err := h.svc.NewDevice(ctx, tid, lid, req.DeviceName)
 	if errors.Is(err, callcenterApp.ErrTooMany) {
 		return ccErr(c, http.StatusConflict, "too_many", "Too many call-center devices: remove one in Store › Staff.")
 	}
@@ -262,9 +267,11 @@ func (h *CallcenterHandler) SessionStart(c *echo.Context) error {
 		// PINs exist); only the audit row says what it was.
 		h.note(c, &d, "callcenter.pin.failed", http.StatusUnauthorized, map[string]string{"reason": "wrong_role"})
 		return ccErr(c, http.StatusUnauthorized, "wrong_pin", "Wrong PIN.")
+	case errors.Is(err, callcenterApp.ErrDeviceRequired):
+		return ccErr(c, http.StatusUnauthorized, "device_required", "Sign in with the call-center login.")
 	case errors.Is(err, callcenterApp.ErrDeviceRevoked):
 		h.note(c, &d, "callcenter.device.revoked", http.StatusUnauthorized, map[string]string{"reason": "pin_guessing"})
-		return ccErr(c, http.StatusUnauthorized, "device_required", "Too many wrong PINs: sign in with the store's login again.")
+		return ccErr(c, http.StatusUnauthorized, "device_required", "Too many wrong PINs: sign in with the call-center login again.")
 	case err != nil:
 		return h.fail(c, err, "callcenter sign-in")
 	}
@@ -465,19 +472,29 @@ func (h *CallcenterHandler) Events(c *echo.Context) error {
 	fmt.Fprint(w, "retry: 3000\n\n")
 	write("hello", last)
 
+	// The Pi's events are an agent's to see: only while someone is signed in on
+	// this browser (security review M6). A locked screen keeps its stream but
+	// gets main's own hello / store / session.ended only.
+	signedIn := d.StaffID != nil
 	keep := time.NewTicker(15 * time.Second)
 	defer keep.Stop()
-	poll := time.NewTicker(3 * time.Second) // the Pi's link + open / closed
+	poll := time.NewTicker(3 * time.Second) // the Pi's link + open / closed, this device's session
 	defer poll.Stop()
-	recheck := time.NewTicker(30 * time.Second) // the token may have been revoked elsewhere
-	defer recheck.Stop()
 	tok := strings.TrimSpace(strings.TrimPrefix(c.Request().Header.Get("Authorization"), "Bearer "))
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case ev := <-sub.C:
-			write(ev.Name, ev.Data)
+			switch {
+			case ev.Name == "session.started":
+				signedIn = true // main's own note: nothing to send
+			case ev.Name == "session.ended":
+				signedIn = false
+				write(ev.Name, ev.Data)
+			case signedIn:
+				write(ev.Name, ev.Data)
+			}
 			if ev.Close {
 				return nil
 			}
@@ -494,10 +511,14 @@ func (h *CallcenterHandler) Events(c *echo.Context) error {
 				write("store", now)
 			}
 			h.svc.Want(ctx, d.Scope(), false)
-		case <-recheck.C:
-			if _, err := h.svc.Authenticate(ctx, tok); errors.Is(err, callcenterApp.ErrDeviceRequired) {
+			// The token may have been revoked, the session ended by idling.
+			cur, err := h.svc.Authenticate(ctx, tok)
+			if errors.Is(err, callcenterApp.ErrDeviceRequired) {
 				write("session.ended", map[string]string{"reason": "device_revoked"})
 				return nil
+			}
+			if err == nil {
+				signedIn = cur.StaffID != nil
 			}
 		}
 	}
@@ -528,6 +549,68 @@ func (h *CallcenterHandler) MeRevokeDevice(c *echo.Context) error {
 	}
 	if !ok {
 		return ccErr(c, http.StatusNotFound, "not_found", "No such device.")
+	}
+	return c.NoContent(http.StatusNoContent)
+}
+
+// GET /store/v1/me/callcenter/login — the call center's shared login (never the password).
+func (h *CallcenterHandler) MeLogin(c *echo.Context) error {
+	_, lid, _ := meScope(c)
+	v, err := h.svc.LoginInfo(c.Request().Context(), lid)
+	if err != nil {
+		return h.fail(c, err, "callcenter login")
+	}
+	return c.JSON(http.StatusOK, v)
+}
+
+// PUT /store/v1/me/callcenter/login {username, password, keep_devices?} — set
+// the call center's own login. It must not be the store manager's login: not
+// the same username, not the same password.
+func (h *CallcenterHandler) MeSetLogin(c *echo.Context) error {
+	ctx := c.Request().Context()
+	tid, lid, _ := meScope(c)
+	var req struct {
+		Username    string `json:"username"`
+		Password    string `json:"password"`
+		KeepDevices bool   `json:"keep_devices"`
+	}
+	if !decodeStrict(c, &req) {
+		return ccErr(c, http.StatusBadRequest, "bad_request", "username and password are required")
+	}
+	u, ok := callcenterApp.NormUsername(req.Username)
+	if !ok {
+		return ccErr(c, http.StatusBadRequest, "bad_username", callcenterApp.ErrBadUsername.Error())
+	}
+	if len(req.Password) < callcenterApp.MinPassword || len(req.Password) > 128 {
+		return ccErr(c, http.StatusBadRequest, "bad_password", callcenterApp.ErrBadPassword.Error())
+	}
+	if t, err := h.tenancy.GetTenant(ctx, tid); err == nil && t != nil && t.Username != "" {
+		if strings.EqualFold(strings.TrimSpace(t.Username), u) {
+			return ccErr(c, http.StatusBadRequest, "same_as_manager", "Pick a different username from the store's own login.")
+		}
+		if _, err := h.tenancy.AuthenticateTenant(ctx, t.Username, req.Password); err == nil {
+			return ccErr(c, http.StatusBadRequest, "same_as_manager", "Pick a different password from the store's own login.")
+		}
+	}
+	v, n, err := h.svc.SetLogin(ctx, tid, lid, u, req.Password, req.KeepDevices)
+	switch {
+	case errors.Is(err, callcenterApp.ErrUsernameTaken):
+		return ccErr(c, http.StatusConflict, "username_taken", "That username is taken. Pick another.")
+	case errors.Is(err, callcenterApp.ErrBadUsername):
+		return ccErr(c, http.StatusBadRequest, "bad_username", err.Error())
+	case errors.Is(err, callcenterApp.ErrBadPassword):
+		return ccErr(c, http.StatusBadRequest, "bad_password", err.Error())
+	case err != nil:
+		return h.fail(c, err, "callcenter login")
+	}
+	return c.JSON(http.StatusOK, map[string]any{"username": v.Username, "set": true, "updated_at": v.UpdatedAt, "devices_revoked": n})
+}
+
+// DELETE /store/v1/me/callcenter/login — no call-center login: every browser signed out.
+func (h *CallcenterHandler) MeDeleteLogin(c *echo.Context) error {
+	tid, lid, _ := meScope(c)
+	if _, err := h.svc.RemoveLogin(c.Request().Context(), tid, lid); err != nil {
+		return h.fail(c, err, "callcenter login")
 	}
 	return c.NoContent(http.StatusNoContent)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,6 +27,10 @@ var (
 	ErrAgentOffline = errors.New("agent offline (no SSE subscribers for scope)")
 	// ErrTimeout means the command was sent but no reply arrived in time.
 	ErrTimeout = errors.New("rpc request timed out")
+	// ErrStreamLost: the agent's stream closed while the request was in flight
+	// and didn't come back (FailType). The outcome is unknown: the agent may
+	// have done the work and its reply went to another main.
+	ErrStreamLost = errors.New("agent stream lost while the request was in flight")
 )
 
 // CommandPublisher is the slice of *sse.Broker the requester needs: send a
@@ -41,8 +46,12 @@ type CommandPublisher interface {
 type InboundHandler func(ctx context.Context, scope sseBroker.Scope, payload json.RawMessage) (replyPayload any, err error)
 
 type waiter struct {
-	scope sseBroker.Scope
-	ch    chan Envelope
+	scope   sseBroker.Scope
+	msgType string
+	ch      chan Envelope
+	// gone is closed by FailType: the agent's stream is gone, no reply will
+	// find this waiter in time.
+	gone chan struct{}
 }
 
 // Requester is the reusable RPC core (a singleton wired in cmd/api/main.go).
@@ -103,8 +112,9 @@ func (r *Requester) Request(ctx context.Context, scope sseBroker.Scope, msgType 
 	}
 
 	ch := make(chan Envelope, 1)
+	gone := make(chan struct{})
 	r.mu.Lock()
-	r.waiters[id] = waiter{scope: scope, ch: ch}
+	r.waiters[id] = waiter{scope: scope, msgType: msgType, ch: ch, gone: gone}
 	r.mu.Unlock()
 	defer func() {
 		r.mu.Lock()
@@ -126,6 +136,13 @@ func (r *Requester) Request(ctx context.Context, scope sseBroker.Scope, msgType 
 			attribute.String("result", "ok"),
 		))
 		return reply, nil
+	case <-gone:
+		// Counted with the offline ones: the alert on a store that can't be
+		// reached reads that series.
+		r.meters.RPCRoundtrip.Record(ctx, msSince(start), typeAttr)
+		r.meters.RPCOffline.Add(ctx, 1, typeAttr)
+		span.SetStatus(codes.Error, "agent stream lost")
+		return Envelope{}, ErrStreamLost
 	case <-time.After(timeout):
 		r.meters.RPCRoundtrip.Record(ctx, msSince(start), typeAttr)
 		r.meters.RPCTimeouts.Add(ctx, 1, typeAttr)
@@ -161,6 +178,28 @@ func (r *Requester) Deliver(scope sseBroker.Scope, env Envelope) bool {
 }
 
 // RegisterInbound registers a handler for an agent-INITIATED message type.
+// FailType fails every pending request of msgType for scope with
+// ErrStreamLost (call it when the scope's stream is gone and hasn't come
+// back): the caller hears "offline, outcome unknown" at once instead of
+// waiting out its timeout. It returns how many it failed.
+func (r *Requester) FailType(scope sseBroker.Scope, msgType string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n := 0
+	for _, w := range r.waiters {
+		if w.scope != scope || w.msgType != msgType {
+			continue
+		}
+		select {
+		case <-w.gone: // already failed
+		default:
+			close(w.gone)
+			n++
+		}
+	}
+	return n
+}
+
 func (r *Requester) RegisterInbound(msgType string, h InboundHandler) {
 	r.mu.Lock()
 	r.inbound[msgType] = h
@@ -181,6 +220,18 @@ func (r *Requester) DispatchInbound(ctx context.Context, scope sseBroker.Scope, 
 	h, ok := r.inbound[env.Type]
 	r.mu.Unlock()
 	if !ok {
+		if req, isReply := strings.CutSuffix(env.Type, ".reply"); isReply {
+			// A reply that found no waiter: the request timed out, was failed
+			// when the stream dropped, or was asked by the other blue-green
+			// slot. The agent did the work; the caller was told it didn't
+			// hear. Counted so we can see how often that happens.
+			r.meters.RPCReplies.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID,
+				attribute.String("type", req),
+				attribute.String("result", "late"),
+			))
+			r.logger.Warn().Ctx(ctx).Str("type", req).Str("location_id", scope.LocationID.String()).Msg("rpc reply found no waiter (late)")
+			return Envelope{}, false, nil
+		}
 		r.meters.RPCInbound.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID,
 			attribute.String("type", env.Type),
 			attribute.String("result", "unknown"),

@@ -93,7 +93,23 @@ func TestGuard(t *testing.T) {
 		{"POST", "orders/x/void", `{"reason":"x"}`, "", ""},
 		{"POST", "orders/x/void", `{"reason":"x","manager_pin":"9"}`, "manager", CodeNotAllowed},
 		{"GET", "orders", ``, "", ""},
-		{"POST", "journal", `[1,2]`, "", ""}, // not an object: the Pi answers
+		// Fail closed: a body the guards can't read never reaches the Pi.
+		{"POST", "journal", `[1,2]`, "", "bad_request"},
+		{"POST", "orders/x/payments", `{"tender":"comp","client_key":7}`, "", "bad_request"},
+		{"POST", "orders/x/payments", `{"tender":5}`, "", "bad_request"},
+		{"POST", "orders", `{"client_key":"k","type":"pickup","payments":"x"}`, "", "bad_request"},
+		{"POST", "orders", `{"client_key":"k","type":"pickup","payments":[{"tender":"manual_card","refund":"yes"}]}`, "", "bad_request"},
+		{"POST", "orders", `{"client_key":"k","type":"pickup","cart":{"lines":"x"}}`, "", "bad_request"},
+		{"POST", "orders", `{"client_key":"k","type":"pickup","cart":{"lines":[{"custom":"yes"}]}}`, "", "bad_request"},
+		{"POST", "orders", `{"client_key":"k","type":7}`, "", "bad_request"},
+		{"PUT", "orders/x/cart", `{"cart":[]}`, "", "bad_request"},
+		{"POST", "orders/x/payments", `{"tender":"manual_card","refund":1}`, "", "bad_request"},
+		{"POST", "orders/x/void", `"reason"`, "", "bad_request"},
+		// keys match as Go's decoder (and the Pi's) reads them: any case, the last one wins
+		{"POST", "orders/x/payments", `{"Tender":"comp"}`, "comp", CodeNotAllowed},
+		{"POST", "orders/x/payments", `{"tender":"manual_card","tender":"cash"}`, "tender", CodeNotAllowed},
+		{"POST", "orders/x/void", `{"reason":"x","manager_pin":["1"]}`, "manager", CodeNotAllowed},
+		{"POST", "orders/x/void", `{"reason":"x","Manager_Pin":"1"}`, "manager", CodeNotAllowed},
 	}
 	for _, c := range cases {
 		r := Guard(c.method, c.path, []byte(c.body))
@@ -119,9 +135,12 @@ func TestPinWait(t *testing.T) {
 // --- fakes --------------------------------------------------------------------
 
 type fakeRepo struct {
-	dev     map[string]*repositories.CallcenterDevice // by token hash
-	revoked map[uuid.UUID]bool
-	seen    int
+	dev      map[string]*repositories.CallcenterDevice // by token hash
+	revoked  map[uuid.UUID]bool
+	failedAt map[uuid.UUID]time.Time
+	logins   map[uuid.UUID]repositories.CallcenterLogin
+	now      func() time.Time
+	seen     int
 }
 
 func (f *fakeRepo) byID(id uuid.UUID) *repositories.CallcenterDevice {
@@ -164,19 +183,101 @@ func (f *fakeRepo) Revoke(_ context.Context, _, id uuid.UUID) (bool, error) {
 
 func (f *fakeRepo) Seen(context.Context, uuid.UUID, bool) error { f.seen++; return nil }
 
-func (f *fakeRepo) StartSession(_ context.Context, id, staffID uuid.UUID) error {
+func (f *fakeRepo) PinAttempt(_ context.Context, id uuid.UUID, lockAfter int, first, maxWait, window time.Duration) (int, bool, error) {
 	d := f.byID(id)
-	d.StaffID, d.PinFails, d.PinLockedUntil = &staffID, 0, nil
-	return nil
+	now := f.now()
+	if d == nil || f.revoked[id] || (d.PinLockedUntil != nil && d.PinLockedUntil.After(now)) {
+		return 0, false, nil
+	}
+	if f.failedAt[id].IsZero() || now.Sub(f.failedAt[id]) > window {
+		d.PinFails = 0
+	}
+	d.PinFails++
+	f.failedAt[id] = now
+	d.PinLockedUntil = nil
+	if d.PinFails >= lockAfter {
+		w := first
+		for i := lockAfter; i < d.PinFails && w < maxWait; i++ {
+			w *= 2
+		}
+		if w > maxWait {
+			w = maxWait
+		}
+		u := now.Add(w)
+		d.PinLockedUntil = &u
+	}
+	return d.PinFails, true, nil
 }
 
-func (f *fakeRepo) PinFailed(_ context.Context, id uuid.UUID, until *time.Time) (int, error) {
+func (f *fakeRepo) PinState(_ context.Context, id uuid.UUID) (bool, *time.Time, error) {
 	d := f.byID(id)
-	d.PinFails++
-	if until != nil {
-		d.PinLockedUntil = until
+	if d == nil || f.revoked[id] {
+		return false, nil, nil
 	}
-	return d.PinFails, nil
+	return true, d.PinLockedUntil, nil
+}
+
+func (f *fakeRepo) PinSucceeded(_ context.Context, id, staffID uuid.UUID, unlock bool) (bool, error) {
+	d := f.byID(id)
+	if d == nil || f.revoked[id] {
+		return false, nil
+	}
+	d.StaffID = &staffID
+	if d.PinFails > 0 {
+		d.PinFails--
+	}
+	if unlock {
+		d.PinLockedUntil = nil
+	}
+	return true, nil
+}
+
+func (f *fakeRepo) LoginByUsername(_ context.Context, u string) (repositories.CallcenterLogin, error) {
+	for _, l := range f.logins {
+		if l.Username == u {
+			return l, nil
+		}
+	}
+	return repositories.CallcenterLogin{}, pgx.ErrNoRows
+}
+
+func (f *fakeRepo) LoginOf(_ context.Context, lid uuid.UUID) (repositories.CallcenterLogin, error) {
+	l, ok := f.logins[lid]
+	if !ok {
+		return l, pgx.ErrNoRows
+	}
+	return l, nil
+}
+
+func (f *fakeRepo) SetLogin(_ context.Context, tid, lid uuid.UUID, u, hash string, revoke bool) (repositories.CallcenterLogin, []uuid.UUID, error) {
+	for id, l := range f.logins {
+		if id != lid && l.Username == u {
+			return repositories.CallcenterLogin{}, nil, repositories.ErrCallcenterUsernameTaken
+		}
+	}
+	l := repositories.CallcenterLogin{TenantID: tid, LocationID: lid, Username: u, PasswordHash: hash, UpdatedAt: f.now()}
+	f.logins[lid] = l
+	ids := []uuid.UUID{}
+	if revoke {
+		ids = f.revokeAll(lid)
+	}
+	return l, ids, nil
+}
+
+func (f *fakeRepo) DeleteLogin(_ context.Context, lid uuid.UUID) ([]uuid.UUID, error) {
+	delete(f.logins, lid)
+	return f.revokeAll(lid), nil
+}
+
+func (f *fakeRepo) revokeAll(lid uuid.UUID) []uuid.UUID {
+	ids := []uuid.UUID{}
+	for _, d := range f.dev {
+		if d.LocationID == lid && !f.revoked[d.ID] {
+			f.revoked[d.ID] = true
+			ids = append(ids, d.ID)
+		}
+	}
+	return ids
 }
 
 func (f *fakeRepo) EndSession(_ context.Context, id uuid.UUID) (bool, error) {
@@ -267,8 +368,10 @@ type world struct {
 
 func newWorld(t *testing.T) *world {
 	t.Helper()
-	w := &world{repo: &fakeRepo{dev: map[string]*repositories.CallcenterDevice{}, revoked: map[uuid.UUID]bool{}},
+	w := &world{repo: &fakeRepo{dev: map[string]*repositories.CallcenterDevice{}, revoked: map[uuid.UUID]bool{},
+		failedAt: map[uuid.UUID]time.Time{}, logins: map[uuid.UUID]repositories.CallcenterLogin{}},
 		pi: &fakePi{streams: 1}, now: time.Date(2026, 11, 12, 18, 0, 0, 0, time.UTC)}
+	w.repo.now = func() time.Time { return w.now }
 	w.agent = person(staff.RoleCallcenter, "4321", true)
 	w.staff = &fakeStaff{settings: staff.DefaultSettings(),
 		people: []staff.Person{w.agent, person(staff.RoleCashier, "1111", true), person(staff.RoleManager, "2222", true)}}
@@ -334,8 +437,9 @@ func TestSessionIdleExpiry(t *testing.T) {
 func TestSignInRolesAndGuessing(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
-	if _, _, err := w.svc.SignIn(ctx, w.dev(t), "12"); !errors.Is(err, ErrBadPin) {
-		t.Fatalf("2 digits: %v", err)
+	fails := func() int { return w.repo.byID(w.dev(t).ID).PinFails }
+	if _, _, err := w.svc.SignIn(ctx, w.dev(t), "12"); !errors.Is(err, ErrBadPin) || fails() != 0 {
+		t.Fatalf("2 digits is not a guess: %v, %d counted", err, fails())
 	}
 	if _, _, err := w.svc.SignIn(ctx, w.dev(t), "9999"); !errors.Is(err, ErrWrongPin) {
 		t.Fatalf("wrong: %v", err)
@@ -345,20 +449,33 @@ func TestSignInRolesAndGuessing(t *testing.T) {
 			t.Fatalf("%s: %v", pin, err)
 		}
 	}
-	if n := w.repo.byID(w.dev(t).ID).PinFails; n != 3 {
-		t.Fatalf("wrong-role PINs count as wrong ones: %d", n)
+	if fails() != 3 {
+		t.Fatalf("wrong-role PINs count as wrong ones: %d", fails())
 	}
-	for i := 0; i < 2; i++ {
-		_, _, _ = w.svc.SignIn(ctx, w.dev(t), "0000")
+	_, _, _ = w.svc.SignIn(ctx, w.dev(t), "0000")
+	// Four wrong, then her own PIN: she is in, but the four stay (no fresh
+	// set of guesses bought with a right PIN).
+	if _, _, err := w.svc.SignIn(ctx, w.dev(t), "4321"); err != nil {
+		t.Fatalf("4 wrong then the right PIN: %v", err)
+	}
+	if fails() != 4 || w.repo.byID(w.dev(t).ID).PinLockedUntil != nil {
+		t.Fatalf("after the right PIN: %d counted, lock %v; want 4, none", fails(), w.repo.byID(w.dev(t).ID).PinLockedUntil)
+	}
+	// The next wrong one is the 5th: the pad locks 30 s, for the right PIN too.
+	if _, _, err := w.svc.SignIn(ctx, w.dev(t), "0000"); !errors.Is(err, ErrWrongPin) {
+		t.Fatalf("5th: %v", err)
 	}
 	var th Throttled
 	if _, _, err := w.svc.SignIn(ctx, w.dev(t), "4321"); !errors.As(err, &th) || th.RetryAfter != 30*time.Second {
 		t.Fatalf("after 5 wrong the pad waits 30 s, even for the right PIN: %v", err)
 	}
-	// Keep guessing after each wait: at 20 in a row the device is revoked.
+	if fails() != 5 {
+		t.Fatalf("an attempt at a locked pad isn't counted: %d", fails())
+	}
+	// Keep guessing after each lock: the 20th counted wrong PIN revokes the device.
 	var last error
 	for i := 0; i < 15; i++ {
-		w.now = w.now.Add(6 * time.Minute)
+		w.now = w.now.Add(5*time.Minute + time.Second)
 		_, _, last = w.svc.SignIn(ctx, w.dev(t), "0000")
 	}
 	if !errors.Is(last, ErrDeviceRevoked) {
@@ -369,21 +486,95 @@ func TestSignInRolesAndGuessing(t *testing.T) {
 	}
 }
 
-func TestStorePinCeiling(t *testing.T) {
+func TestPinWindowDecaysAndRevokedDeviceGetsNoSession(t *testing.T) {
 	w := newWorld(t)
 	ctx := context.Background()
 	d := w.dev(t)
-	// 30 wrong PINs across the store's browsers in 15 min: every pad waits.
-	for i := 0; i < storePinMax; i++ {
-		w.svc.storePins.Add(d.LocationID.String())
+	for i := 0; i < 4; i++ {
+		_, _, _ = w.svc.SignIn(ctx, d, "0000")
 	}
-	var th Throttled
-	if _, _, err := w.svc.SignIn(ctx, d, "4321"); !errors.As(err, &th) {
-		t.Fatalf("store ceiling: %v", err)
-	}
+	// 15 minutes with no attempt: the window starts again.
 	w.now = w.now.Add(16 * time.Minute)
-	if _, _, err := w.svc.SignIn(ctx, w.dev(t), "4321"); err != nil {
-		t.Fatalf("after the window: %v", err)
+	if _, _, err := w.svc.SignIn(ctx, d, "0000"); !errors.Is(err, ErrWrongPin) || w.repo.byID(d.ID).PinFails != 1 {
+		t.Fatalf("after the window: %v, %d counted", err, w.repo.byID(d.ID).PinFails)
+	}
+	// One device's wrong PINs never lock another device of the store.
+	tok2, d2, err := w.svc.NewDevice(ctx, d.TenantID, d.LocationID, "Desk 2")
+	if err != nil || tok2 == "" {
+		t.Fatal(err)
+	}
+	for i := 0; i < 40; i++ {
+		w.now = w.now.Add(6 * time.Minute)
+		_, _, _ = w.svc.SignIn(ctx, d, "0000")
+	}
+	if _, _, err := w.svc.SignIn(ctx, d2, "4321"); err != nil {
+		t.Fatalf("another device of the store: %v", err)
+	}
+	// The first device was revoked for guessing: the right PIN gets no session there.
+	if _, _, err := w.svc.SignIn(ctx, d, "4321"); !errors.Is(err, ErrDeviceRequired) {
+		t.Fatalf("a revoked device with the right PIN: %v", err)
+	}
+	if w.repo.byID(d.ID).StaffID != nil {
+		t.Fatal("a revoked device got a session")
+	}
+}
+
+func TestOwnLogin(t *testing.T) {
+	w := newWorld(t)
+	ctx := context.Background()
+	tid, lid := uuid.New(), uuid.New()
+	if _, _, err := w.svc.CheckLogin(ctx, "lombardis-cc", "a long password"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("no login set: %v", err)
+	}
+	for _, bad := range []string{"", "ab", "has space", "-lead", "UPPER!", "x" + string(make([]byte, 50))} {
+		if _, _, err := w.svc.SetLogin(ctx, tid, lid, bad, "a long password", false); !errors.Is(err, ErrBadUsername) {
+			t.Errorf("username %q: %v", bad, err)
+		}
+	}
+	if _, _, err := w.svc.SetLogin(ctx, tid, lid, "lombardis-cc", "short", false); !errors.Is(err, ErrBadPassword) {
+		t.Fatalf("short password: %v", err)
+	}
+	v, n, err := w.svc.SetLogin(ctx, tid, lid, " Lombardis-CC ", "a long password", false)
+	if err != nil || v.Username != "lombardis-cc" || !v.Set || n != 0 {
+		t.Fatalf("set: %+v %d %v", v, n, err)
+	}
+	gt, gl, err := w.svc.CheckLogin(ctx, "LOMBARDIS-cc", "a long password")
+	if err != nil || gt != tid || gl != lid {
+		t.Fatalf("check: %v", err)
+	}
+	if _, _, err := w.svc.CheckLogin(ctx, "lombardis-cc", "another password"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("wrong password: %v", err)
+	}
+	if _, _, err := w.svc.SetLogin(ctx, uuid.New(), uuid.New(), "lombardis-cc", "a long password", false); !errors.Is(err, ErrUsernameTaken) {
+		t.Fatalf("another store, the same username: %v", err)
+	}
+	// A new password signs every browser out (unless kept).
+	tok, d, _ := w.svc.NewDevice(ctx, tid, lid, "Desk")
+	sub, cancel := w.svc.Subscribe(ctx, d)
+	defer cancel()
+	if _, n, _ := w.svc.SetLogin(ctx, tid, lid, "lombardis-cc", "a newer password", true); n != 0 {
+		t.Fatalf("keep_devices: %d revoked", n)
+	}
+	if _, err := w.svc.Authenticate(ctx, tok); err != nil {
+		t.Fatalf("kept device: %v", err)
+	}
+	if _, n, _ := w.svc.SetLogin(ctx, tid, lid, "lombardis-cc", "the newest password", false); n != 1 {
+		t.Fatalf("changing the password revokes the devices: %d", n)
+	}
+	if _, err := w.svc.Authenticate(ctx, tok); !errors.Is(err, ErrDeviceRequired) {
+		t.Fatalf("a device of the old password: %v", err)
+	}
+	if ev := <-sub.C; ev.Name != "session.ended" || !ev.Close {
+		t.Fatalf("its stream ends: %+v", ev)
+	}
+	if _, _, err := w.svc.CheckLogin(ctx, "lombardis-cc", "a newer password"); !errors.Is(err, ErrInvalidCredentials) {
+		t.Fatalf("the old password: %v", err)
+	}
+	if _, err := w.svc.RemoveLogin(ctx, tid, lid); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := w.svc.LoginInfo(ctx, lid); v.Set {
+		t.Fatal("removed login still set")
 	}
 }
 

@@ -935,6 +935,8 @@ export interface CallcenterDevice {
   id: string; name: string; created_at: string; last_seen_at: string | null;
   staff_id?: string; staff_name?: string; revoked_at?: string;
 }
+/** The call center's own shared login (never the password). */
+export interface CallcenterLogin { username: string; set: boolean; updated_at: string | null; devices_revoked?: number }
 export interface CallcenterReportRow {
   day: string; staff_id: string; staff_name: string; orders: number; voided: number; pickup: number; delivery: number;
   sales_cents: number; card_cents: number; tips_cents: number;

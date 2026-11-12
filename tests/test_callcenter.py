@@ -31,18 +31,40 @@ NY = ZoneInfo("America/New_York")
 # --- helpers ---------------------------------------------------------------------
 
 
-def _login(store, name: str = "Desk 1") -> tuple[dict, dict]:
-    """The store's login → (Bearer headers, the login answer)."""
-    username, password = f"cc{store.tag}", secrets.token_urlsafe(10)
-    r = store.admin.patch(f"{ADMIN_V1}/tenants/{store.tenant_id}/credentials",
-                          json={"username": username, "password": password}, timeout=5)
-    assert r.status_code == 204, r.text
+def _mgr(store) -> requests.Session:
+    """The store's manager session, one per store (a second manager_session() sets a new password, which
+    signs the first one out)."""
+    if getattr(store, "cc_mgr", None) is None:
+        store.cc_mgr = store.manager_session()
+    return store.cc_mgr
+
+
+def _set_cc_login(store, mgr=None) -> tuple[str, str]:
+    """The owner sets the call center's own login in Store › Staff (never the store's own)."""
+    mgr = mgr or _mgr(store)
+    username, password = f"cc-{store.tag}", secrets.token_urlsafe(12)
+    r = mgr.put(f"{STORE_V1}/me/callcenter/login", json={"username": username, "password": password}, timeout=5)
+    assert r.status_code == 200, r.text
     store.cc_login = (username, password)
+    return username, password
+
+
+def _login(store, name: str = "Desk 1") -> tuple[dict, dict]:
+    """The call center's login → (Bearer headers, the login answer)."""
+    if not getattr(store, "cc_login", None):
+        _set_cc_login(store)
+    username, password = store.cc_login
     r = requests.post(f"{CC}/login", json={"username": username, "password": password, "device_name": name}, timeout=5)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["device_token"].startswith("qccd_") and len(body["device_token"]) == 5 + 64
     return {"Authorization": f"Bearer {body['device_token']}"}, body
+
+
+def _pi_offline(hdr: dict) -> None:
+    """A store with no Pi stream reads offline (a main started seconds ago still gives every store the
+    reconnect grace: wait it out rather than fail on a fresh dev main)."""
+    assert wait_until(lambda: requests.get(f"{CC}/me", headers=hdr, timeout=5).json()["pi"]["online"] is False, timeout=12)
 
 
 def _person(mgr, role: str, pin: str, first: str = "Cara", last: str = "Smith") -> dict:
@@ -165,8 +187,9 @@ class CCEvents:
 
 def _agent(store, pin: str = "4321") -> tuple[dict, dict, requests.Session]:
     """A signed-in browser with an agent on it: (headers, the staff row, the manager session)."""
-    mgr = store.manager_session()
+    mgr = _mgr(store)
     person = _person(mgr, "callcenter", pin)
+    _set_cc_login(store, mgr)
     hdr, _ = _login(store)
     r = _pin(hdr, pin)
     assert r.status_code == 200, r.text
@@ -186,6 +209,7 @@ def test_login_me_and_logout(store) -> None:
     assert "set-cookie" not in {k.lower() for k in r.headers}
     assert requests.post(f"{CC}/login", json={"username": ""}, timeout=5).status_code == 400
 
+    _pi_offline(hdr)
     r = requests.get(f"{CC}/me", headers=hdr, timeout=5)
     assert r.status_code == 200, r.text
     me = r.json()
@@ -212,8 +236,107 @@ def test_login_me_and_logout(store) -> None:
     assert r.status_code == 401 and r.json()["code"] == "device_required"
 
 
+def test_the_call_center_has_its_own_login_never_the_managers(store, make_store) -> None:
+    """Security review H1: the store manager's login opens Store pages and links
+    a Pi; the call center gets its own shared login, valid only here."""
+    muser, mpw = f"mgr{store.tag}", secrets.token_urlsafe(10)
+    r = store.admin.patch(f"{ADMIN_V1}/tenants/{store.tenant_id}/credentials", json={"username": muser, "password": mpw}, timeout=5)
+    assert r.status_code == 204, r.text
+    mgr = requests.Session()
+    assert mgr.post(f"{STORE_V1}/session", json={"username": muser, "password": mpw}, timeout=5).status_code == 200
+
+    # Nothing set yet: nobody signs in, the manager's login least of all.
+    assert mgr.get(f"{STORE_V1}/me/callcenter/login", timeout=5).json() == {"username": "", "set": False, "updated_at": None}
+    r = requests.post(f"{CC}/login", json={"username": muser, "password": mpw}, timeout=5)
+    assert r.status_code == 401 and r.json()["code"] == "invalid_credentials", r.text
+
+    user, pw = f"cc-{store.tag}", "a-Long-enough-pw"
+    put = lambda body: mgr.put(f"{STORE_V1}/me/callcenter/login", json=body, timeout=5)  # noqa: E731
+    for bad, code in (({"username": "ab", "password": pw}, "bad_username"), ({"username": "has space", "password": pw}, "bad_username"),
+                      ({"username": user, "password": "short"}, "bad_password"), ({"username": user}, "bad_password"),
+                      ({"username": muser, "password": pw}, "same_as_manager"),          # the manager's username
+                      ({"username": muser.upper(), "password": pw}, "same_as_manager"),
+                      ({"username": user, "password": mpw + "x" * 0}, "same_as_manager" if len(mpw) >= 10 else "bad_password"),
+                      ({"username": user, "password": pw, "nope": 1}, "bad_request")):
+        r = put(bad)
+        assert r.status_code == 400 and r.json()["code"] == code, (bad, r.text)
+    r = put({"username": f"  {user.upper()} ", "password": pw})
+    assert r.status_code == 200, r.text
+    assert r.json()["username"] == user and r.json()["set"] is True and r.json()["devices_revoked"] == 0
+    got = mgr.get(f"{STORE_V1}/me/callcenter/login", timeout=5).json()
+    assert got["username"] == user and got["set"] is True and "password" not in json.dumps(got)
+
+    # It opens the call center, any case of the username; it opens nothing else.
+    r = requests.post(f"{CC}/login", json={"username": user.upper(), "password": pw, "device_name": "Desk 1"}, timeout=5)
+    assert r.status_code == 200, r.text
+    hdr = {"Authorization": f"Bearer {r.json()['device_token']}"}
+    assert requests.post(f"{STORE_V1}/session", json={"username": user, "password": pw}, timeout=5).status_code == 401
+    assert requests.post(f"{STORE_V1}/agent/link", json={"username": user, "password": pw}, timeout=5).status_code in (400, 401)
+    # The manager's login still doesn't; a wrong password doesn't.
+    for u, p in ((muser, mpw), (user, mpw), (user, pw + "x"), ("nobody-" + store.tag, pw)):
+        r = requests.post(f"{CC}/login", json={"username": u, "password": p}, timeout=5)
+        assert r.status_code == 401 and r.json()["code"] == "invalid_credentials", (u, r.text)
+    # Failed call-center logins never lock the manager out of Store pages.
+    assert requests.post(f"{STORE_V1}/session", json={"username": muser, "password": mpw}, timeout=5).status_code == 200
+
+    # Another store can't take the username.
+    other = _mgr(make_store())
+    r = other.put(f"{STORE_V1}/me/callcenter/login", json={"username": user, "password": pw}, timeout=5)
+    assert r.status_code == 409 and r.json()["code"] == "username_taken", r.text
+
+    # A new password signs every browser out (the old password is dead); keep_devices keeps them.
+    r = put({"username": user, "password": pw + "-2", "keep_devices": True})
+    assert r.status_code == 200 and r.json()["devices_revoked"] == 0, r.text
+    assert requests.get(f"{CC}/me", headers=hdr, timeout=5).status_code == 200
+    r = put({"username": user, "password": pw + "-3"})
+    assert r.status_code == 200 and r.json()["devices_revoked"] == 1, r.text
+    r = requests.get(f"{CC}/me", headers=hdr, timeout=5)
+    assert r.status_code == 401 and r.json()["code"] == "device_required", r.text
+    assert requests.post(f"{CC}/login", json={"username": user, "password": pw}, timeout=5).status_code == 401
+    r = requests.post(f"{CC}/login", json={"username": user, "password": pw + "-3"}, timeout=5)
+    assert r.status_code == 200, r.text
+    hdr = {"Authorization": f"Bearer {r.json()['device_token']}"}
+
+    # Removed: nobody signs in, the browsers are out.
+    assert mgr.delete(f"{STORE_V1}/me/callcenter/login", timeout=5).status_code == 204
+    assert requests.get(f"{CC}/me", headers=hdr, timeout=5).status_code == 401
+    assert requests.post(f"{CC}/login", json={"username": user, "password": pw + "-3"}, timeout=5).status_code == 401
+    assert mgr.get(f"{STORE_V1}/me/callcenter/login", timeout=5).json()["set"] is False
+
+    # The password never shows in the audit trail.
+    rows = mgr.get(f"{STORE_V1}/me/reports/audit?limit=200", timeout=5).json()["entries"]
+    assert [e for e in rows if e["entity"] == "callcenter_logins"], "no audit row for the login"
+    assert pw not in json.dumps(rows) and "$2a$" not in json.dumps([e for e in rows if e["entity"] == "callcenter_logins"])
+
+
+def test_failed_logins_are_limited_and_clipped(store) -> None:
+    """5 failed per username → 429; what the caller typed is clipped in the audit row (M9)."""
+    mgr = _mgr(store)
+    _set_cc_login(store, mgr)
+    long_user = "x" * 500 + store.tag
+    r = requests.post(f"{CC}/login", json={"username": long_user, "password": "nope"},
+                      headers={"X-Request-ID": "r" * 500}, timeout=5)
+    assert r.status_code == 401, r.text
+    user = store.cc_login[0]
+    codes = [requests.post(f"{CC}/login", json={"username": user, "password": "nope"}, timeout=5).status_code for _ in range(6)]
+    assert codes[:5] == [401] * 5 and codes[5] == 429, codes
+    r = requests.post(f"{CC}/login", json={"username": user, "password": store.cc_login[1]}, timeout=5)
+    assert r.status_code == 429 and r.json()["code"] == "too_many_attempts" and int(r.headers["Retry-After"]) > 0, r.text
+    # The manager's own login isn't touched by it.
+    assert _mgr(store).get(f"{STORE_V1}/me/staff", timeout=5).status_code == 200
+    def clipped():
+        rows = store.admin.get(f"{ADMIN_V1}/audit?limit=200", timeout=5).json()["entries"]
+        return [e for e in rows if e["action"] == "callcenter.login.failed"
+                and str(((e.get("detail") or {}).get("params") or {}).get("username", "")).startswith("xxxx")]
+
+    mine = wait_until(clipped, timeout=5)
+    assert mine, "no audit row for the failed login"
+    for e in mine:
+        assert len(e["detail"]["params"]["username"]) <= 64 and len(e.get("request_id") or "") <= 64, e
+
+
 def test_idle_lock_minutes_is_a_store_setting(store) -> None:
-    mgr = store.manager_session()
+    mgr = _mgr(store)
     hdr, _ = _login(store)
     r = mgr.put(f"{STORE_V1}/me/terminal/settings", json={"callcenter_idle_lock_minutes": 7}, timeout=5)
     assert r.status_code == 200 and r.json()["callcenter_idle_lock_minutes"] == 7, r.text
@@ -243,7 +366,7 @@ def test_device_token_opens_nothing_else(store) -> None:
 
 
 def test_callcenter_role_pin_rules_and_the_pis_snapshot(store) -> None:
-    mgr = store.manager_session()
+    mgr = _mgr(store)
     for bad in ("12", "123", "12345", "12a4"):
         r = mgr.post(f"{STORE_V1}/me/staff", json={"first_name": "Cara", "role": "callcenter", "pin": bad}, timeout=5)
         assert r.status_code == 400 and r.json()["code"] == "bad_pin", (bad, r.text)
@@ -276,7 +399,7 @@ def test_callcenter_role_pin_rules_and_the_pis_snapshot(store) -> None:
 
 
 def test_pin_session(store) -> None:
-    mgr = store.manager_session()
+    mgr = _mgr(store)
     agent = _person(mgr, "callcenter", "4321")
     _person(mgr, "cashier", "1111", first="Sam")
     _person(mgr, "manager", "2222", first="Kay")
@@ -333,36 +456,63 @@ def test_pin_session(store) -> None:
     assert r.status_code == 401 and r.json()["code"] == "wrong_pin", r.text
 
 
-def test_wrong_pins_lock_the_pad_then_revoke_the_device(store) -> None:
-    mgr = store.manager_session()
+def test_wrong_pins_lock_the_pad(store) -> None:
+    mgr = _mgr(store)
     _person(mgr, "callcenter", "4321")
     hdr, _ = _login(store)
+    # Four wrong, then her own PIN: in. The four stay: one more wrong locks the pad.
     for _ in range(4):
         assert _pin(hdr, "0000").status_code == 401
-    assert _pin(hdr, "0000").status_code == 401  # the 5th: the pad locks after it
+    assert _pin(hdr, "4321").status_code == 200
+    assert _pin(hdr, "0000").status_code == 401  # the 5th counted wrong one: the pad locks after it
     r = _pin(hdr, "4321")  # even the right PIN waits
     assert r.status_code == 429 and r.json()["code"] == "too_many_attempts", r.text
     assert 1 <= int(r.headers["Retry-After"]) <= 30
 
     # Another browser of the store isn't locked by it.
-    hdr2 = {"Authorization": "Bearer " + requests.post(f"{CC}/login", json={
-        "username": store.cc_login[0], "password": store.cc_login[1]}, timeout=5).json()["device_token"]}
+    hdr2, _ = _login(store, "Desk 2")
     assert _pin(hdr2, "4321").status_code == 200
 
     # The manager revokes the locked browser: its token is gone.
     devs = mgr.get(f"{STORE_V1}/me/callcenter/devices", timeout=5).json()
-    locked = next(d for d in devs if "staff_id" not in d)
+    locked = next(d for d in devs if d["name"] == "Desk 1")
     assert mgr.delete(f"{STORE_V1}/me/callcenter/devices/{locked['id']}", timeout=5).status_code == 204
     assert mgr.delete(f"{STORE_V1}/me/callcenter/devices/{locked['id']}", timeout=5).status_code == 404
     r = requests.get(f"{CC}/me", headers=hdr, timeout=5)
+    assert r.status_code == 401 and r.json()["code"] == "device_required", r.text
+    r = _pin(hdr, "4321")
     assert r.status_code == 401 and r.json()["code"] == "device_required", r.text
     listed = {d["id"]: d for d in mgr.get(f"{STORE_V1}/me/callcenter/devices", timeout=5).json()}
     assert listed[locked["id"]].get("revoked_at")
 
 
+def test_parallel_pin_guesses_cannot_outrun_the_lock(store) -> None:
+    """Security review M1: the attempt is counted before the PIN is checked, in
+    one statement. 120 guesses at once (the right PIN among them, late in the
+    list): at most 5 are checked, the rest answer 429, and no session starts
+    unless the right PIN was among those 5."""
+    from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+
+    mgr = _mgr(store)
+    _person(mgr, "callcenter", "4321")
+    hdr, _ = _login(store)
+    pins = [f"{n:04d}" for n in range(5000, 5119)] + ["4321"]
+    with ThreadPoolExecutor(max_workers=40) as pool:
+        codes = list(pool.map(lambda p: _pin(hdr, p).status_code, pins))
+    checked = [c for c in codes if c in (200, 401)]
+    assert len(checked) <= 5, (len(checked), sorted(set(codes)))
+    assert set(codes) <= {200, 401, 429}, sorted(set(codes))
+    assert codes.count(429) >= len(pins) - 5
+    if 200 not in codes:
+        assert requests.get(f"{CC}/session", headers=hdr, timeout=5).json()["staff"] is None
+    # The pad is locked now: the right PIN waits too.
+    r = _pin(hdr, "4321")
+    assert r.status_code == 429 and int(r.headers["Retry-After"]) >= 1, r.text
+
+
 def test_another_stores_manager_cannot_touch_the_device(store, make_store) -> None:
     hdr, body = _login(store)
-    other = make_store().manager_session()
+    other = _mgr(make_store())
     assert other.get(f"{STORE_V1}/me/callcenter/devices", timeout=5).json() == []
     assert other.delete(f"{STORE_V1}/me/callcenter/devices/{body['device']['id']}", timeout=5).status_code == 404
     assert requests.get(f"{CC}/me", headers=hdr, timeout=5).status_code == 200
@@ -503,6 +653,20 @@ def test_relay_refuses_what_the_call_center_may_not_carry(store) -> None:
         assert r.status_code == 400 and r.json()["code"] == "idempotency_key_required", r.text
         r = requests.post(f"{CC}/pi/quote", headers=hdr, data="not json", timeout=10)
         assert r.status_code == 400, r.text
+        # The guard fails closed (M2): a body it can't read (a field of the wrong JSON type) never reaches the Pi.
+        for path, raw in (("orders/o1/payments", '{"tender":"comp","client_key":7}'), ("orders/o1/payments", '{"tender":5}'),
+                          ("orders", '{"client_key":"k-12345678","type":"pickup","payments":"x"}'),
+                          ("orders", '{"client_key":"k-12345678","type":"pickup","cart":{"lines":"x"}}'),
+                          ("orders", '{"client_key":"k-12345678","type":"pickup","payments":[{"tender":"manual_card","refund":"yes"}]}'),
+                          ("orders/o1/void", '"reason"'), ("orders/o1/void", '[1]'), ("journal", '[1,2]')):
+            r = requests.post(f"{CC}/pi/{path}", headers={**hdr, "Content-Type": "application/json"}, data=raw, timeout=10)
+            assert r.status_code == 400 and r.json()["code"] == "bad_request", (path, raw, r.status_code, r.text)
+        # Keys as the Pi's decoder reads them: any case, the last one wins.
+        for path, raw, what in (("orders/o1/payments", '{"Tender":"comp"}', "comp"),
+                                ("orders/o1/payments", '{"tender":"manual_card","tender":"cash"}', "tender"),
+                                ("orders/o1/void", '{"reason":"x","Manager_Pin":"1"}', "manager")):
+            r = requests.post(f"{CC}/pi/{path}", headers={**hdr, "Content-Type": "application/json"}, data=raw, timeout=10)
+            assert r.status_code == 403 and r.json()["what"] == what, (path, raw, r.text)
         assert pi.seen == [], "a refused call reached the Pi"
 
         # What is allowed: a typed card, a coupon code, lines an order already holds on a change, a quote of them.
@@ -530,6 +694,7 @@ def test_store_offline(store) -> None:
     """No Pi stream, or a reply that isn't a relay answer (an older Pi): 503
     store_offline. A Pi that is busy: 503 store_busy."""
     hdr, _, _ = _agent(store)
+    _pi_offline(hdr)
     r = requests.get(f"{CC}/pi/pickups", headers=hdr, timeout=10)
     assert r.status_code == 503 and r.json()["code"] == "store_offline", r.text
     r = requests.post(f"{CC}/pi/orders", headers=hdr, json={"client_key": "cc-0003-abcd", "type": "pickup", "cart": {"lines": []}}, timeout=10)
@@ -593,10 +758,13 @@ def test_store_closed(store) -> None:
 
 
 def test_events_relay_the_pis_terminal_events(store, make_store) -> None:
-    hdr, _ = _login(store)  # no agent needed: a locked screen keeps its stream
-    other_hdr, _ = _login(make_store())
-    ev, other = CCEvents(hdr), CCEvents(other_hdr)
+    hdr, _, _ = _agent(store)
+    other_hdr, _, _ = _agent(make_store())
+    locked_hdr, _ = _login(store, "Desk 2")  # signed in with the login, no agent on it
+    _pi_offline(hdr)
+    ev, other, locked = CCEvents(hdr), CCEvents(other_hdr), CCEvents(locked_hdr)
     try:
+        assert locked.wait("hello") is not None
         assert ev.wait("hello") == {"pi_online": False, "open": True, "closed_reason": ""}
         assert other.wait("hello") is not None
         with FakePi(store) as pi:
@@ -611,16 +779,33 @@ def test_events_relay_the_pis_terminal_events(store, make_store) -> None:
             assert ev.wait("order.updated") == {"id": "o1"}
         # The Pi left: after the reconnect grace the app hears it.
         assert ev.wait("store", lambda d: not d["pi_online"], timeout=20) is not None
-        # Another store's browser heard none of it.
+        # Another store's browser heard none of it. Nor did the locked one (M6: the Pi's events need an
+        # agent session), which still hears main's own store events.
         assert other.wait("terminal.order.placed", timeout=1) is None
+        seen = []
+        while not locked.frames.empty():
+            seen.append(locked.frames.get_nowait()[0])
+        assert set(seen) <= {"store"} and "store" in seen, seen
+        # Locking a signed-in browser stops the Pi's events for it at once; the PIN brings them back.
+        assert requests.delete(f"{CC}/session", headers=hdr, timeout=5).status_code == 204
+        assert ev.wait("session.ended") == {"reason": "locked"}
+        with FakePi(store) as pi:
+            assert ev.wait("store", lambda d: d["pi_online"]) is not None
+            pi.report([{"event": "terminal.order.paid", "data": {"n": 1}}])
+            assert ev.wait("terminal.order.paid", timeout=1.5) is None
+            assert _pin(hdr, "4321").status_code == 200
+            assert wait_until(lambda: (pi.report([{"event": "terminal.order.paid", "data": {"n": 2}}]),
+                                       ev.wait("terminal.order.paid", timeout=1))[1] is not None, timeout=10)
     finally:
         ev.close()
         other.close()
+        locked.close()
 
 
 def test_revoking_a_device_ends_its_stream(store) -> None:
+    mgr = _mgr(store)
+    _set_cc_login(store, mgr)
     hdr, body = _login(store)
-    mgr = store.manager_session()
     ev = CCEvents(hdr)
     try:
         assert ev.wait("hello") is not None
@@ -635,7 +820,7 @@ def test_revoking_a_device_ends_its_stream(store) -> None:
 
 
 def test_report_per_agent_per_day(store) -> None:
-    mgr = store.manager_session()
+    mgr = _mgr(store)
     cara = _person(mgr, "callcenter", "4321")
     dee = _person(mgr, "callcenter", "5432", first="Dee", last="")
     cashier = _person(mgr, "cashier", "11", first="Sam")

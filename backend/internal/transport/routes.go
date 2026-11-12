@@ -520,7 +520,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", storePrefix+"/me/hours-exceptions/:id", "store-session", "Remove a date exception", statusH.MeDeleteException, storeSession),
 		// The call center's remote terminal (CALLCENTER-PLAN.md, contract §2.5zh).
 		// Its web app's server calls these with the device token (Bearer qccd_…).
-		def("POST", callcenterPrefix+"/login", "none", "The store's login opens the call-center app on a browser {username, password, device_name?} -> {device_token (long-lived, revocable in Store › Staff), device, store} | 401 invalid_credentials | 429", ccH.Login),
+		def("POST", callcenterPrefix+"/login", "none", "The call center's own login (Store › Staff sets it; never the store manager's) opens the app on a browser {username, password, device_name?} -> {device_token (long-lived, revocable in Store › Staff), device, store} | 401 invalid_credentials | 429", ccH.Login),
 		def("POST", callcenterPrefix+"/logout", "callcenter-device", "Forget this browser: its device token is revoked", ccH.Logout),
 		def("GET", callcenterPrefix+"/me", "callcenter-device", "The store for the call center: {store, open, closed_reason, next_open_at, hours, pi {online}, settings {idle_lock_minutes}, square|null, device, session|null}", ccH.Me),
 		def("POST", callcenterPrefix+"/session", "callcenter-device", "An agent signs in with their 4-digit PIN {pin} (role callcenter only) -> {staff, role, limits, settings, expires_at} | 400 bad_pin | 401 wrong_pin | 403 wrong_role | 429 too_many_attempts", ccH.SessionStart),
@@ -533,6 +533,9 @@ func routeTable(d RouterDeps) []routeDef {
 		def("PUT", callcenterPrefix+"/pi/*", "callcenter-session", "Relay (see GET)", ccH.Relay),
 		def("PATCH", callcenterPrefix+"/pi/*", "callcenter-session", "Relay (see GET)", ccH.Relay),
 		def("DELETE", callcenterPrefix+"/pi/*", "callcenter-session", "Relay (see GET)", ccH.Relay),
+		def("GET", storePrefix+"/me/callcenter/login", "store-session", "The call center's own shared login {username, set, updated_at} (never the password)", ccH.MeLogin, storeSession),
+		def("PUT", storePrefix+"/me/callcenter/login", "store-session", "Set the call center's login {username, password (>= 10), keep_devices?}: valid only at /callcenter/v1/login, never the store's own login; signs every call-center browser out unless keep_devices -> {username, set, updated_at, devices_revoked} | 400 bad_username / bad_password / same_as_manager | 409 username_taken", ccH.MeSetLogin, storeSession),
+		def("DELETE", storePrefix+"/me/callcenter/login", "store-session", "Remove the call center's login: every call-center browser signed out", ccH.MeDeleteLogin, storeSession),
 		def("GET", storePrefix+"/me/callcenter/devices", "store-session", "The call center's browsers (device tokens): [{id, name, created_at, last_seen_at, staff_id?, staff_name?, revoked_at?}]", ccH.MeDevices, storeSession),
 		def("DELETE", storePrefix+"/me/callcenter/devices/:id", "store-session", "Revoke a call-center browser", ccH.MeRevokeDevice, storeSession),
 		def("GET", storePrefix+"/me/reports/callcenter", "store-session", "Orders + sales per call-center agent per store-local day ?from=&to= (YYYY-MM-DD, default today, <= 92 days) -> {from, to, timezone, rows, totals}", ccH.MeReport, storeSession),

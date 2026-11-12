@@ -149,7 +149,10 @@ func Guard(method, path string, body []byte) *Refusal {
 	}
 	var b guardBody
 	if err := json.Unmarshal(body, &b); err != nil {
-		return nil // not an object the guards read: the Pi answers 400
+		// Fail closed: a body the guards can't read (not an object, or a
+		// field of the wrong JSON type: {"tender": "comp", "client_key": 7})
+		// never reaches the Pi.
+		return &Refusal{Status: http.StatusBadRequest, Code: "bad_request", Error: "The body isn't what this call takes."}
 	}
 	if present(b.ManagerPin) || present(b.Approvals) {
 		return refuse("manager", "The call center can't use a manager's PIN or approval.")

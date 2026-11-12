@@ -6,7 +6,9 @@
     storeApi,
     timeAgo,
     TERMINAL_DEFAULTS,
+    ApiError,
     type CallcenterDevice,
+    type CallcenterLogin,
     type CallcenterReport,
     type TerminalSettings
   } from '$lib/api';
@@ -37,6 +39,80 @@
 
   const live = $derived(devices?.filter((d) => !d.revoked_at) ?? []);
 
+  // The call center's own login: a username + password only the call-center
+  // app takes (never the store's own login, which opens these pages).
+  let login = $state<CallcenterLogin | null>(null);
+  let lUser = $state('');
+  let lPass = $state('');
+  let lErr = $state('');
+  let lSaving = $state(false);
+
+  function loginText(x: unknown): string {
+    if (x instanceof ApiError) {
+      switch (x.code) {
+        case 'bad_username':
+          return 'A username is 3 to 40 letters, digits, dots, dashes or underscores.';
+        case 'bad_password':
+          return 'A password is at least 10 characters.';
+        case 'same_as_manager':
+          return 'Use a different username and password from the store’s own login: this one is for the call center only.';
+        case 'username_taken':
+          return 'That username is taken. Pick another.';
+      }
+    }
+    return errText(x);
+  }
+
+  async function saveLogin(e: SubmitEvent) {
+    e.preventDefault();
+    lErr = '';
+    if (lUser.trim().length < 3) return (lErr = 'A username is 3 to 40 letters, digits, dots, dashes or underscores.');
+    if (lPass.length < 10) return (lErr = 'A password is at least 10 characters.');
+    if (login?.set && live.length) {
+      const ok = await confirmDialog({
+        title: 'Change the call-center login?',
+        body: `The ${live.length === 1 ? 'computer' : `${live.length} computers`} signed in now ${live.length === 1 ? 'is' : 'are'} signed out at once and need the new login.`,
+        confirmLabel: 'Change login',
+        danger: true
+      });
+      if (!ok) return;
+    }
+    lSaving = true;
+    try {
+      login = await storeApi<CallcenterLogin>('/me/callcenter/login', {
+        method: 'PUT',
+        body: JSON.stringify({ username: lUser.trim(), password: lPass })
+      });
+      lUser = login.username;
+      lPass = '';
+      toast.success('Call-center login saved');
+      await loadDevices();
+    } catch (x) {
+      lErr = loginText(x);
+    } finally {
+      lSaving = false;
+    }
+  }
+
+  async function removeLogin() {
+    const ok = await confirmDialog({
+      title: 'Remove the call-center login?',
+      body: 'Nobody can open the call-center app for this store until you set a new login. Every computer signed in now is signed out.',
+      confirmLabel: 'Remove login',
+      danger: true
+    });
+    if (!ok) return;
+    try {
+      await storeApi('/me/callcenter/login', { method: 'DELETE' });
+      login = { username: '', set: false, updated_at: null };
+      lUser = lPass = '';
+      toast.success('Call-center login removed');
+      await loadDevices();
+    } catch (x) {
+      toast.error(errText(x));
+    }
+  }
+
   async function loadDevices() {
     devices = await storeApi<CallcenterDevice[]>('/me/callcenter/devices');
   }
@@ -62,6 +138,8 @@
       const s = await storeApi<TerminalSettings>('/me/terminal/settings');
       idleSaved = s.callcenter_idle_lock_minutes ?? IDLE_DEFAULT;
       idle = String(idleSaved);
+      login = await storeApi<CallcenterLogin>('/me/callcenter/login');
+      lUser = login.username;
       await Promise.all([loadDevices(), loadReport()]);
     } catch (x) {
       err = errText(x);
@@ -115,9 +193,31 @@
   <div class="px-5 pb-5 flex flex-col gap-5" data-testid="callcenter-card">
     {#if err}<p class="field-error !mt-0" role="alert">{err}</p>{/if}
     <p class="help !mt-0">
-      The call center takes phone orders in its own app (callcenter.quiccpos.com). A computer there is opened once with the store’s
-      login; each agent then uses their own 4-digit PIN (add them above with the role Call center).
+      The call center takes phone orders in its own app (callcenter.quiccpos.com). A computer there is opened once with the
+      call-center login below; each agent then uses their own 4-digit PIN (add them above with the role Call center).
     </p>
+
+    <section class="flex flex-col gap-2" aria-labelledby="cc-login-title">
+      <h3 class="sec-title" id="cc-login-title">Call-center login</h3>
+      <form class="flex flex-wrap items-end gap-3" onsubmit={saveLogin} data-testid="callcenter-login">
+        <div>
+          <label class="lbl" for="cc-user">Username</label>
+          <input id="cc-user" class="field" bind:value={lUser} maxlength="40" autocomplete="off" autocapitalize="none" spellcheck="false" />
+        </div>
+        <div>
+          <label class="lbl" for="cc-pass">{login?.set ? 'New password' : 'Password'}</label>
+          <input id="cc-pass" class="field" type="password" bind:value={lPass} maxlength="128" autocomplete="new-password" />
+        </div>
+        <Button type="submit" loading={lSaving}>{login?.set ? 'Change login' : 'Set login'}</Button>
+        {#if login?.set}<Button variant="ghost" onclick={removeLogin}>Remove</Button>{/if}
+        <p class="help !mt-0 basis-full">
+          {#if lErr}<span class="field-error" role="alert">{lErr}</span>
+          {:else if login === null}Loading…
+          {:else if login.set}Set (username <span class="mono">{login.username}</span>). Give it to the call center only: it opens the call-center app and nothing else. Changing it signs every computer out.
+          {:else}Not set: nobody can open the call-center app for this store yet. Never use the store’s own login here.{/if}
+        </p>
+      </form>
+    </section>
 
     <form class="flex flex-wrap items-end gap-3" onsubmit={saveIdle}>
       <div>

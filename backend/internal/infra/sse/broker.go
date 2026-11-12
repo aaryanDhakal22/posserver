@@ -83,6 +83,8 @@ type Broker struct {
 	meters  observability.Meters
 	// onSubscribe hooks run (off the caller's path) whenever a stream opens.
 	onSubscribe []func(scope Scope)
+	// onGone hooks run when a scope's last stream closes.
+	onGone []func(scope Scope)
 	// left is when each scope's last stream closed (Presence: how long its Pi
 	// has been away); started is when this broker began (a scope never seen).
 	left    map[Scope]time.Time
@@ -93,6 +95,11 @@ type Broker struct {
 // stream subscribes to a scope — e.g. the geo worker re-pushes what the
 // (re)connected agent has not acked. Wire before serving.
 func (b *Broker) OnSubscribe(fn func(scope Scope)) { b.onSubscribe = append(b.onSubscribe, fn) }
+
+// OnGone registers a hook run (off the caller's path) when a scope's LAST
+// stream closes: its Pi has no stream on this main any more (it dropped, is
+// reconnecting, or moved to the other blue-green slot).
+func (b *Broker) OnGone(fn func(scope Scope)) { b.onGone = append(b.onGone, fn) }
 
 func New(lg zerolog.Logger, meters observability.Meters) *Broker {
 	return &Broker{
@@ -159,6 +166,9 @@ func (b *Broker) removeLocked(scope Scope, ch chan Frame) {
 		if len(set) == 0 {
 			delete(b.clients, scope)
 			b.left[scope] = time.Now()
+			for _, fn := range b.onGone {
+				safego.Go(context.Background(), "sse.on_gone", func(context.Context) { fn(scope) }) // never under mu
+			}
 		}
 	}
 }

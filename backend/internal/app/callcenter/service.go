@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -86,8 +87,13 @@ type Repo interface {
 	List(ctx context.Context, locationID uuid.UUID) ([]repositories.CallcenterDevice, error)
 	Revoke(ctx context.Context, locationID, id uuid.UUID) (bool, error)
 	Seen(ctx context.Context, id uuid.UUID, session bool) error
-	StartSession(ctx context.Context, id, staffID uuid.UUID) error
-	PinFailed(ctx context.Context, id uuid.UUID, lockUntil *time.Time) (int, error)
+	PinAttempt(ctx context.Context, id uuid.UUID, lockAfter int, first, maxWait, window time.Duration) (n int, ok bool, err error)
+	PinState(ctx context.Context, id uuid.UUID) (live bool, lockedUntil *time.Time, err error)
+	PinSucceeded(ctx context.Context, id, staffID uuid.UUID, unlock bool) (bool, error)
+	LoginByUsername(ctx context.Context, username string) (repositories.CallcenterLogin, error)
+	LoginOf(ctx context.Context, locationID uuid.UUID) (repositories.CallcenterLogin, error)
+	SetLogin(ctx context.Context, tenantID, locationID uuid.UUID, username, passwordHash string, revoke bool) (repositories.CallcenterLogin, []uuid.UUID, error)
+	DeleteLogin(ctx context.Context, locationID uuid.UUID) ([]uuid.UUID, error)
 	EndSession(ctx context.Context, id uuid.UUID) (bool, error)
 	Sessions(ctx context.Context, locationID uuid.UUID) ([]repositories.CallcenterDevice, error)
 	Report(ctx context.Context, locationID uuid.UUID, zone, from, to string) ([]repositories.CallcenterReportRow, error)
@@ -147,6 +153,7 @@ type Service struct {
 	// storePins: wrong PINs per store across its devices (in memory: a
 	// ceiling on top of the per-device counters on the rows).
 	storePins *ratelimit.Window
+	pinMu     map[uuid.UUID]*sync.Mutex // one PIN check per device at a time
 	subs      map[sseBroker.Scope]map[*Subscriber]struct{}
 	wanted    map[sseBroker.Scope]time.Time // when terminal.events.want was last sent
 	menus     map[uuid.UUID]menuCopy        // location → the Pi's last menu answer
@@ -155,7 +162,7 @@ type Service struct {
 func NewService(repo Repo, st Staff, status Status, presence Presence, req Requester, cmd Commander, card WebCard, locs Locations, lg zerolog.Logger) *Service {
 	s := &Service{repo: repo, staff: st, status: status, presence: presence, rpc: req, cmd: cmd, card: card, locs: locs,
 		logger: lg.With().Str("module", "callcenter").Logger(), now: time.Now,
-		seen: map[uuid.UUID]time.Time{}, seenSave: map[uuid.UUID]time.Time{}, storePins: ratelimit.New(storePinMax, storePinWindow),
+		seen: map[uuid.UUID]time.Time{}, seenSave: map[uuid.UUID]time.Time{}, storePins: ratelimit.New(storePinMax, storePinWindow), pinMu: map[uuid.UUID]*sync.Mutex{},
 		menus: map[uuid.UUID]menuCopy{},
 		subs:  map[sseBroker.Scope]map[*Subscriber]struct{}{}, wanted: map[sseBroker.Scope]time.Time{}}
 	if req != nil {
@@ -179,9 +186,6 @@ type Device struct {
 	// StaffID: the agent signed in (nil = locked / never signed in / idle too long).
 	StaffID        *uuid.UUID
 	SessionExpires time.Time
-	// the PIN guard's state on the row
-	pinFails       int
-	pinLockedUntil *time.Time
 }
 
 func (d Device) Scope() sseBroker.Scope {
@@ -242,8 +246,7 @@ func (s *Service) Authenticate(ctx context.Context, token string) (Device, error
 	if err != nil {
 		return Device{}, err
 	}
-	d := Device{ID: row.ID, TenantID: row.TenantID, LocationID: row.LocationID, Name: row.Name, CreatedAt: row.CreatedAt,
-		pinFails: row.PinFails, pinLockedUntil: row.PinLockedUntil}
+	d := Device{ID: row.ID, TenantID: row.TenantID, LocationID: row.LocationID, Name: row.Name, CreatedAt: row.CreatedAt}
 	if row.StaffID != nil {
 		last := time.Time{}
 		if row.SessionSeenAt != nil {
@@ -333,7 +336,115 @@ func (s *Service) forget(id uuid.UUID) {
 	s.mu.Lock()
 	delete(s.seen, id)
 	delete(s.seenSave, id)
+	delete(s.pinMu, id)
 	s.mu.Unlock()
+}
+
+// --- the call center's own login -------------------------------------------------------
+
+var (
+	ErrInvalidCredentials = errors.New("wrong call-center login")
+	ErrBadUsername        = errors.New("the username is 3-40 of a-z, 0-9, dot, dash, underscore, starting with a letter or digit")
+	ErrBadPassword        = errors.New("the password is 10-128 characters")
+	ErrUsernameTaken      = repositories.ErrCallcenterUsernameTaken
+	ErrNoLogin            = errors.New("no call-center login set")
+)
+
+var usernameRE = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{2,39}$`)
+
+// MinPassword is the shortest call-center password.
+const MinPassword = 10
+
+// NormUsername lowercases and trims a call-center username; ok = it is valid.
+func NormUsername(u string) (string, bool) {
+	u = strings.ToLower(strings.TrimSpace(u))
+	return u, usernameRE.MatchString(u)
+}
+
+// dummyHash keeps a login for an unknown username as slow as a known one.
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("no such call-center login"), bcrypt.DefaultCost)
+
+// CheckLogin checks the call center's own shared login (never the store
+// manager's: that one opens Store pages and links a Pi) and returns its store.
+func (s *Service) CheckLogin(ctx context.Context, username, password string) (tenantID, locationID uuid.UUID, err error) {
+	u, ok := NormUsername(username)
+	if !ok || password == "" || len(password) > 128 {
+		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
+		return uuid.Nil, uuid.Nil, ErrInvalidCredentials
+	}
+	l, err := s.repo.LoginByUsername(ctx, u)
+	if errors.Is(err, pgx.ErrNoRows) {
+		_ = bcrypt.CompareHashAndPassword(dummyHash, []byte(password))
+		return uuid.Nil, uuid.Nil, ErrInvalidCredentials
+	}
+	if err != nil {
+		return uuid.Nil, uuid.Nil, err
+	}
+	if bcrypt.CompareHashAndPassword([]byte(l.PasswordHash), []byte(password)) != nil {
+		return uuid.Nil, uuid.Nil, ErrInvalidCredentials
+	}
+	return l.TenantID, l.LocationID, nil
+}
+
+// LoginView is the store's call-center login as Store › Staff shows it (never
+// the password).
+type LoginView struct {
+	Username  string     `json:"username"`
+	Set       bool       `json:"set"`
+	UpdatedAt *time.Time `json:"updated_at"`
+}
+
+// LoginInfo is the store's call-center login (Set false: none yet).
+func (s *Service) LoginInfo(ctx context.Context, locationID uuid.UUID) (LoginView, error) {
+	l, err := s.repo.LoginOf(ctx, locationID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return LoginView{}, nil
+	}
+	if err != nil {
+		return LoginView{}, err
+	}
+	return LoginView{Username: l.Username, Set: true, UpdatedAt: &l.UpdatedAt}, nil
+}
+
+// SetLogin sets the store's call-center login. Unless keepDevices, every
+// browser signed in with the old one is signed out (their streams end). It
+// returns how many were.
+func (s *Service) SetLogin(ctx context.Context, tenantID, locationID uuid.UUID, username, password string, keepDevices bool) (LoginView, int, error) {
+	u, ok := NormUsername(username)
+	if !ok {
+		return LoginView{}, 0, ErrBadUsername
+	}
+	if len(password) < MinPassword || len(password) > 128 {
+		return LoginView{}, 0, ErrBadPassword
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return LoginView{}, 0, err
+	}
+	l, ids, err := s.repo.SetLogin(ctx, tenantID, locationID, u, string(hash), !keepDevices)
+	if err != nil {
+		return LoginView{}, 0, err
+	}
+	s.revoked(sseBroker.Scope{TenantID: tenantID, LocationID: locationID}, ids)
+	return LoginView{Username: l.Username, Set: true, UpdatedAt: &l.UpdatedAt}, len(ids), nil
+}
+
+// RemoveLogin removes the store's call-center login and signs every browser out.
+func (s *Service) RemoveLogin(ctx context.Context, tenantID, locationID uuid.UUID) (int, error) {
+	ids, err := s.repo.DeleteLogin(ctx, locationID)
+	if err != nil {
+		return 0, err
+	}
+	s.revoked(sseBroker.Scope{TenantID: tenantID, LocationID: locationID}, ids)
+	return len(ids), nil
+}
+
+// revoked forgets devices the store just ended and closes their streams.
+func (s *Service) revoked(scope sseBroker.Scope, ids []uuid.UUID) {
+	for _, id := range ids {
+		s.forget(id)
+		s.publishDevice(scope, id, Event{Name: "session.ended", Data: json.RawMessage(`{"reason":"device_revoked"}`), Close: true})
+	}
 }
 
 // --- the agent's session ------------------------------------------------------
@@ -360,21 +471,27 @@ func viewOf(p staff.Person) StaffView {
 	return StaffView{ID: p.ID, FirstName: p.FirstName, LastName: p.LastName, Name: DisplayName(p), Role: p.Role}
 }
 
-// The PIN guard (kept on the device row: it survives a restart and the
-// blue-green swap). After 5 wrong PINs in a row the device waits 30 s,
-// doubling to 5 min; after 20 in a row the device token is revoked (the store
-// login is needed again); and a store's devices together get 30 wrong PINs per
-// 15 min before every PIN pad of the store waits.
+// The PIN guard (security review M1). Every attempt is counted on the device
+// row BEFORE the PIN is checked, in one UPDATE that also refuses a locked or
+// revoked device, so parallel guesses can't outrun the lock; one check runs per
+// device at a time in this process. From the 5th attempt in a window the pad
+// locks at once (30 s, doubling to 5 min). A right PIN takes back only its own
+// attempt: the wrong ones before it stay until 15 min pass without an attempt
+// (so "four wrong, then my own PIN" doesn't buy four more guesses). The 20th
+// counted attempt in a window that is wrong revokes the device. A store's
+// devices don't lock each other: many wrong PINs across a store are logged
+// (an alert reads the line), never a store-wide lock.
 const (
 	pinMaxFails    = 5
 	pinFirst       = 30 * time.Second
 	pinMaxWait     = 5 * time.Minute
+	pinWindow      = 15 * time.Minute
 	pinRevokeAfter = 20
 	storePinMax    = 30
 	storePinWindow = 15 * time.Minute
 )
 
-// pinWait is the lock after the n-th wrong PIN in a row (0 = none yet).
+// pinWait is the lock set by the n-th counted attempt in a window (0 = none).
 func pinWait(n int) time.Duration {
 	if n < pinMaxFails {
 		return 0
@@ -389,31 +506,24 @@ func pinWait(n int) time.Duration {
 	return w
 }
 
-func (s *Service) pinBlocked(d Device) time.Duration {
-	if d.pinLockedUntil != nil {
-		if left := d.pinLockedUntil.Sub(s.now()); left > 0 {
-			return left
-		}
+// pinLock is the device's "one PIN check at a time" lock.
+func (s *Service) pinLock(id uuid.UUID) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.pinMu[id]
+	if m == nil {
+		m = &sync.Mutex{}
+		s.pinMu[id] = m
 	}
-	if !s.storePins.Allow(d.LocationID.String()) {
-		return s.storePins.RetryAfter(d.LocationID.String())
-	}
-	return 0
+	return m
 }
 
-// pinFailed counts a wrong PIN; revoked = the device was guessing (20 in a
-// row): its token is gone.
-func (s *Service) pinFailed(ctx context.Context, d Device) (revoked bool) {
+// pinFailed handles a counted attempt that was wrong; revoked = the device
+// was guessing (the 20th in a window): its token is gone.
+func (s *Service) pinFailed(ctx context.Context, d Device, n int) (revoked bool) {
 	s.storePins.Add(d.LocationID.String())
-	var until *time.Time
-	if w := pinWait(d.pinFails + 1); w > 0 {
-		u := s.now().Add(w)
-		until = &u
-	}
-	n, err := s.repo.PinFailed(context.WithoutCancel(ctx), d.ID, until)
-	if err != nil {
-		s.logger.Warn().Err(err).Msg("callcenter: wrong PIN not counted")
-		return false
+	if !s.storePins.Allow(d.LocationID.String()) {
+		s.logger.Warn().Str("location_id", d.LocationID.String()).Msg("callcenter: many wrong PINs across the store")
 	}
 	if n >= pinRevokeAfter {
 		// The message is matched by an alert rule: keep the words.
@@ -422,10 +532,10 @@ func (s *Service) pinFailed(ctx context.Context, d Device) (revoked bool) {
 		_, _ = s.Revoke(context.WithoutCancel(ctx), d.TenantID, d.LocationID, d.ID)
 		return true
 	}
-	if until != nil {
+	if w := pinWait(n); w > 0 {
 		// The message is matched by an alert rule: keep the words. Never the PIN.
 		s.logger.Warn().Str("device_id", d.ID.String()).Str("location_id", d.LocationID.String()).Int("wrong_pins", n).
-			Time("locked_until", *until).Msg("callcenter: PIN lockout")
+			Dur("locked_for", w).Msg("callcenter: PIN lockout")
 	}
 	return false
 }
@@ -436,15 +546,36 @@ func validPin4(pin string) bool { return len(pin) == 4 && staff.ValidPin(pin) }
 // call-center agent in on the device. ErrBadPin (not 4 digits), ErrWrongPin,
 // ErrWrongRole (a cashier's / manager's / driver's PIN), Throttled.
 func (s *Service) SignIn(ctx context.Context, d Device, pin string) (staff.Person, time.Time, error) {
-	if left := s.pinBlocked(d); left > 0 {
-		return staff.Person{}, time.Time{}, Throttled{RetryAfter: left}
-	}
+	none := staff.Person{}
 	if !validPin4(pin) {
-		return staff.Person{}, time.Time{}, ErrBadPin
+		return none, time.Time{}, ErrBadPin // not a guess: nothing counted
+	}
+	mu := s.pinLock(d.ID)
+	mu.Lock()
+	defer mu.Unlock()
+	// Count the attempt first (and learn in the same statement whether the
+	// pad is locked or the device revoked).
+	n, ok, err := s.repo.PinAttempt(ctx, d.ID, pinMaxFails, pinFirst, pinMaxWait, pinWindow)
+	if err != nil {
+		return none, time.Time{}, err
+	}
+	if !ok {
+		live, until, err := s.repo.PinState(ctx, d.ID)
+		if err != nil {
+			return none, time.Time{}, err
+		}
+		if !live {
+			return none, time.Time{}, ErrDeviceRequired
+		}
+		left := time.Second
+		if until != nil && until.Sub(s.now()) > left {
+			left = until.Sub(s.now())
+		}
+		return none, time.Time{}, Throttled{RetryAfter: left}
 	}
 	people, err := s.staff.People(ctx, d.LocationID)
 	if err != nil {
-		return staff.Person{}, time.Time{}, err
+		return none, time.Time{}, err
 	}
 	var hit *staff.Person
 	for i := range people {
@@ -462,18 +593,25 @@ func (s *Service) SignIn(ctx context.Context, d Device, pin string) (staff.Perso
 		if hit != nil {
 			err = ErrWrongRole
 		}
-		if s.pinFailed(ctx, d) {
-			return staff.Person{}, time.Time{}, ErrDeviceRevoked
+		if s.pinFailed(ctx, d, n) {
+			return none, time.Time{}, ErrDeviceRevoked
 		}
-		return staff.Person{}, time.Time{}, err
+		return none, time.Time{}, err
 	}
-	if err := s.repo.StartSession(ctx, d.ID, hit.ID); err != nil {
-		return staff.Person{}, time.Time{}, err
+	// The same attempt succeeded: take it back, lift the lock it set (if it
+	// did), start the session. A device revoked meanwhile gets no session.
+	in, err := s.repo.PinSucceeded(ctx, d.ID, hit.ID, n >= pinMaxFails)
+	if err != nil {
+		return none, time.Time{}, err
+	}
+	if !in {
+		return none, time.Time{}, ErrDeviceRequired
 	}
 	now := s.now()
 	s.mu.Lock()
 	s.seen[d.ID], s.seenSave[d.ID] = now, now
 	s.mu.Unlock()
+	s.publishDevice(d.Scope(), d.ID, Event{Name: "session.started"}) // this browser's stream may carry the Pi's events now
 	return *hit, now.Add(s.idle(ctx, d.LocationID)), nil
 }
 
@@ -587,6 +725,31 @@ const (
 func (s *Service) PiOnline(scope sseBroker.Scope) bool {
 	n, away := s.presence.Presence(scope)
 	return n > 0 || (!away.IsZero() && s.now().Sub(away) < reconnectGrace)
+}
+
+// streamLostGrace: after the Pi's last stream closes, relayed calls in flight
+// get this long for their answer (the Pi posts it over plain HTTP, and may be
+// back on a new stream in a moment) before they are failed.
+const streamLostGrace = 2 * time.Second
+
+// PiGone is the broker's "last stream closed" hook: when the stream hasn't
+// come back after a short grace, the relayed calls still waiting are failed
+// at once (503 store_offline, outcome unknown: the keys make the retry safe)
+// instead of waiting out their 12 s / 35 s.
+func (s *Service) PiGone(scope sseBroker.Scope) {
+	time.Sleep(streamLostGrace)
+	if n, _ := s.presence.Presence(scope); n > 0 {
+		return
+	}
+	type failer interface {
+		FailType(scope sseBroker.Scope, msgType string) int
+	}
+	if f, ok := s.rpc.(failer); ok {
+		if n := f.FailType(scope, MsgRelay); n > 0 {
+			s.logger.Warn().Str("location_id", scope.LocationID.String()).Int("calls", n).
+				Msg("callcenter relay: the Pi's stream is gone, calls in flight failed (outcome unknown)")
+		}
+	}
 }
 
 // waitStream waits (briefly) for a reconnecting Pi's stream; false = offline.
@@ -735,7 +898,7 @@ func (s *Service) relay(ctx context.Context, d Device, staffID uuid.UUID, method
 	}
 	env, err := s.rpc.Request(ctx, d.Scope(), MsgRelay, req, timeout)
 	if err != nil {
-		if errors.Is(err, rpc.ErrAgentOffline) || errors.Is(err, rpc.ErrTimeout) {
+		if errors.Is(err, rpc.ErrAgentOffline) || errors.Is(err, rpc.ErrTimeout) || errors.Is(err, rpc.ErrStreamLost) {
 			s.logger.Warn().Err(err).Str("method", method).Str("path", path).Str("location_id", d.LocationID.String()).Msg("callcenter relay: no answer from the Pi")
 			return RelayReply{}, ErrOffline
 		}
@@ -751,8 +914,13 @@ func (s *Service) relay(ctx context.Context, d Device, staffID uuid.UUID, method
 		var b struct {
 			Code string `json:"code"`
 		}
-		if json.Unmarshal(rep.Body, &b) == nil && b.Code == "busy" {
-			return RelayReply{}, ErrBusy
+		if json.Unmarshal(rep.Body, &b) == nil {
+			switch b.Code {
+			case "busy": // no slot within the Pi's wait: nothing was done
+				return RelayReply{}, ErrBusy
+			case "timeout": // the Pi's handler ran past its deadline: outcome unknown
+				return RelayReply{}, ErrOffline
+			}
 		}
 	}
 	return rep, nil

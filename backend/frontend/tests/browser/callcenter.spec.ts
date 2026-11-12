@@ -17,8 +17,11 @@ async function cc(method: string, path: string, token = '', body?: unknown) {
   return { status: r.status, data: r.status === 204 ? null : await r.json() };
 }
 
+const ccUser = (store: TestStore) => `cc-${store.tag}`;
+const CC_PASS = 'a-Long-enough-pw';
+
 async function login(store: TestStore, name: string): Promise<string> {
-  const r = await cc('POST', '/login', '', { username: store.username, password: store.password, device_name: name });
+  const r = await cc('POST', '/login', '', { username: ccUser(store), password: CC_PASS, device_name: name });
   expect(r.status).toBe(200);
   return r.data.device_token as string;
 }
@@ -76,7 +79,28 @@ test('call center: an agent with a 4-digit PIN, the idle lock, computers signed 
   const saved = (await store.me('GET', '/terminal/settings', undefined, 200)).data as Record<string, any>;
   expect([saved.callcenter_idle_lock_minutes, saved.auto_lock_minutes, saved.cashier_discount_pct]).toEqual([20, 5, 20]);
 
-  // Two computers sign in with the store's login; an agent signs in on one.
+  // The call center's own login: never the store's own, set in words, the password never shown back.
+  const loginForm = card.getByTestId('callcenter-login');
+  await expect(loginForm).toContainText('Not set');
+  expect((await cc('POST', '/login', '', { username: store.username, password: store.password })).status).toBe(401);
+  await loginForm.getByLabel('Username').fill(store.username);
+  await loginForm.getByLabel('Password').fill(CC_PASS);
+  await loginForm.getByRole('button', { name: 'Set login' }).click();
+  await expect(loginForm.getByRole('alert')).toContainText('different username and password from the store’s own login');
+  await loginForm.getByLabel('Username').fill(ccUser(store));
+  await loginForm.getByLabel('Password').fill('short');
+  await loginForm.getByRole('button', { name: 'Set login' }).click();
+  await expect(loginForm.getByRole('alert')).toHaveText('A password is at least 10 characters.');
+  await loginForm.getByLabel('Password').fill(CC_PASS);
+  await loginForm.getByRole('button', { name: 'Set login' }).click();
+  await expect(page.getByText('Call-center login saved')).toBeVisible();
+  await expect(loginForm).toContainText(`Set (username ${ccUser(store)})`);
+  await expect(loginForm.getByLabel('New password')).toHaveValue('');
+  expect((await store.me('GET', '/callcenter/login', undefined, 200)).data).toMatchObject({ username: ccUser(store), set: true });
+  // The store's own login still opens nothing at the call center.
+  expect((await cc('POST', '/login', '', { username: store.username, password: store.password })).status).toBe(401);
+
+  // Two computers sign in with the call-center login; an agent signs in on one.
   const desk1 = await login(store, 'Desk 1');
   const desk2 = await login(store, 'Desk 2');
   expect((await cc('POST', '/session', desk1, { pin: '4321' })).status).toBe(200);
@@ -103,4 +127,12 @@ test('call center: an agent with a 4-digit PIN, the idle lock, computers signed 
   await card.getByLabel('To').fill('2026-11-12');
   await card.getByRole('button', { name: 'Show' }).click();
   await expect(card.getByText('No call-center orders in these days.')).toBeVisible();
+
+  // Changing the login signs the remaining computer out (asked first).
+  await loginForm.getByLabel('New password').fill(CC_PASS + '-2');
+  await loginForm.getByRole('button', { name: 'Change login' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Change login' }).click();
+  await expect(page.getByText('Call-center login saved')).toBeVisible();
+  expect((await cc('GET', '/me', desk2)).status).toBe(401);
+  await shot(page, info, 'login-changed');
 });

@@ -448,6 +448,7 @@ func main() {
 	// and the Pi's terminal events back (terminal.events).
 	callcenterService := callcenterApp.NewService(repositories.NewCallcenterRepository(pool), staffService, storeStatusService,
 		broker, requester, broker, squareService, tenancyService.GetLocation, lgr)
+	broker.OnGone(callcenterService.PiGone) // a relayed call in flight when the Pi's stream drops fails at once
 	requester.RegisterInbound(squarepay.MsgPosFakeCharge, squareService.HandlePosFakeCharge)
 	// Square on the counter terminal (agent contract §2.10r): the reader's
 	// sign-in, a typed card's payment, a refund of either.
