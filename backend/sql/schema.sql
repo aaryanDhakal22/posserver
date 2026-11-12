@@ -286,6 +286,23 @@ CREATE TABLE menu_categories (
 );
 CREATE INDEX idx_menu_categories_menu ON menu_categories(menu_id);
 
+-- 00045_families_coupons: a store's item / mod families (coupons name item families).
+CREATE TABLE menu_families (
+    id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   uuid        NOT NULL,
+    location_id uuid        NOT NULL,
+    kind        text        NOT NULL CHECK (kind IN ('item', 'mod')),
+    name        text        NOT NULL CHECK (length(btrim(name)) BETWEEN 1 AND 60),
+    class       text        NOT NULL DEFAULT '' CHECK (class IN ('', 'regular', 'premium', 'unpriced')),
+    position    integer     NOT NULL DEFAULT 0,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE,
+    CHECK ((kind = 'item' AND class = '') OR (kind = 'mod' AND class <> ''))
+);
+CREATE INDEX idx_menu_families_location ON menu_families (location_id);
+CREATE UNIQUE INDEX idx_menu_families_name ON menu_families (location_id, kind, lower(btrim(name)));
+
 CREATE TABLE menu_items (
     id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id     uuid        NOT NULL,
@@ -307,6 +324,7 @@ CREATE TABLE menu_items (
     sku           text        NOT NULL DEFAULT '',
     out_hold      boolean     NOT NULL DEFAULT false, -- 00028
     no_kitchen_ticket boolean NOT NULL DEFAULT false, -- 00041
+    family_id     uuid        REFERENCES menu_families(id) ON DELETE SET NULL, -- 00045
     FOREIGN KEY (category_id, tenant_id) REFERENCES menu_categories(id, tenant_id) ON DELETE CASCADE,
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id)       ON DELETE CASCADE,
     FOREIGN KEY (printer_id)             REFERENCES printers(id)                   ON DELETE SET NULL,
@@ -345,6 +363,7 @@ CREATE TABLE modifier_options (
     is_default        boolean     NOT NULL DEFAULT false,
     kitchen_name      text        NOT NULL DEFAULT '',
     out_hold          boolean     NOT NULL DEFAULT false, -- 00028
+    family_id         uuid        REFERENCES menu_families(id) ON DELETE SET NULL, -- 00045
     FOREIGN KEY (group_id, tenant_id) REFERENCES modifier_groups(id, tenant_id) ON DELETE CASCADE,
     UNIQUE (id, tenant_id)
 );
@@ -797,7 +816,7 @@ CREATE TABLE deals (
     id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id     uuid        NOT NULL,
     location_id   uuid        NOT NULL,
-    kind          text        NOT NULL CHECK (kind IN ('bundle', 'mix', 'nth', 'code', 'free_item')),
+    kind          text        NOT NULL CHECK (kind IN ('bundle', 'mix', 'nth', 'code', 'free_item', 'coupon')), -- coupon: 00045
     name          text        NOT NULL,
     description   text        NOT NULL DEFAULT '',
     active        boolean     NOT NULL DEFAULT true,
@@ -1285,3 +1304,7 @@ CREATE TABLE money_flags (
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE RESTRICT
 );
 CREATE INDEX idx_money_flags_location ON money_flags (location_id, at DESC);
+
+-- 00045: families on items + options (the tables above carry family_id).
+CREATE INDEX idx_menu_items_family ON menu_items (family_id) WHERE family_id IS NOT NULL;
+CREATE INDEX idx_modifier_options_family ON modifier_options (family_id) WHERE family_id IS NOT NULL;
