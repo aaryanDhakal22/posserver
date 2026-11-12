@@ -144,6 +144,10 @@ def test_terminal_app_settings(store, mgr) -> None:
     # The Pi's terminal config carries them as saved.
     cfg = _config(store.key)
     assert {k: cfg["settings"][k] for k in mine} == {**mine}
+    # Every font the terminal ships is a choice (contract §2.5zb).
+    for font in ("barlow", "barlow_condensed", "barlow_semi_condensed", "system", "fira_sans_condensed",
+                 "ibm_plex_sans_condensed", "atkinson_hyperlegible"):
+        assert _ok(mgr.put(SETTINGS, json={"button_font": font}, timeout=5))["button_font"] == font
 
 
 def test_terminal_config_for_the_pi(store, mgr) -> None:

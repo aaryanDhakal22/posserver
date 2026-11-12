@@ -43,12 +43,14 @@ export interface Context {
   types: { pickup: boolean; delivery: boolean };
   /** This channel may sell open-price items at the line's own price (the counter). */
   open_prices?: boolean;
+  /** A line's price_cents may also replace a set price (an item price change; only the Pi's counter sets it). */
+  price_overrides?: boolean;
 }
 /** portion: whole ('' too) | first | second (older carts: left = first, right = second); mode: add ('' too) | only | no. */
 export interface Pick { group_id: string; option_id: string; portion?: string; mode?: string }
 /** A specialty pizza (a menu item) on half 1 or 2, priced at the line's size. */
 export interface Half { item_id: string; half: number }
-/** price_cents: an open-price item's price (0–MAX_OPEN_PRICE_CENTS); refused on any other item. */
+/** price_cents: an open-price item's price (0–MAX_OPEN_PRICE_CENTS); on any other item a price change, taken only with price_overrides (it replaces the item's price at its size, half and half: the pizza's; options still add). */
 export interface Selection { item_id: string; choice_id?: string; size_id?: string; options?: Pick[] | null; halves?: Half[] | null; price_cents?: number | null }
 export interface Line extends Selection { qty?: number; note?: string; deal_id?: string; picks?: Selection[] | null }
 export interface Cart {
@@ -57,6 +59,8 @@ export interface Cart {
 }
 export interface QuoteLine {
   index: number; name: string; mods: string[]; qty: number; unit_cents: number; total_cents: number; regular_cents: number | null; deal_id: string;
+  /** A price change: the item's own price the line's price_cents replaced. */
+  list_cents?: number;
 }
 export interface Discount { type: string; deal_id: string; label: string; amount_cents: number }
 export interface Issue { code: string; message: string; line: number | null }
@@ -125,6 +129,8 @@ function matches(el: Eligible, u: Unit): boolean {
 
 interface Priced {
   name: string; mods: string[]; base: number; halfUp: number; extras: number; unit: number; bankItem: string; rateItem: string; size: string; issues: Issue[];
+  /** A price change: the price the line's own replaced. */
+  list?: number;
 }
 
 /** An open price's ceiling ($10,000). */
@@ -255,11 +261,16 @@ class Engine {
     }
     if (soldOut) p.issues.push(issueOf('sold_out', `${p.name} is sold out right now.`));
     // An open-price item (the counter's "Advance Payment"): the line carries the cashier's price.
+    // A price change (price_overrides, the Pi's counter): the line's own price replaces the item's, once the pizza is priced.
     const open = p.bankItem !== '' && !!this.ctx.items?.[p.bankItem]?.open_price;
     const own = sel.price_cents;
+    let override = false;
     if (open && !this.ctx.open_prices) p.issues.push(issueOf('open_price', `${p.name} can't be ordered here.`));
     else if (open && (own == null || !Number.isInteger(own) || own < 0 || own > MAX_OPEN_PRICE_CENTS)) p.issues.push(issueOf('open_price', `${p.name}: enter a price.`));
     else if (open) base = own as number;
+    else if (own != null && this.ctx.price_overrides && (!Number.isInteger(own) || own < 0 || own > MAX_OPEN_PRICE_CENTS))
+      p.issues.push(issueOf('open_price', `${p.name}: a price is $0.00 to ${money(MAX_OPEN_PRICE_CENTS)}.`));
+    else if (own != null && this.ctx.price_overrides) override = true;
     else if (own != null) p.issues.push(issueOf('open_price', `${p.name} has a set price.`));
     const groupIds = it.modifier_group_ids ?? [];
     // Half-specialties: a specialty pizza on a half, at the line's size.
@@ -366,6 +377,12 @@ class Engine {
       if (i >= free) p.extras += x;
     });
     if (spec[1] || spec[2] || only[1] || only[2]) p.halfUp = this.halves(p, base, spec, only) - base;
+    if (override) {
+      // The pizza's price (with its halves) becomes the line's own.
+      p.list = base + p.halfUp;
+      base = own as number;
+      p.halfUp = 0;
+    }
     p.base = base;
     p.extras += p.halfUp;
     p.unit = base + p.extras;
@@ -404,9 +421,12 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
       const mods = [...p.mods];
       const note = (line.note ?? '').trim();
       if (note) mods.push(`“${note}”`);
-      q.lines.push({ index: i, name: p.name, mods, qty, unit_cents: p.unit, total_cents: p.unit * qty, regular_cents: null, deal_id: '' });
+      const ql: QuoteLine = { index: i, name: p.name, mods, qty, unit_cents: p.unit, total_cents: p.unit * qty, regular_cents: null, deal_id: '' };
+      if (p.list != null) ql.list_cents = p.list;
+      q.lines.push(ql);
       lineTax.push({ total: p.unit * qty, rate: e.rate(p.rateItem) });
-      if (p.bankItem && p.issues.length === 0) for (let k = 0; k < qty; k++) units.push({ price: p.unit, item: p.bankItem, category: e.category(p.bankItem), size: p.size });
+      // A price-changed line is left out of the automatic deals: the cashier's price is the line's price.
+      if (p.bankItem && p.issues.length === 0 && p.list == null) for (let k = 0; k < qty; k++) units.push({ price: p.unit, item: p.bankItem, category: e.category(p.bankItem), size: p.size });
       return;
     }
     hasBundle = true;
@@ -428,6 +448,7 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
       }
       const p = e.price(picks[k], slot.included_options ?? 0);
       for (const is of p.issues) issue(is.code, is.message, i);
+      if (p.list != null) issue('open_price', `${d!.name}: a combo's items keep their prices.`, i);
       if (p.issues.length === 0 && !matches(slot.eligible, { price: 0, item: p.bankItem, category: e.category(p.bankItem), size: p.size }))
         issue('deal_slot', `${d!.name}: ${p.name} doesn't fit “${slot.label}”.`, i);
       if (rateItem === '') rateItem = p.rateItem;

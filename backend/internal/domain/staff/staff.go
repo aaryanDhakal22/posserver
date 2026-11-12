@@ -87,7 +87,8 @@ var DefaultTabs = []string{"info", "counter", "takeout", "delivery", "pickup", "
 
 // ButtonFonts are the menu buttons' font choices (the terminal maps each
 // name to a bundled font; "system" = the platform font, Roboto).
-var ButtonFonts = []string{"barlow", "barlow_condensed", "barlow_semi_condensed", "system"}
+var ButtonFonts = []string{"barlow", "barlow_condensed", "barlow_semi_condensed", "system",
+	"fira_sans_condensed", "ibm_plex_sans_condensed", "atkinson_hyperlegible"}
 
 // Ranges of the terminal app's settings.
 const (

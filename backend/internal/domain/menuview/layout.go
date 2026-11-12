@@ -22,7 +22,8 @@ import (
 //     a grid of option buttons and half-and-half state buttons;
 //   - flows: each item's ordered modifier steps (a screen may come twice);
 //   - functions + bottom_bar: the function buttons (toolbar sections and the
-//     contextual bottom bar per selection state).
+//     contextual bottom bar per selection state);
+//   - quick_notes: one-tap notes (texts, no ids).
 //
 // It names bank rows by id; every id must exist in the store's bank when it
 // is saved. Captions and prices come from the bank in the build
@@ -38,6 +39,9 @@ type LayoutOf[A any, S any] struct {
 	Flows     map[string][]S `json:"flows"` // item → its modifier steps, in order
 	Functions Functions      `json:"functions"`
 	BottomBar BottomBar      `json:"bottom_bar"`
+	// QuickNotes are the store's one-tap notes (SoftTouch's quick messages):
+	// plain texts the terminal offers for a line or the order, in order.
+	QuickNotes []string `json:"quick_notes"`
 }
 
 // Layout is a counter layout as stored: flows are keyed by bank item id.
@@ -200,6 +204,8 @@ const (
 	MinFontSize     = 6
 	MaxFontSize     = 72
 	MaxProblems     = 100
+	MaxQuickNotes   = 50
+	MaxQuickNoteLen = 80
 	maxFunctionName = 40
 )
 
@@ -258,6 +264,12 @@ func NormalizeLayout[A, S any](l *LayoutOf[A, S]) {
 			f := &(*fs)[i]
 			f.Name, f.Caption, f.Role = strings.TrimSpace(f.Name), strings.TrimSpace(f.Caption), strings.TrimSpace(f.Role)
 		}
+	}
+	if l.QuickNotes == nil {
+		l.QuickNotes = []string{}
+	}
+	for i := range l.QuickNotes {
+		l.QuickNotes[i] = strings.TrimSpace(l.QuickNotes[i])
 	}
 	for _, b := range []*Bar{&l.BottomBar.None, &l.BottomBar.Line, &l.BottomBar.Modifier} {
 		if b.Buttons == nil {
@@ -515,6 +527,19 @@ func (v *layoutValidator) run(l *Layout) {
 			taken[[2]int{x.Row, x.Col}] = i
 		}
 	}
+	if len(l.QuickNotes) > MaxQuickNotes {
+		p.add("quick_notes", "at most %d quick notes", MaxQuickNotes)
+	}
+	seenNote := map[string]int{}
+	for i, n := range l.QuickNotes {
+		np := fmt.Sprintf("quick_notes[%d]", i)
+		p.text(np, "a quick note", n, MaxQuickNoteLen, true)
+		if prev, dup := seenNote[strings.ToLower(n)]; dup && n != "" {
+			p.add(np, "the same note as quick_notes[%d]", prev)
+		} else {
+			seenNote[strings.ToLower(n)] = i
+		}
+	}
 }
 
 // gridButtons checks a grid, its pages and its buttons (in the grid, one per
@@ -719,7 +744,7 @@ func normKey(s string) string { return strings.Join(strings.Fields(strings.ToLow
 // visited in sorted order so the first error is stable.
 func MapLayout[A, S, A2, S2 any](l LayoutOf[A, S], key func(path, k string) (string, error),
 	act func(path string, a A) (A2, error), step func(path string, s S) (S2, error)) (LayoutOf[A2, S2], error) {
-	out := LayoutOf[A2, S2]{TabStrip: l.TabStrip, Functions: l.Functions, BottomBar: l.BottomBar,
+	out := LayoutOf[A2, S2]{TabStrip: l.TabStrip, Functions: l.Functions, BottomBar: l.BottomBar, QuickNotes: l.QuickNotes,
 		Tabs: make([]TabOf[A2], 0, len(l.Tabs)), Screens: make([]ScreenOf[A2], 0, len(l.Screens)), Flows: map[string][]S2{}}
 	buttons := func(path string, bs []ButtonOf[A]) ([]ButtonOf[A2], error) {
 		o := make([]ButtonOf[A2], 0, len(bs))

@@ -58,7 +58,8 @@ func docLayout() bankdoc.Layout {
 				{Row: 0, Col: 1, Action: bankdoc.LayoutAction{Type: "state", State: "second_add"}},
 				{Row: 0, Col: 2, Action: bankdoc.LayoutAction{Type: "item_pick", Item: "Soda"}},
 			}}},
-		Flows: map[string][]bankdoc.LayoutStep{"Cheese Pizza": {{Screen: "Toppings", Size: "16 X-Large", RequiredCount: 2, Forced: true}}},
+		Flows:      map[string][]bankdoc.LayoutStep{"Cheese Pizza": {{Screen: "Toppings", Size: "16 X-Large", RequiredCount: 2, Forced: true}}},
+		QuickNotes: []string{"Well Done", "Cut in squares"},
 	}
 }
 
@@ -99,6 +100,9 @@ func TestLayoutNamesToIDsAndBack(t *testing.T) {
 	}
 	if _, ok := out.Flows["Cheese Pizza"]; !ok {
 		t.Errorf("export flows: %+v", out.Flows)
+	}
+	if len(out.QuickNotes) != 2 || out.QuickNotes[1] != "Cut in squares" {
+		t.Errorf("export quick notes: %+v", out.QuickNotes)
 	}
 	again, err := a.layoutIDs("x", out, deals)
 	if err != nil {

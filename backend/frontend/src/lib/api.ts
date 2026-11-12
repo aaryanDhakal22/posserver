@@ -851,7 +851,9 @@ export interface Staff {
   limits: StaffLimits; effective_limits: StaffEffective; active: boolean; created_at: string; updated_at: string;
 }
 export type TerminalTabName = 'info' | 'counter' | 'takeout' | 'delivery' | 'pickup' | 'history' | 'dispatch';
-export type ButtonFont = 'barlow' | 'barlow_condensed' | 'barlow_semi_condensed' | 'system';
+export type ButtonFont =
+  | 'barlow' | 'barlow_condensed' | 'barlow_semi_condensed' | 'system'
+  | 'fira_sans_condensed' | 'ibm_plex_sans_condensed' | 'atkinson_hyperlegible';
 export interface TerminalSettings {
   cashier_refund_cents: number; cashier_discount_pct: number; auto_lock_minutes: number; counter_start: number;
   receipt_auto_done_seconds: number; auto_close_batch_at: string;

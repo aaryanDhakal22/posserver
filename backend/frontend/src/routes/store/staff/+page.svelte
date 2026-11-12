@@ -46,7 +46,10 @@
     { value: 'barlow', label: 'Barlow' },
     { value: 'barlow_condensed', label: 'Barlow Condensed' },
     { value: 'barlow_semi_condensed', label: 'Barlow Semi Condensed' },
-    { value: 'system', label: 'System (Roboto)' }
+    { value: 'system', label: 'System (Roboto)' },
+    { value: 'fira_sans_condensed', label: 'Fira Sans Condensed' },
+    { value: 'ibm_plex_sans_condensed', label: 'IBM Plex Sans Condensed' },
+    { value: 'atkinson_hyperlegible', label: 'Atkinson Hyperlegible' }
   ];
 
   let staff = $state<Staff[] | null>(null);

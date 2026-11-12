@@ -2,6 +2,7 @@ package menuview
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -49,6 +50,7 @@ func testLayout() Layout {
 			Manager: []Function{{Name: "zout", Caption: "Z Out", Order: 17, Visible: true, Role: "manager"}}},
 		BottomBar: BottomBar{None: Bar{Rows: 2, Cols: 9, Buttons: []BarButton{{Row: 0, Col: 0, Name: "home", Caption: "Home"},
 			{Row: 0, Col: 8, Name: "cash_out", Caption: "Cash Out", Emphasis: true}}}},
+		QuickNotes: []string{" Well Done ", "Cut in squares"},
 	}
 }
 
@@ -62,7 +64,7 @@ func TestLayoutValid(t *testing.T) {
 	if ps := ValidateLayout(&l, testRefs()); len(ps) != 0 {
 		t.Fatalf("problems: %+v", ps)
 	}
-	if l.Tabs[0].Color != "#ff8080" || l.Functions.Employee == nil || l.BottomBar.Line.Buttons == nil {
+	if l.Tabs[0].Color != "#ff8080" || l.Functions.Employee == nil || l.BottomBar.Line.Buttons == nil || l.QuickNotes[0] != "Well Done" {
 		t.Errorf("not normalized: %+v", l.Tabs[0])
 	}
 	// The stored shape round-trips through JSON unchanged.
@@ -138,6 +140,15 @@ func TestLayoutProblems(t *testing.T) {
 		{"bar overlap", func(l *Layout) { l.BottomBar.None.Buttons[1].Col = 0 }, "bottom_bar.none.buttons[1]", "overlaps"},
 		{"bar without grid", func(l *Layout) { l.BottomBar.Line.Buttons = []BarButton{{Name: "done"}} }, "bottom_bar.line", "needs rows and cols"},
 		{"bar too tall", func(l *Layout) { l.BottomBar.None.Rows = 5 }, "bottom_bar.none.rows", "1..4"},
+		{"empty quick note", func(l *Layout) { l.QuickNotes = append(l.QuickNotes, "  ") }, "quick_notes[2]", "required"},
+		{"quick note twice", func(l *Layout) { l.QuickNotes = append(l.QuickNotes, "well done") }, "quick_notes[2]", "same note as quick_notes[0]"},
+		{"long quick note", func(l *Layout) { l.QuickNotes[1] = strings.Repeat("x", 81) }, "quick_notes[1]", "longer than 80"},
+		{"too many quick notes", func(l *Layout) {
+			for i := 0; i < MaxQuickNotes; i++ {
+				l.QuickNotes = append(l.QuickNotes, fmt.Sprintf("note %d", i))
+			}
+		}, "quick_notes", "at most 50"},
+		{"no quick notes (control)", func(l *Layout) { l.QuickNotes = nil }, "", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -204,6 +215,9 @@ func TestResolveLayout(t *testing.T) {
 	ResolveLayout(&b, bank, v, map[string]string{"deal-1": "2 Medium Cheese"}, &l)
 	if b.Layout == nil {
 		t.Fatal("no layout in the build")
+	}
+	if q := b.Layout.QuickNotes; len(q) != 2 || q[0] != "Well Done" {
+		t.Errorf("quick notes in the build: %v", q)
 	}
 	tab := b.Layout.Tabs[0]
 	med := tab.Buttons[0]

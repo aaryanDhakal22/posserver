@@ -150,6 +150,7 @@ def _names_layout() -> dict:
                 {"row": 0, "col": 1, "name": "remove", "caption": "Remove", "emphasis": False}]},
             "modifier": {"rows": 0, "cols": 0, "buttons": []},
         },
+        "quick_notes": ["Well Done", "Cut in squares"],
     }
 
 
@@ -244,6 +245,7 @@ def test_put_get_build_delete(mgr):
     assert {g["name"] for g in build["modifier_groups"]} >= {"Pizza Toppings", "Wing Sauce"}
     assert len(bl["flows"][ids.item["Cheese Pizza"]]) == 2
     assert not [n for n in build["needs_attention"] if n["code"].startswith("layout_")]
+    assert bl["quick_notes"] == ["Well Done", "Cut in squares"]
     # Other views' builds have no layout.
     web = _ok(mgr.get(f"{MENU}/views/{views[('web', 'Web')]['id']}/build", timeout=5))
     assert "layout" not in web
