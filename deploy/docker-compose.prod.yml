@@ -68,6 +68,30 @@ services:
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
       GEO_CENSUS_URL: ${GEO_CENSUS_URL:-}
       GEO_NOMINATIM_URL: ${GEO_NOMINATIM_URL:-}
+      # Store websites, Square (online holds, the counter terminal, Send to phone),
+      # customer sign-in and email receipts: every one empty = off. Same keys as
+      # the staging compose (Doppler main/prd holds the values; added 2026-11-12
+      # for the Centurion go-live, deploy/main-deploy.sh warns when the box's
+      # compose differs from this file).
+      SITE_BASE_DOMAIN: ${SITE_BASE_DOMAIN:-}
+      SQUARE_ENV: ${SQUARE_ENV:-}
+      SQUARE_APP_ID: ${SQUARE_APP_ID:-}
+      SQUARE_APP_SECRET: ${SQUARE_APP_SECRET:-}
+      SQUARE_TOKEN_KEY: ${SQUARE_TOKEN_KEY:-}
+      SQUARE_REDIRECT_URL: ${SQUARE_REDIRECT_URL:-}
+      SQUARE_APP_URL: ${SQUARE_APP_URL:-}
+      SQUARE_WEBHOOK_SIGNATURE_KEY: ${SQUARE_WEBHOOK_SIGNATURE_KEY:-}
+      SQUARE_WEBHOOK_URL: ${SQUARE_WEBHOOK_URL:-}
+      SQUARE_BASE_URL: ${SQUARE_BASE_URL:-}
+      SQUARE_POS_CALLBACK_URL: ${SQUARE_POS_CALLBACK_URL:-}
+      SIGNIN_CODES: ${SIGNIN_CODES:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_VERIFY_SERVICE_SID: ${TWILIO_VERIFY_SERVICE_SID:-}
+      MAIL_ENV: ${MAIL_ENV:-}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-}
+      SES_REGION: ${SES_REGION:-}
+      NOTIFY_TEST_STORES: ${NOTIFY_TEST_STORES:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
       OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME}
@@ -132,6 +156,30 @@ services:
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
       GEO_CENSUS_URL: ${GEO_CENSUS_URL:-}
       GEO_NOMINATIM_URL: ${GEO_NOMINATIM_URL:-}
+      # Store websites, Square (online holds, the counter terminal, Send to phone),
+      # customer sign-in and email receipts: every one empty = off. Same keys as
+      # the staging compose (Doppler main/prd holds the values; added 2026-11-12
+      # for the Centurion go-live, deploy/main-deploy.sh warns when the box's
+      # compose differs from this file).
+      SITE_BASE_DOMAIN: ${SITE_BASE_DOMAIN:-}
+      SQUARE_ENV: ${SQUARE_ENV:-}
+      SQUARE_APP_ID: ${SQUARE_APP_ID:-}
+      SQUARE_APP_SECRET: ${SQUARE_APP_SECRET:-}
+      SQUARE_TOKEN_KEY: ${SQUARE_TOKEN_KEY:-}
+      SQUARE_REDIRECT_URL: ${SQUARE_REDIRECT_URL:-}
+      SQUARE_APP_URL: ${SQUARE_APP_URL:-}
+      SQUARE_WEBHOOK_SIGNATURE_KEY: ${SQUARE_WEBHOOK_SIGNATURE_KEY:-}
+      SQUARE_WEBHOOK_URL: ${SQUARE_WEBHOOK_URL:-}
+      SQUARE_BASE_URL: ${SQUARE_BASE_URL:-}
+      SQUARE_POS_CALLBACK_URL: ${SQUARE_POS_CALLBACK_URL:-}
+      SIGNIN_CODES: ${SIGNIN_CODES:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_VERIFY_SERVICE_SID: ${TWILIO_VERIFY_SERVICE_SID:-}
+      MAIL_ENV: ${MAIL_ENV:-}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-}
+      SES_REGION: ${SES_REGION:-}
+      NOTIFY_TEST_STORES: ${NOTIFY_TEST_STORES:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
       OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME}

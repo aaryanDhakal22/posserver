@@ -91,6 +91,11 @@ func (r storeResolver) ResolveStore(ctx context.Context, storeID int64, storeNam
 }
 
 func main() {
+	// `app migrate [status]`: the deploy's one-off migration container
+	// (internal/migrate/command.go, deploy/main-deploy.sh); nothing else starts.
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		os.Exit(migrate.Command(os.Args[2:]))
+	}
 	tmpLogger := logger.TempLogger()
 	tmpLogger.Info().Msg("\n\n ==== Starting API ==== \n\n")
 

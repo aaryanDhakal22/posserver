@@ -72,6 +72,7 @@ services:
       SQUARE_WEBHOOK_SIGNATURE_KEY: ${SQUARE_WEBHOOK_SIGNATURE_KEY:-}
       SQUARE_WEBHOOK_URL: ${SQUARE_WEBHOOK_URL:-}
       SQUARE_BASE_URL: ${SQUARE_BASE_URL:-}
+      SQUARE_POS_CALLBACK_URL: ${SQUARE_POS_CALLBACK_URL:-}
       # Customer sign-in + receipts: unset = the fakes on staging (codes logged,
       # mail kept in memory) until the Twilio Verify service / SES are set.
       SIGNIN_CODES: ${SIGNIN_CODES:-}
