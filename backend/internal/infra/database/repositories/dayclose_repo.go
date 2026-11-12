@@ -17,7 +17,7 @@ import (
 )
 
 // DayCloseRepository keeps the Pi's cash drawer sessions, their pay-ins /
-// pay-outs and the Z reports (terminal Stage 2, migration 00036). Plain SQL
+// pay-outs and the Z reports (terminal Stage 2, migration 00038). Plain SQL
 // (not sqlc): the tables are its own. Each floor event is one transaction
 // that writes its row(s) and marks the event seen with its result.
 type DayCloseRepository struct{ pool *pgxpool.Pool }

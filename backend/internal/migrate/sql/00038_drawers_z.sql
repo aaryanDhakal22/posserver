@@ -1,5 +1,7 @@
 -- +goose Up
 -- +goose StatementBegin
+-- (Was 00036: renumbered to apply after 00037, which test databases had
+-- already applied; IF NOT EXISTS so a database that ran the old 00036 boots.)
 -- Cash drawers + the Z report (TERMINAL-PLAN "Drawers", "End of day"; floor
 -- events drawer.opened / drawer.movement / drawer.closed / z.report from the
 -- Pi, contract/main.md §2.5zb). Ids are the Pi's. A drawer session belongs to
@@ -8,7 +10,7 @@
 -- may arrive before its session row. One Z report per store per Pi batch (a
 -- rebuilt Z replaces it); business_date = the store-local date the batch
 -- opened, as the Pi sends it.
-CREATE TABLE drawer_sessions (
+CREATE TABLE IF NOT EXISTS drawer_sessions (
     id                 uuid        PRIMARY KEY,
     tenant_id          uuid        NOT NULL,
     location_id        uuid        NOT NULL,
@@ -38,9 +40,9 @@ CREATE TABLE drawer_sessions (
     updated_at         timestamptz NOT NULL DEFAULT now(),
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
 );
-CREATE INDEX idx_drawer_sessions_location ON drawer_sessions (location_id, opened_at DESC);
+CREATE INDEX IF NOT EXISTS idx_drawer_sessions_location ON drawer_sessions (location_id, opened_at DESC);
 
-CREATE TABLE drawer_movements (
+CREATE TABLE IF NOT EXISTS drawer_movements (
     id           uuid        PRIMARY KEY,
     tenant_id    uuid        NOT NULL,
     location_id  uuid        NOT NULL,
@@ -53,9 +55,9 @@ CREATE TABLE drawer_movements (
     at           timestamptz NOT NULL,
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
 );
-CREATE INDEX idx_drawer_movements_drawer ON drawer_movements (drawer_id, at);
+CREATE INDEX IF NOT EXISTS idx_drawer_movements_drawer ON drawer_movements (drawer_id, at);
 
-CREATE TABLE z_reports (
+CREATE TABLE IF NOT EXISTS z_reports (
     id            uuid        NOT NULL UNIQUE,
     tenant_id     uuid        NOT NULL,
     location_id   uuid        NOT NULL,
@@ -68,7 +70,7 @@ CREATE TABLE z_reports (
     PRIMARY KEY (location_id, batch_id),
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
 );
-CREATE INDEX idx_z_reports_date ON z_reports (location_id, business_date, closed_at DESC);
+CREATE INDEX IF NOT EXISTS idx_z_reports_date ON z_reports (location_id, business_date, closed_at DESC);
 -- +goose StatementEnd
 
 -- +goose Down

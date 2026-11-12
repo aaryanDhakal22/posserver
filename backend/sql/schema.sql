@@ -1124,7 +1124,7 @@ CREATE TABLE staff_journal (
 );
 CREATE INDEX idx_staff_journal_location_at ON staff_journal (location_id, at DESC);
 
--- 00036 (terminal Stage 2): cash drawers per cashier shift + the Z report (floor events
+-- 00038 (terminal Stage 2): cash drawers per cashier shift + the Z report (floor events
 -- drawer.opened / drawer.movement / drawer.closed / z.report; ids are the Pi's).
 CREATE TABLE drawer_sessions (
     id                 uuid        PRIMARY KEY,
