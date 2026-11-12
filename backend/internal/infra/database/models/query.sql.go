@@ -942,9 +942,9 @@ func (q *Queries) CreateMenu(ctx context.Context, arg CreateMenuParams) (Menu, e
 }
 
 const createMenuCategory = `-- name: CreateMenuCategory :one
-INSERT INTO menu_categories (tenant_id, location_id, menu_id, name, description, available, position, default_printer_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+INSERT INTO menu_categories (tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, no_kitchen_ticket)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 `
 
 type CreateMenuCategoryParams struct {
@@ -956,6 +956,7 @@ type CreateMenuCategoryParams struct {
 	Available        bool        `json:"available"`
 	Position         int32       `json:"position"`
 	DefaultPrinterID pgtype.UUID `json:"default_printer_id"`
+	NoKitchenTicket  bool        `json:"no_kitchen_ticket"`
 }
 
 func (q *Queries) CreateMenuCategory(ctx context.Context, arg CreateMenuCategoryParams) (MenuCategory, error) {
@@ -968,6 +969,7 @@ func (q *Queries) CreateMenuCategory(ctx context.Context, arg CreateMenuCategory
 		arg.Available,
 		arg.Position,
 		arg.DefaultPrinterID,
+		arg.NoKitchenTicket,
 	)
 	var i MenuCategory
 	err := row.Scan(
@@ -982,6 +984,7 @@ func (q *Queries) CreateMenuCategory(ctx context.Context, arg CreateMenuCategory
 		&i.DefaultPrinterID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.NoKitchenTicket,
 	)
 	return i, err
 }
@@ -989,7 +992,7 @@ func (q *Queries) CreateMenuCategory(ctx context.Context, arg CreateMenuCategory
 const createMenuItem = `-- name: CreateMenuItem :one
 INSERT INTO menu_items (tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 `
 
 type CreateMenuItemParams struct {
@@ -1045,6 +1048,7 @@ func (q *Queries) CreateMenuItem(ctx context.Context, arg CreateMenuItemParams) 
 		&i.KitchenName,
 		&i.Sku,
 		&i.OutHold,
+		&i.NoKitchenTicket,
 	)
 	return i, err
 }
@@ -3102,7 +3106,7 @@ func (q *Queries) GetMenuByID(ctx context.Context, arg GetMenuByIDParams) (Menu,
 }
 
 const getMenuCategoryByID = `-- name: GetMenuCategoryByID :one
-SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 FROM menu_categories WHERE id = $1 AND tenant_id = $2
 `
 
@@ -3126,12 +3130,13 @@ func (q *Queries) GetMenuCategoryByID(ctx context.Context, arg GetMenuCategoryBy
 		&i.DefaultPrinterID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.NoKitchenTicket,
 	)
 	return i, err
 }
 
 const getMenuItemByID = `-- name: GetMenuItemByID :one
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 FROM menu_items WHERE id = $1 AND tenant_id = $2
 `
 
@@ -3163,6 +3168,7 @@ func (q *Queries) GetMenuItemByID(ctx context.Context, arg GetMenuItemByIDParams
 		&i.KitchenName,
 		&i.Sku,
 		&i.OutHold,
+		&i.NoKitchenTicket,
 	)
 	return i, err
 }
@@ -3754,15 +3760,27 @@ SELECT id, order_id, processor, status, amount_cents, token, last4, captured_at,
 FROM payments WHERE order_id = $1
 `
 
-func (q *Queries) GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error) {
+type GetPaymentsByOrderIDRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	OrderID     pgtype.UUID        `json:"order_id"`
+	Processor   string             `json:"processor"`
+	Status      string             `json:"status"`
+	AmountCents int64              `json:"amount_cents"`
+	Token       string             `json:"token"`
+	Last4       string             `json:"last4"`
+	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
+	AuthCode    string             `json:"auth_code"`
+}
+
+func (q *Queries) GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]GetPaymentsByOrderIDRow, error) {
 	rows, err := q.db.Query(ctx, getPaymentsByOrderID, orderID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Payment
+	var items []GetPaymentsByOrderIDRow
 	for rows.Next() {
-		var i Payment
+		var i GetPaymentsByOrderIDRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.OrderID,
@@ -4512,6 +4530,7 @@ VALUES ($1, $2, $3, $4, $5, $6,
         $7, 'import',
         CASE WHEN $4::text = '' THEN '' ELSE 'import' END,
         CASE WHEN $7::text = '' THEN '' ELSE 'import' END)
+ON CONFLICT (location_id, phone) DO NOTHING
 RETURNING id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, first_name, last_name, notes, source, name_source, notes_source
 `
 
@@ -4525,6 +4544,8 @@ type InsertImportedCustomerParams struct {
 	Notes      string      `json:"notes"`
 }
 
+// No row (pgx.ErrNoRows) = the phone is taken: another writer (the Pi's
+// customer.upsert, a website sign-in) created it after the import read.
 func (q *Queries) InsertImportedCustomer(ctx context.Context, arg InsertImportedCustomerParams) (Customer, error) {
 	row := q.db.QueryRow(ctx, insertImportedCustomer,
 		arg.TenantID,
@@ -5387,7 +5408,7 @@ func (q *Queries) ListCardHoldsWithOrders(ctx context.Context, arg ListCardHolds
 }
 
 const listCategoriesByLocation = `-- name: ListCategoriesByLocation :many
-SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 FROM menu_categories WHERE location_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -5412,6 +5433,7 @@ func (q *Queries) ListCategoriesByLocation(ctx context.Context, locationID pgtyp
 			&i.DefaultPrinterID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.NoKitchenTicket,
 		); err != nil {
 			return nil, err
 		}
@@ -5424,7 +5446,7 @@ func (q *Queries) ListCategoriesByLocation(ctx context.Context, locationID pgtyp
 }
 
 const listCategoriesByMenu = `-- name: ListCategoriesByMenu :many
-SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 FROM menu_categories WHERE menu_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -5449,6 +5471,7 @@ func (q *Queries) ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) 
 			&i.DefaultPrinterID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.NoKitchenTicket,
 		); err != nil {
 			return nil, err
 		}
@@ -6251,7 +6274,7 @@ func (q *Queries) ListItemSizesByLocation(ctx context.Context, locationID pgtype
 }
 
 const listItemsByCategory = `-- name: ListItemsByCategory :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 FROM menu_items WHERE category_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -6284,6 +6307,7 @@ func (q *Queries) ListItemsByCategory(ctx context.Context, categoryID pgtype.UUI
 			&i.KitchenName,
 			&i.Sku,
 			&i.OutHold,
+			&i.NoKitchenTicket,
 		); err != nil {
 			return nil, err
 		}
@@ -6296,7 +6320,7 @@ func (q *Queries) ListItemsByCategory(ctx context.Context, categoryID pgtype.UUI
 }
 
 const listItemsByLocation = `-- name: ListItemsByLocation :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 FROM menu_items WHERE location_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -6329,6 +6353,7 @@ func (q *Queries) ListItemsByLocation(ctx context.Context, locationID pgtype.UUI
 			&i.KitchenName,
 			&i.Sku,
 			&i.OutHold,
+			&i.NoKitchenTicket,
 		); err != nil {
 			return nil, err
 		}
@@ -7295,7 +7320,9 @@ func (q *Queries) ListRestoreOrderIDs(ctx context.Context, arg ListRestoreOrderI
 const listRoutingByLocation = `-- name: ListRoutingByLocation :many
 SELECT i.id AS item_id,
        i.name AS item_name,
-       COALESCE(i.printer_id, c.default_printer_id)::uuid AS printer_id
+       (CASE WHEN i.no_kitchen_ticket OR (i.printer_id IS NULL AND c.no_kitchen_ticket) THEN NULL
+             ELSE COALESCE(i.printer_id, c.default_printer_id) END)::uuid AS printer_id,
+       (i.no_kitchen_ticket OR (i.printer_id IS NULL AND c.no_kitchen_ticket))::boolean AS no_kitchen
 FROM menu_items i
 JOIN menu_categories c ON c.id = i.category_id
 JOIN menus m ON m.id = c.menu_id
@@ -7307,11 +7334,13 @@ type ListRoutingByLocationRow struct {
 	ItemID    pgtype.UUID `json:"item_id"`
 	ItemName  string      `json:"item_name"`
 	PrinterID pgtype.UUID `json:"printer_id"`
+	NoKitchen bool        `json:"no_kitchen"`
 }
 
 // Kitchen routing table for one location: every menu item's name with its
-// effective printer (the item's own printer, else its category's default),
-// best candidate first — available menus/categories first, then menu,
+// effective printer (the item's own printer, else its category's default;
+// none and no_kitchen when the item, or its category for an item without
+// its own printer, has "no kitchen ticket", 00041), best candidate first — available menus/categories first, then menu,
 // category and item position. The router keeps the first row per name.
 func (q *Queries) ListRoutingByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListRoutingByLocationRow, error) {
 	rows, err := q.db.Query(ctx, listRoutingByLocation, locationID)
@@ -7322,7 +7351,12 @@ func (q *Queries) ListRoutingByLocation(ctx context.Context, locationID pgtype.U
 	var items []ListRoutingByLocationRow
 	for rows.Next() {
 		var i ListRoutingByLocationRow
-		if err := rows.Scan(&i.ItemID, &i.ItemName, &i.PrinterID); err != nil {
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.ItemName,
+			&i.PrinterID,
+			&i.NoKitchen,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -8954,6 +8988,22 @@ func (q *Queries) SetItemBank(ctx context.Context, arg SetItemBankParams) (int64
 	return result.RowsAffected(), nil
 }
 
+const setItemNoKitchen = `-- name: SetItemNoKitchen :exec
+UPDATE menu_items SET no_kitchen_ticket = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2
+`
+
+type SetItemNoKitchenParams struct {
+	ID              pgtype.UUID `json:"id"`
+	TenantID        pgtype.UUID `json:"tenant_id"`
+	NoKitchenTicket bool        `json:"no_kitchen_ticket"`
+}
+
+// "No kitchen ticket" on an item (00041).
+func (q *Queries) SetItemNoKitchen(ctx context.Context, arg SetItemNoKitchenParams) error {
+	_, err := q.db.Exec(ctx, setItemNoKitchen, arg.ID, arg.TenantID, arg.NoKitchenTicket)
+	return err
+}
+
 const setItemPosition = `-- name: SetItemPosition :exec
 UPDATE menu_items SET position = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2
 `
@@ -10108,9 +10158,9 @@ func (q *Queries) UpdateMenu(ctx context.Context, arg UpdateMenuParams) (Menu, e
 }
 
 const updateMenuCategory = `-- name: UpdateMenuCategory :one
-UPDATE menu_categories SET name = $3, description = $4, available = $5, default_printer_id = $6, updated_at = now()
+UPDATE menu_categories SET name = $3, description = $4, available = $5, default_printer_id = $6, no_kitchen_ticket = $7, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 `
 
 type UpdateMenuCategoryParams struct {
@@ -10120,6 +10170,7 @@ type UpdateMenuCategoryParams struct {
 	Description      string      `json:"description"`
 	Available        bool        `json:"available"`
 	DefaultPrinterID pgtype.UUID `json:"default_printer_id"`
+	NoKitchenTicket  bool        `json:"no_kitchen_ticket"`
 }
 
 func (q *Queries) UpdateMenuCategory(ctx context.Context, arg UpdateMenuCategoryParams) (MenuCategory, error) {
@@ -10130,6 +10181,7 @@ func (q *Queries) UpdateMenuCategory(ctx context.Context, arg UpdateMenuCategory
 		arg.Description,
 		arg.Available,
 		arg.DefaultPrinterID,
+		arg.NoKitchenTicket,
 	)
 	var i MenuCategory
 	err := row.Scan(
@@ -10144,6 +10196,7 @@ func (q *Queries) UpdateMenuCategory(ctx context.Context, arg UpdateMenuCategory
 		&i.DefaultPrinterID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.NoKitchenTicket,
 	)
 	return i, err
 }
@@ -10152,7 +10205,7 @@ const updateMenuItem = `-- name: UpdateMenuItem :one
 UPDATE menu_items SET name = $3, description = $4, price_cents = $5, tax_rate_bps = $6, in_stock = $7, out_until = $8, tags = $9, attributes = $10, updated_at = now(),
     out_hold = CASE WHEN $7 THEN false ELSE out_hold END
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 `
 
 type UpdateMenuItemParams struct {
@@ -10202,6 +10255,7 @@ func (q *Queries) UpdateMenuItem(ctx context.Context, arg UpdateMenuItemParams) 
 		&i.KitchenName,
 		&i.Sku,
 		&i.OutHold,
+		&i.NoKitchenTicket,
 	)
 	return i, err
 }

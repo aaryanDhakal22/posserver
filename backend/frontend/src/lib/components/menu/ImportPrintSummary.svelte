@@ -5,9 +5,10 @@
   // "8 items will print on Grill" lines for a menu import (or its preview).
   let { result }: { result: MenuImportResult } = $props();
   const noPrinter = $derived(result.items_no_printer ?? 0);
+  const noKitchen = $derived(result.items_no_kitchen ?? 0);
 </script>
 
-{#if result.prints_on?.length || noPrinter}
+{#if result.prints_on?.length || noPrinter || noKitchen}
   <ul class="m-0 p-0 list-none flex flex-col gap-1 text-[13px]" aria-label="Where the items will print">
     {#each result.prints_on ?? [] as p (p.printer)}
       <li class="flex items-center gap-2 text-text2">
@@ -15,6 +16,12 @@
         <span><b class="text-text">{plural(p.items, 'item')}</b> will print on <b class="text-text">{p.printer}</b></span>
       </li>
     {/each}
+    {#if noKitchen}
+      <li class="flex items-center gap-2 text-text2">
+        <Icon name="printer" size={14} class="text-muted shrink-0" />
+        <span><b class="text-text">{plural(noKitchen, 'item')}</b> print on the receipt only (no kitchen ticket)</span>
+      </li>
+    {/if}
     {#if noPrinter}
       <li class="flex items-center gap-2 text-warn font-medium">
         <Icon name="alert" size={14} class="shrink-0" />

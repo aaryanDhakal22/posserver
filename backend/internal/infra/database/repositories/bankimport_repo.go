@@ -160,13 +160,15 @@ func (t *bankTx) DeleteMenu(ctx context.Context, id uuid.UUID) error {
 
 func (t *bankTx) CreateCategory(ctx context.Context, c menu.Category) (uuid.UUID, error) {
 	row, err := t.q.CreateMenuCategory(ctx, models.CreateMenuCategoryParams{TenantID: t.T(), LocationID: t.L(), MenuID: pgID(c.MenuID),
-		Name: c.Name, Description: c.Description, Available: c.Available, Position: i32(c.Position), DefaultPrinterID: pgIDPtr(c.DefaultPrinterID)})
+		Name: c.Name, Description: c.Description, Available: c.Available, Position: i32(c.Position), DefaultPrinterID: pgIDPtr(c.DefaultPrinterID),
+		NoKitchenTicket: c.NoKitchenTicket})
 	return idOf(row.ID), err
 }
 
 func (t *bankTx) UpdateCategory(ctx context.Context, c menu.Category) error {
 	if _, err := t.q.UpdateMenuCategory(ctx, models.UpdateMenuCategoryParams{ID: pgID(c.ID), TenantID: t.T(), Name: c.Name,
-		Description: c.Description, Available: c.Available, DefaultPrinterID: pgIDPtr(c.DefaultPrinterID)}); err != nil {
+		Description: c.Description, Available: c.Available, DefaultPrinterID: pgIDPtr(c.DefaultPrinterID),
+		NoKitchenTicket: c.NoKitchenTicket}); err != nil {
 		return err
 	}
 	if err := t.q.MoveMenuCategory(ctx, models.MoveMenuCategoryParams{ID: pgID(c.ID), TenantID: t.T(), MenuID: pgID(c.MenuID)}); err != nil {
@@ -186,6 +188,9 @@ func (t *bankTx) CreateItem(ctx context.Context, it menu.Item) (uuid.UUID, error
 		Name: it.Name, Description: it.Description, PriceCents: it.PriceCents, TaxRateBps: i32(it.TaxRateBps), InStock: it.InStock,
 		OutUntil: tsOf(it.OutUntil), Tags: tagsToJSON(it.Tags), PrinterID: pgIDPtr(it.PrinterID), Position: i32(it.Position),
 		Attributes: attrsToJSON(it.Attributes)})
+	if err == nil && it.NoKitchenTicket {
+		err = t.q.SetItemNoKitchen(ctx, models.SetItemNoKitchenParams{ID: row.ID, TenantID: t.T(), NoKitchenTicket: true})
+	}
 	return idOf(row.ID), err
 }
 
@@ -199,6 +204,9 @@ func (t *bankTx) UpdateItem(ctx context.Context, it menu.Item) error {
 		return err
 	}
 	if err := t.q.SetItemPrinter(ctx, models.SetItemPrinterParams{ID: pgID(it.ID), TenantID: t.T(), PrinterID: pgIDPtr(it.PrinterID)}); err != nil {
+		return err
+	}
+	if err := t.q.SetItemNoKitchen(ctx, models.SetItemNoKitchenParams{ID: pgID(it.ID), TenantID: t.T(), NoKitchenTicket: it.NoKitchenTicket}); err != nil {
 		return err
 	}
 	return t.q.SetItemPosition(ctx, models.SetItemPositionParams{ID: pgID(it.ID), TenantID: t.T(), Position: i32(it.Position)})

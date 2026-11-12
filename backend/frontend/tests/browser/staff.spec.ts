@@ -72,11 +72,11 @@ test('staff: add with a confirmed PIN, PIN conflicts in words, own limits, chang
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(row(page, 'Cara Smith')).toBeVisible();
   await expect(row(page, 'Cara Smith')).toContainText('Cashier');
-  await expect(row(page, 'Cara Smith')).toContainText('No refunds · discounts up to 20%');
+  await expect(row(page, 'Cara Smith')).toContainText('Refunds up to $20.00 · discounts up to 20%');
   let list = await staffList(store);
   expect(list).toHaveLength(1);
   expect(list[0]).toMatchObject({ first_name: 'Cara', last_name: 'Smith', role: 'cashier', active: true });
-  expect(list[0].effective_limits).toEqual({ refund_cents: 0, discount_pct: 20 });
+  expect(list[0].effective_limits).toEqual({ refund_cents: 2000, discount_pct: 20 });
   expect(JSON.stringify(list[0])).not.toContain('1234'); // the PIN is never sent back
 
   // A one-digit PIN is refused in the page.
@@ -164,7 +164,7 @@ test('terminal settings: the defaults, plain labels with units, every field save
   const field = (label: string) => page.getByLabel(label, { exact: false }).first();
   const bar = page.getByTestId('settings-savebar');
   // Every store starts with the owner's defaults (2026-11-12).
-  await expect(field('Refunds up to')).toHaveValue('0.00');
+  await expect(field('Refunds up to')).toHaveValue('20.00');
   await expect(field('Discounts up to')).toHaveValue('20');
   await expect(field('Lower an item’s price by up to')).toHaveValue('20');
   await expect(field('Lock the terminal after')).toHaveValue('5');
@@ -172,7 +172,7 @@ test('terminal settings: the defaults, plain labels with units, every field save
   await expect(field('Pay out of the drawer up to')).toHaveValue('20.00');
   await expect(field('Pickups are ready in')).toHaveValue('15');
   await expect(field('Local area codes')).toHaveValue('410, 443, 667');
-  await expect(field('Drivers may claim after')).toHaveValue('45');
+  await expect(field('Drivers may claim after')).toHaveCount(0); // retired 2026-11-12: past the promised time
   await expect(page.getByLabel('After login, open')).toHaveValue('info');
   await expect(page.getByLabel('Menu button font')).toHaveValue('barlow');
   await expect(bar).toContainText('All changes saved');
@@ -185,7 +185,7 @@ test('terminal settings: the defaults, plain labels with units, every field save
   await expect(field('Discounts up to')).toHaveValue('20');
   await expect(bar).toContainText('All changes saved');
 
-  await field('Refunds up to').fill('20');
+  await field('Refunds up to').fill('25');
   await field('Discounts up to').fill('12');
   await field('Lower an item’s price by up to').fill('25');
   await page.getByLabel('After login, open').selectOption('takeout');
@@ -205,16 +205,15 @@ test('terminal settings: the defaults, plain labels with units, every field save
   await page.getByLabel('Tip choices').fill('10, 15, 20, 25');
   await page.getByLabel('At (store time)').fill('03:30');
   await field('Pay out of the drawer up to').fill('35');
-  await field('Pickups are ready in').fill('20');
+  await field('Pickups are ready in').fill('241');
   await field('Local area codes').fill('410, 443, 410, 202');
-  await field('Drivers may claim after').fill('481');
   await bar.getByRole('button', { name: 'Save terminal settings' }).click();
   // A bad value never leaves the page: the message says which field, and that field is marked + focused.
-  await expect(bar.getByRole('alert')).toContainText('Drivers may claim after: a whole number from 0 to 480.');
-  await expect(field('Drivers may claim after')).toHaveAttribute('aria-invalid', 'true');
-  await expect(field('Drivers may claim after')).toBeFocused();
+  await expect(bar.getByRole('alert')).toContainText('Pickups are ready in: a whole number from 0 to 240.');
+  await expect(field('Pickups are ready in')).toHaveAttribute('aria-invalid', 'true');
+  await expect(field('Pickups are ready in')).toBeFocused();
   await shot(page, info, 'settings-error');
-  await field('Drivers may claim after').fill('30');
+  await field('Pickups are ready in').fill('20');
   await field('Local area codes').fill('410, 12');
   await bar.getByRole('button', { name: 'Save terminal settings' }).click();
   await expect(bar.getByRole('alert')).toContainText('Area codes');
@@ -228,11 +227,11 @@ test('terminal settings: the defaults, plain labels with units, every field save
   await expect(bar).toContainText('All changes saved');
 
   const want = {
-    cashier_refund_cents: 2000, cashier_discount_pct: 12, cashier_price_drop_pct: 25, default_tab: 'takeout',
+    cashier_refund_cents: 2500, cashier_discount_pct: 12, cashier_price_drop_pct: 25, default_tab: 'takeout',
     button_font: 'barlow_condensed', auto_lock_minutes: 7, receipt_auto_done_seconds: 0, show_history: true,
     prices_on_buttons: true, click_sound: true, counter_start: 100, employee_meal_pct: 40, out_of_area_margin_mi: 1.5,
     name_on_paid_counter: true, card_tips: true, card_tip_percents: [10, 15, 20, 25], auto_close_batch_at: '03:30',
-    cashier_payout_cents: 3500, default_pickup_minutes: 20, area_codes: ['410', '443', '202'], driver_claim_after_minutes: 30,
+    cashier_payout_cents: 3500, default_pickup_minutes: 20, area_codes: ['410', '443', '202'],
     topping_max_count: 4
   };
   await expect.poll(async () => (await store.me('GET', '/terminal/settings', undefined, 200)).data).toMatchObject(want);
@@ -248,7 +247,6 @@ test('terminal settings: the defaults, plain labels with units, every field save
   await page.reload();
   await expect(page.getByLabel('After login, open')).toHaveValue('takeout');
   await expect(field('Deliver past the delivery area by up to')).toHaveValue('1.5');
-  await expect(field('Drivers may claim after')).toHaveValue('30');
 
   // Fill in defaults (confirmed) → the owner's defaults, saved on Save.
   await page.getByRole('button', { name: 'Fill in defaults' }).click();
@@ -259,7 +257,7 @@ test('terminal settings: the defaults, plain labels with units, every field save
   await expect
     .poll(async () => (await store.me('GET', '/terminal/settings', undefined, 200)).data)
     .toMatchObject({ cashier_discount_pct: 20, employee_meal_pct: 20, auto_lock_minutes: 5, cashier_price_drop_pct: 20,
-      default_tab: 'info', auto_close_batch_at: '04:00', driver_claim_after_minutes: 45 });
+      default_tab: 'info', auto_close_batch_at: '04:00', cashier_refund_cents: 2000 });
 });
 
 test('what the owner saves reaches the Pi: terminal-config carries the staff and settings, its version moves', async ({

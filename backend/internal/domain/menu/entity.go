@@ -34,27 +34,33 @@ type Category struct {
 	Available        bool       `json:"available"`
 	Position         int        `json:"position"`
 	DefaultPrinterID *uuid.UUID `json:"default_printer_id"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	// NoKitchenTicket (00041): the category's items without a printer of
+	// their own get no station ticket (receipt only).
+	NoKitchenTicket bool      `json:"no_kitchen_ticket,omitempty"` // omitted when false: the operator menu's bytes stay (golden)
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 type Item struct {
-	ID          uuid.UUID      `json:"id"`
-	TenantID    uuid.UUID      `json:"tenant_id"`
-	LocationID  uuid.UUID      `json:"location_id"`
-	CategoryID  uuid.UUID      `json:"category_id"`
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	PriceCents  int64          `json:"price_cents"`
-	TaxRateBps  int            `json:"tax_rate_bps"`
-	InStock     bool           `json:"in_stock"`
-	OutUntil    *time.Time     `json:"out_until"`
-	Tags        []string       `json:"tags"`
-	PrinterID   *uuid.UUID     `json:"printer_id"`
-	Position    int            `json:"position"`
-	Attributes  map[string]any `json:"attributes"`
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
+	ID          uuid.UUID  `json:"id"`
+	TenantID    uuid.UUID  `json:"tenant_id"`
+	LocationID  uuid.UUID  `json:"location_id"`
+	CategoryID  uuid.UUID  `json:"category_id"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	PriceCents  int64      `json:"price_cents"`
+	TaxRateBps  int        `json:"tax_rate_bps"`
+	InStock     bool       `json:"in_stock"`
+	OutUntil    *time.Time `json:"out_until"`
+	Tags        []string   `json:"tags"`
+	PrinterID   *uuid.UUID `json:"printer_id"`
+	// NoKitchenTicket (00041): no station ticket of its own and not in "Also
+	// on this order"; still on the customer receipt. Wins over PrinterID.
+	NoKitchenTicket bool           `json:"no_kitchen_ticket,omitempty"` // omitted when false (golden)
+	Position        int            `json:"position"`
+	Attributes      map[string]any `json:"attributes"`
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
 }
 
 type ModifierGroup struct {

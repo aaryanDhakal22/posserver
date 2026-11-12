@@ -55,7 +55,7 @@ type Repo interface {
 	SetReplyEmail(ctx context.Context, tenantID, locationID uuid.UUID, email string) error
 	// Terminal stage 0c (import.go): the bulk import's transaction (commit
 	// false = a dry run, rolled back) and the Pi's change feed.
-	Import(ctx context.Context, commit bool, fn func(customer.ImportTx) error) error
+	Import(ctx context.Context, locationID uuid.UUID, commit bool, fn func(customer.ImportTx) error) error
 	Changes(ctx context.Context, locationID uuid.UUID, afterAt time.Time, afterID uuid.UUID, limit int) ([]customer.Change, error)
 	ByIDs(ctx context.Context, ids []uuid.UUID) ([]customer.Customer, map[uuid.UUID][]customer.Address, error)
 	PruneTombstones(ctx context.Context, before time.Time) (int64, error)

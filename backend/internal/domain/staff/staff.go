@@ -86,9 +86,11 @@ type Settings struct {
 	DefaultPickupMinutes int      `json:"default_pickup_minutes"` // a pickup's quoted minutes on the terminal
 	AreaCodes            []string `json:"area_codes"`             // the store's local area codes (the terminal reads them for phone numbers)
 
-	// Driver view (2026-11-11): a delivery nobody took shows in the drivers'
-	// Dispatch section once it has waited this long (the Pi reads it).
-	DriverClaimAfterMinutes int `json:"driver_claim_after_minutes"`
+	// DrawerStartCents (the owner, 2026-11-12): the cash left in each
+	// terminal's drawer at opening (the Pi opens a terminal's drawer with it
+	// at its first payment; the till report's starting cash). Same for every
+	// terminal.
+	DrawerStartCents int64 `json:"drawer_start_cents"`
 }
 
 // DefaultTabs are the tabs a login may land on (the terminal's names;
@@ -106,9 +108,9 @@ const (
 	MaxToppingCount      = 10
 	MaxCardTipPercents   = 6
 	MaxPayoutCents       = 100_000
+	MaxDrawerStartCents  = 1_000_000
 	MaxPickupMinutes     = 240
 	MaxAreaCodes         = 20
-	MaxDriverClaimAfter  = 480
 )
 
 // DefaultAreaCodes are Lombardi's (Baltimore County): 410, 443, 667.
@@ -125,6 +127,11 @@ func ValidAreaCode(c string) bool {
 const (
 	DefaultCashierDiscountPct = 20
 	DefaultEmployeeMealPct    = 20
+	// DefaultCashierRefundCents: a cashier gives back up to $20 in cash per
+	// order without a manager (the owner, 2026-11-12; it was 0 = every
+	// refund a manager's; migration 00042 moved stores still on 0). Card
+	// refunds always need a manager (the Pi's rule).
+	DefaultCashierRefundCents = 2000
 )
 
 // DefaultAutoCloseBatchAt is the batch auto-close time (the owner: on by
@@ -132,8 +139,8 @@ const (
 const DefaultAutoCloseBatchAt = "04:00"
 
 // DefaultSettings are every store's defaults (the owner, 2026-11-12: "everything
-// here is default, not just for one store"): refunds are a manager's
-// (TERMINAL-PLAN "Refunds: manager only"), a cashier discounts up to 20 %,
+// here is default, not just for one store"): a cashier refunds cash up to
+// $20 per order (card refunds are a manager's), discounts up to 20 %,
 // the terminal locks after 5 idle minutes, counter numbers start at 1, the
 // receipt screen closes after 15 s; the app lands on Info with History
 // hidden, Barlow buttons without prices or clicks, a cashier lowers a price
@@ -142,14 +149,14 @@ const DefaultAutoCloseBatchAt = "04:00"
 // 20 % off, a topping goes on up to 3 times (tap again = 2×, 3×), a cashier
 // pays out up
 // to $20 from the drawer, a pickup is quoted 15 minutes, the area codes are
-// 410 / 443 / 667, drivers may claim a delivery nobody took after 45 minutes.
+// 410 / 443 / 667. (Drivers claim a delivery nobody took once it is past
+// the order's promised time on the Pi: no setting since 2026-11-12.)
 func DefaultSettings() Settings {
-	return Settings{CashierRefundCents: 0, CashierDiscountPct: DefaultCashierDiscountPct, AutoLockMinutes: 5, CounterStart: 1, ReceiptAutoDoneSeconds: 15,
+	return Settings{CashierRefundCents: DefaultCashierRefundCents, CashierDiscountPct: DefaultCashierDiscountPct, AutoLockMinutes: 5, CounterStart: 1, ReceiptAutoDoneSeconds: 15,
 		AutoCloseBatchAt: DefaultAutoCloseBatchAt,
 		DefaultTab:       "info", ButtonFont: "barlow", CashierPriceDropPct: 20, OutOfAreaMarginMi: 1,
 		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: DefaultEmployeeMealPct, ToppingMaxCount: 3,
-		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes(),
-		DriverClaimAfterMinutes: 45}
+		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes(), DrawerStartCents: 10000}
 }
 
 // Ranges.
@@ -246,10 +253,10 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: topping_max_count must be 1–%d", ErrBadSettings, MaxToppingCount)
 	case s.CashierPayoutCents < 0 || s.CashierPayoutCents > MaxPayoutCents:
 		return fmt.Errorf("%w: cashier_payout_cents must be 0–%d", ErrBadSettings, MaxPayoutCents)
+	case s.DrawerStartCents < 0 || s.DrawerStartCents > MaxDrawerStartCents:
+		return fmt.Errorf("%w: drawer_start_cents must be 0–%d", ErrBadSettings, MaxDrawerStartCents)
 	case s.DefaultPickupMinutes < 0 || s.DefaultPickupMinutes > MaxPickupMinutes:
 		return fmt.Errorf("%w: default_pickup_minutes must be 0–%d", ErrBadSettings, MaxPickupMinutes)
-	case s.DriverClaimAfterMinutes < 0 || s.DriverClaimAfterMinutes > MaxDriverClaimAfter:
-		return fmt.Errorf("%w: driver_claim_after_minutes must be 0–%d", ErrBadSettings, MaxDriverClaimAfter)
 	case len(s.AreaCodes) < 1 || len(s.AreaCodes) > MaxAreaCodes:
 		return fmt.Errorf("%w: area_codes needs 1–%d codes", ErrBadSettings, MaxAreaCodes)
 	}

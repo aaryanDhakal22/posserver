@@ -646,6 +646,7 @@
       {live}
       {piState}
       inheritedPrinter={editCat?.default_printer_id ? printerName(editCat.default_printer_id) : ''}
+      categoryNoKitchen={!!editCat?.no_kitchen_ticket}
       {sizes}
       bank={bankItems.get(editing.id)}
       onclose={() => (editing = null)}

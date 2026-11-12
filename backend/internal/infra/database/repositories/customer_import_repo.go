@@ -2,24 +2,33 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"quiccpos/main/internal/domain/customer"
 	"quiccpos/main/internal/infra/database/models"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // Terminal stage 0c: the bulk customer import and the Pi's change feed.
 
 // Import runs fn in one transaction; commit false (a dry run) rolls it back.
-func (r *CustomerRepository) Import(ctx context.Context, commit bool, fn func(customer.ImportTx) error) error {
+func (r *CustomerRepository) Import(ctx context.Context, locationID uuid.UUID, commit bool, fn func(customer.ImportTx) error) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// One writer of a store's customers at a time (a dry run too: it writes
+	// before rolling back): the import reads every phone, then inserts the
+	// new ones and merges the rest, so a counter customer.upsert landing
+	// in between used to fail the whole import on the phone's unique key.
+	if err := lockStoreCustomers(ctx, tx, locationID); err != nil {
+		return err
+	}
 	if err := fn(importTx{q: models.New(tx)}); err != nil {
 		return err
 	}
@@ -66,6 +75,9 @@ func addressesOf(ctx context.Context, q *models.Queries, ids []pgtype.UUID) (map
 func (t importTx) Create(ctx context.Context, tenantID, locationID uuid.UUID, c customer.Customer) (customer.Customer, error) {
 	row, err := t.q.InsertImportedCustomer(ctx, models.InsertImportedCustomerParams{TenantID: pgID(tenantID), LocationID: pgID(locationID),
 		Phone: c.Phone, Name: c.Name, FirstName: c.FirstName, LastName: c.LastName, Notes: c.Notes})
+	if errors.Is(err, pgx.ErrNoRows) { // ON CONFLICT (location_id, phone) DO NOTHING
+		return customer.Customer{}, customer.ErrPhoneTaken
+	}
 	if err != nil {
 		return customer.Customer{}, err
 	}
@@ -132,4 +144,12 @@ func (r *CustomerRepository) ByIDs(ctx context.Context, ids []uuid.UUID) ([]cust
 // PruneTombstones forgets deletions older than before.
 func (r *CustomerRepository) PruneTombstones(ctx context.Context, before time.Time) (int64, error) {
 	return models.New(r.pool).PruneCustomerTombstones(ctx, ts(before))
+}
+
+// lockStoreCustomers takes the store's customer-writer lock for the rest of
+// the transaction (the bulk import and the Pi's customer.upsert both read,
+// then write a store's customers; one at a time per store).
+func lockStoreCustomers(ctx context.Context, tx pgx.Tx, locationID uuid.UUID) error {
+	_, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", "customers|"+locationID.String())
+	return err
 }

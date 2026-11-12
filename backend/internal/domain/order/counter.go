@@ -112,8 +112,10 @@ func (p CounterPayment) Check() (CheckedPayment, error) {
 	if !CounterMethods[p.Method] {
 		return CheckedPayment{}, badCounter("payment method %q (cash, card, square_app, manual_card, comp, other)", p.Method)
 	}
-	if p.AmountCents == 0 || p.AmountCents > MaxPaymentCents || p.AmountCents < -MaxPaymentCents {
-		return CheckedPayment{}, badCounter("payment amount_cents must be non-zero, within ±%d", MaxPaymentCents)
+	// A zero amount is a tip added to a card payment afterwards (the Pi's
+	// POST …/payments/{id}/tip, agent contract 2.10p): it must carry a tip.
+	if (p.AmountCents == 0 && p.TipCents == 0) || p.AmountCents > MaxPaymentCents || p.AmountCents < -MaxPaymentCents {
+		return CheckedPayment{}, badCounter("payment amount_cents must be within ±%d, non-zero unless it is a tip (tip_cents > 0)", MaxPaymentCents)
 	}
 	if p.TipCents < 0 || p.TipCents > MaxPaymentCents {
 		return CheckedPayment{}, badCounter("payment tip_cents out of range")
@@ -255,7 +257,8 @@ func NewCounterOrder(sc Scope, s CounterSnapshot, raw []byte) (*CounterOrder, er
 
 var counterPortions = map[string]bool{"": true, "first": true, "second": true}
 var counterModes = map[string]bool{"": true, "add": true, "only": true, "no": true, "specialty": true}
-var counterRouting = map[string]bool{"": true, string(RoutingMatched): true, string(RoutingUnmatched): true, string(RoutingUnassigned): true}
+var counterRouting = map[string]bool{"": true, string(RoutingMatched): true, string(RoutingUnmatched): true, string(RoutingUnassigned): true,
+	string(RoutingNoKitchen): true}
 
 func counterItems(in []LineItemDTO, depth int) ([]LineItem, error) {
 	if depth > 2 {

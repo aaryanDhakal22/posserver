@@ -12,6 +12,11 @@ package menuApp
 //	price        dollars, e.g. 12.50 or $12.50 (optional)
 //	printer      station printer name as set up in /app/store (optional)
 //	description  (optional)
+//	no_kitchen_ticket  yes / no (optional; also true/false, 1/0, x): "no
+//	             kitchen ticket" (00041) = no station ticket, not in "Also on
+//	             this order", receipt only. Blank leaves it alone (a new item:
+//	             no). Export writes "yes" for an item that has it, its own or
+//	             its category's (then with a blank printer).
 //
 // Rules: menus, categories and items are matched by normalized name and
 // reused, so a re-import is idempotent. A blank price/printer/description cell
@@ -47,7 +52,7 @@ const DefaultImportMenu = "Main"
 // MaxImportRows bounds one import.
 const MaxImportRows = 5000
 
-var exportHeader = []string{"menu", "category", "item", "price", "printer", "description"}
+var exportHeader = []string{"menu", "category", "item", "price", "printer", "description", "no_kitchen_ticket"}
 
 // CSVRow is one parsed import row. Has* report a non-blank cell.
 type CSVRow struct {
@@ -56,6 +61,8 @@ type CSVRow struct {
 	Printer, Description     string
 	PriceCents               int64
 	HasPrice, HasDescription bool
+	// NoKitchen: the no_kitchen_ticket cell (nil = blank, leave it alone).
+	NoKitchen *bool
 }
 
 // CSVError is a parse or validation failure the caller should fix in the file.
@@ -142,6 +149,13 @@ func ParseMenuCSV(r io.Reader) ([]CSVRow, error) {
 		}
 		row.Printer, _ = cell(rec, "printer")
 		row.Description, row.HasDescription = cell(rec, "description")
+		if v, ok := cell(rec, "no_kitchen_ticket"); ok {
+			b, err := parseYesNo(v)
+			if err != nil {
+				return nil, &CSVError{Line: line, Msg: err.Error()}
+			}
+			row.NoKitchen = &b
+		}
 		if p, ok := cell(rec, "price"); ok {
 			cents, err := parsePrice(p)
 			if err != nil {
@@ -158,6 +172,17 @@ func ParseMenuCSV(r io.Reader) ([]CSVRow, error) {
 		return nil, &CSVError{Msg: "the file has no rows"}
 	}
 	return rows, nil
+}
+
+// parseYesNo reads a yes / no cell.
+func parseYesNo(s string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "yes", "y", "true", "1", "x":
+		return true, nil
+	case "no", "n", "false", "0":
+		return false, nil
+	}
+	return false, fmt.Errorf("no_kitchen_ticket must be yes or no, not %q", s)
 }
 
 func blankRecord(rec []string) bool {
@@ -199,8 +224,13 @@ type ImportResult struct {
 	PrintsOn []PrinterItems `json:"prints_on"`
 	// ItemsNoPrinter counts the file's items left without any printer — they
 	// print on every kitchen station.
-	ItemsNoPrinter int      `json:"items_no_printer"`
-	Changes        []string `json:"changes"`
+	ItemsNoPrinter int `json:"items_no_printer"`
+	// ItemsNoKitchen counts the file's items with "no kitchen ticket" (their
+	// own or their category's): receipt only, no station.
+	ItemsNoKitchen int `json:"items_no_kitchen"`
+	// ItemNoKitchenChanged counts items whose own flag the file changed.
+	ItemNoKitchenChanged int      `json:"item_no_kitchen_changed"`
+	Changes              []string `json:"changes"`
 }
 
 // PrinterItems is one entry of ImportResult.PrintsOn.
@@ -457,6 +487,20 @@ func (s *Service) ImportCSV(ctx context.Context, tenantID, locationID uuid.UUID,
 					fileItems = append(fileItems, it)
 				}
 
+				if r.NoKitchen != nil && *r.NoKitchen != it.NoKitchenTicket {
+					res.ItemNoKitchenChanged++
+					if *r.NoKitchen {
+						res.note("  ~ %q no kitchen ticket (receipt only)", it.Name)
+					} else {
+						res.note("  ~ %q kitchen ticket again", it.Name)
+					}
+					if !dryRun {
+						if err := s.repo.SetItemNoKitchen(ctx, it.ID, tenantID, *r.NoKitchen); err != nil {
+							return res, fmt.Errorf("line %d: set no kitchen ticket for %q: %w", r.Line, it.Name, err)
+						}
+					}
+					it.NoKitchenTicket = *r.NoKitchen
+				}
 				if r.Printer == "" {
 					continue // blank = leave the item's printer alone
 				}
@@ -483,6 +527,8 @@ func (s *Service) ImportCSV(ctx context.Context, tenantID, locationID uuid.UUID,
 			}
 			for _, it := range fileItems {
 				switch {
+				case it.NoKitchenTicket || (it.PrinterID == nil && cat.NoKitchenTicket):
+					res.ItemsNoKitchen++
 				case it.PrinterID != nil:
 					printsOn[*it.PrinterID]++
 				case cat.DefaultPrinterID != nil:
@@ -556,13 +602,16 @@ func (s *Service) ExportCSV(ctx context.Context, locationID uuid.UUID, w io.Writ
 				return err
 			}
 			for _, it := range items {
-				printer := ""
-				if it.PrinterID != nil {
+				printer, noKitchen := "", "no"
+				switch {
+				case it.NoKitchenTicket || (it.PrinterID == nil && c.NoKitchenTicket):
+					noKitchen = "yes"
+				case it.PrinterID != nil:
 					printer = printerName[*it.PrinterID]
-				} else if c.DefaultPrinterID != nil {
+				case c.DefaultPrinterID != nil:
 					printer = printerName[*c.DefaultPrinterID]
 				}
-				if err := cw.Write([]string{m.Name, c.Name, it.Name, formatPrice(it.PriceCents), printer, it.Description}); err != nil {
+				if err := cw.Write([]string{m.Name, c.Name, it.Name, formatPrice(it.PriceCents), printer, it.Description, noKitchen}); err != nil {
 					return err
 				}
 			}

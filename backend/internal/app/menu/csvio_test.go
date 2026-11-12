@@ -115,6 +115,16 @@ func (r *memRepo) UpdateItem(_ context.Context, p menuDom.UpdateItemParams) (*me
 	}
 	return nil, errNotFound
 }
+func (r *memRepo) SetItemNoKitchen(_ context.Context, id, _ uuid.UUID, on bool) error {
+	r.calls++
+	for _, it := range r.items {
+		if it.ID == id {
+			it.NoKitchenTicket = on
+			return nil
+		}
+	}
+	return errNotFound
+}
 func (r *memRepo) SetItemPrinter(_ context.Context, id, _ uuid.UUID, printerID *uuid.UUID) error {
 	r.calls++
 	for _, it := range r.items {
@@ -256,8 +266,8 @@ func TestImportCSV(t *testing.T) {
 	if err := svc.ExportCSV(ctx, lid, &buf); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "Main,Pizza,Cheese Pizza,10.00,Pizza,\n") ||
-		!strings.Contains(buf.String(), "Main,Pizza,Garlic Knots,4.00,Sub,\n") {
+	if !strings.Contains(buf.String(), "Main,Pizza,Cheese Pizza,10.00,Pizza,,no\n") ||
+		!strings.Contains(buf.String(), "Main,Pizza,Garlic Knots,4.00,Sub,,no\n") {
 		t.Errorf("export =\n%s", buf.String())
 	}
 	rt, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, buf.String()), false, false)
@@ -334,4 +344,61 @@ func equalPrintsOn(got, want []PrinterItems) bool {
 		}
 	}
 	return true
+}
+
+// TestImportCSVNoKitchen: the no_kitchen_ticket column sets the item's flag
+// (blank leaves it), such items count as receipt only, export writes "yes"
+// with a blank printer (its own or its category's flag) and round-trips.
+func TestImportCSVNoKitchen(t *testing.T) {
+	ctx := context.Background()
+	svc, repo, _ := newImportSvc(t, "Pizza", "Wings")
+	tid, lid := uuid.New(), uuid.New()
+	in := "category,item,price,printer,no_kitchen_ticket\n" +
+		"Misc,Ranch,0.75,Wings,no\n" +
+		"Misc,Coke,2.00,,yes\n" +
+		"Misc,Napkins,0.00,Wings,\n"
+	if _, err := ParseMenuCSV(strings.NewReader("category,item,no_kitchen_ticket\nMisc,Coke,maybe\n")); !IsCSVError(err) {
+		t.Fatalf("bad yes/no: err = %v", err)
+	}
+	res, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, in), false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ItemsNoKitchen != 1 || res.ItemNoKitchenChanged != 1 || res.ItemsNoPrinter != 0 {
+		t.Fatalf("import = %+v", res)
+	}
+	for _, it := range repo.items {
+		if want := it.Name == "Coke"; it.NoKitchenTicket != want {
+			t.Errorf("%s no kitchen = %v, want %v", it.Name, it.NoKitchenTicket, want)
+		}
+	}
+	// A blank cell leaves it; "no" clears it.
+	again, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, "category,item,no_kitchen_ticket\nMisc,Coke,\n"), false, false)
+	if err != nil || len(again.Changes) != 0 || again.ItemsNoKitchen != 1 {
+		t.Fatalf("blank cell: %+v %v", again, err)
+	}
+	// The category's flag reaches an item without its own printer.
+	for _, c := range repo.cats {
+		c.NoKitchenTicket = true
+	}
+	var buf bytes.Buffer
+	if err := svc.ExportCSV(ctx, lid, &buf); err != nil {
+		t.Fatal(err)
+	}
+	out := buf.String()
+	// Ranch + Napkins have the category default (Wings) as their printer:
+	// the category's flag only reaches items with no printer of their own
+	// - here every item inherits, so every one is receipt only.
+	for _, want := range []string{"Main,Misc,Coke,2.00,,,yes\n", "Main,Misc,Ranch,0.75,,,yes\n"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("export lacks %q:\n%s", want, out)
+		}
+	}
+	for _, c := range repo.cats {
+		c.NoKitchenTicket = false
+	}
+	cl, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, "category,item,no_kitchen_ticket\nMisc,Coke,no\n"), false, false)
+	if err != nil || cl.ItemNoKitchenChanged != 1 || cl.ItemsNoKitchen != 0 {
+		t.Fatalf("clear: %+v %v", cl, err)
+	}
 }

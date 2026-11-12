@@ -8,6 +8,7 @@ import (
 
 	menuDom "quiccpos/main/internal/domain/menu"
 	"quiccpos/main/internal/domain/order"
+	tenancyDom "quiccpos/main/internal/domain/tenancy"
 	"quiccpos/main/internal/observability"
 
 	"github.com/google/uuid"
@@ -141,5 +142,59 @@ func TestRouteItemsVendorMapsDown(t *testing.T) {
 	got, err := svc.RouteItems(context.Background(), uuid.New(), []string{"wings 8pc"})
 	if err != nil || *got[0].MenuItemID != wings {
 		t.Errorf("routes %+v err %v", got, err)
+	}
+}
+
+// "No kitchen ticket" (00041): a name / bank item that matches such an item
+// is routed "none" with no printer; the counter menu's routes say
+// {printer_id: "", no_kitchen: true}; it's never in the unmatched report.
+func TestRoutingNoKitchen(t *testing.T) {
+	p1 := uuid.New()
+	ranch, coke, salad := uuid.New(), uuid.New(), uuid.New()
+	repo := routingRepo{entries: []menuDom.RouteEntry{
+		{ItemID: ranch, Name: "Ranch", PrinterID: &p1},
+		{ItemID: coke, Name: "Coke 2 Liter", NoKitchen: true},
+		{ItemID: salad, Name: "Garden Salad"},
+	}}
+	meters, _ := observability.NewMeters()
+	svc := NewService(repo, nil, meters, zerolog.Nop())
+	ctx := context.Background()
+
+	got, err := svc.RouteItems(ctx, uuid.New(), []string{"coke 2 liter", "Ranch", "Garden Salad"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := got[0]; g.Routing != order.RoutingNoKitchen || g.PrinterID != nil || g.MenuItemID == nil || *g.MenuItemID != coke {
+		t.Errorf("coke = %+v, want routing none, no printer", g)
+	}
+	if got[1].Routing != order.RoutingMatched || got[2].Routing != order.RoutingUnassigned {
+		t.Errorf("others = %+v", got)
+	}
+	byID, err := svc.RouteBankItems(ctx, uuid.New(), []uuid.UUID{coke, ranch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if byID[0].Routing != order.RoutingNoKitchen || byID[0].PrinterID != nil || byID[1].Routing != order.RoutingMatched {
+		t.Errorf("bank items = %+v", byID)
+	}
+	if string(order.RoutingNoKitchen) != "none" {
+		t.Errorf("the wire value is %q, want none", order.RoutingNoKitchen)
+	}
+
+	svc.listPrinters = func(context.Context, uuid.UUID) ([]tenancyDom.Printer, error) {
+		return []tenancyDom.Printer{{ID: p1, Name: "Wings"}}, nil
+	}
+	routes, err := svc.ItemPrinters(ctx, uuid.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := routes[coke]; !r.NoKitchen || r.PrinterID != "" {
+		t.Errorf("coke route = %+v", r)
+	}
+	if r := routes[ranch]; r.NoKitchen || r.PrinterID != p1.String() || r.Name != "Wings" {
+		t.Errorf("ranch route = %+v", r)
+	}
+	if _, ok := routes[salad]; ok {
+		t.Errorf("salad has a route, want none (prints on every station)")
 	}
 }

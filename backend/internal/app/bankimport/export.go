@@ -90,7 +90,9 @@ func export(ctx context.Context, tx bankdoc.Tx) (*bankdoc.Document, error) {
 			if c.DefaultPrinterID != nil {
 				pn = printer[*c.DefaultPrinterID]
 			}
-			dc := bankdoc.Category{Name: c.Name, Description: c.Description, Available: &ca, Printer: &pn, Items: []bankdoc.Item{}}
+			cnk := c.NoKitchenTicket
+			dc := bankdoc.Category{Name: c.Name, Description: c.Description, Available: &ca, Printer: &pn, NoKitchenTicket: &cnk,
+				Items: []bankdoc.Item{}}
 			for _, it := range c.Items {
 				item[it.ID.String()] = it.Name
 				in := it.InStock
@@ -98,6 +100,7 @@ func export(ctx context.Context, tx bankdoc.Tx) (*bankdoc.Document, error) {
 				if it.PrinterID != nil {
 					ipn = printer[*it.PrinterID]
 				}
+				nk := it.NoKitchenTicket
 				tags := append([]string{}, it.Tags...)
 				sizes := make([]bankdoc.ItemSize, 0, len(it.Sizes))
 				for _, z := range it.Sizes {
@@ -109,7 +112,7 @@ func export(ctx context.Context, tx bankdoc.Tx) (*bankdoc.Document, error) {
 				}
 				dc.Items = append(dc.Items, bankdoc.Item{Name: it.Name, Description: it.Description, PriceCents: it.PriceCents,
 					TaxRateBps: it.TaxRateBps, InStock: &in, Tags: &tags, Printer: &ipn, KitchenName: it.KitchenName, SKU: it.SKU,
-					Sizes: &sizes, Groups: &groups})
+					Sizes: &sizes, Groups: &groups, NoKitchenTicket: &nk})
 			}
 			dm.Categories = append(dm.Categories, dc)
 		}

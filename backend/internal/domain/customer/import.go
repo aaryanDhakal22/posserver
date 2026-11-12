@@ -2,6 +2,7 @@ package customer
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -16,7 +17,10 @@ const MaxAddresses = 20
 type ImportTx interface {
 	// ByPhones are the store's customers with these phones, with their addresses.
 	ByPhones(ctx context.Context, locationID uuid.UUID, phones []string) (map[string]Customer, map[uuid.UUID][]Address, error)
-	// Create inserts an imported customer (source import).
+	// Create inserts an imported customer (source import). ErrPhoneTaken: a
+	// customer with that phone exists after all (another writer made it after
+	// ByPhones read: a website sign-in; the Pi's counter writes wait for the
+	// import's store lock).
 	Create(ctx context.Context, tenantID, locationID uuid.UUID, c Customer) (Customer, error)
 	// SetNamesNotes writes name / first / last / notes and their sources.
 	SetNamesNotes(ctx context.Context, c Customer) error
@@ -24,6 +28,10 @@ type ImportTx interface {
 	// FillAddress rewrites an address's label, line2, city, state, zip and notes.
 	FillAddress(ctx context.Context, a Address) error
 }
+
+// ErrPhoneTaken: ImportTx.Create found the store already has a customer
+// with that phone (the import then merges into it, as with one it read).
+var ErrPhoneTaken = errors.New("a customer with that phone exists")
 
 // Change is one row of the Pi's change feed: a customer changed (or was
 // deleted) at At.

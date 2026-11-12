@@ -153,7 +153,7 @@ func (s *Service) Import(ctx context.Context, tenantID, locationID uuid.UUID, re
 		phones = append(phones, p)
 	}
 
-	err := s.repo.Import(ctx, !dryRun, func(tx customer.ImportTx) error {
+	err := s.repo.Import(ctx, locationID, !dryRun, func(tx customer.ImportTx) error {
 		known, addrs, err := tx.ByPhones(ctx, locationID, phones)
 		if err != nil {
 			return err
@@ -164,10 +164,22 @@ func (s *Service) Import(ctx context.Context, tenantID, locationID uuid.UUID, re
 			if !exists {
 				c, err = tx.Create(ctx, tenantID, locationID, customer.Customer{Phone: r.phone, FirstName: r.first, LastName: r.last,
 					Name: customer.JoinName(r.first, r.last), Notes: r.notes})
-				if err != nil {
+				if errors.Is(err, customer.ErrPhoneTaken) {
+					// Another writer (a website sign-in) made it after ByPhones:
+					// merge into theirs like any customer read at the start.
+					k, a, rerr := tx.ByPhones(ctx, locationID, []string{r.phone})
+					if rerr != nil {
+						return fmt.Errorf("record %d: %w", r.index, rerr)
+					}
+					if c, exists = k[r.phone]; !exists {
+						return fmt.Errorf("record %d: %w", r.index, err)
+					}
+					addrs[c.ID] = a[c.ID]
+				} else if err != nil {
 					return fmt.Errorf("record %d: %w", r.index, err)
 				}
-			} else {
+			}
+			if exists {
 				next := c
 				if r.first != "" || r.last != "" {
 					name := customer.JoinName(r.first, r.last)

@@ -252,6 +252,49 @@ type DiagReport struct {
 	ResolvedAt   pgtype.Timestamptz `json:"resolved_at"`
 }
 
+type DrawerMovement struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	DrawerID    pgtype.UUID        `json:"drawer_id"`
+	Kind        string             `json:"kind"`
+	AmountCents int64              `json:"amount_cents"`
+	Reason      string             `json:"reason"`
+	StaffID     string             `json:"staff_id"`
+	ApprovedBy  string             `json:"approved_by"`
+	At          pgtype.Timestamptz `json:"at"`
+}
+
+type DrawerSession struct {
+	ID               pgtype.UUID        `json:"id"`
+	TenantID         pgtype.UUID        `json:"tenant_id"`
+	LocationID       pgtype.UUID        `json:"location_id"`
+	DeviceID         string             `json:"device_id"`
+	DeviceName       string             `json:"device_name"`
+	StaffID          string             `json:"staff_id"`
+	StaffName        string             `json:"staff_name"`
+	BatchID          pgtype.Int8        `json:"batch_id"`
+	OpenedAt         pgtype.Timestamptz `json:"opened_at"`
+	StartCents       int64              `json:"start_cents"`
+	HandoverFrom     pgtype.UUID        `json:"handover_from"`
+	ClosedAt         pgtype.Timestamptz `json:"closed_at"`
+	ClosedBy         string             `json:"closed_by"`
+	CloseReason      string             `json:"close_reason"`
+	CountedCents     pgtype.Int8        `json:"counted_cents"`
+	Denominations    []byte             `json:"denominations"`
+	ExpectedCents    pgtype.Int8        `json:"expected_cents"`
+	OverShortCents   pgtype.Int8        `json:"over_short_cents"`
+	Flagged          bool               `json:"flagged"`
+	CashSalesCents   int64              `json:"cash_sales_cents"`
+	CashRefundsCents int64              `json:"cash_refunds_cents"`
+	CashTipsCents    int64              `json:"cash_tips_cents"`
+	PayInsCents      int64              `json:"pay_ins_cents"`
+	PayOutsCents     int64              `json:"pay_outs_cents"`
+	NoSales          int32              `json:"no_sales"`
+	Payments         int32              `json:"payments"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
 type Driver struct {
 	ID         pgtype.UUID        `json:"id"`
 	TenantID   pgtype.UUID        `json:"tenant_id"`
@@ -380,28 +423,30 @@ type MenuCategory struct {
 	DefaultPrinterID pgtype.UUID        `json:"default_printer_id"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	NoKitchenTicket  bool               `json:"no_kitchen_ticket"`
 }
 
 type MenuItem struct {
-	ID          pgtype.UUID        `json:"id"`
-	TenantID    pgtype.UUID        `json:"tenant_id"`
-	LocationID  pgtype.UUID        `json:"location_id"`
-	CategoryID  pgtype.UUID        `json:"category_id"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	PriceCents  int64              `json:"price_cents"`
-	TaxRateBps  int32              `json:"tax_rate_bps"`
-	InStock     bool               `json:"in_stock"`
-	OutUntil    pgtype.Timestamptz `json:"out_until"`
-	Tags        []byte             `json:"tags"`
-	PrinterID   pgtype.UUID        `json:"printer_id"`
-	Position    int32              `json:"position"`
-	Attributes  []byte             `json:"attributes"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-	KitchenName string             `json:"kitchen_name"`
-	Sku         string             `json:"sku"`
-	OutHold     bool               `json:"out_hold"`
+	ID              pgtype.UUID        `json:"id"`
+	TenantID        pgtype.UUID        `json:"tenant_id"`
+	LocationID      pgtype.UUID        `json:"location_id"`
+	CategoryID      pgtype.UUID        `json:"category_id"`
+	Name            string             `json:"name"`
+	Description     string             `json:"description"`
+	PriceCents      int64              `json:"price_cents"`
+	TaxRateBps      int32              `json:"tax_rate_bps"`
+	InStock         bool               `json:"in_stock"`
+	OutUntil        pgtype.Timestamptz `json:"out_until"`
+	Tags            []byte             `json:"tags"`
+	PrinterID       pgtype.UUID        `json:"printer_id"`
+	Position        int32              `json:"position"`
+	Attributes      []byte             `json:"attributes"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	KitchenName     string             `json:"kitchen_name"`
+	Sku             string             `json:"sku"`
+	OutHold         bool               `json:"out_hold"`
+	NoKitchenTicket bool               `json:"no_kitchen_ticket"`
 }
 
 type MenuItemSize struct {
@@ -657,6 +702,8 @@ type Payment struct {
 	Last4       string             `json:"last4"`
 	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
 	AuthCode    string             `json:"auth_code"`
+	TipCents    int64              `json:"tip_cents"`
+	StaffID     pgtype.UUID        `json:"staff_id"`
 }
 
 type PlatformKey struct {
@@ -748,6 +795,33 @@ type SquareConnection struct {
 	ConnectedAt      pgtype.Timestamptz `json:"connected_at"`
 }
 
+type Staff struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	FirstName  string             `json:"first_name"`
+	LastName   string             `json:"last_name"`
+	PinHash    string             `json:"pin_hash"`
+	Role       string             `json:"role"`
+	Limits     []byte             `json:"limits"`
+	Active     bool               `json:"active"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type StaffJournal struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	At         pgtype.Timestamptz `json:"at"`
+	StaffID    pgtype.UUID        `json:"staff_id"`
+	DeviceID   string             `json:"device_id"`
+	Action     string             `json:"action"`
+	OrderID    pgtype.UUID        `json:"order_id"`
+	Detail     []byte             `json:"detail"`
+	ReceivedAt pgtype.Timestamptz `json:"received_at"`
+}
+
 type StatusEvent struct {
 	OrderID    pgtype.UUID        `json:"order_id"`
 	Position   int32              `json:"position"`
@@ -807,4 +881,24 @@ type Tenant struct {
 	PasswordHash pgtype.Text        `json:"password_hash"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	StoreID      pgtype.Int8        `json:"store_id"`
+}
+
+type TerminalSetting struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	Settings   []byte             `json:"settings"`
+	Version    int64              `json:"version"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ZReport struct {
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	BatchID      int64              `json:"batch_id"`
+	BusinessDate pgtype.Date        `json:"business_date"`
+	OpenedAt     pgtype.Timestamptz `json:"opened_at"`
+	ClosedAt     pgtype.Timestamptz `json:"closed_at"`
+	Report       []byte             `json:"report"`
+	ReceivedAt   pgtype.Timestamptz `json:"received_at"`
 }

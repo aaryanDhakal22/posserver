@@ -181,13 +181,29 @@ def compare(want: list[dict], got: list[dict]) -> list[str]:
             try:
                 lost = _lost(_loads(w["body"]), _loads(g["body"]), "")
             except ValueError:
-                lost = ["(not JSON) body changed"]
+                lost = _lost_csv(w, g)
             if lost:
                 problems.append(f"{where}: fields changed or gone\n  " + "\n  ".join(lost[:20]))
         elif w["body"] != g["body"]:
             diff = difflib.unified_diff(_pretty(w["body"]), _pretty(g["body"]), "reference", "now", lineterm="", n=2)
             problems.append(f"{where}: body\n" + "\n".join(list(diff)[:40]))
     return problems
+
+
+def _lost_csv(w: dict, g: dict) -> list[str]:
+    """A CSV body (main's own Store › Menu export) in additive mode: the same
+    rows, each keeping the reference's columns unchanged; new columns may only
+    be added at the end (the 2026-11-12 no_kitchen_ticket column)."""
+    if "text/csv" not in str(w.get("headers", {}).get("content-type", "")):
+        return ["(not JSON) body changed"]
+    old, new = w["body"].splitlines(), g["body"].splitlines()
+    if len(old) != len(new):
+        return [f"(csv) {len(old)} rows → {len(new)}"]
+    lost = []
+    for i, (a, b) in enumerate(zip(old, new)):
+        if not (b == a or b.startswith(a + ",")):
+            lost.append(f"(csv) row {i}: {a!r} → {b!r}")
+    return lost
 
 
 _BARE = re.compile(r'(?<=[:\[,])(<[^<>"]+>)(?=[,}\]])')

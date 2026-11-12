@@ -164,6 +164,7 @@ func (h *MenuHandler) MeCreateCategory(c *echo.Context) error {
 		Name           string  `json:"name"`
 		Description    string  `json:"description"`
 		DefaultPrinter *string `json:"default_printer_id"`
+		NoKitchen      bool    `json:"no_kitchen_ticket"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
@@ -172,7 +173,7 @@ func (h *MenuHandler) MeCreateCategory(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("default_printer_id must be a uuid"))
 	}
-	cat, err := h.svc.CreateCategory(c.Request().Context(), tid, lid, menuID, req.Name, req.Description, pr)
+	cat, err := h.svc.CreateCategory(c.Request().Context(), tid, lid, menuID, req.Name, req.Description, pr, req.NoKitchen)
 	if err != nil {
 		return h.mErr(c, err)
 	}
@@ -190,6 +191,7 @@ func (h *MenuHandler) MeUpdateCategory(c *echo.Context) error {
 		Description    string  `json:"description"`
 		Available      bool    `json:"available"`
 		DefaultPrinter *string `json:"default_printer_id"`
+		NoKitchen      *bool   `json:"no_kitchen_ticket"` // absent = keep
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
@@ -198,7 +200,7 @@ func (h *MenuHandler) MeUpdateCategory(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("default_printer_id must be a uuid"))
 	}
-	cat, err := h.svc.UpdateCategory(c.Request().Context(), tid, lid, id, req.Name, req.Description, req.Available, pr)
+	cat, err := h.svc.UpdateCategory(c.Request().Context(), tid, lid, id, req.Name, req.Description, req.Available, pr, req.NoKitchen)
 	if err != nil {
 		return h.mErr(c, err)
 	}
@@ -297,6 +299,7 @@ func (h *MenuHandler) MeAssignItemPrinter(c *echo.Context) error {
 	}
 	var req struct {
 		PrinterID *string `json:"printer_id"`
+		NoKitchen *bool   `json:"no_kitchen_ticket"` // absent = keep
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
@@ -305,7 +308,7 @@ func (h *MenuHandler) MeAssignItemPrinter(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("printer_id must be a uuid"))
 	}
-	if err := h.svc.AssignItemPrinter(c.Request().Context(), tid, lid, id, pr); err != nil {
+	if err := h.svc.AssignItemPrinter(c.Request().Context(), tid, lid, id, pr, req.NoKitchen); err != nil {
 		return h.mErr(c, err)
 	}
 	return c.NoContent(http.StatusNoContent)

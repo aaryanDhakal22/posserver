@@ -10,7 +10,8 @@
 //     name; a deal by name. Category and item names must be unique in the
 //     document (they are what views and deals refer to).
 //   - Absent optional fields keep what is there: `available` / `in_stock`
-//     (new rows: true), `printer` (new rows: none), an item's `tags`,
+//     (new rows: true), `printer` (new rows: none), `no_kitchen_ticket`
+//     (new rows: false), an item's `tags`,
 //     `sizes` and `groups`. Sold-out state (`out_until`) is never touched.
 //   - A view's entries are replaced by the document's (views are generated).
 //   - Nothing is deleted unless the import is asked to prune; views are never
@@ -83,12 +84,15 @@ type Menu struct {
 }
 
 // Category: Printer names the store printer (nil = keep, "" = none).
+// NoKitchenTicket: its items without a printer of their own get no station
+// ticket (receipt only; nil = keep, new rows false).
 type Category struct {
-	Name        string  `json:"name"`
-	Description string  `json:"description"`
-	Available   *bool   `json:"available,omitempty"`
-	Printer     *string `json:"printer,omitempty"`
-	Items       []Item  `json:"items"`
+	Name            string  `json:"name"`
+	Description     string  `json:"description"`
+	Available       *bool   `json:"available,omitempty"`
+	Printer         *string `json:"printer,omitempty"`
+	NoKitchenTicket *bool   `json:"no_kitchen_ticket,omitempty"`
+	Items           []Item  `json:"items"`
 }
 
 // Item is one bank item. Printer nil = keep ("" = inherit the category's);
@@ -113,6 +117,10 @@ type Item struct {
 	// (the counter). Item attributes no_tax / open_price; nil = keep.
 	NoTax     *bool `json:"no_tax,omitempty"`
 	OpenPrice *bool `json:"open_price,omitempty"`
+	// NoKitchenTicket: no station ticket of its own and not in "Also on
+	// this order" (receipt only; wins over Printer). nil = keep, new rows
+	// false.
+	NoKitchenTicket *bool `json:"no_kitchen_ticket,omitempty"`
 }
 
 // ItemSize is a size an item comes in.

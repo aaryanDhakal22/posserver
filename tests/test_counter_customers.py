@@ -125,3 +125,40 @@ def test_customers_changed_is_pushed_to_the_pi(admin, store) -> None:
             if cmd:
                 break
         assert cmd and cmd["payload"]["at"], "customers.changed was not pushed"
+
+
+def test_import_and_counter_upserts_race_on_the_same_phones(admin, store) -> None:
+    """The Pi's customer.upsert landing while an import (dry run or real) is between reading its phones and
+    inserting them used to fail the whole import on the phone's unique key (503 try_again; the agent suite's
+    test_customers_sync_lookup_add_and_orders). Now both write a store's customers one at a time: every import
+    answers 200, every upsert is applied, and each phone is one customer."""
+    import threading
+
+    for dry in (True, False):
+        phones = list(dict.fromkeys(_phone() for _ in range(1500)))
+        racing = phones[-12:]  # inserted last by the import: the widest window
+        recs = [{"phone": p, "first_name": "Imp", "last_name": "Test"} for p in phones]
+        out: dict = {}
+
+        def run_import() -> None:
+            out["import"] = _import(admin, store, recs, dry_run=dry)
+
+        def run_upserts() -> None:
+            evs = [_upsert({"id": str(uuid.uuid4()), "phone": p, "first_name": "Dee", "last_name": "Test"}) for p in racing]
+            out["upserts"] = {}
+            for ev in evs:  # one event per call: they spread over the import's transaction
+                out["upserts"].update(_send(store.key, [ev]))
+
+        threads = [threading.Thread(target=run_import), threading.Thread(target=run_upserts)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=60)
+        assert "import" in out, "the import failed (see the assertion in its thread)"
+        assert set(out["upserts"].values()) == {"applied"}, out["upserts"]
+        res = out["import"]
+        assert res["created"] + res["updated"] + res["unchanged"] == len(phones), res
+        feed = _feed_all(store.key)[0]
+        assert all(p in feed for p in racing)
+        if not dry:
+            assert all(p in feed for p in phones)

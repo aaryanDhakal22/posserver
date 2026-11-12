@@ -144,11 +144,16 @@ def test_status_payment_void(store) -> None:
     # Bad payments / unknown order.
     bad = [
         {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid, "payment": {**pay, "id": str(uuid.uuid4()), "method": "iou"}},
-        {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid, "payment": {**pay, "id": str(uuid.uuid4()), "amount_cents": 0}},
+        {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid,
+         "payment": {**pay, "id": str(uuid.uuid4()), "amount_cents": 0, "tip_cents": 0}},  # a zero amount needs a tip
     ]
     nf = {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": str(uuid.uuid4()), "payment": {**pay, "id": str(uuid.uuid4())}}
     res = _send(store.key, [*bad, nf])
     assert [res[b["event_id"]] for b in bad] == ["invalid", "invalid"] and res[nf["event_id"]] == "not_found"
+    # A tip added to a card payment afterwards (agent §2.10p): a zero amount with a tip is taken.
+    tip = {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid,
+           "payment": {**pay, "id": str(uuid.uuid4()), "amount_cents": 0, "tip_cents": 200, "ref": pay["id"]}}
+    assert _send(store.key, [tip])[tip["event_id"]] == "applied"
 
     # Void after it was picked up: cancelled with the reason; twice = stale.
     done = {"event_id": str(uuid.uuid4()), "type": "order.status", "order_id": oid, "status": "delivered", "at": _now()}

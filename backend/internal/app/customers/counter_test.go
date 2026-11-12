@@ -16,7 +16,7 @@ import (
 
 func (f *fakeRepo) CounterUpsert(ctx context.Context, _, _, _ uuid.UUID, _ string, fn func(customer.CounterTx) (string, error)) (string, error) {
 	var res string
-	err := f.Import(ctx, true, func(tx customer.ImportTx) error {
+	err := f.Import(ctx, uuid.Nil, true, func(tx customer.ImportTx) error {
 		var err error
 		res, err = fn(tx.(*fakeTx))
 		return err

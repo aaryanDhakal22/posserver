@@ -323,12 +323,16 @@ export interface Category {
   id: string; tenant_id: string; location_id: string; menu_id: string;
   name: string; description: string; available: boolean; position: number;
   default_printer_id: string | null;
+  /** "No kitchen ticket" (00041): its items without their own printer print on the receipt only. */
+  no_kitchen_ticket?: boolean;
 }
 export interface Item {
   id: string; tenant_id: string; location_id: string; category_id: string;
   name: string; description: string; price_cents: number; tax_rate_bps: number;
   in_stock: boolean; out_until: string | null; tags: string[];
   printer_id: string | null; position: number; attributes: Record<string, unknown>;
+  /** "No kitchen ticket" (00041): no station ticket, not in "Also on this order"; receipt only. */
+  no_kitchen_ticket?: boolean;
 }
 export interface ModifierGroup {
   id: string; tenant_id: string; location_id: string; name: string;
@@ -416,6 +420,9 @@ export interface MenuImportResult {
   prints_on?: { printer: string; items: number }[];
   /** File items left with no printer — they print on every station. */
   items_no_printer?: number;
+  /** File items with "no kitchen ticket" (receipt only). */
+  items_no_kitchen?: number;
+  item_no_kitchen_changed?: number;
 }
 export interface UnmatchedName { name: string; routing: 'unmatched' | 'unassigned'; orders: number; last_seen: string; }
 export interface FloorDriver { id: string; name: string; position: number; status: string; updated_at: string; }
@@ -860,13 +867,13 @@ export interface TerminalSettings {
   default_tab: TerminalTabName; show_history: boolean; button_font: ButtonFont; cashier_price_drop_pct: number;
   click_sound: boolean; prices_on_buttons: boolean; out_of_area_margin_mi: number; name_on_paid_counter: boolean;
   card_tips: boolean; card_tip_percents: number[]; employee_meal_pct: number; topping_max_count: number;
-  cashier_payout_cents: number; default_pickup_minutes: number; area_codes: string[]; driver_claim_after_minutes: number;
+  cashier_payout_cents: number; default_pickup_minutes: number; area_codes: string[]; drawer_start_cents: number;
 }
 /** The owner's defaults (main's staff.DefaultSettings): a field main doesn't send yet shows these. */
 export const TERMINAL_DEFAULTS: TerminalSettings = {
-  cashier_refund_cents: 0, cashier_discount_pct: 20, auto_lock_minutes: 5, counter_start: 1, receipt_auto_done_seconds: 15,
+  cashier_refund_cents: 2000, cashier_discount_pct: 20, auto_lock_minutes: 5, counter_start: 1, receipt_auto_done_seconds: 15,
   auto_close_batch_at: '04:00', default_tab: 'info', show_history: false, button_font: 'barlow', cashier_price_drop_pct: 20,
   click_sound: false, prices_on_buttons: false, out_of_area_margin_mi: 1, name_on_paid_counter: false, card_tips: false,
   card_tip_percents: [15, 18, 20], employee_meal_pct: 20, topping_max_count: 3,
-  cashier_payout_cents: 2000, default_pickup_minutes: 15, area_codes: ['410', '443', '667'], driver_claim_after_minutes: 45
+  cashier_payout_cents: 2000, default_pickup_minutes: 15, area_codes: ['410', '443', '667'], drawer_start_cents: 10000
 };

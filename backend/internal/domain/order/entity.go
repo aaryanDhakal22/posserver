@@ -200,6 +200,9 @@ const (
 	RoutingMatched    Routing = "matched"    // menu item found + it (or its category) has a printer
 	RoutingUnmatched  Routing = "unmatched"  // no menu item with that name
 	RoutingUnassigned Routing = "unassigned" // menu item found, but no printer assigned
+	// RoutingNoKitchen: the menu item has "no kitchen ticket" (00041): no
+	// station ticket, not in "Also on this order", receipt only.
+	RoutingNoKitchen Routing = "none"
 )
 
 type PaymentStatus string

@@ -52,7 +52,7 @@ def test_staff_crud_and_pins(mgr) -> None:
     assert sam["first_name"] == "Sam" and sam["role"] == "cashier" and sam["active"] is True
     assert "pin" not in json.dumps(sam).replace('"pin_', ""), "the PIN never comes back"
     assert "pin_hash" not in sam
-    assert sam["limits"] == {} and sam["effective_limits"] == {"refund_cents": 0, "discount_pct": 20}
+    assert sam["limits"] == {} and sam["effective_limits"] == {"refund_cents": 2000, "discount_pct": 20}
 
     # PIN rules.
     assert _code(mgr.post(STAFF, json={"first_name": "Ann", "role": "cashier", "pin": "1234"}, timeout=10), 409) == "pin_taken"
@@ -70,7 +70,7 @@ def test_staff_crud_and_pins(mgr) -> None:
 
     # Edit: name, role, limits ({} = the role defaults again).
     sam = _ok(mgr.patch(f"{STAFF}/{sam['id']}", json={"last_name": "Leigh", "limits": {"discount_pct": 25}}, timeout=10))
-    assert sam["last_name"] == "Leigh" and sam["effective_limits"] == {"refund_cents": 0, "discount_pct": 25}
+    assert sam["last_name"] == "Leigh" and sam["effective_limits"] == {"refund_cents": 2000, "discount_pct": 25}
     sam = _ok(mgr.patch(f"{STAFF}/{sam['id']}", json={"role": "driver", "limits": {}}, timeout=10))
     assert sam["effective_limits"] == {"refund_cents": 0, "discount_pct": 0}
 
@@ -110,7 +110,7 @@ def _known(got: dict, want: dict) -> dict:
 
 
 def test_terminal_settings(mgr) -> None:
-    first = {"cashier_refund_cents": 0, "cashier_discount_pct": 20, "auto_lock_minutes": 5, "counter_start": 1,
+    first = {"cashier_refund_cents": 2000, "cashier_discount_pct": 20, "auto_lock_minutes": 5, "counter_start": 1,
              "receipt_auto_done_seconds": 15, "auto_close_batch_at": "04:00", **APP_DEFAULTS}
     assert _known(_ok(mgr.get(SETTINGS, timeout=5)), first) == first
     want = {"cashier_refund_cents": 2000, "cashier_discount_pct": 15, "auto_lock_minutes": 3, "counter_start": 100,
@@ -178,17 +178,24 @@ def test_drawer_and_phone_settings(store, mgr) -> None:
     assert (cfg["cashier_payout_cents"], cfg["default_pickup_minutes"], cfg["area_codes"]) == (3500, 20, ["410", "443", "667"])
 
 
-def test_driver_claim_after_setting(store, mgr) -> None:
-    """driver_claim_after_minutes (the drivers' Dispatch wait, default 45, 0-480): kept when a save leaves it out,
-    sent to the Pi."""
-    assert _ok(mgr.get(SETTINGS, timeout=5))["driver_claim_after_minutes"] == 45
-    assert _config(store.key)["settings"]["driver_claim_after_minutes"] == 45
-    assert _ok(mgr.put(SETTINGS, json={"driver_claim_after_minutes": 30}, timeout=5))["driver_claim_after_minutes"] == 30
-    assert _ok(mgr.put(SETTINGS, json={"auto_lock_minutes": 6}, timeout=5))["driver_claim_after_minutes"] == 30
-    for bad in (-1, 481):
-        assert _code(mgr.put(SETTINGS, json={"driver_claim_after_minutes": bad}, timeout=5), 400) == "bad_settings", bad
-    assert _ok(mgr.put(SETTINGS, json={"driver_claim_after_minutes": 0}, timeout=5))["driver_claim_after_minutes"] == 0
-    assert _config(store.key)["settings"]["driver_claim_after_minutes"] == 0
+def test_drawer_start_setting(store, mgr) -> None:
+    """drawer_start_cents (the owner, 2026-11-12: "cash left in each drawer at opening", default $100): saved,
+    ranged, kept when a save leaves it out, sent to the Pi."""
+    assert _ok(mgr.get(SETTINGS, timeout=5))["drawer_start_cents"] == 10000
+    assert _config(store.key)["settings"]["drawer_start_cents"] == 10000
+    assert _ok(mgr.put(SETTINGS, json={"drawer_start_cents": 15000}, timeout=5))["drawer_start_cents"] == 15000
+    assert _ok(mgr.put(SETTINGS, json={"auto_lock_minutes": 6}, timeout=5))["drawer_start_cents"] == 15000
+    for bad in (-1, 1_000_001):
+        assert _code(mgr.put(SETTINGS, json={"drawer_start_cents": bad}, timeout=5), 400) == "bad_settings", bad
+    assert _config(store.key)["settings"]["drawer_start_cents"] == 15000
+
+
+def test_driver_claim_setting_retired(store, mgr) -> None:
+    """driver_claim_after_minutes is gone (the owner, 2026-11-12: drivers claim once an order is past its promised
+    time on the Pi; migration 00042 dropped it from saved rows): not served, not sent to the Pi, refused on a save."""
+    assert "driver_claim_after_minutes" not in _ok(mgr.get(SETTINGS, timeout=5))
+    assert "driver_claim_after_minutes" not in _config(store.key)["settings"]
+    assert _code(mgr.put(SETTINGS, json={"driver_claim_after_minutes": 30}, timeout=5), 400) == "bad_request"
 
 
 def test_terminal_config_for_the_pi(store, mgr) -> None:
@@ -206,7 +213,7 @@ def test_terminal_config_for_the_pi(store, mgr) -> None:
         (eve,) = cfg["staff"]
         assert eve["id"] == p["id"] and eve["role"] == "cashier" and eve["first_name"] == "Eve"
         assert eve["pin_hash"].startswith("$2a$08$") and len(eve["pin_hash"]) == 60
-        assert eve["effective_limits"] == {"refund_cents": 0, "discount_pct": 20}
+        assert eve["effective_limits"] == {"refund_cents": 2000, "discount_pct": 20}
 
         # A settings save is a change too.
         st = _ok(mgr.get(SETTINGS, timeout=5))

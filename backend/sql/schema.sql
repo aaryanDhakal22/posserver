@@ -235,6 +235,7 @@ CREATE TABLE menu_categories (
     default_printer_id uuid,
     created_at         timestamptz NOT NULL DEFAULT now(),
     updated_at         timestamptz NOT NULL DEFAULT now(),
+    no_kitchen_ticket  boolean     NOT NULL DEFAULT false, -- 00041
     FOREIGN KEY (menu_id, tenant_id)     REFERENCES menus(id, tenant_id)      ON DELETE CASCADE,
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id)  ON DELETE CASCADE,
     FOREIGN KEY (default_printer_id)     REFERENCES printers(id)              ON DELETE SET NULL,
@@ -262,6 +263,7 @@ CREATE TABLE menu_items (
     kitchen_name  text        NOT NULL DEFAULT '',
     sku           text        NOT NULL DEFAULT '',
     out_hold      boolean     NOT NULL DEFAULT false, -- 00028
+    no_kitchen_ticket boolean NOT NULL DEFAULT false, -- 00041
     FOREIGN KEY (category_id, tenant_id) REFERENCES menu_categories(id, tenant_id) ON DELETE CASCADE,
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id)       ON DELETE CASCADE,
     FOREIGN KEY (printer_id)             REFERENCES printers(id)                   ON DELETE SET NULL,

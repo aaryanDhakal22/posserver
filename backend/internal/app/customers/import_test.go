@@ -17,15 +17,24 @@ type fakeRepo struct {
 	byPhone map[string]customer.Customer
 	addrs   map[uuid.UUID][]customer.Address
 	changes []customer.Change
+	// late: customers another writer creates while an import runs (after its
+	// ByPhones read, before its insert): Create of that phone sees it and
+	// answers ErrPhoneTaken, as the store's ON CONFLICT DO NOTHING does.
+	late map[string]lateWrite
+}
+
+type lateWrite struct {
+	c     customer.Customer
+	addrs []customer.Address
 }
 
 func newFake() *fakeRepo {
 	return &fakeRepo{byPhone: map[string]customer.Customer{}, addrs: map[uuid.UUID][]customer.Address{}}
 }
 
-func (f *fakeRepo) Import(ctx context.Context, commit bool, fn func(customer.ImportTx) error) error {
+func (f *fakeRepo) Import(ctx context.Context, _ uuid.UUID, commit bool, fn func(customer.ImportTx) error) error {
 	// Work on copies; keep them only on commit.
-	tx := &fakeTx{byPhone: map[string]customer.Customer{}, addrs: map[uuid.UUID][]customer.Address{}}
+	tx := &fakeTx{byPhone: map[string]customer.Customer{}, addrs: map[uuid.UUID][]customer.Address{}, late: f.late}
 	for k, v := range f.byPhone {
 		tx.byPhone[k] = v
 	}
@@ -44,6 +53,7 @@ func (f *fakeRepo) Import(ctx context.Context, commit bool, fn func(customer.Imp
 type fakeTx struct {
 	byPhone map[string]customer.Customer
 	addrs   map[uuid.UUID][]customer.Address
+	late    map[string]lateWrite
 }
 
 func (t *fakeTx) ByPhones(_ context.Context, _ uuid.UUID, phones []string) (map[string]customer.Customer, map[uuid.UUID][]customer.Address, error) {
@@ -58,6 +68,10 @@ func (t *fakeTx) ByPhones(_ context.Context, _ uuid.UUID, phones []string) (map[
 }
 
 func (t *fakeTx) Create(_ context.Context, _, _ uuid.UUID, c customer.Customer) (customer.Customer, error) {
+	if w, ok := t.late[c.Phone]; ok {
+		t.byPhone[c.Phone], t.addrs[w.c.ID] = w.c, append([]customer.Address(nil), w.addrs...)
+		return customer.Customer{}, customer.ErrPhoneTaken
+	}
 	c.ID, c.Source = uuid.New(), customer.SourceImport
 	if c.Name != "" {
 		c.NameSource = customer.SourceImport
@@ -282,5 +296,42 @@ func TestFeedPagesAndLags(t *testing.T) {
 	old := feedCursor(now.Add(-TombstoneKeep-time.Hour), uuid.Nil)
 	if r, _ := s.Changes(context.Background(), loc, old, 2); !r.Reset {
 		t.Fatal("an old cursor must reset")
+	}
+}
+
+// A customer another writer created after the import read its phones (the
+// race behind the agent suite's 503 try_again): the import merges into it
+// instead of failing, a dry run included, and keeps the other writer's name.
+func TestImportMergesIntoACustomerCreatedMeanwhile(t *testing.T) {
+	for _, dry := range []bool{true, false} {
+		f := newFake()
+		id := uuid.New()
+		f.late = map[string]lateWrite{"4105550111": {c: customer.Customer{ID: id, Phone: "4105550111", Name: "Dee Test", FirstName: "Dee",
+			LastName: "Test", NameSource: customer.SourceWeb, Source: customer.SourceWeb},
+			addrs: []customer.Address{{ID: uuid.New(), Line1: "4 Test Road", Zip: "21204", Default: true}}}}
+		s := svcWith(f)
+		res, err := s.Import(context.Background(), tenant, loc, []ImportRecord{
+			{Phone: "4105550111", FirstName: "Imp", LastName: "Other", Notes: "gate code 12",
+				Addresses: []ImportAddress{{Line1: "4 Test Rd", City: "Towson", Zip: "21204"}, {Line1: "9 Work Ave", City: "Towson"}}},
+			{Phone: "4105550112", FirstName: "New", LastName: "Test"}}, dry)
+		if err != nil {
+			t.Fatalf("dry %v: %v", dry, err)
+		}
+		if res.Created != 1 || res.Updated != 1 || res.Kept["name"] != 1 || res.Addresses.Matched != 1 || res.Addresses.Added != 1 {
+			t.Fatalf("dry %v: %+v", dry, res)
+		}
+		if dry {
+			if len(f.byPhone) != 0 {
+				t.Fatalf("dry run kept: %+v", f.byPhone)
+			}
+			continue
+		}
+		c := f.byPhone["4105550111"]
+		if c.ID != id || c.Name != "Dee Test" || c.Notes != "gate code 12" || c.NotesSource != customer.SourceImport {
+			t.Fatalf("merged: %+v", c)
+		}
+		if a := f.addrs[id]; len(a) != 2 || a[0].City != "Towson" || !a[0].Default || a[1].Line1 != "9 Work Ave" {
+			t.Fatalf("addresses: %+v", a)
+		}
 	}
 }

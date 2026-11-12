@@ -31,6 +31,7 @@
     live,
     piState = 'unknown',
     inheritedPrinter = '',
+    categoryNoKitchen = false,
     sizes = [],
     bank,
     onclose,
@@ -43,6 +44,8 @@
     live: LivePrinters | null;
     piState?: PiLink;
     inheritedPrinter?: string;
+    /** The category has "no kitchen ticket" (reaches an item without its own printer). */
+    categoryNoKitchen?: boolean;
     /** The store's sizes and this item's bank data (main 3.0). */
     sizes?: MenuSize[];
     bank?: BankItem;
@@ -71,6 +74,9 @@
   let outUntil = $state(toLocalInput(it0.out_until));
   let tagsStr = $state((it0.tags || []).join(', '));
   let printerId = $state<string | null>(it0.printer_id);
+  let noKitchen = $state(!!it0.no_kitchen_ticket);
+  // Receipt only: its own flag, or its category's when it has no printer of its own.
+  const receiptOnly = $derived(noKitchen || (printerId === null && categoryNoKitchen));
   let priceErr = $state('');
   // Bank data: kitchen name, SKU, sizes (saved with the item).
   const b0 = untrack(() => ({
@@ -112,6 +118,7 @@
       (!inStock && outUntil !== toLocalInput(it0.out_until)) ||
       tagsStr !== (it0.tags || []).join(', ') ||
       printerId !== it0.printer_id ||
+      noKitchen !== !!it0.no_kitchen_ticket ||
       bankDirty
   );
   async function beforeClose(): Promise<boolean> {
@@ -183,8 +190,11 @@
           attributes: it0.attributes || {}
         })
       });
-      if (printerId !== it0.printer_id) {
-        await storeApi(`/me/menu/items/${it0.id}/printer`, { method: 'PATCH', body: JSON.stringify({ printer_id: printerId }) });
+      if (printerId !== it0.printer_id || noKitchen !== !!it0.no_kitchen_ticket) {
+        await storeApi(`/me/menu/items/${it0.id}/printer`, {
+          method: 'PATCH',
+          body: JSON.stringify({ printer_id: printerId, no_kitchen_ticket: noKitchen })
+        });
       }
       onsaved(it0.category_id);
     } catch (e) {
@@ -298,15 +308,30 @@
     </div>
     <div>
       <label class="lbl" for="ie-printer">Kitchen printer</label>
-      <select id="ie-printer" class="field" bind:value={printerId}>
-        <option value={null}>{inheritedPrinter ? `Same as category (${inheritedPrinter})` : 'None — prints on every station'}</option>
+      <select id="ie-printer" class="field" bind:value={printerId} disabled={noKitchen}>
+        <option value={null}
+          >{categoryNoKitchen
+            ? 'Same as category (no kitchen ticket)'
+            : inheritedPrinter
+              ? `Same as category (${inheritedPrinter})`
+              : 'None — prints on every station'}</option
+        >
         {#each printers as p (p.id)}
           <option value={p.id}>{printerLabel(p, printers)}{upFor(p.name) === true ? ' · online' : upFor(p.name) === false ? ' · offline' : ''}</option>
         {/each}
       </select>
-      {#if printerId === null && !inheritedPrinter}
+      {#if printerId === null && !inheritedPrinter && !receiptOnly}
         <p class="help !text-warn">Neither the item nor its category has a printer, so it prints on every kitchen station.</p>
       {/if}
+      <div class="flex items-center gap-2.5 mt-2">
+        <Switch bind:checked={noKitchen} label="No kitchen ticket" />
+        <span>No kitchen ticket</span>
+      </div>
+      <p class="help" data-testid="no-kitchen-hint">
+        Prints on the receipt only: no station ticket, not in 'Also on this order'.{receiptOnly && !noKitchen
+          ? ' Its category is set this way.'
+          : ''}
+      </p>
       {#if piState === 'offline'}<p class="help !text-warn">The Pi is offline — printer status may be stale.</p>{/if}
     </div>
     <div>

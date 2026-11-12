@@ -646,6 +646,10 @@ func (a *applier) applyCategory(ctx context.Context, path string, menuID uuid.UU
 		if c.DefaultPrinterID, err = a.printer(path+".printer", dc.Printer, cur.DefaultPrinterID); err != nil {
 			return err
 		}
+		c.NoKitchenTicket = cur.NoKitchenTicket
+		if dc.NoKitchenTicket != nil {
+			c.NoKitchenTicket = *dc.NoKitchenTicket
+		}
 		var f []string
 		f = diff(f, "name", cur.Name, c.Name)
 		f = diff(f, "description", cur.Description, c.Description)
@@ -653,6 +657,7 @@ func (a *applier) applyCategory(ctx context.Context, path string, menuID uuid.UU
 		f = diff(f, "menu", cur.MenuID, c.MenuID)
 		f = diff(f, "position", cur.Position, pos)
 		f = diff(f, "printer", idStr(cur.DefaultPrinterID), idStr(c.DefaultPrinterID))
+		f = diff(f, "no_kitchen_ticket", cur.NoKitchenTicket, c.NoKitchenTicket)
 		if len(f) > 0 {
 			if err := a.tx.UpdateCategory(ctx, c); err != nil {
 				return fmt.Errorf("%s: %w", what, err)
@@ -665,6 +670,9 @@ func (a *applier) applyCategory(ctx context.Context, path string, menuID uuid.UU
 		}
 		if c.DefaultPrinterID, err = a.printer(path+".printer", dc.Printer, nil); err != nil {
 			return err
+		}
+		if dc.NoKitchenTicket != nil {
+			c.NoKitchenTicket = *dc.NoKitchenTicket
 		}
 		if c.ID, err = a.tx.CreateCategory(ctx, c); err != nil {
 			return fmt.Errorf("%s: %w", what, err)
@@ -690,10 +698,14 @@ func (a *applier) applyItem(ctx context.Context, path string, catID uuid.UUID, p
 	var groups []uuid.UUID
 	if exists {
 		it.ID, it.InStock, it.OutUntil, it.Tags, it.Attributes = cur.ID, cur.InStock, cur.OutUntil, cur.Tags, cur.Attributes
+		it.NoKitchenTicket = cur.NoKitchenTicket
 		extra.Sizes, groups = cur.Sizes, cur.GroupIDs
 	}
 	if di.InStock != nil {
 		it.InStock = *di.InStock
+	}
+	if di.NoKitchenTicket != nil {
+		it.NoKitchenTicket = *di.NoKitchenTicket
 	}
 	if di.Tags != nil {
 		it.Tags = append([]string{}, (*di.Tags)...)
@@ -756,6 +768,7 @@ func (a *applier) applyItem(ctx context.Context, path string, catID uuid.UUID, p
 	f = diff(f, "category", cur.CategoryID, it.CategoryID)
 	f = diff(f, "position", cur.Position, it.Position)
 	f = diff(f, "printer", idStr(cur.PrinterID), idStr(it.PrinterID))
+	f = diff(f, "no_kitchen_ticket", cur.NoKitchenTicket, it.NoKitchenTicket)
 	if !slices.Equal(cur.Tags, it.Tags) {
 		f = append(f, "tags")
 	}

@@ -28,6 +28,9 @@ func (r *CustomerRepository) CounterUpsert(ctx context.Context, tenantID, locati
 		return "", fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockStoreCustomers(ctx, tx, locationID); err != nil { // waits for a running import
+		return "", err
+	}
 	q := models.New(tx)
 	res, err := fn(counterTx{tx: tx, q: q})
 	if err != nil {

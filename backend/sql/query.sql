@@ -519,26 +519,26 @@ UPDATE menus SET position = $3, updated_at = now() WHERE id = $1 AND tenant_id =
 DELETE FROM menus WHERE id = $1 AND tenant_id = $2;
 
 -- name: CreateMenuCategory :one
-INSERT INTO menu_categories (tenant_id, location_id, menu_id, name, description, available, position, default_printer_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at;
+INSERT INTO menu_categories (tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, no_kitchen_ticket)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket;
 
 -- name: GetMenuCategoryByID :one
-SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 FROM menu_categories WHERE id = $1 AND tenant_id = $2;
 
 -- name: ListCategoriesByMenu :many
-SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 FROM menu_categories WHERE menu_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: ListCategoriesByLocation :many
-SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 FROM menu_categories WHERE location_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: UpdateMenuCategory :one
-UPDATE menu_categories SET name = $3, description = $4, available = $5, default_printer_id = $6, updated_at = now()
+UPDATE menu_categories SET name = $3, description = $4, available = $5, default_printer_id = $6, no_kitchen_ticket = $7, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at;
+RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket;
 
 -- name: SetCategoryPosition :exec
 UPDATE menu_categories SET position = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
@@ -549,25 +549,25 @@ DELETE FROM menu_categories WHERE id = $1 AND tenant_id = $2;
 -- name: CreateMenuItem :one
 INSERT INTO menu_items (tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold;
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket;
 
 -- name: GetMenuItemByID :one
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 FROM menu_items WHERE id = $1 AND tenant_id = $2;
 
 -- name: ListItemsByCategory :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 FROM menu_items WHERE category_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: ListItemsByLocation :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 FROM menu_items WHERE location_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: UpdateMenuItem :one
 UPDATE menu_items SET name = $3, description = $4, price_cents = $5, tax_rate_bps = $6, in_stock = $7, out_until = $8, tags = $9, attributes = $10, updated_at = now(),
     out_hold = CASE WHEN $7 THEN false ELSE out_hold END
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold;
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket;
 
 -- name: ListRecentItemNames :many
 -- Top-level item names ordered at a location since a time, with counts — the
@@ -580,12 +580,15 @@ GROUP BY li.name;
 
 -- name: ListRoutingByLocation :many
 -- Kitchen routing table for one location: every menu item's name with its
--- effective printer (the item's own printer, else its category's default),
--- best candidate first — available menus/categories first, then menu,
+-- effective printer (the item's own printer, else its category's default;
+-- none and no_kitchen when the item, or its category for an item without
+-- its own printer, has "no kitchen ticket", 00041), best candidate first — available menus/categories first, then menu,
 -- category and item position. The router keeps the first row per name.
 SELECT i.id AS item_id,
        i.name AS item_name,
-       COALESCE(i.printer_id, c.default_printer_id)::uuid AS printer_id
+       (CASE WHEN i.no_kitchen_ticket OR (i.printer_id IS NULL AND c.no_kitchen_ticket) THEN NULL
+             ELSE COALESCE(i.printer_id, c.default_printer_id) END)::uuid AS printer_id,
+       (i.no_kitchen_ticket OR (i.printer_id IS NULL AND c.no_kitchen_ticket))::boolean AS no_kitchen
 FROM menu_items i
 JOIN menu_categories c ON c.id = i.category_id
 JOIN menus m ON m.id = c.menu_id
@@ -594,6 +597,10 @@ ORDER BY (m.available AND c.available) DESC, m.position, c.position, i.position,
 
 -- name: SetItemPrinter :exec
 UPDATE menu_items SET printer_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
+
+-- name: SetItemNoKitchen :exec
+-- "No kitchen ticket" on an item (00041).
+UPDATE menu_items SET no_kitchen_ticket = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
 
 -- name: MoveMenuItem :exec
 -- The bank import (bankimport): an item moves to another category of the location.
@@ -1788,11 +1795,14 @@ SELECT * FROM customers WHERE location_id = $1 AND phone = ANY(sqlc.arg(phones):
 SELECT * FROM customer_addresses WHERE customer_id = ANY(sqlc.arg(ids)::uuid[]) ORDER BY customer_id, is_default DESC, created_at;
 
 -- name: InsertImportedCustomer :one
+-- No row (pgx.ErrNoRows) = the phone is taken: another writer (the Pi's
+-- customer.upsert, a website sign-in) created it after the import read.
 INSERT INTO customers (tenant_id, location_id, phone, name, first_name, last_name, notes, source, name_source, notes_source)
 VALUES (sqlc.arg(tenant_id), sqlc.arg(location_id), sqlc.arg(phone), sqlc.arg(name), sqlc.arg(first_name), sqlc.arg(last_name),
         sqlc.arg(notes), 'import',
         CASE WHEN sqlc.arg(name)::text = '' THEN '' ELSE 'import' END,
         CASE WHEN sqlc.arg(notes)::text = '' THEN '' ELSE 'import' END)
+ON CONFLICT (location_id, phone) DO NOTHING
 RETURNING *;
 
 -- name: UpdateImportedCustomer :exec

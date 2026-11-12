@@ -303,7 +303,7 @@
     refund: string; discount: string; lock: string; counterStart: string; receiptDone: string;
     autoClose: boolean; autoCloseAt: string; defaultTab: string; showHistory: boolean; font: string;
     priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean; toppingMax: string;
-    cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string; claimAfter: string;
+    cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string; drawerStart: string;
   };
   type TextKey = { [K in keyof SettingsForm]: SettingsForm[K] extends string ? K : never }[keyof SettingsForm];
   let saved = $state<TerminalSettings | null>(null);
@@ -326,7 +326,7 @@
       nameOnPaid: s.name_on_paid_counter, cardTips: s.card_tips, tipPercents: (s.card_tip_percents ?? []).join(', '),
       meal: String(s.employee_meal_pct), payout: centsInput(s.cashier_payout_cents),
       pickupMinutes: String(s.default_pickup_minutes), areaCodes: (s.area_codes ?? []).join(', '),
-      claimAfter: String(s.driver_claim_after_minutes)
+      drawerStart: centsInput(s.drawer_start_cents)
     };
   }
   function useSaved(s: TerminalSettings) {
@@ -387,8 +387,8 @@
       employee_meal_pct: int(f, 'meal', 'Employee meal', 0, 100),
       topping_max_count: int(f, 'toppingMax', 'Most of one topping', 1, 10),
       cashier_payout_cents: money(f, 'payout', 'Pay out of the drawer up to', 100_000),
+      drawer_start_cents: money(f, 'drawerStart', 'Cash left in each drawer at opening', 1_000_000),
       default_pickup_minutes: int(f, 'pickupMinutes', 'Pickups are ready in', 0, 240),
-      driver_claim_after_minutes: int(f, 'claimAfter', 'Drivers may claim after', 0, 480),
       area_codes: codes
     };
   }
@@ -473,11 +473,13 @@
   const D = TERMINAL_DEFAULTS;
   const CASHIER: NumField[] = [
     { key: 'refund', label: 'Refunds up to', unit: '$', prefix: true, decimal: true,
-      help: `0 = every refund needs a manager. Default ${dollars(D.cashier_refund_cents)}.` },
+      help: `Cash given back on one order, in all, without a manager (card refunds and older days’ orders always need one). 0 = every refund needs a manager. Default ${dollars(D.cashier_refund_cents)}.` },
     { key: 'discount', label: 'Discounts up to', unit: '%', help: `A discount the cashier types on an order. Default ${D.cashier_discount_pct}%.` },
     { key: 'priceDrop', label: 'Lower an item’s price by up to', unit: '%', help: `Raising a price is always allowed. Default ${D.cashier_price_drop_pct}%.` },
     { key: 'payout', label: 'Pay out of the drawer up to', unit: '$', prefix: true, decimal: true,
-      help: `Paying cash in is always allowed. Default ${dollars(D.cashier_payout_cents)}.` }
+      help: `Paying cash in is always allowed. Default ${dollars(D.cashier_payout_cents)}.` },
+    { key: 'drawerStart', label: 'Cash left in each drawer at opening', unit: '$', prefix: true, decimal: true,
+      help: `Every terminal's drawer starts the day with this; the drawer report's Expected in Drawer counts from it. Default ${dollars(D.drawer_start_cents)}.` }
   ];
   const SCREEN: NumField[] = [
     { key: 'lock', label: 'Lock the terminal after', unit: 'min', help: `Idle this long, the terminal goes back to the PIN pad. Default ${D.auto_lock_minutes} min.` },
@@ -491,9 +493,7 @@
   ];
   const DELIVERY: NumField[] = [
     { key: 'margin', label: 'Deliver past the delivery area by up to', unit: 'mi', decimal: true,
-      help: `Up to this far past your delivery area the cashier just sees a warning; farther needs a manager’s PIN. Default ${D.out_of_area_margin_mi} mi.` },
-    { key: 'claimAfter', label: 'Drivers may claim after', unit: 'min',
-      help: `A delivery nobody took shows in the drivers’ Dispatch list this long after it went to the kitchen; the driver who claims it gets it as delivered. 0 = right away. Default ${D.driver_claim_after_minutes} min.` }
+      help: `Up to this far past your delivery area the cashier just sees a warning; farther needs a manager’s PIN. Default ${D.out_of_area_margin_mi} mi.` }
   ];
 </script>
 
@@ -715,6 +715,7 @@
             <div class="grid-f">
               {#each DELIVERY as f (f.key)}{@render numField(f)}{/each}
             </div>
+            <p class="help !mt-0">A delivery nobody took shows in the drivers’ Dispatch list once it is past the time promised to the customer; the driver who claims it gets it as delivered.</p>
             <p class="help !mt-0">The delivery fee (store share + driver share) is on Store › Details, with the website’s prices.</p>
           </section>
 

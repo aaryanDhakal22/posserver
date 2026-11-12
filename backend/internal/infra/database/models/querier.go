@@ -215,7 +215,7 @@ type Querier interface {
 	// at a time (load + apply + write in a single transaction).
 	GetOrderInScopeForUpdate(ctx context.Context, arg GetOrderInScopeForUpdateParams) (Order, error)
 	GetOrdersPageInScope(ctx context.Context, arg GetOrdersPageInScopeParams) ([]Order, error)
-	GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error)
+	GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]GetPaymentsByOrderIDRow, error)
 	GetPlacement(ctx context.Context, arg GetPlacementParams) (OrderPlacement, error)
 	GetPrinterByID(ctx context.Context, id pgtype.UUID) (Printer, error)
 	GetSiteDomain(ctx context.Context, host string) (SiteDomain, error)
@@ -249,6 +249,8 @@ type Querier interface {
 	InsertDiagReport(ctx context.Context, arg InsertDiagReportParams) (int64, error)
 	InsertDriver(ctx context.Context, arg InsertDriverParams) error
 	InsertEmailReceipt(ctx context.Context, arg InsertEmailReceiptParams) error
+	// No row (pgx.ErrNoRows) = the phone is taken: another writer (the Pi's
+	// customer.upsert, a website sign-in) created it after the import read.
 	InsertImportedCustomer(ctx context.Context, arg InsertImportedCustomerParams) (Customer, error)
 	InsertItemSize(ctx context.Context, arg InsertItemSizeParams) error
 	InsertOptionPrice(ctx context.Context, arg InsertOptionPriceParams) error
@@ -342,8 +344,9 @@ type Querier interface {
 	// batch, plus orders nobody accepted yet since the batch opened.
 	ListRestoreOrderIDs(ctx context.Context, arg ListRestoreOrderIDsParams) ([]pgtype.UUID, error)
 	// Kitchen routing table for one location: every menu item's name with its
-	// effective printer (the item's own printer, else its category's default),
-	// best candidate first — available menus/categories first, then menu,
+	// effective printer (the item's own printer, else its category's default;
+	// none and no_kitchen when the item, or its category for an item without
+	// its own printer, has "no kitchen ticket", 00041), best candidate first — available menus/categories first, then menu,
 	// category and item position. The router keeps the first row per name.
 	ListRoutingByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListRoutingByLocationRow, error)
 	ListSiteDomains(ctx context.Context, locationID pgtype.UUID) ([]SiteDomain, error)
@@ -455,6 +458,8 @@ type Querier interface {
 	SetDiagReportResolved(ctx context.Context, arg SetDiagReportResolvedParams) (int64, error)
 	SetGroupPortions(ctx context.Context, arg SetGroupPortionsParams) (int64, error)
 	SetItemBank(ctx context.Context, arg SetItemBankParams) (int64, error)
+	// "No kitchen ticket" on an item (00041).
+	SetItemNoKitchen(ctx context.Context, arg SetItemNoKitchenParams) error
 	SetItemPosition(ctx context.Context, arg SetItemPositionParams) error
 	SetItemPrinter(ctx context.Context, arg SetItemPrinterParams) error
 	SetItemStock(ctx context.Context, arg SetItemStockParams) (SetItemStockRow, error)

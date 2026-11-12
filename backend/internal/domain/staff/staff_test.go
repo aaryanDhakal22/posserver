@@ -71,8 +71,6 @@ func TestSettingsValidate(t *testing.T) {
 		func(s *Settings) { s.AreaCodes = []string{"110"} },
 		func(s *Settings) { s.AreaCodes = []string{"41a"} },
 		func(s *Settings) { s.AreaCodes = []string{"4100"} },
-		func(s *Settings) { s.DriverClaimAfterMinutes = -1 },
-		func(s *Settings) { s.DriverClaimAfterMinutes = 481 },
 	} {
 		s := DefaultSettings()
 		f(&s)
@@ -104,7 +102,7 @@ func TestOwnerDefaults(t *testing.T) {
 	if got != [4]int{5, 20, 20, 20} {
 		t.Fatalf("lock, discount, price drop, meal = %v", got)
 	}
-	if e := RoleDefaults(RoleCashier, d); *e.DiscountPct != 20 || *e.RefundCents != 0 {
+	if e := RoleDefaults(RoleCashier, d); *e.DiscountPct != 20 || *e.RefundCents != 2000 {
 		t.Fatalf("cashier role defaults: %+v", e)
 	}
 }
@@ -161,15 +159,30 @@ func TestDrawerAndPhoneDefaults(t *testing.T) {
 	}
 }
 
-func TestDriverClaimAfterDefault(t *testing.T) {
+// The owner's defaults of 2026-11-12: a cashier refunds cash up to $20 per
+// order; drivers' claim follows the Pi's promised time (no setting).
+func TestCashierRefundDefault(t *testing.T) {
 	s := DefaultSettings()
-	if s.DriverClaimAfterMinutes != 45 {
-		t.Fatalf("default: %d", s.DriverClaimAfterMinutes)
+	if s.CashierRefundCents != 2000 {
+		t.Fatalf("default: %d", s.CashierRefundCents)
 	}
-	for _, v := range []int{0, 45, 480} {
-		s.DriverClaimAfterMinutes = v
-		if err := s.Validate(); err != nil {
-			t.Fatalf("%d: %v", v, err)
-		}
+	if e := EffectiveLimits(Person{Role: RoleCashier}, s); *e.RefundCents != 2000 {
+		t.Fatalf("cashier: %+v", e)
+	}
+}
+
+// The cash left in each drawer at opening (the owner, 2026-11-12): $100.
+func TestDrawerStartDefault(t *testing.T) {
+	s := DefaultSettings()
+	if s.DrawerStartCents != 10000 {
+		t.Fatalf("default %d", s.DrawerStartCents)
+	}
+	s.DrawerStartCents = -1
+	if s.Validate() == nil {
+		t.Fatal("negative accepted")
+	}
+	s.DrawerStartCents = MaxDrawerStartCents + 1
+	if s.Validate() == nil {
+		t.Fatal("too much accepted")
 	}
 }
