@@ -10,12 +10,20 @@ services:
     container_name: quicc-prod-postgres
     environment:
       POSTGRES_DB: ${DB_NAME}
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      # The Postgres superuser is its own login (PG_SUPERUSER / PG_SUPERPASSWORD), not the
+      # api's: DB_USER is the restricted app login (member of quicc_app) and
+      # DB_MIGRATOR_USER owns the schema. Unset = DB_USER / DB_PASSWORD, the layout before
+      # 2026-11-12 where the api logged in as the superuser. These two only take effect when
+      # an EMPTY data directory is initialised; on an existing volume the superuser is whoever
+      # initialised it, and PG_SUPERUSER must name that role (deploy/main-deploy.sh reads it
+      # from the running server and pins it in the env file) so that tools reading this
+      # container's POSTGRES_USER (backups, the deploy) keep finding the superuser.
+      POSTGRES_USER: ${PG_SUPERUSER:-${DB_USER}}
+      POSTGRES_PASSWORD: ${PG_SUPERPASSWORD:-${DB_PASSWORD}}
     volumes:
       - quicc_prod_postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      test: ["CMD-SHELL", "pg_isready -U ${PG_SUPERUSER:-${DB_USER}} -d ${DB_NAME}"]
       interval: 10s
       timeout: 5s
       retries: 10
