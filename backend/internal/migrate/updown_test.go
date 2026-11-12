@@ -3,7 +3,6 @@ package migrate
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -17,36 +16,48 @@ import (
 )
 
 // TestMigrationNumbers (no database): numbers are unique and in order with no
-// gap but the known 00036 (renumbered to 00038, see CLAUDE.md), so a parallel
+// gap, in sql/ (the baseline and what follows it) and in history/ (the old
+// chain, whose known gap is 00036, renumbered to 00038), so a parallel
 // branch's duplicate or skipped number fails here before it reaches a DB that
 // applies strictly in order.
 func TestMigrationNumbers(t *testing.T) {
-	entries, err := fs.ReadDir(migrations, "sql")
-	if err != nil {
-		t.Fatal(err)
+	for _, c := range []struct {
+		fsys fs.FS
+		dir  string
+		gaps map[int]bool
+	}{{migrations, "sql", nil}, {history, "history", map[int]bool{36: true}}} {
+		entries, err := fs.ReadDir(c.fsys, c.dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		re := regexp.MustCompile(`^(\d{5})_[a-z0-9_]+\.sql$`)
+		seen := map[int]string{}
+		var nums []int
+		for _, e := range entries {
+			m := re.FindStringSubmatch(e.Name())
+			if m == nil {
+				t.Errorf("%s/%s: not NNNNN_name.sql", c.dir, e.Name())
+				continue
+			}
+			n, _ := strconv.Atoi(m[1])
+			if prev, dup := seen[n]; dup {
+				t.Errorf("%s: migration %05d twice: %s and %s", c.dir, n, prev, e.Name())
+			}
+			seen[n] = e.Name()
+			nums = append(nums, n)
+		}
+		sort.Ints(nums)
+		if len(nums) == 0 || nums[0] != 1 {
+			t.Fatalf("%s: must start at 00001", c.dir)
+		}
+		for i := 1; i <= nums[len(nums)-1]; i++ {
+			if _, ok := seen[i]; !ok && !c.gaps[i] {
+				t.Errorf("%s: migration %05d is missing (numbers must not skip)", c.dir, i)
+			}
+		}
 	}
-	re := regexp.MustCompile(`^(\d{5})_[a-z0-9_]+\.sql$`)
-	seen := map[int]string{}
-	var nums []int
-	for _, e := range entries {
-		m := re.FindStringSubmatch(e.Name())
-		if m == nil {
-			t.Errorf("%s: not NNNNN_name.sql", e.Name())
-			continue
-		}
-		n, _ := strconv.Atoi(m[1])
-		if prev, dup := seen[n]; dup {
-			t.Errorf("migration %05d twice: %s and %s", n, prev, e.Name())
-		}
-		seen[n] = e.Name()
-		nums = append(nums, n)
-	}
-	sort.Ints(nums)
-	allowedGap := map[int]bool{36: true}
-	for i := 1; i <= nums[len(nums)-1]; i++ {
-		if _, ok := seen[i]; !ok && !allowedGap[i] {
-			t.Errorf("migration %05d is missing (numbers must not skip)", i)
-		}
+	if !strings.Contains(hardeningSQL, "CREATE TABLE audit_log") {
+		t.Fatal("hardening.sql not embedded")
 	}
 }
 
@@ -89,96 +100,6 @@ func TestUpDownUp(t *testing.T) {
 	}
 	if err := Run(ctx, dsn); err != nil {
 		t.Fatalf("up again: %v", err)
-	}
-}
-
-// columns lists every public table's columns + indexes, comparable across two
-// schemas.
-func describe(t *testing.T, db *sql.DB, schema string) []string {
-	t.Helper()
-	var out []string
-	rows, err := db.Query(`SELECT table_name, column_name, data_type, is_nullable, COALESCE(column_default, ''), is_generated
-		FROM information_schema.columns WHERE table_schema = $1 AND table_name <> 'goose_db_version'
-		ORDER BY table_name, ordinal_position`, schema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for rows.Next() {
-		var tbl, col, typ, null, def, gen string
-		if err := rows.Scan(&tbl, &col, &typ, &null, &def, &gen); err != nil {
-			t.Fatal(err)
-		}
-		def = strings.ReplaceAll(def, schema+".", "")
-		out = append(out, fmt.Sprintf("col %s.%s %s null=%s default=%s generated=%s", tbl, col, typ, null, def, gen))
-	}
-	rows.Close()
-	rows, err = db.Query(`SELECT tablename, indexname, regexp_replace(indexdef, ' ON [a-z_0-9]+\.', ' ON ')
-		FROM pg_indexes WHERE schemaname = $1 AND tablename <> 'goose_db_version' ORDER BY tablename, indexname`, schema)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for rows.Next() {
-		var tbl, idx, def string
-		if err := rows.Scan(&tbl, &idx, &def); err != nil {
-			t.Fatal(err)
-		}
-		out = append(out, fmt.Sprintf("idx %s.%s %s", tbl, idx, def))
-	}
-	rows.Close()
-	return out
-}
-
-// TestSchemaMirror (S-5): sql/schema.sql (sqlc's source) has the same tables,
-// columns (in order) and indexes as the migrations.
-func TestSchemaMirror(t *testing.T) {
-	db, dsn := scratch(t)
-	if err := Run(context.Background(), dsn); err != nil {
-		t.Fatalf("up: %v", err)
-	}
-	src, err := os.ReadFile("../../sql/schema.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`DROP SCHEMA IF EXISTS mirror CASCADE; CREATE SCHEMA mirror`); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Exec(`DROP SCHEMA IF EXISTS mirror CASCADE`) })
-	conn, err := db.Conn(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	if _, err := conn.ExecContext(context.Background(), `SET search_path TO mirror, public`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := conn.ExecContext(context.Background(), string(src)); err != nil {
-		t.Fatalf("schema.sql: %v", err)
-	}
-	want, got := describe(t, db, "public"), describe(t, db, "mirror")
-	ws, gs := map[string]bool{}, map[string]bool{}
-	for _, l := range want {
-		ws[l] = true
-	}
-	for _, l := range got {
-		gs[l] = true
-	}
-	for _, l := range want {
-		if !gs[l] {
-			t.Errorf("schema.sql lacks: %s", l)
-		}
-	}
-	for _, l := range got {
-		if !ws[l] {
-			t.Errorf("schema.sql has, migrations don't: %s", l)
-		}
-	}
-	if len(want) == len(got) {
-		for i := range want {
-			if want[i] != got[i] && ws[got[i]] && gs[want[i]] {
-				t.Errorf("column order differs at %d: migrations %q, schema.sql %q", i, want[i], got[i])
-				break
-			}
-		}
 	}
 }
 
@@ -252,5 +173,21 @@ func TestDumpRestores(t *testing.T) {
 	}
 	if err := tdb.QueryRow(`SELECT delivery_fee_cents, driver_fee_cents FROM orders`).Scan(&fee, &driver); err != nil || fee != 400 || driver != 300 {
 		t.Fatalf("restored: %d %d %v", fee, driver, err)
+	}
+	// The restore is the same schema (privileges included), marked with the
+	// same baseline, with the same audit trail and goose history.
+	sameFingerprint(t, "source", fingerprint(t, db), "restored", fingerprint(t, tdb))
+	for _, q := range []string{
+		`SELECT baseline || '/' || squashed_from FROM schema_baseline`,
+		`SELECT count(*)::text FROM audit_log`,
+		`SELECT max(version_id)::text FROM goose_db_version WHERE is_applied`,
+	} {
+		var a, b string
+		if err := db.QueryRow(q).Scan(&a); err != nil {
+			t.Fatal(err)
+		}
+		if err := tdb.QueryRow(q).Scan(&b); err != nil || a != b {
+			t.Errorf("%s: source %q, restored %q (%v)", q, a, b, err)
+		}
 	}
 }

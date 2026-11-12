@@ -40,6 +40,7 @@ func RequestLogger(logger *zerolog.Logger) echo.MiddlewareFunc {
 
 			reqLog := builder.Logger()
 			ctx := reqLog.WithContext(req.Context())
+			ctx = withRequestInfo(ctx, requestID, c.RealIP()) // the audit log's request id + ip
 			c.SetRequest(req.WithContext(ctx))
 
 			reqLog.Debug().Msg("request started")

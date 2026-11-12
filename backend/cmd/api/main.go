@@ -16,6 +16,7 @@ import (
 	"quiccpos/main/internal/dispatch"
 	"quiccpos/main/internal/dispatch/handlers"
 	"quiccpos/main/internal/domain/order"
+	"quiccpos/main/internal/infra/database/auditconn"
 	"quiccpos/main/internal/infra/database/repositories"
 	"quiccpos/main/internal/infra/pushover"
 	"quiccpos/main/internal/migrate"
@@ -27,6 +28,7 @@ import (
 	"quiccpos/main/internal/shared/safego"
 	"quiccpos/main/internal/transport"
 	"quiccpos/main/internal/transport/handler"
+	appMiddleware "quiccpos/main/internal/transport/middleware"
 	"quiccpos/main/internal/transport/session"
 	"strings"
 	"syscall"
@@ -168,6 +170,9 @@ func main() {
 	if err := dbpool.Apply(poolConfig, os.Getenv); err != nil {
 		mainLogger.Fatal().Err(err).Msg("Bad database pool setting")
 	}
+	// The audit triggers record who acted: each connection handed to a
+	// request carries its actor + trace id (baseline 2026-11-12).
+	auditconn.Install(poolConfig, appMiddleware.AuditActor)
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
@@ -581,6 +586,7 @@ func main() {
 		DevNotices:        devNotices,
 		Staff:             staffService,
 		DayClose:          dayCloseService,
+		Audit:             repositories.NewAuditRepository(pool),
 	})
 
 	serverLogger := lgr.With().Str("module", "server").Logger()

@@ -27,6 +27,7 @@ func AdminAuth(expected string) echo.MiddlewareFunc {
 				zerolog.Ctx(c.Request().Context()).Warn().Str("path", c.Request().URL.Path).Msg("admin: invalid key")
 				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "invalid admin key"})
 			}
+			c.SetRequest(c.Request().WithContext(withAdmin(c.Request().Context()))) // the audit log's actor
 			return next(c)
 		}
 	}

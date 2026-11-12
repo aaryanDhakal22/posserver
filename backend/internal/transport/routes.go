@@ -50,6 +50,7 @@ import (
 	"quiccpos/main/internal/app/tracking"
 	"quiccpos/main/internal/domain/notify"
 	siteDom "quiccpos/main/internal/domain/site"
+	"quiccpos/main/internal/infra/database/repositories"
 	"quiccpos/main/internal/infra/mail"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
@@ -62,6 +63,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/labstack/echo/v5"
 	echomw "github.com/labstack/echo/v5/middleware"
 	"github.com/rs/zerolog"
@@ -163,6 +165,9 @@ type RouterDeps struct {
 	OptionFlags *optionflags.Service
 	// DayClose backs the Pi's drawer sessions + Z reports (terminal Stage 2).
 	DayClose *daycloseApp.Service
+	// Audit writes main's row per admin / manager write and reads the audit
+	// log (baseline 2026-11-12); nil = no app rows, no audit routes' data.
+	Audit *repositories.AuditRepository
 }
 
 // RouteInfo is the JSON shape served at GET /__routes (shared across all
@@ -217,6 +222,12 @@ func routeTable(d RouterDeps) []routeDef {
 	agentOnly := appMiddleware.RequireDeviceKind(tenancyApp.DeviceKindAgent)
 	admin := appMiddleware.AdminAuth(d.AdminAPIKey)
 	storeSession := appMiddleware.StoreSessionAuth(d.SessionSigner)
+	if d.Audit != nil {
+		// every admin / manager write leaves main's audit row (the database's
+		// triggers add the rows it changed)
+		admin = appMiddleware.Chain(admin, appMiddleware.AuditWrites(d.Audit))
+		storeSession = appMiddleware.Chain(storeSession, appMiddleware.AuditWrites(d.Audit))
+	}
 	operatorAuth := appMiddleware.OperatorAuth(d.OperatorService, d.Meters)
 	channelAuth := appMiddleware.ChannelAuth(d.ChannelService)
 	// The storefront as itself (no store host): only the Square OAuth relay.
@@ -257,6 +268,7 @@ func routeTable(d RouterDeps) []routeDef {
 	bankDocH := handler.NewBankImportHandler(d.BankImport, d.Logger)
 	famH := handler.NewFamiliesHandler(d.Families, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
+	auditH := handler.NewAuditHandler(d.Audit, d.Logger)
 	staffH := handler.NewStaffHandler(d.Staff, d.MenuViewService, d.Pricing, d.MenuService, d.Logger)
 	dayCloseH := handler.NewDayCloseHandler(d.DayClose, d.Logger)
 	if d.Kitchen != nil {
@@ -322,6 +334,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", adminPrefix+"/tenants/:id/store-session", "admin", "Open this tenant's store as its manager (sets a 2h store session cookie; audited)", adminH.OpenStoreSession, admin),
 		def("DELETE", adminPrefix+"/tenants/:id", "admin", "Cascade-delete a tenant + its locations/orders/devices (409 has_money_records for a store with money that isn't a test store: retire it)", adminH.DeleteTenant, admin),
 		def("POST", adminPrefix+"/tenants/:id/retire", "admin", "Retire a store: kept with its records, devices revoked, no orders routed (S-1)", adminH.RetireTenant, admin),
+		def("GET", adminPrefix+"/audit", "admin", "Every store's audit log, newest first (?location_id narrows; ?before / limit / entity / entity_id as /store/v1/me/reports/audit)", auditH.AdminAudit, admin),
 		def("GET", adminPrefix+"/orders", "admin", "Cross-tenant order list (?source_event_id/tenant_id/limit)", adminH.ListOrders, admin),
 		def("DELETE", adminPrefix+"/orders", "admin", "Bulk-delete orders (?tenant_id, absent=all)", adminH.DeleteOrders, admin),
 		def("DELETE", adminPrefix+"/orders/:id", "admin", "Delete a single order + children (cleanup)", adminH.DeleteOrder, admin),
@@ -502,6 +515,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/me/staff/:id/pin", "store-session", "Reset a person's PIN {pin}", staffH.MeResetPin, storeSession),
 		def("DELETE", storePrefix+"/me/staff/:id", "store-session", "Delete a person", staffH.MeDelete, storeSession),
 		def("GET", storePrefix+"/me/reports/flags", "store-session", "Money main stored but flagged (M-2/M-7/M-12/M-13), newest 200: {flags[{id, at, event_id, event_type, subject, code, detail, resolved_at}]}", dayCloseH.MeMoneyFlags, storeSession),
+		def("GET", storePrefix+"/me/reports/audit", "store-session", "The store's audit log, newest first (append-only; db = a row a trigger saw change, before/after with secrets masked; app = an admin / manager write): ?before=<id>&limit=1-200 (50)&entity=&entity_id= → {entries[{id, at, actor_kind, actor_id, actor_name, source, action, entity, entity_id, before, after, detail, trace_id, request_id, ip}], next_before}", auditH.MeAudit, storeSession),
 		def("GET", storePrefix+"/me/reports/z", "store-session", "The Pi's Z reports (one per closed batch), newest first: ?date=YYYY-MM-DD = that business date, none = the newest 30", dayCloseH.MeZList, storeSession),
 		def("GET", storePrefix+"/me/reports/z/:id", "store-session", "One Z report as the Pi sent it", dayCloseH.MeZ, storeSession),
 		def("GET", storePrefix+"/me/drawers", "store-session", "Cash drawer sessions (per terminal + cashier), newest first: ?date=YYYY-MM-DD = opened that store-local date, none = the newest 50", dayCloseH.MeDrawers, storeSession),
