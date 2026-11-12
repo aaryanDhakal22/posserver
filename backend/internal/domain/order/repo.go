@@ -50,8 +50,8 @@ type Summary struct {
 	CustomerName  string
 	TotalCents    int64
 	ReceivedAt    time.Time
-	// TipCents: Σ its payments' tip_cents (counter tips, tips added
-	// afterwards, a driver's door tip, a captured website card's tip).
+	// TipCents: Σ its payments' tip_cents (counter card tips, tips added
+	// afterwards, a captured website card's tip).
 	TipCents int64
 }
 

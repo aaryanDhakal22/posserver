@@ -230,8 +230,8 @@ type Payment struct {
 	Last4      string
 	AuthCode   string
 	CapturedAt *time.Time
-	// Tip: the tip taken with it (counter payments, a tip added afterwards,
-	// a driver's door tip; never in the order's money).
+	// Tip: the tip taken with it (a counter card payment's tip, a tip added
+	// afterwards; never in the order's money).
 	Tip Money
 }
 

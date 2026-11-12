@@ -6,7 +6,7 @@
   // and drivers; the agent syncs them here).
   let { orders, empty = 'No orders yet.' }: { orders: StoreOrder[]; empty?: string } = $props();
   const typeLabel = (t: string) => (t ? t[0].toUpperCase() + t.slice(1).replaceAll('_', ' ') : '—');
-  // Tips ride on the payments (a counter tip, a tip added afterwards, a driver's door tip), never in the total.
+  // Tips ride on the payments (a card pre-tip, a card tip added afterwards), never in the total.
   const tipsOf = (o: StoreOrder) => (o.payments ?? []).reduce((n, p) => n + (p.tip_cents ?? 0), 0);
 </script>
 

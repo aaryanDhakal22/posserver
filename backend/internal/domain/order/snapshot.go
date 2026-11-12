@@ -55,9 +55,9 @@ type PaymentSummary struct {
 	AmountCents int64  `json:"amount_cents"`
 	Last4       string `json:"last4,omitempty"` // last 4 of card number; "" for non-card
 	AuthCode    string `json:"auth_code,omitempty"`
-	// TipCents: the tip taken with it (a counter payment's tip, a tip added
-	// afterwards on a $0 row, a driver's door tip on a `door_tip` row);
-	// absent when none. Never part of the order's money.
+	// TipCents: the card tip taken with it (a counter card payment's pre-tip,
+	// a tip added afterwards on a $0 row); absent when none. Never part of
+	// the order's money. Cash tips are kept out (the owner, 2026-11-12).
 	TipCents int64 `json:"tip_cents,omitempty"`
 }
 

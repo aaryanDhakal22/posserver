@@ -64,7 +64,7 @@ type event struct {
 	// order.status cancelled by hand (weborder stage 3): customer_asked | couldnt_deliver | other
 	Reason string `json:"reason"`
 	// order.void: "void" (default) or "waste" (made already; the owner, 2026-11-12);
-	// order.tip: "door" = a driver's cash tip at the door on a counter order
+	// order.tip: "door" = a retired door cash tip (acked stale, never kept)
 	Kind string `json:"kind"`
 	// order.void kind waste: the store's waste reason the cashier picked
 	WasteReason string `json:"waste_reason"`
@@ -113,8 +113,6 @@ type CounterOrders interface {
 	CreateCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, co *order.CounterOrder, agentStatus []byte, batchID *int64) (string, []order.MoneyFlag, error)
 	AddCounterPayment(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, p order.CheckedPayment) (string, []order.MoneyFlag, error)
 	ChangeCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, o *order.Order, at time.Time, flags []order.MoneyFlag) (string, []order.MoneyFlag, error)
-	// SetDoorTip keeps a counter order's door tip (absolute; order.tip kind door).
-	SetDoorTip(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, cents int64, at time.Time) (string, error)
 }
 
 // StaffLimits tells who the store's people are for the money rules (the
@@ -212,8 +210,9 @@ func (s *Service) OnCounterMoved(f func(ctx context.Context, before, after *orde
 // (every flag is still logged, counted and kept in money_flags).
 const FlagPageEvery = time.Hour
 
-// TipKindDoor is order.tip's kind for a driver's cash tip at the door on a
-// counter order (absent = ADD TIP on a website card order).
+// TipKindDoor is order.tip's kind for a driver's cash tip at the door, sent
+// by Pis built between 2026-11-12 12:18 and the owner's correction the same
+// day ("keep cash tips out the entire system"): acked stale, never kept.
 const TipKindDoor = "door"
 
 // MaxTipCents bounds an added tip absolutely ($1,000); the store's own cap
@@ -307,17 +306,8 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 		return res, err
 	case "order.tip":
 		oid, err := uuid.Parse(ev.OrderID)
-		if ev.Kind == TipKindDoor {
-			// A cash tip a driver got at the door on a counter order (the Pi's door tip, 2026-11-12):
-			// kept on main's payments as the driver's, never charged, never in the Z check.
-			if s.counter == nil || err != nil || ev.TipCents == nil || *ev.TipCents < 0 || *ev.TipCents > MaxTipCents {
-				return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
-			}
-			res, err := s.counter.SetDoorTip(ctx, sc, eid, ev.Type, oid, *ev.TipCents, ev.At)
-			if err == nil && res == order.FloorApplied {
-				s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Int64("tip_cents", *ev.TipCents).Msg("door tip recorded")
-			}
-			return res, err
+		if ev.Kind == TipKindDoor { // cash tips stay out of main (the owner, 2026-11-12)
+			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorStale)
 		}
 		if s.holds == nil || err != nil || ev.TipCents == nil || *ev.TipCents < 0 || *ev.TipCents > MaxTipCents {
 			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
