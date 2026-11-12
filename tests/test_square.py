@@ -230,7 +230,8 @@ def test_declines_and_stores_without_square(admin, store, mgr, make_store) -> No
 
 
 def _sign(body: bytes) -> str:
-    mac = hmac.new(b"fake-webhook-key", b"http://localhost:1323/square/webhook" + body, hashlib.sha256)
+    # main signs over its own webhook URL: dev's default, or a gate stack's (SQUARE_WEBHOOK_URL there)
+    mac = hmac.new(b"fake-webhook-key", f"{MAIN_BASE_URL}/square/webhook".encode() + body, hashlib.sha256)
     return base64.b64encode(mac.digest()).decode()
 
 

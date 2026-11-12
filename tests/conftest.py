@@ -46,11 +46,13 @@ SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL", "")
 SQS_DLQ_URL = os.getenv("SQS_DLQ_URL") or (SQS_QUEUE_URL + "-dlq" if SQS_QUEUE_URL else "")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 if IS_DEV:
-    # Dev publishes straight to the local ElasticMQ main consumes from.
-    SQS_ENDPOINT = "http://localhost:9324"
+    # Dev publishes straight to the local ElasticMQ main consumes from (a gate stack's own queue:
+    # SQS_HOST_ENDPOINT, set by scripts/gate-stack.sh env N).
+    SQS_ENDPOINT = os.getenv("SQS_HOST_ENDPOINT", "http://localhost:9324").rstrip("/")
     AWS_KEY, AWS_SECRET = "dev", "dev"
-    SQS_QUEUE_URL = SQS_QUEUE_URL.replace("elasticmq:9324", "localhost:9324")
-    SQS_DLQ_URL = SQS_DLQ_URL.replace("elasticmq:9324", "localhost:9324")
+    for _host in ("http://elasticmq:9324", "http://localhost:9324"):
+        SQS_QUEUE_URL = SQS_QUEUE_URL.replace(_host, SQS_ENDPOINT)
+        SQS_DLQ_URL = SQS_DLQ_URL.replace(_host, SQS_ENDPOINT)
 else:
     SQS_ENDPOINT = os.getenv("SQS_ENDPOINT") or None
     AWS_KEY, AWS_SECRET = os.getenv("AWS_ACCESS_KEY_ID"), os.getenv("AWS_SECRET_ACCESS_KEY")

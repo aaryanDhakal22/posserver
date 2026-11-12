@@ -200,7 +200,7 @@ tasks:
   test:
     desc: Run the main/ pytest suite (dev stack must be up)
     cmds:
-      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v -n 4 --dist loadgroup {{.CLI_ARGS}}
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v -n ${MAIN_PYTEST_WORKERS:-4} --dist loadgroup {{.CLI_ARGS}}
 
   test-quick:
     desc: Fast subset of main/ tests
