@@ -201,7 +201,11 @@ func NewCounterOrder(sc Scope, s CounterSnapshot, raw []byte) (*CounterOrder, er
 	}
 	m := MoneyBreakdown{Subtotal: Money(s.Money.Subtotal), Tax: Money(s.Money.Tax), Tip: Money(s.Money.Tip), Total: Money(s.Money.Total)}
 	for _, f := range s.Money.Fees {
-		m.Fees = append(m.Fees, Fee{Type: f.Type, Label: f.Label, Amount: Money(f.Amount)})
+		fee := Fee{Type: f.Type, Label: f.Label, Amount: Money(f.Amount)}
+		if f.Type == "delivery" && f.DriverCents > 0 && f.DriverCents <= f.Amount {
+			fee.DriverCents = Money(f.DriverCents)
+		}
+		m.Fees = append(m.Fees, fee)
 	}
 	for _, d := range s.Money.Discounts {
 		m.Discounts = append(m.Discounts, Discount{Type: d.Type, Code: d.Code, Label: d.Label, Amount: Money(d.Amount)})

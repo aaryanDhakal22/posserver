@@ -175,15 +175,17 @@ func (h *StaffHandler) MeSettings(c *echo.Context) error {
 	return c.JSON(http.StatusOK, st)
 }
 
-// PUT /store/v1/me/terminal/settings — replace them all (a body without
-// auto_close_batch_at keeps the saved one: older clients don't know it).
+// PUT /store/v1/me/terminal/settings — the body over the saved settings: a
+// field it leaves out keeps its saved value (older clients don't know the
+// newer fields).
 func (h *StaffHandler) MeSaveSettings(c *echo.Context) error {
 	tid, lid, _ := meScope(c)
 	cur, _, err := h.svc.Settings(c.Request().Context(), lid)
 	if err != nil {
 		return h.err(c, err)
 	}
-	st := staff.Settings{AutoCloseBatchAt: cur.AutoCloseBatchAt}
+	st := cur
+	st.CardTipPercents = append([]int(nil), cur.CardTipPercents...)
 	if !decodeStrict(c, &st) {
 		return badBody(c)
 	}

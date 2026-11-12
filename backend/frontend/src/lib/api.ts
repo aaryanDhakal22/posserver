@@ -127,10 +127,13 @@ export class ApiError extends Error {
   status: number;
   /** Seconds from a 429's Retry-After header, when present. */
   retryAfter?: number;
-  constructor(status: number, message: string, retryAfter?: number) {
+  /** The body's machine-readable `code` (e.g. "pin_taken"), when present. */
+  code?: string;
+  constructor(status: number, message: string, retryAfter?: number, code?: string) {
     super(message);
     this.status = status;
     this.retryAfter = retryAfter;
+    this.code = code;
   }
 }
 
@@ -141,18 +144,20 @@ export function errText(e: unknown): string {
   return String(e);
 }
 
-async function parseError(res: Response): Promise<string> {
+async function parseError(res: Response): Promise<{ message: string; code?: string }> {
   const text = await res.text();
   try {
-    return (JSON.parse(text).error as string) || text;
+    const j = JSON.parse(text);
+    return { message: (j.error as string) || text, code: typeof j.code === 'string' ? j.code : undefined };
   } catch {
-    return text || res.statusText;
+    return { message: text || res.statusText };
   }
 }
 
 async function toApiError(res: Response): Promise<ApiError> {
   const ra = Number(res.headers.get('Retry-After'));
-  return new ApiError(res.status, await parseError(res), Number.isFinite(ra) && ra > 0 ? ra : undefined);
+  const { message, code } = await parseError(res);
+  return new ApiError(res.status, message, Number.isFinite(ra) && ra > 0 ? ra : undefined, code);
 }
 
 export function getAdminKey(): string {
@@ -706,6 +711,8 @@ export function storeTime(iso: string | null | undefined, tz: string): string {
 export interface PricingFees {
   service_fee_cents: number; service_fee_bps: number; delivery_fee_cents: number;
   free_delivery_over_cents: number | null; delivery_min_cents: number;
+  /** The driver's share of delivery_fee_cents (the rest is the store's); null/absent = $3, capped at the fee. */
+  delivery_driver_cents?: number | null;
 }
 export interface PricingTips { enabled: boolean; presets: number[]; default_pct: number }
 export interface PricingStore {
@@ -834,3 +841,28 @@ export interface SiteDomain {
   verified: boolean;
   created_at: string;
 }
+
+// --- Store › Staff (counter terminal staff + terminal settings, contract §2.5zb) ---
+export type StaffRole = 'cashier' | 'manager' | 'driver';
+export interface StaffLimits { refund_cents?: number; discount_pct?: number }
+export interface StaffEffective { refund_cents: number | null; discount_pct: number | null }
+export interface Staff {
+  id: string; first_name: string; last_name: string; role: StaffRole;
+  limits: StaffLimits; effective_limits: StaffEffective; active: boolean; created_at: string; updated_at: string;
+}
+export type TerminalTabName = 'info' | 'counter' | 'takeout' | 'delivery' | 'pickup' | 'history' | 'dispatch';
+export type ButtonFont = 'barlow' | 'barlow_condensed' | 'barlow_semi_condensed' | 'system';
+export interface TerminalSettings {
+  cashier_refund_cents: number; cashier_discount_pct: number; auto_lock_minutes: number; counter_start: number;
+  receipt_auto_done_seconds: number; auto_close_batch_at: string;
+  default_tab: TerminalTabName; show_history: boolean; button_font: ButtonFont; cashier_price_drop_pct: number;
+  click_sound: boolean; prices_on_buttons: boolean; out_of_area_margin_mi: number; name_on_paid_counter: boolean;
+  card_tips: boolean; card_tip_percents: number[]; employee_meal_pct: number;
+}
+/** The owner's defaults (main's staff.DefaultSettings): a field main doesn't send yet shows these. */
+export const TERMINAL_DEFAULTS: TerminalSettings = {
+  cashier_refund_cents: 0, cashier_discount_pct: 10, auto_lock_minutes: 5, counter_start: 1, receipt_auto_done_seconds: 15,
+  auto_close_batch_at: '04:00', default_tab: 'info', show_history: false, button_font: 'barlow', cashier_price_drop_pct: 20,
+  click_sound: false, prices_on_buttons: false, out_of_area_margin_mi: 1, name_on_paid_counter: false, card_tips: false,
+  card_tip_percents: [15, 18, 20], employee_meal_pct: 50
+};

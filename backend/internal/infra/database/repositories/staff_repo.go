@@ -87,6 +87,7 @@ func (r *StaffRepository) Settings(ctx context.Context, locationID uuid.UUID) (*
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return nil, 0, fmt.Errorf("terminal settings: %w", err)
 	}
+	s.Normalize()
 	return &s, version, nil
 }
 

@@ -10,7 +10,11 @@
   // Tax, fees, tips and how deals combine. The store's fees and tips apply
   // to every channel unless a channel has its own (e.g. the website charges
   // an online fee and takes tips; the counter doesn't).
-  type FeesForm = { service: string; servicePct: string; delivery: string; freeOver: string; min: string };
+  // Delivery fee = the store's share + the driver's share (TERMINAL-PLAN "Delivery fee");
+  // the customer pays the total (delivery_fee_cents), the split feeds driver reports.
+  // main's default driver share, capped at the fee (before the $state initializers below call feesForm).
+  const DEFAULT_DRIVER_CENTS = 300;
+  type FeesForm = { service: string; servicePct: string; storeShare: string; driverShare: string; freeOver: string; min: string };
   type TipsForm = { enabled: boolean; presets: string; def: string };
   type KindForm = { ownFees: boolean; fees: FeesForm; ownTips: boolean; tips: TipsForm };
 
@@ -28,10 +32,18 @@
   let kept: PricingBody['kinds'] = {}; // kinds this card doesn't edit (vendor) stay as they are
 
   function feesForm(f: PricingFees | null): FeesForm {
+    const total = f?.delivery_fee_cents ?? 0;
+    const driver = Math.min(f?.delivery_driver_cents ?? DEFAULT_DRIVER_CENTS, total);
     return {
-      service: centsInput(f?.service_fee_cents ?? 0), servicePct: String((f?.service_fee_bps ?? 0) / 100), delivery: centsInput(f?.delivery_fee_cents ?? 0),
+      service: centsInput(f?.service_fee_cents ?? 0), servicePct: String((f?.service_fee_bps ?? 0) / 100),
+      storeShare: centsInput(total - driver), driverShare: centsInput(driver),
       freeOver: f?.free_delivery_over_cents == null ? '' : centsInput(f.free_delivery_over_cents), min: centsInput(f?.delivery_min_cents ?? 0)
     };
+  }
+  function feeTotal(f: FeesForm): string {
+    const a = f.storeShare.trim() ? toCents(f.storeShare) : 0;
+    const b = f.driverShare.trim() ? toCents(f.driverShare) : 0;
+    return a === null || b === null || a < 0 || b < 0 ? '—' : '$' + centsInput(a + b);
   }
   function tipsForm(t: PricingTips | null): TipsForm {
     return { enabled: !!t?.enabled, presets: (t?.presets ?? [15, 18, 20]).join(', '), def: String(t?.default_pct ?? 18) };
@@ -65,7 +77,8 @@
     };
     return {
       service_fee_cents: c(f.service, 'online fee'), service_fee_bps: Math.round((parseFloat(f.servicePct) || 0) * 100),
-      delivery_fee_cents: c(f.delivery, 'delivery fee'), free_delivery_over_cents: f.freeOver.trim() ? c(f.freeOver, 'amount') : null,
+      delivery_fee_cents: c(f.storeShare, 'store share') + c(f.driverShare, 'driver share'),
+      delivery_driver_cents: c(f.driverShare, 'driver share'), free_delivery_over_cents: f.freeOver.trim() ? c(f.freeOver, 'amount') : null,
       delivery_min_cents: c(f.min, 'minimum')
     };
   }
@@ -112,7 +125,9 @@
   <div class="grid gap-3 grid-cols-2 sm:grid-cols-3">
     <div><label class="lbl" for="{p}-svc">Online fee ($)</label><input id="{p}-svc" class="field mono text-right" inputmode="decimal" bind:value={f.service} /></div>
     <div><label class="lbl" for="{p}-svcp">+ % of food</label><input id="{p}-svcp" class="field mono text-right" inputmode="decimal" bind:value={f.servicePct} /></div>
-    <div><label class="lbl" for="{p}-del">Delivery fee ($)</label><input id="{p}-del" class="field mono text-right" inputmode="decimal" bind:value={f.delivery} /></div>
+    <div><label class="lbl" for="{p}-dels">Delivery: store share ($)</label><input id="{p}-dels" class="field mono text-right" inputmode="decimal" bind:value={f.storeShare} /></div>
+    <div><label class="lbl" for="{p}-deld">Delivery: driver share ($)</label><input id="{p}-deld" class="field mono text-right" inputmode="decimal" bind:value={f.driverShare} /></div>
+    <div class="flex flex-col justify-end pb-2"><span class="lbl">Delivery fee total</span><span class="mono font-semibold" data-testid="{p}-del-total">{feeTotal(f)}</span></div>
     <div><label class="lbl" for="{p}-free">Free delivery over ($)</label><input id="{p}-free" class="field mono text-right" inputmode="decimal" placeholder="never" bind:value={f.freeOver} /></div>
     <div><label class="lbl" for="{p}-min">Delivery minimum ($)</label><input id="{p}-min" class="field mono text-right" inputmode="decimal" bind:value={f.min} /></div>
   </div>
@@ -147,7 +162,7 @@
             </select>
           </div>
         </div>
-        <p class="help !mt-0">Items use their own tax rate when they have one (item panel), else this. Delivery fees aren't taxed; the online fee is.</p>
+        <p class="help !mt-0">Items use their own tax rate when they have one (item panel), else this. Delivery fees aren't taxed; the online fee is. The customer pays the delivery fee total; the driver share shows on the driver reports.</p>
         <div class="flex flex-wrap gap-4 items-end">
           <div class="flex-1 min-w-[220px]">
             <label class="lbl" for="pr-half">A topping on half a pizza</label>

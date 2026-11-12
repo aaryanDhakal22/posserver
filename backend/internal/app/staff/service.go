@@ -344,6 +344,7 @@ func (s *Service) Delete(ctx context.Context, tenantID, locationID, id uuid.UUID
 
 // SaveSettings replaces the store's terminal settings.
 func (s *Service) SaveSettings(ctx context.Context, tenantID, locationID uuid.UUID, st staff.Settings) (staff.Settings, error) {
+	st.Normalize()
 	if err := st.Validate(); err != nil {
 		return staff.Settings{}, err
 	}

@@ -94,6 +94,7 @@ type DeliveryRunStore interface {
 type CounterOrders interface {
 	CreateCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, co *order.CounterOrder, agentStatus []byte, batchID *int64) (string, error)
 	AddCounterPayment(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, p order.CheckedPayment) (string, error)
+	ChangeCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, o *order.Order) (string, error)
 }
 
 // Journal keeps the terminal's staff journal (the staff service).
@@ -270,6 +271,8 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 		return s.applyPayment(ctx, sc, eid, ev)
 	case "order.void":
 		return s.applyVoid(ctx, sc, eid, ev)
+	case "order.changed":
+		return s.applyChanged(ctx, sc, eid, ev)
 	case "journal.entries":
 		return s.applyJournal(ctx, sc, eid, ev)
 	default:

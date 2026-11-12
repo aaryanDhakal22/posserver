@@ -98,3 +98,29 @@ func TestApplyVoid(t *testing.T) {
 		t.Error("a second void is stale")
 	}
 }
+
+// A delivery fee keeps the driver's share (the split), on the order and in
+// the snapshot the Pi gets; a share above the fee is dropped.
+func TestCounterDeliveryDriverShare(t *testing.T) {
+	sc := Scope{TenantID: TenantID(uuid.New()), LocationID: LocationID(uuid.New())}
+	s := counterSnap()
+	s.Fulfillment = FulfillmentDTO{Type: "delivery", Address: &AddressDTO{Line1: "1 Main St", City: "Towson"}}
+	s.Money = MoneyDTO{Subtotal: 1000, Tax: 60, Fees: []FeeDTO{{Type: "delivery", Label: "Delivery fee", Amount: 400, DriverCents: 300}}, Total: 1460}
+	s.CounterPayments[0].AmountCents = 1460
+	co, err := NewCounterOrder(sc, s, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f := co.Order.Money().Fees[0]; f.DriverCents != 300 || f.Amount != 400 {
+		t.Fatalf("fee: %+v", f)
+	}
+	raw, _ := json.Marshal(co.Order.Snapshot().Money.Fees)
+	if string(raw) != `[{"type":"delivery","label":"Delivery fee","amount_cents":400,"driver_cents":300}]` {
+		t.Fatalf("snapshot fees: %s", raw)
+	}
+	s.Money.Fees[0].DriverCents = 401
+	co, _ = NewCounterOrder(sc, s, nil)
+	if f := co.Order.Money().Fees[0]; f.DriverCents != 0 {
+		t.Fatalf("share over the fee kept: %+v", f)
+	}
+}

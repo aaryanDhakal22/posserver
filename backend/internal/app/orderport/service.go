@@ -630,7 +630,9 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 		money.Discounts = append(money.Discounts, order.Discount{Type: t, Code: code, Label: d.Label, Amount: order.Money(d.AmountCents)})
 	}
 	if q.DeliveryFeeCents > 0 {
-		money.Fees = append(money.Fees, order.Fee{Type: "delivery", Label: "Delivery fee", Amount: order.Money(q.DeliveryFeeCents)})
+		_, driver := pricing.DeliverySplit(pctx.Settings, q.DeliveryFeeCents)
+		money.Fees = append(money.Fees, order.Fee{Type: "delivery", Label: "Delivery fee", Amount: order.Money(q.DeliveryFeeCents),
+			DriverCents: order.Money(driver)})
 	}
 	if q.ServiceFeeCents > 0 {
 		money.Fees = append(money.Fees, order.Fee{Type: "service", Label: "Online fee", Amount: order.Money(q.ServiceFeeCents)})

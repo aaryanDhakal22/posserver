@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -63,7 +65,35 @@ type Settings struct {
 	// AutoCloseBatchAt: the Pi closes a batch nobody closed at this store
 	// time ("HH:MM", 24 h; "" = off). Default DefaultAutoCloseBatchAt.
 	AutoCloseBatchAt string `json:"auto_close_batch_at"`
+
+	// The terminal app's own settings (TERMINAL-PLAN 2026-11-11; the Pi
+	// passes them through untouched).
+	DefaultTab          string  `json:"default_tab"`            // the tab a PIN login lands on
+	ShowHistory         bool    `json:"show_history"`           // the History tab on the top bar
+	ButtonFont          string  `json:"button_font"`            // one of ButtonFonts
+	CashierPriceDropPct int     `json:"cashier_price_drop_pct"` // a cashier lowers an item's price by up to this % without a manager
+	ClickSound          bool    `json:"click_sound"`            // the soft click on the bubbly buttons
+	PricesOnButtons     bool    `json:"prices_on_buttons"`      // menu buttons show prices (off = captions only)
+	OutOfAreaMarginMi   float64 `json:"out_of_area_margin_mi"`  // a delivery this far past the store's radius still goes (warned)
+	NameOnPaidCounter   bool    `json:"name_on_paid_counter"`   // pressing Counter asks a name first
+	CardTips            bool    `json:"card_tips"`              // the Square Reader offers tips
+	CardTipPercents     []int   `json:"card_tip_percents"`      // the Reader's tip choices
+	EmployeeMealPct     int     `json:"employee_meal_pct"`      // the Employee meal discount
 }
+
+// DefaultTabs are the tabs a login may land on (the terminal's names;
+// Drawer is a bottom-bar button, not a landing tab).
+var DefaultTabs = []string{"info", "counter", "takeout", "delivery", "pickup", "history", "dispatch"}
+
+// ButtonFonts are the menu buttons' font choices (the terminal maps each
+// name to a bundled font; "system" = the platform font, Roboto).
+var ButtonFonts = []string{"barlow", "barlow_condensed", "barlow_semi_condensed", "system"}
+
+// Ranges of the terminal app's settings.
+const (
+	MaxOutOfAreaMarginMi = 10
+	MaxCardTipPercents   = 6
+)
 
 // DefaultAutoCloseBatchAt is the batch auto-close time (the owner: on by
 // default at 4:00 am).
@@ -71,10 +101,16 @@ const DefaultAutoCloseBatchAt = "04:00"
 
 // DefaultSettings: refunds are a manager's (TERMINAL-PLAN "Refunds: manager
 // only"), a cashier discounts up to 10 %, the terminal locks after 5 idle
-// minutes, counter numbers start at 1, the receipt screen closes after 15 s.
+// minutes, counter numbers start at 1, the receipt screen closes after 15 s;
+// the app lands on Info with History hidden, Barlow buttons without prices
+// or clicks, a cashier lowers a price up to 20 %, deliveries up to 1 mile
+// past the radius go, no name on a paid counter order, no card tips (15 /
+// 18 / 20 % when on), the employee meal is 50 % off.
 func DefaultSettings() Settings {
 	return Settings{CashierRefundCents: 0, CashierDiscountPct: 10, AutoLockMinutes: 5, CounterStart: 1, ReceiptAutoDoneSeconds: 15,
-		AutoCloseBatchAt: DefaultAutoCloseBatchAt}
+		AutoCloseBatchAt: DefaultAutoCloseBatchAt,
+		DefaultTab:       "info", ButtonFont: "barlow", CashierPriceDropPct: 20, OutOfAreaMarginMi: 1,
+		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: 50}
 }
 
 // Ranges.
@@ -155,8 +191,35 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: receipt_auto_done_seconds must be 0–%d", ErrBadSettings, MaxReceiptDoneS)
 	case !ValidHHMM(s.AutoCloseBatchAt):
 		return fmt.Errorf("%w: auto_close_batch_at must be HH:MM (24 h) or empty (off)", ErrBadSettings)
+	case !slices.Contains(DefaultTabs, s.DefaultTab):
+		return fmt.Errorf("%w: default_tab must be one of %s", ErrBadSettings, strings.Join(DefaultTabs, ", "))
+	case !slices.Contains(ButtonFonts, s.ButtonFont):
+		return fmt.Errorf("%w: button_font must be one of %s", ErrBadSettings, strings.Join(ButtonFonts, ", "))
+	case s.CashierPriceDropPct < 0 || s.CashierPriceDropPct > 100:
+		return fmt.Errorf("%w: cashier_price_drop_pct must be 0–100", ErrBadSettings)
+	case math.IsNaN(s.OutOfAreaMarginMi) || s.OutOfAreaMarginMi < 0 || s.OutOfAreaMarginMi > MaxOutOfAreaMarginMi:
+		return fmt.Errorf("%w: out_of_area_margin_mi must be 0–%d", ErrBadSettings, MaxOutOfAreaMarginMi)
+	case len(s.CardTipPercents) < 1 || len(s.CardTipPercents) > MaxCardTipPercents:
+		return fmt.Errorf("%w: card_tip_percents needs 1–%d values", ErrBadSettings, MaxCardTipPercents)
+	case s.EmployeeMealPct < 0 || s.EmployeeMealPct > 100:
+		return fmt.Errorf("%w: employee_meal_pct must be 0–100", ErrBadSettings)
+	}
+	for _, p := range s.CardTipPercents {
+		if p < 0 || p > 100 {
+			return fmt.Errorf("%w: card_tip_percents are 0–100", ErrBadSettings)
+		}
 	}
 	return nil
+}
+
+// Normalize: a null tip list = the default one; the margin keeps one
+// decimal. (The repository decodes a stored row over DefaultSettings, so
+// fields saved before they existed read as their defaults.)
+func (s *Settings) Normalize() {
+	if s.CardTipPercents == nil {
+		s.CardTipPercents = []int{15, 18, 20}
+	}
+	s.OutOfAreaMarginMi = math.Round(s.OutOfAreaMarginMi*10) / 10
 }
 
 // ValidHHMM: "" or a 24-hour "HH:MM".

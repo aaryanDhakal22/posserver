@@ -107,6 +107,10 @@ type Fee struct {
 	Type   string
 	Label  string
 	Amount Money
+	// DriverCents is the driver's share of a delivery fee (Type "delivery";
+	// the store keeps Amount − DriverCents). Informational: Amount is what
+	// the customer paid. 0 = no split known.
+	DriverCents Money `json:",omitempty"`
 }
 
 type Discount struct {

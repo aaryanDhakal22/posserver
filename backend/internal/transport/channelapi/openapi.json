@@ -3440,6 +3440,10 @@
           "delivery_min_cents": {
             "type": "integer"
           },
+          "delivery_driver_cents": {
+            "type": "integer",
+            "description": "The driver's share of delivery_fee_cents (the store keeps the rest). Informational: the customer pays delivery_fee_cents."
+          },
           "tips": {
             "type": "object",
             "required": [

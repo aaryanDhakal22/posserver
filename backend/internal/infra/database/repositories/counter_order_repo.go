@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -168,6 +169,66 @@ func (r *OrderRepository) AddCounterPayment(ctx context.Context, sc order.Scope,
 	if result == order.FloorApplied {
 		if _, err := tx.Exec(ctx, `UPDATE orders SET updated_at = now() WHERE id = $1`, orderID); err != nil {
 			return "", err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("commit: %w", err)
+	}
+	return result, nil
+}
+
+// ChangeCounterOrder replaces a counter order's line items and money with
+// o's (the Pi's order.changed, a kitchen change after SEND): applied,
+// duplicate (the event was seen), not_found (no such order in the scope) or
+// invalid (not a counter order, or cancelled). Payments, status and the
+// number are left as they are.
+func (r *OrderRepository) ChangeCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, o *order.Order) (string, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	q := models.New(tx)
+
+	var source, status string
+	err = tx.QueryRow(ctx, `SELECT source, status FROM orders WHERE id = $1 AND tenant_id = $2 AND location_id = $3 FOR UPDATE`,
+		orderID, uuid.UUID(sc.TenantID), uuid.UUID(sc.LocationID)).Scan(&source, &status)
+	result := order.FloorApplied
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		result = order.FloorNotFound
+	case err != nil:
+		return "", fmt.Errorf("get order: %w", err)
+	case source != string(order.SourceCounter), status == string(order.StatusCancelled):
+		result = order.FloorInvalid
+	}
+	var oid *uuid.UUID
+	if result != order.FloorNotFound {
+		oid = &orderID
+	}
+	fresh, err := markSeen(ctx, q, sc, eventID, oid, typ, result)
+	if err != nil {
+		return "", err
+	}
+	if !fresh {
+		return order.FloorDuplicate, nil
+	}
+	if result == order.FloorApplied {
+		if _, err := tx.Exec(ctx, `DELETE FROM line_items WHERE order_id = $1`, orderID); err != nil {
+			return "", fmt.Errorf("drop line items: %w", err)
+		}
+		for _, item := range o.Items() {
+			if err := insertLineItemTree(ctx, q, order.ID(orderID), nil, item); err != nil {
+				return "", fmt.Errorf("line items: %w", err)
+			}
+		}
+		m := o.Money()
+		fees, _ := json.Marshal(m.Fees)
+		discounts, _ := json.Marshal(m.Discounts)
+		if _, err := tx.Exec(ctx, `UPDATE orders SET subtotal_cents = $2, tax_cents = $3, tip_cents = $4, total_cents = $5,
+			fees = $6, discounts = $7, updated_at = now() WHERE id = $1`,
+			orderID, int64(m.Subtotal), int64(m.Tax), int64(m.Tip), int64(m.Total), fees, discounts); err != nil {
+			return "", fmt.Errorf("update money: %w", err)
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {

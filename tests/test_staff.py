@@ -97,13 +97,19 @@ def test_staff_crud_and_pins(mgr) -> None:
     assert _code(mgr.patch(f"{STAFF}/not-a-uuid", json={}, timeout=5), 400) == "bad_request"
 
 
+APP_DEFAULTS = {"default_tab": "info", "show_history": False, "button_font": "barlow", "cashier_price_drop_pct": 20,
+                "click_sound": False, "prices_on_buttons": False, "out_of_area_margin_mi": 1, "name_on_paid_counter": False,
+                "card_tips": False, "card_tip_percents": [15, 18, 20], "employee_meal_pct": 50}
+
+
 def test_terminal_settings(mgr) -> None:
     assert _ok(mgr.get(SETTINGS, timeout=5)) == {"cashier_refund_cents": 0, "cashier_discount_pct": 10, "auto_lock_minutes": 5,
-                                                 "counter_start": 1, "receipt_auto_done_seconds": 15, "auto_close_batch_at": "04:00"}
+                                                 "counter_start": 1, "receipt_auto_done_seconds": 15, "auto_close_batch_at": "04:00",
+                                                 **APP_DEFAULTS}
     want = {"cashier_refund_cents": 2000, "cashier_discount_pct": 15, "auto_lock_minutes": 3, "counter_start": 100,
             "receipt_auto_done_seconds": 0, "auto_close_batch_at": "03:30"}
-    assert _ok(mgr.put(SETTINGS, json=want, timeout=5)) == want
-    assert _ok(mgr.get(SETTINGS, timeout=5)) == want
+    assert _ok(mgr.put(SETTINGS, json=want, timeout=5)) == {**want, **APP_DEFAULTS}
+    assert _ok(mgr.get(SETTINGS, timeout=5)) == {**want, **APP_DEFAULTS}
     # A client that doesn't know auto_close_batch_at keeps the saved one; "" = off.
     older = {k: v for k, v in want.items() if k != "auto_close_batch_at"}
     assert _ok(mgr.put(SETTINGS, json=older, timeout=5))["auto_close_batch_at"] == "03:30"
@@ -116,6 +122,28 @@ def test_terminal_settings(mgr) -> None:
     # A cashier's effective limits follow the settings.
     p = _ok(mgr.post(STAFF, json={"first_name": "Dee", "role": "cashier", "pin": "11"}, timeout=10), 201)
     assert p["effective_limits"] == {"refund_cents": 2000, "discount_pct": 15}
+
+
+def test_terminal_app_settings(store, mgr) -> None:
+    """The terminal app's settings (TERMINAL-PLAN 2026-11-11): saved, ranged, kept when a save leaves them out, sent to the Pi."""
+    mine = {"default_tab": "takeout", "show_history": True, "button_font": "barlow_semi_condensed", "cashier_price_drop_pct": 25,
+            "click_sound": True, "prices_on_buttons": True, "out_of_area_margin_mi": 1.5, "name_on_paid_counter": True,
+            "card_tips": True, "card_tip_percents": [10, 15, 20, 25], "employee_meal_pct": 40}
+    saved = _ok(mgr.put(SETTINGS, json=mine, timeout=5))
+    assert {k: saved[k] for k in mine} == mine and saved["auto_lock_minutes"] == 5
+    # An older client's full save of the fields it knows keeps every new one.
+    older = {k: saved[k] for k in ("cashier_refund_cents", "cashier_discount_pct", "auto_lock_minutes", "counter_start",
+                                   "receipt_auto_done_seconds")}
+    after = _ok(mgr.put(SETTINGS, json={**older, "auto_lock_minutes": 7}, timeout=5))
+    assert {k: after[k] for k in mine} == mine and after["auto_lock_minutes"] == 7
+    for bad in ({"default_tab": "drawer"}, {"button_font": "comic"}, {"cashier_price_drop_pct": 101}, {"out_of_area_margin_mi": 11},
+                {"out_of_area_margin_mi": -1}, {"card_tip_percents": []}, {"card_tip_percents": [1, 2, 3, 4, 5, 6, 7]},
+                {"card_tip_percents": [15, 101]}, {"employee_meal_pct": -1}):
+        assert _code(mgr.put(SETTINGS, json=bad, timeout=5), 400) == "bad_settings", bad
+    assert _code(mgr.put(SETTINGS, json={"card_tips": "yes"}, timeout=5), 400) == "bad_request"
+    # The Pi's terminal config carries them as saved.
+    cfg = _config(store.key)
+    assert {k: cfg["settings"][k] for k in mine} == {**mine}
 
 
 def test_terminal_config_for_the_pi(store, mgr) -> None:

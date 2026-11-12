@@ -219,3 +219,49 @@ def test_journal_entries(store) -> None:
     ]
     assert set(_send(store.key, bad).values()) == {"invalid"}
     assert len(mgr.get(f"{STORE_V1}/me/staff/journal", timeout=5).json()) == 2
+
+
+def test_order_changed_replaces_lines_and_money(store, publish) -> None:
+    """A kitchen change after SEND (agent §2.10d): order.changed carries the
+    whole new snapshot; main replaces the lines + money, keeps payments,
+    status and number."""
+    oid = _uuid7()
+    snap = _snapshot(oid)
+    ev = _placed(snap)
+    assert _send(store.key, [ev]) == {ev["event_id"]: "applied"}
+    wings = {"id": str(uuid.uuid4()), "position": 1, "name": "Wings", "size": "10 pc", "quantity": 2,
+             "unit_price_cents": 1000, "line_total_cents": 2000, "routing": "unassigned"}
+    changed = {**snap, "items": [*snap["items"], wings],
+               "money": {**snap["money"], "subtotal_cents": 4399, "tax_cents": 264, "total_cents": 4423}}
+    ch = {"event_id": str(uuid.uuid4()), "type": "order.changed", "order_id": oid, "at": _now(), "snapshot": changed,
+          "staff_id": snap["staff_id"]}
+    again = {**ch, "event_id": str(uuid.uuid4())}
+    res = _send(store.key, [ch])
+    assert res == {ch["event_id"]: "applied"}
+    assert _send(store.key, [ch]) == {ch["event_id"]: "duplicate"}
+    got = _get(store.key, oid)
+    assert sorted(i["name"] for i in got["items"]) == ["Cheese Pizza", "Wings"]
+    assert got["money"]["total_cents"] == 4423 and got["money"]["subtotal_cents"] == 4399
+    assert got["kitchen_order_number"] == 12 and got["status"] == "accepted"
+    assert [p["amount_cents"] for p in got.get("payments") or []] == [2303]
+    # The same change again under a new event id: applied again (idempotent content).
+    assert _send(store.key, [again]) == {again["event_id"]: "applied"}
+    assert len(_get(store.key, oid)["items"]) == 2
+
+    # Money that doesn't add up, a snapshot for another id, an unknown order: refused.
+    bad_money = {**ch, "event_id": str(uuid.uuid4()), "snapshot": {**changed, "money": {**changed["money"], "total_cents": 1}}}
+    other_id = {**ch, "event_id": str(uuid.uuid4()), "order_id": str(uuid.uuid4())}
+    unknown = _snapshot(_uuid7())
+    nf = {"event_id": str(uuid.uuid4()), "type": "order.changed", "order_id": unknown["id"], "at": _now(), "snapshot": unknown}
+    res = _send(store.key, [bad_money, other_id, nf])
+    assert res == {bad_money["event_id"]: "invalid", other_id["event_id"]: "invalid", nf["event_id"]: "not_found"}
+
+    # Not a counter order / a voided one: invalid.
+    o = store.order()
+    publish(o)
+    online = wait_order(store.key, o["order_id"])["id"]
+    foreign = {**ch, "event_id": str(uuid.uuid4()), "order_id": online, "snapshot": {**changed, "id": online}}
+    v = {"event_id": str(uuid.uuid4()), "type": "order.void", "order_id": oid, "reason": "left", "at": _now()}
+    late = {**ch, "event_id": str(uuid.uuid4())}
+    res = _send(store.key, [foreign, v, late])
+    assert res == {foreign["event_id"]: "invalid", v["event_id"]: "applied", late["event_id"]: "invalid"}

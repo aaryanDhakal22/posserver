@@ -70,6 +70,8 @@ type FeeDTO struct {
 	Type   string `json:"type"`
 	Label  string `json:"label,omitempty"`
 	Amount int64  `json:"amount_cents"`
+	// DriverCents: the driver's share of a delivery fee (absent = no split).
+	DriverCents int64 `json:"driver_cents,omitempty"`
 }
 
 type DiscountDTO struct {
@@ -192,7 +194,7 @@ func toPaymentSummariesDTO(payments []Payment) []PaymentSummary {
 func toMoneyDTO(m MoneyBreakdown) MoneyDTO {
 	fees := make([]FeeDTO, 0, len(m.Fees))
 	for _, f := range m.Fees {
-		fees = append(fees, FeeDTO{Type: f.Type, Label: f.Label, Amount: int64(f.Amount)})
+		fees = append(fees, FeeDTO{Type: f.Type, Label: f.Label, Amount: int64(f.Amount), DriverCents: int64(f.DriverCents)})
 	}
 	discounts := make([]DiscountDTO, 0, len(m.Discounts))
 	for _, d := range m.Discounts {

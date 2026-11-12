@@ -16,7 +16,7 @@ import (
 )
 
 // Counter orders from the Pi (TERMINAL-PLAN.md 0d, contract/main.md §2.5zb):
-// order.placed, order.payment, order.void and journal.entries.
+// order.placed, order.payment, order.void, order.changed and journal.entries.
 
 func (s *Service) applyPlaced(ctx context.Context, sc order.Scope, eid uuid.UUID, ev event) (string, error) {
 	if s.counter == nil || len(ev.Snapshot) == 0 {
@@ -97,6 +97,35 @@ func (s *Service) applyVoid(ctx context.Context, sc order.Scope, eid uuid.UUID, 
 		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Msg("counter order voided")
 	}
 	return out, nil
+}
+
+// applyChanged replaces a counter order's lines and money with the Pi's
+// changed snapshot (a kitchen change after SEND, agent contract §2.10d):
+// checked like order.placed's; payments, status and number stay.
+func (s *Service) applyChanged(ctx context.Context, sc order.Scope, eid uuid.UUID, ev event) (string, error) {
+	oid, err := uuid.Parse(ev.OrderID)
+	if s.counter == nil || err != nil || len(ev.Snapshot) == 0 {
+		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
+	}
+	var snap order.CounterSnapshot
+	if err := json.Unmarshal(ev.Snapshot, &snap); err != nil {
+		return s.invalid(ctx, sc, eid, ev, err)
+	}
+	if snap.ID != ev.OrderID {
+		return s.invalid(ctx, sc, eid, ev, errors.New("order_id differs from the snapshot's id"))
+	}
+	co, err := order.NewCounterOrder(sc, snap, ev.Snapshot)
+	if err != nil {
+		return s.invalid(ctx, sc, eid, ev, err)
+	}
+	res, err := s.counter.ChangeCounterOrder(ctx, sc, eid, ev.Type, oid, co.Order)
+	if err != nil {
+		return "", err
+	}
+	if res == order.FloorApplied {
+		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Int("lines", len(co.Order.Items())).Msg("counter order changed")
+	}
+	return res, nil
 }
 
 type journalEntry struct {

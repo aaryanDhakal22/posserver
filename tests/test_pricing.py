@@ -95,6 +95,18 @@ def test_settings(admin, store, mgr) -> None:
     assert counter["settings"]["service_fee_cents"] == 0 and counter["settings"]["free_delivery_over_cents"] == 3000
     assert counter["settings"]["stacking"] == "stack" and counter["timezone"] == "America/New_York" and counter["types"] == {"pickup": True, "delivery": True}
 
+    # The delivery fee split (store share + driver share): unset = $3 of the fee to the driver (capped), the total unchanged.
+    assert web["settings"]["delivery_driver_cents"] == 300 and counter["settings"]["delivery_driver_cents"] == 299
+    split = {**body, "kinds": {"web": {**body["kinds"]["web"], "fees": {**body["kinds"]["web"]["fees"], "delivery_fee_cents": 400,
+                                                                         "delivery_driver_cents": 250}}}}
+    got = _ok(mgr.put(f"{ME}/pricing", json=split, timeout=5))
+    assert got["kinds"]["web"]["fees"]["delivery_driver_cents"] == 250 and "delivery_driver_cents" not in got["store"]["fees"]
+    web = check(requests.get(f"{CH_V1}/pricing", headers=_channel(admin, store, "web"), timeout=5), "getPricing")
+    assert web["settings"]["delivery_fee_cents"] == 400 and web["settings"]["delivery_driver_cents"] == 250
+    over = {**split, "kinds": {"web": {**split["kinds"]["web"], "fees": {**split["kinds"]["web"]["fees"], "delivery_driver_cents": 401}}}}
+    assert mgr.put(f"{ME}/pricing", json=over, timeout=5).status_code == 400
+    _ok(mgr.put(f"{ME}/pricing", json=body, timeout=5))
+
     for bad in ({**body, "store": {**body["store"], "tax_bps": 5000}}, {**body, "store": {**body["store"], "stacking": "all"}},
                 {**body, "kinds": {"kiosk": {}}}, {**body, "kinds": {"web": {"tips": {"enabled": True, "presets": [150], "default_pct": 18}}}},
                 {**body, "store": {**body["store"], "card_fee": {"mode": "tax", "bps": 0}}}):

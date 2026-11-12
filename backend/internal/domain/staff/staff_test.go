@@ -1,6 +1,9 @@
 package staff
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestValidPin(t *testing.T) {
 	for pin, ok := range map[string]bool{"12": true, "0000": true, "123": true, "1": false, "12345": false, "12a": false, "": false, "١٢": false} {
@@ -48,6 +51,16 @@ func TestSettingsValidate(t *testing.T) {
 		func(s *Settings) { s.AutoCloseBatchAt = "24:00" },
 		func(s *Settings) { s.AutoCloseBatchAt = "04:60" },
 		func(s *Settings) { s.AutoCloseBatchAt = "4am" },
+		func(s *Settings) { s.DefaultTab = "drawer" },
+		func(s *Settings) { s.DefaultTab = "" },
+		func(s *Settings) { s.ButtonFont = "comic_sans" },
+		func(s *Settings) { s.CashierPriceDropPct = 101 },
+		func(s *Settings) { s.OutOfAreaMarginMi = -0.1 },
+		func(s *Settings) { s.OutOfAreaMarginMi = 10.5 },
+		func(s *Settings) { s.CardTipPercents = []int{} },
+		func(s *Settings) { s.CardTipPercents = []int{1, 2, 3, 4, 5, 6, 7} },
+		func(s *Settings) { s.CardTipPercents = []int{15, 101} },
+		func(s *Settings) { s.EmployeeMealPct = -1 },
 	} {
 		s := DefaultSettings()
 		f(&s)
@@ -67,5 +80,27 @@ func TestAutoCloseBatchAt(t *testing.T) {
 		if err := s.Validate(); err != nil {
 			t.Errorf("%q: %v", v, err)
 		}
+	}
+}
+
+func TestTerminalAppDefaults(t *testing.T) {
+	d := DefaultSettings()
+	if d.DefaultTab != "info" || d.ShowHistory || d.ButtonFont != "barlow" || d.CashierPriceDropPct != 20 || d.ClickSound ||
+		d.PricesOnButtons || d.OutOfAreaMarginMi != 1 || d.NameOnPaidCounter || d.CardTips ||
+		!reflect.DeepEqual(d.CardTipPercents, []int{15, 18, 20}) || d.EmployeeMealPct != 50 {
+		t.Fatalf("defaults: %+v", d)
+	}
+	for _, tab := range DefaultTabs {
+		s := DefaultSettings()
+		s.DefaultTab = tab
+		if err := s.Validate(); err != nil {
+			t.Errorf("%s: %v", tab, err)
+		}
+	}
+	s := DefaultSettings()
+	s.CardTipPercents, s.OutOfAreaMarginMi = nil, 1.26
+	s.Normalize()
+	if !reflect.DeepEqual(s.CardTipPercents, []int{15, 18, 20}) || s.OutOfAreaMarginMi != 1.3 {
+		t.Fatalf("normalize: %+v", s)
 	}
 }
