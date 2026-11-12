@@ -547,6 +547,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", storePrefix+"/me/menu/entries/:id", "store-session", "Delete an entry", viewH.MeDeleteEntry, storeSession),
 		def("GET", storePrefix+"/me/square", "store-session", "Square: connection, locations, holds open", squareH.MeStatus, storeSession),
 		def("POST", storePrefix+"/me/square/connect", "store-session", "Square: the link to connect the account → {url}", squareH.MeConnect, storeSession),
+		def("POST", storePrefix+"/me/square/sandbox-token", "store-session", "Square: paste a sandbox access token + location (staging / dev only; 403 not_sandbox in production) {access_token, location_id}", squareH.MePasteSandboxToken, storeSession),
 		def("PUT", storePrefix+"/me/square/location", "store-session", "Square: the location payments go to {square_location_id}", squareH.MeSetLocation, storeSession),
 		def("DELETE", storePrefix+"/me/square", "store-session", "Square: disconnect (refused while holds are open)", squareH.MeDisconnect, storeSession),
 		def("GET", storePrefix+"/me/card-holds", "store-session", "Recent online card holds with who ordered (?status=&limit=)", squareH.MeHolds, storeSession),

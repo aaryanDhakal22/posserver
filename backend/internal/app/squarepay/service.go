@@ -95,6 +95,7 @@ type Service struct {
 	aead     cipher.AEAD
 	logger   zerolog.Logger
 	now      func() time.Time
+	grants   grants // the stores' OAuth scopes (terminal.go)
 }
 
 func NewService(cfg Config, client *square.Client, repo Repo, locs LocationReader, lg zerolog.Logger) (*Service, error) {
@@ -308,10 +309,21 @@ type Status struct {
 	LastError        string            `json:"last_error"`
 	ConnectedAt      *time.Time        `json:"connected_at"`
 	HoldsOpen        int               `json:"holds_open"`
+	// InPerson: the grant includes PAYMENTS_WRITE_IN_PERSON (the counter
+	// terminal's card reader); false = connected before that scope was asked
+	// for: reconnect once. null = not connected, or Square couldn't say.
+	InPerson *bool    `json:"in_person"`
+	Scopes   []string `json:"scopes"`
+	// SandboxPaste: this server runs Square's sandbox, so Store › Payments
+	// offers "Paste a Square sandbox token" (never in production).
+	// Pasted: the connection is such a pasted sandbox token.
+	SandboxPaste bool `json:"sandbox_paste"`
+	Pasted       bool `json:"pasted"`
 }
 
 func (s *Service) Status(ctx context.Context, locationID uuid.UUID) (Status, error) {
-	st := Status{Enabled: s.Enabled(), Env: s.cfg.Env, AppID: s.cfg.AppID, Locations: []square.Location{}}
+	st := Status{Enabled: s.Enabled(), Env: s.cfg.Env, AppID: s.cfg.AppID, Locations: []square.Location{}, Scopes: []string{},
+		SandboxPaste: s.Enabled() && s.cfg.Env == "sandbox"}
 	c, err := s.repo.Get(ctx, locationID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return st, nil
@@ -320,6 +332,7 @@ func (s *Service) Status(ctx context.Context, locationID uuid.UUID) (Status, err
 		return st, err
 	}
 	at := c.ConnectedAt
+	st.Pasted = s.pasted(c)
 	st.State, st.Connected, st.MerchantID, st.SquareLocationID, st.LastError, st.ConnectedAt =
 		c.Status, c.Status == "connected", c.MerchantID, c.SquareLocationID, c.LastError, &at
 	if holds, err := s.repo.Holds(ctx, locationID, 500); err == nil {
@@ -340,6 +353,13 @@ func (s *Service) Status(ctx context.Context, locationID uuid.UUID) (Status, err
 				}
 			} else {
 				st.LastError = err.Error()
+			}
+			if st.Pasted { // a sandbox personal token: every permission
+				in := true
+				st.InPerson = &in
+			} else if scopes, ok := s.Grant(ctx, locationID, tok); ok {
+				in := hasScope(scopes, square.ScopeInPerson)
+				st.InPerson, st.Scopes = &in, append([]string{}, scopes...)
 			}
 		}
 	}
@@ -383,7 +403,7 @@ func (s *Service) Disconnect(ctx context.Context, locationID uuid.UUID) error {
 			return ErrHoldsOpen
 		}
 	}
-	if s.Enabled() && c.Status != "revoked" {
+	if s.Enabled() && c.Status != "revoked" && !s.pasted(c) { // a pasted token isn't ours to revoke
 		if tok, err := s.open(c.AccessEnc); err == nil {
 			if err := s.client.Revoke(ctx, tok); err != nil {
 				s.logger.Warn().Err(err).Str("location_id", locationID.String()).Msg("square revoke failed (forgetting the connection anyway)")
@@ -418,6 +438,9 @@ func (s *Service) refresh(ctx context.Context, c repositories.SquareConnection) 
 	rt, err := s.open(c.RefreshEnc)
 	if err != nil {
 		return "", err
+	}
+	if rt == pastedRefresh { // a pasted sandbox token: nothing to refresh
+		return s.open(c.AccessEnc)
 	}
 	tok, err := s.client.Refresh(ctx, rt)
 	if err != nil {

@@ -222,3 +222,44 @@ test('access removed in Square: the store sees it and can reconnect', async ({ p
   await expect(page.getByText('Connected', { exact: true })).toBeVisible();
   expect((await square(store)).connected).toBe(true);
 });
+
+/** A token the fake Square issued (stands in for the Developer Console's sandbox access token) + its active location. */
+async function fakeSandboxToken(): Promise<{ token: string; location: string }> {
+  const auth = await fetch(`${FAKE}/oauth2/authorize?client_id=sq0idp-fake&redirect_uri=${encodeURIComponent('http://paste.invalid/cb')}&state=s&scope=PAYMENTS_WRITE`, { redirect: 'manual' });
+  const code = new URL(auth.headers.get('location')!).searchParams.get('code')!;
+  const tok = await (await fetch(`${FAKE}/oauth2/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ client_id: 'sq0idp-fake', client_secret: 'sq0csp-fake', grant_type: 'authorization_code', code })
+  })).json();
+  const locs = await (await fetch(`${FAKE}/v2/locations`, { headers: { authorization: `Bearer ${tok.access_token}` } })).json();
+  return { token: tok.access_token, location: locs.locations.find((l: any) => l.status === 'ACTIVE').id };
+}
+
+test('paste a Square sandbox token (staging only): shown only when main runs the sandbox, saved like a connection', async ({ page, store }) => {
+  // Dev main runs the fake Square, so it never offers the form: none here.
+  await page.goto('/app/store/payments');
+  await expect(page.getByRole('button', { name: 'Connect Square' })).toBeVisible();
+  await expect(page.getByTestId('square-paste')).toHaveCount(0);
+  // Staging's main (SQUARE_ENV=sandbox) says sandbox_paste: true; the save goes to the real route.
+  await page.route(/\/store\/v1\/me\/square$/, async (route) => {
+    const r = await route.fetch();
+    const body = await r.json();
+    await route.fulfill({ response: r, json: { ...body, sandbox_paste: true } });
+  });
+  await page.reload();
+  const { token, location } = await fakeSandboxToken();
+  await expect(page.getByTestId('square-paste')).toBeVisible();
+  await page.getByLabel('Sandbox access token').fill('EAAA-not-a-token');
+  await page.getByLabel('Sandbox location ID').fill(location);
+  await page.getByRole('button', { name: 'Save sandbox token' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'refused by Square' })).toBeVisible();
+  expect((await square(store)).connected).toBe(false);
+  await page.getByLabel('Sandbox access token').fill(token);
+  await page.getByRole('button', { name: 'Save sandbox token' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'sandbox, pasted token' })).toBeVisible();
+  await expect(page.getByText('Connected (sandbox, pasted token)', { exact: true })).toBeVisible();
+  const st = await square(store);
+  expect([st.connected, st.pasted, st.square_location_id]).toEqual([true, true, location]);
+  expect(JSON.stringify(st)).not.toContain(token);
+});

@@ -428,6 +428,11 @@ func main() {
 	// The counter terminal's setup test charge ($1, no order) is refunded
 	// through the Pi: RPC square.test_refund (TERMINAL-SETUP-PLAN, owner Q3).
 	requester.RegisterInbound(squarepay.MsgSquareTestRefund, squareService.HandleTestRefund)
+	// Square on the counter terminal (agent contract §2.10r): the reader's
+	// sign-in, a typed card's payment, a refund of either.
+	requester.RegisterInbound(squarepay.MsgSquareSession, squareService.HandleSession)
+	requester.RegisterInbound(squarepay.MsgSquareKeyedPayment, squareService.HandleKeyedPayment)
+	requester.RegisterInbound(squarepay.MsgSquareRefund, squareService.HandleRefund)
 	if squareService.Enabled() {
 		gateways[payment.MethodCard] = squareService.CardRouter(testCard)
 		safego.Loop(ctx, "square.refresh", squareService.RunRefresh)

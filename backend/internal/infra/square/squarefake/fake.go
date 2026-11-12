@@ -12,14 +12,26 @@
 //	cnon:card-edit-tip-failure          (Square's sandbox name for the same)
 //	cnon:card-nonce-declined            400 GENERIC_DECLINE
 //	cnon:card-nonce-rejected-cvv        400 CVV_FAILURE
+//	cnon:card-nonce-rejected-postalcode 400 ADDRESS_VERIFICATION_FAILURE
+//	cnon:card-nonce-rejected-expiration 400 INVALID_EXPIRATION
+//	cnon:card-nonce-insufficient-funds  400 INSUFFICIENT_FUNDS
 //	cnon:card-nonce-verification        402 CARD_DECLINED_VERIFICATION_REQUIRED
 //	cnon:card-nonce-slow-<seconds>      approved like no-edit, after <seconds> (≤ 60; tests of slow placements)
 //	ccof:…                              a saved card (charged at once)
 //
+// A payment made with customer_details.seller_keyed_in (the counter
+// terminal's manual entry, MOTO) reads entry_method KEYED; every payment has
+// a receipt_number (its id's first 4 characters, as Square's). OAuth grants
+// keep the scope the authorize link asked for: POST /oauth2/token/status
+// answers them (a test drops PAYMENTS_WRITE_IN_PERSON from the link to play a
+// store connected before the reader's scope existed).
+//
 // Test hooks (no auth): GET _fake/payments/{id}, GET _fake/state,
-// POST _fake/fail {op, code, status, count} makes the next count calls of op
-// (create|update|complete|cancel|refund|card|customer|token) fail, POST
-// _fake/expire {payment_id} plays Square's 7-day delay action (cancel).
+// POST _fake/fail {op, code, status, count, merchant?} makes the next count
+// calls of op (create|update|complete|cancel|refund|card|customer|token) fail
+// (merchant set: only that merchant's calls, so parallel tests don't take each
+// other's failures), POST _fake/expire {payment_id} plays Square's 7-day delay
+// action (cancel).
 package squarefake
 
 import (
@@ -42,6 +54,7 @@ type Fake struct {
 	AppID     string
 	AppSecret string
 	codes     map[string]bool             // issued OAuth codes
+	scopes    map[string][]string         // OAuth code / access token / refresh token → the granted scopes
 	access    map[string]string           // access token → merchant
 	refresh   map[string]string           // refresh token → merchant
 	payments  map[string]*payment         // id → payment
@@ -55,21 +68,22 @@ type Fake struct {
 }
 
 type failure struct {
-	Code   string
-	Status int
+	Code     string
+	Status   int
+	Merchant string // "" = anyone's call
 }
 
 type payment struct {
 	ID, Status, Location, Customer, Reference, Source string
 	Amount, Tip, Refunded                             int64
-	CanEdit                                           bool
+	CanEdit, Keyed                                    bool
 	Created                                           time.Time
 	Version                                           int
 	Card                                              string // ccof id when charged on a saved card
 }
 
 func New(appID, appSecret string) *Fake {
-	return &Fake{AppID: appID, AppSecret: appSecret, codes: map[string]bool{}, access: map[string]string{}, refresh: map[string]string{},
+	return &Fake{AppID: appID, AppSecret: appSecret, codes: map[string]bool{}, scopes: map[string][]string{}, access: map[string]string{}, refresh: map[string]string{},
 		payments: map[string]*payment{}, byKey: map[string]string{}, refunds: map[string]map[string]any{},
 		customers: map[string]map[string]any{}, cards: map[string]map[string]any{}, fail: map[string][]failure{},
 		revoked: map[string]bool{}, locations: map[string][]map[string]any{}}
@@ -93,10 +107,15 @@ func sqErr(w http.ResponseWriter, status int, category, code, detail string) {
 
 // FailNext makes the next count calls of op fail with code/status.
 func (f *Fake) FailNext(op, code string, status, count int) {
+	f.FailNextFor("", op, code, status, count)
+}
+
+// FailNextFor is FailNext for one merchant's calls only ("" = anyone's).
+func (f *Fake) FailNextFor(merchant, op, code string, status, count int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i := 0; i < count; i++ {
-		f.fail[op] = append(f.fail[op], failure{Code: code, Status: status})
+		f.fail[op] = append(f.fail[op], failure{Code: code, Status: status, Merchant: merchant})
 	}
 }
 
@@ -111,19 +130,23 @@ func (f *Fake) Payment(id string) (map[string]any, bool) {
 	return f.view(p), true
 }
 
-// failed pops a queued failure for op (callers hold mu).
-func (f *Fake) failed(w http.ResponseWriter, op string) bool {
+// failed pops a queued failure for op (callers hold mu); merchant is the
+// caller's ("" when unknown: only an unscoped failure applies).
+func (f *Fake) failed(w http.ResponseWriter, op, merchant string) bool {
 	q := f.fail[op]
-	if len(q) == 0 {
-		return false
+	for i, x := range q {
+		if x.Merchant != "" && x.Merchant != merchant {
+			continue
+		}
+		f.fail[op] = append(q[:i:i], q[i+1:]...)
+		cat := "API_ERROR"
+		if x.Status == http.StatusBadRequest || x.Status == http.StatusPaymentRequired {
+			cat = "PAYMENT_METHOD_ERROR"
+		}
+		sqErr(w, x.Status, cat, x.Code, "injected failure")
+		return true
 	}
-	f.fail[op] = q[1:]
-	cat := "API_ERROR"
-	if q[0].Status == http.StatusBadRequest || q[0].Status == http.StatusPaymentRequired {
-		cat = "PAYMENT_METHOD_ERROR"
-	}
-	sqErr(w, q[0].Status, cat, q[0].Code, "injected failure")
-	return true
+	return false
 }
 
 func (f *Fake) merchant(r *http.Request) (string, bool) {
@@ -143,16 +166,26 @@ func (f *Fake) view(p *payment) map[string]any {
 	if p.Status != "APPROVED" {
 		caps = nil
 	}
+	entry := "KEYED"
+	if p.Card != "" {
+		entry = "ON_FILE"
+	}
+	receipt := strings.TrimPrefix(p.ID, "pay_")
+	if len(receipt) > 4 {
+		receipt = receipt[:4]
+	}
 	v := map[string]any{
 		"id": p.ID, "status": p.Status, "location_id": p.Location, "reference_id": p.Reference, "customer_id": p.Customer,
-		"amount_money":   map[string]any{"amount": p.Amount, "currency": "USD"},
-		"tip_money":      map[string]any{"amount": p.Tip, "currency": "USD"},
-		"total_money":    map[string]any{"amount": p.Amount + p.Tip, "currency": "USD"},
-		"refunded_money": map[string]any{"amount": p.Refunded, "currency": "USD"},
-		"capabilities":   caps, "version_token": "v" + string(rune('0'+p.Version%10)),
+		"receipt_number":  receipt,
+		"seller_keyed_in": p.Keyed, // the fake's own field: the request said MOTO
+		"amount_money":    map[string]any{"amount": p.Amount, "currency": "USD"},
+		"tip_money":       map[string]any{"amount": p.Tip, "currency": "USD"},
+		"total_money":     map[string]any{"amount": p.Amount + p.Tip, "currency": "USD"},
+		"refunded_money":  map[string]any{"amount": p.Refunded, "currency": "USD"},
+		"capabilities":    caps, "version_token": "v" + string(rune('0'+p.Version%10)),
 		"delayed_until": p.Created.Add(7 * 24 * time.Hour).UTC().Format(time.RFC3339),
 		"card_details": map[string]any{"status": map[string]string{"APPROVED": "AUTHORIZED", "COMPLETED": "CAPTURED", "CANCELED": "VOIDED"}[p.Status],
-			"auth_result_code": "FAKE01", "card": map[string]string{"last_4": "1111", "card_brand": "VISA"}},
+			"auth_result_code": "FAKE01", "entry_method": entry, "card": map[string]string{"last_4": "1111", "card_brand": "VISA"}},
 	}
 	if p.Card != "" {
 		v["source_card_id"] = p.Card
@@ -181,6 +214,7 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 		code := id("sq0cgp-")
 		f.mu.Lock()
 		f.codes[code] = true
+		f.scopes[code] = strings.Fields(r.URL.Query().Get("scope"))
 		f.mu.Unlock()
 		u, err := url.Parse(to)
 		if err != nil || to == "" {
@@ -201,7 +235,7 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 		var b map[string]string
 		f.mu.Lock()
 		defer f.mu.Unlock()
-		if f.failed(w, "token") {
+		if f.failed(w, "token", "") {
 			return
 		}
 		if !decode(r, &b) || b["client_id"] != f.AppID || b["client_secret"] != f.AppSecret {
@@ -209,6 +243,7 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 			return
 		}
 		var merchant string
+		var granted []string
 		switch b["grant_type"] {
 		case "authorization_code":
 			if !f.codes[b["code"]] {
@@ -216,6 +251,8 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 				return
 			}
 			delete(f.codes, b["code"])
+			granted = f.scopes[b["code"]]
+			delete(f.scopes, b["code"])
 			merchant = id("ML")
 			f.locations[merchant] = []map[string]any{
 				{"id": id("L"), "name": "Main store", "status": "ACTIVE", "currency": "USD", "capabilities": []string{"CREDIT_CARD_PROCESSING", "AUTOMATIC_TRANSFERS"}},
@@ -228,6 +265,7 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 				return
 			}
 			merchant = m
+			granted = f.scopes[b["refresh_token"]]
 		default:
 			writeJSON(w, http.StatusBadRequest, map[string]string{"type": "bad_request", "message": "grant_type"})
 			return
@@ -236,10 +274,24 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 		if rt == "" {
 			rt = id("EQAA")
 			f.refresh[rt] = merchant
+			f.scopes[rt] = granted
 		}
 		f.access[at] = merchant
+		f.scopes[at] = granted
 		writeJSON(w, http.StatusOK, map[string]any{"access_token": at, "refresh_token": rt, "merchant_id": merchant,
 			"token_type": "bearer", "expires_at": time.Now().Add(30 * 24 * time.Hour).UTC().Format(time.RFC3339)})
+	})
+	mux.HandleFunc("POST "+p+"/oauth2/token/status", func(w http.ResponseWriter, r *http.Request) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		tok := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		m, ok := f.access[tok]
+		if !ok || f.revoked[m] {
+			writeJSON(w, http.StatusUnauthorized, map[string]string{"type": "unauthorized", "message": "bad access token"})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"scopes": f.scopes[tok], "client_id": f.AppID, "merchant_id": m,
+			"expires_at": time.Now().Add(30 * 24 * time.Hour).UTC().Format(time.RFC3339)})
 	})
 	mux.HandleFunc("POST "+p+"/oauth2/revoke", func(w http.ResponseWriter, r *http.Request) {
 		var b map[string]string
@@ -265,7 +317,7 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 				sqErr(w, http.StatusUnauthorized, "AUTHENTICATION_ERROR", "UNAUTHORIZED", "bad access token")
 				return
 			}
-			if op != "" && f.failed(w, op) {
+			if op != "" && f.failed(w, op, m) {
 				return
 			}
 			h(w, r, m)
@@ -284,10 +336,13 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 			Tip *struct {
 				Amount int64 `json:"amount"`
 			} `json:"tip_money"`
-			Autocomplete *bool  `json:"autocomplete"`
-			LocationID   string `json:"location_id"`
-			CustomerID   string `json:"customer_id"`
-			ReferenceID  string `json:"reference_id"`
+			Autocomplete    *bool  `json:"autocomplete"`
+			LocationID      string `json:"location_id"`
+			CustomerID      string `json:"customer_id"`
+			ReferenceID     string `json:"reference_id"`
+			CustomerDetails *struct {
+				SellerKeyedIn bool `json:"seller_keyed_in"`
+			} `json:"customer_details"`
 		}
 		if !decode(r, &b) || b.IdempotencyKey == "" || b.Amount == nil || b.Amount.Amount <= 0 {
 			sqErr(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "BAD_REQUEST", "idempotency_key, source_id and amount_money are required")
@@ -310,6 +365,15 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 		case b.SourceID == "cnon:card-nonce-rejected-cvv":
 			sqErr(w, http.StatusBadRequest, "PAYMENT_METHOD_ERROR", "CVV_FAILURE", "Authorization error: 'CVV_FAILURE'")
 			return
+		case b.SourceID == "cnon:card-nonce-rejected-postalcode":
+			sqErr(w, http.StatusBadRequest, "PAYMENT_METHOD_ERROR", "ADDRESS_VERIFICATION_FAILURE", "Authorization error: 'ADDRESS_VERIFICATION_FAILURE'")
+			return
+		case b.SourceID == "cnon:card-nonce-rejected-expiration":
+			sqErr(w, http.StatusBadRequest, "PAYMENT_METHOD_ERROR", "INVALID_EXPIRATION", "Authorization error: 'INVALID_EXPIRATION'")
+			return
+		case b.SourceID == "cnon:card-nonce-insufficient-funds":
+			sqErr(w, http.StatusBadRequest, "PAYMENT_METHOD_ERROR", "INSUFFICIENT_FUNDS", "Authorization error: 'INSUFFICIENT_FUNDS'")
+			return
 		case b.SourceID == "cnon:card-nonce-verification":
 			sqErr(w, http.StatusPaymentRequired, "PAYMENT_METHOD_ERROR", "CARD_DECLINED_VERIFICATION_REQUIRED", "verification required")
 			return
@@ -330,7 +394,8 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 			loc, _ = f.locations[m][0]["id"].(string)
 		}
 		pay := &payment{ID: id("pay_"), Status: "APPROVED", Location: loc, Customer: b.CustomerID, Reference: b.ReferenceID,
-			Source: b.SourceID, Amount: b.Amount.Amount, CanEdit: canEdit, Created: time.Now(), Card: card}
+			Source: b.SourceID, Amount: b.Amount.Amount, CanEdit: canEdit, Created: time.Now(), Card: card,
+			Keyed: b.CustomerDetails != nil && b.CustomerDetails.SellerKeyedIn}
 		if b.Tip != nil {
 			pay.Tip = b.Tip.Amount
 		}
@@ -596,8 +661,8 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 	})
 	mux.HandleFunc("POST "+p+"/_fake/fail", func(w http.ResponseWriter, r *http.Request) {
 		var b struct {
-			Op, Code      string
-			Status, Count int
+			Op, Code, Merchant string
+			Status, Count      int
 		}
 		if !decode(r, &b) || b.Op == "" {
 			http.Error(w, "op", http.StatusBadRequest)
@@ -612,7 +677,7 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 		if b.Code == "" {
 			b.Code = "TEMPORARY_ERROR"
 		}
-		f.FailNext(b.Op, b.Code, b.Status, b.Count)
+		f.FailNextFor(b.Merchant, b.Op, b.Code, b.Status, b.Count)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc("POST "+p+"/_fake/expire", func(w http.ResponseWriter, r *http.Request) {

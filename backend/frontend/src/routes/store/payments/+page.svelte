@@ -70,6 +70,31 @@
     }
   }
 
+  // Paste a Square sandbox token (staging / dev only; main refuses it with 403 in production and
+  // never says sandbox_paste there). Stored like an OAuth connection.
+  let pasteToken = $state('');
+  let pasteLocation = $state('');
+  async function pasteSandbox() {
+    if (!pasteToken.trim() || !pasteLocation.trim()) {
+      toast.error('Paste both the sandbox access token and the location id');
+      return;
+    }
+    busy = 'paste';
+    try {
+      sq = await storeApi<SquareStatus>('/me/square/sandbox-token', {
+        method: 'POST',
+        body: JSON.stringify({ access_token: pasteToken.trim(), location_id: pasteLocation.trim() })
+      });
+      pasteToken = '';
+      pasteLocation = '';
+      toast.success('Square is connected (sandbox, pasted token)');
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      busy = '';
+    }
+  }
+
   async function pickLocation(id: string) {
     if (!id) return;
     busy = 'location';
@@ -177,10 +202,36 @@
         <Button variant="primary" icon="card" loading={busy === 'connect'} onclick={connect}>Connect Square</Button>
         {#if envNote}<Badge tone="info">{envNote}</Badge>{/if}
       </div>
+      {#if sq.sandbox_paste}
+        <form
+          class="flex flex-col gap-3 items-start mt-5 pt-4 border-t border-border"
+          data-testid="square-paste"
+          onsubmit={(e) => {
+            e.preventDefault();
+            pasteSandbox();
+          }}
+        >
+          <p class="m-0 text-text2">
+            <strong>Or paste a Square sandbox token</strong> (staging only): Square Developer Console › your app › Sandbox › the
+            access token, and one of its locations.
+          </p>
+          <div class="w-full max-w-[520px]">
+            <label class="lbl" for="paste-token">Sandbox access token</label>
+            <input id="paste-token" class="field" type="password" autocomplete="off" spellcheck="false" placeholder="EAAA…" bind:value={pasteToken} />
+          </div>
+          <div class="w-full max-w-[520px]">
+            <label class="lbl" for="paste-location">Sandbox location ID</label>
+            <input id="paste-location" class="field" autocomplete="off" spellcheck="false" placeholder="L…" bind:value={pasteLocation} />
+          </div>
+          <Button type="submit" variant="secondary" loading={busy === 'paste'}>Save sandbox token</Button>
+        </form>
+      {/if}
     {:else}
       <div class="flex flex-col gap-4">
         <div class="flex flex-wrap items-center gap-2.5">
-          {#if sq.connected}
+          {#if sq.connected && sq.pasted}
+            <Badge tone="ok" dot>Connected (sandbox, pasted token)</Badge>
+          {:else if sq.connected}
             <Badge tone="ok" dot>Connected</Badge>
           {:else if sq.state === 'revoked'}
             <Badge tone="bad" dot>Access removed in Square</Badge>
@@ -212,6 +263,15 @@
               <p class="help">Square didn't answer just now ({sq.last_error}).</p>
             {/if}
           </div>
+          {#if sq.in_person === false}
+            <div class="flex flex-col gap-2 items-start" data-testid="square-reconnect-reader">
+              <p class="field-error !mt-0">
+                The counter's card reader needs one more Square permission. Reconnect Square once to allow it (website
+                card orders keep working meanwhile).
+              </p>
+              <Button variant="primary" icon="card" loading={busy === 'connect'} onclick={connect}>Reconnect Square</Button>
+            </div>
+          {/if}
           <div class="flex flex-wrap items-center justify-between gap-3">
             <p class="text-text2 m-0">
               {sq.holds_open ? `${plural(sq.holds_open, 'card order')} waiting to be charged` : 'No card orders waiting to be charged'}

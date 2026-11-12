@@ -42,6 +42,12 @@ func (h *SquareHandler) sErr(c *echo.Context, err error) error {
 		return c.JSON(http.StatusBadRequest, errCode(err.Error(), "bad_request"))
 	case errors.Is(err, squarepay.ErrHoldsOpen):
 		return c.JSON(http.StatusConflict, errCode(err.Error(), "holds_open"))
+	case errors.Is(err, squarepay.ErrNotSandbox):
+		return c.JSON(http.StatusForbidden, errCode(err.Error(), "not_sandbox"))
+	case errors.Is(err, squarepay.ErrTokenRefused):
+		return c.JSON(http.StatusUnprocessableEntity, errCode(err.Error(), "token_refused"))
+	case errors.Is(err, squarepay.ErrBadLocation):
+		return c.JSON(http.StatusUnprocessableEntity, errCode(err.Error(), "bad_location"))
 	case errors.Is(err, pgx.ErrNoRows):
 		return c.JSON(http.StatusNotFound, errCode("not found", "not_found"))
 	}
@@ -81,6 +87,27 @@ func (h *SquareHandler) MeSetLocation(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, errCode("send {square_location_id}", "bad_request"))
 	}
 	if err := h.svc.SetLocation(c.Request().Context(), lid, body.SquareLocationID); err != nil {
+		return h.sErr(c, err)
+	}
+	return h.MeStatus(c)
+}
+
+// POST /store/v1/me/square/sandbox-token {access_token, location_id}: staging /
+// dev only (Square's sandbox; 403 not_sandbox anywhere else). The token is
+// checked with Square and stored like an OAuth connection; never logged.
+func (h *SquareHandler) MePasteSandboxToken(c *echo.Context) error {
+	_, lid, _ := meScope(c)
+	if !h.svc.PasteAllowed() {
+		return h.sErr(c, squarepay.ErrNotSandbox)
+	}
+	var body struct {
+		AccessToken string `json:"access_token"`
+		LocationID  string `json:"location_id"`
+	}
+	if err := echo.BindBody(c, &body); err != nil || body.AccessToken == "" || body.LocationID == "" {
+		return c.JSON(http.StatusBadRequest, errCode("send {access_token, location_id}", "bad_request"))
+	}
+	if err := h.svc.PasteSandboxToken(c.Request().Context(), lid, body.AccessToken, body.LocationID); err != nil {
 		return h.sErr(c, err)
 	}
 	return h.MeStatus(c)

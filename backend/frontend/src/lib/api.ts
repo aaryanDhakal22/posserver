@@ -804,6 +804,13 @@ export interface SquareStatus {
   last_error: string;
   connected_at: string | null;
   holds_open: number;
+  /** The grant includes the counter card reader's scope (PAYMENTS_WRITE_IN_PERSON); false = reconnect once; null = unknown. */
+  in_person?: boolean | null;
+  scopes?: string[];
+  /** This server runs Square's sandbox: "Paste a Square sandbox token" is offered (never in production). */
+  sandbox_paste?: boolean;
+  /** The connection is a pasted sandbox token. */
+  pasted?: boolean;
 }
 
 export type HoldStatus = 'held' | 'captured' | 'cancelled' | 'failed';

@@ -45,8 +45,13 @@ const (
 	CapAmountUp = "EDIT_AMOUNT_UP"
 )
 
-// Scopes main asks a store for.
-var Scopes = []string{"PAYMENTS_WRITE", "PAYMENTS_READ", "MERCHANT_PROFILE_READ", "CUSTOMERS_WRITE", "CUSTOMERS_READ", "DISPUTES_READ"}
+// ScopeInPerson lets the counter terminal's Square Reader (the Mobile Payments
+// SDK, authorized with the store's token: agent contract §2.10r) take payments.
+const ScopeInPerson = "PAYMENTS_WRITE_IN_PERSON"
+
+// Scopes main asks a store for. A store that connected before ScopeInPerson
+// was added reconnects once (Store › Payments says so).
+var Scopes = []string{"PAYMENTS_WRITE", "PAYMENTS_READ", ScopeInPerson, "MERCHANT_PROFILE_READ", "CUSTOMERS_WRITE", "CUSTOMERS_READ", "DISPUTES_READ"}
 
 // Client talks to one Square environment for one app.
 type Client struct {
@@ -73,20 +78,23 @@ func USD(cents int64) *Money { return &Money{Amount: cents, Currency: "USD"} }
 
 // Payment is the slice of Square's Payment main reads.
 type Payment struct {
-	ID           string   `json:"id"`
-	Status       string   `json:"status"`
-	LocationID   string   `json:"location_id,omitempty"`
-	CustomerID   string   `json:"customer_id,omitempty"`
-	ReferenceID  string   `json:"reference_id,omitempty"`
-	AmountMoney  *Money   `json:"amount_money,omitempty"`
-	TipMoney     *Money   `json:"tip_money,omitempty"`
-	TotalMoney   *Money   `json:"total_money,omitempty"`
-	Capabilities []string `json:"capabilities,omitempty"`
-	VersionToken string   `json:"version_token,omitempty"`
-	DelayedUntil string   `json:"delayed_until,omitempty"`
-	CardDetails  *struct {
+	ID            string   `json:"id"`
+	Status        string   `json:"status"`
+	LocationID    string   `json:"location_id,omitempty"`
+	CustomerID    string   `json:"customer_id,omitempty"`
+	ReferenceID   string   `json:"reference_id,omitempty"`
+	AmountMoney   *Money   `json:"amount_money,omitempty"`
+	TipMoney      *Money   `json:"tip_money,omitempty"`
+	TotalMoney    *Money   `json:"total_money,omitempty"`
+	RefundedMoney *Money   `json:"refunded_money,omitempty"`
+	Capabilities  []string `json:"capabilities,omitempty"`
+	VersionToken  string   `json:"version_token,omitempty"`
+	DelayedUntil  string   `json:"delayed_until,omitempty"`
+	ReceiptNumber string   `json:"receipt_number,omitempty"`
+	CardDetails   *struct {
 		Status         string `json:"status"`
 		AuthResultCode string `json:"auth_result_code"`
+		EntryMethod    string `json:"entry_method"` // KEYED | EMV | CONTACTLESS | SWIPED | ON_FILE
 		Card           struct {
 			Last4     string `json:"last_4"`
 			CardBrand string `json:"card_brand"`
@@ -119,11 +127,36 @@ func (p *Payment) Brand() string {
 	return p.CardDetails.Card.CardBrand
 }
 
+// Entry is how the card was read (Square's entry_method; "" when unknown).
+func (p *Payment) Entry() string {
+	if p.CardDetails == nil {
+		return ""
+	}
+	return p.CardDetails.EntryMethod
+}
+
 func (p *Payment) AuthCode() string {
 	if p.CardDetails == nil {
 		return ""
 	}
 	return p.CardDetails.AuthResultCode
+}
+
+// RefundAmount is what can still be refunded (total − refunded; 0 when unknown).
+func (p *Payment) RefundAmount() int64 {
+	total := int64(0)
+	if p.TotalMoney != nil {
+		total = p.TotalMoney.Amount
+	} else if p.AmountMoney != nil {
+		total = p.AmountMoney.Amount
+		if p.TipMoney != nil {
+			total += p.TipMoney.Amount
+		}
+	}
+	if p.RefundedMoney != nil {
+		total -= p.RefundedMoney.Amount
+	}
+	return total
 }
 
 // Refund is the slice of Square's PaymentRefund main reads.
@@ -137,6 +170,7 @@ type Refund struct {
 // Location is one of the seller's Square locations.
 type Location struct {
 	ID           string   `json:"id"`
+	MerchantID   string   `json:"merchant_id,omitempty"`
 	Name         string   `json:"name"`
 	Status       string   `json:"status"`
 	Currency     string   `json:"currency"`
@@ -350,6 +384,31 @@ func (c *Client) Refresh(ctx context.Context, refreshToken string) (Token, error
 	return t, err
 }
 
+// TokenInfo is RetrieveTokenStatus's answer: what an access token may do.
+type TokenInfo struct {
+	Scopes     []string `json:"scopes"`
+	ExpiresAt  string   `json:"expires_at"`
+	ClientID   string   `json:"client_id"`
+	MerchantID string   `json:"merchant_id"`
+}
+
+// Has reports whether the token was granted scope.
+func (t TokenInfo) Has(scope string) bool {
+	for _, s := range t.Scopes {
+		if s == scope {
+			return true
+		}
+	}
+	return false
+}
+
+// TokenStatus reads an access token's scopes and expiry (POST /oauth2/token/status).
+func (c *Client) TokenStatus(ctx context.Context, accessToken string) (TokenInfo, error) {
+	var t TokenInfo
+	err := c.do(ctx, http.MethodPost, "/oauth2/token/status", bearer(accessToken), map[string]any{}, &t)
+	return t, err
+}
+
 // Revoke ends main's access to the seller's account.
 func (c *Client) Revoke(ctx context.Context, accessToken string) error {
 	return c.do(ctx, http.MethodPost, "/oauth2/revoke", "Client "+c.AppSecret,
@@ -381,6 +440,16 @@ type CreatePayment struct {
 	Note              string `json:"note,omitempty"`
 	BuyerEmailAddress string `json:"buyer_email_address,omitempty"`
 	VerificationToken string `json:"verification_token,omitempty"`
+	// CustomerDetails {customer_initiated: false, seller_keyed_in: true} = a
+	// card staff typed in (Mail Order / Telephone Order: the counter terminal's
+	// manual entry, agent contract §2.10r).
+	CustomerDetails *CustomerDetails `json:"customer_details,omitempty"`
+}
+
+// CustomerDetails says who started a payment and how the card was given.
+type CustomerDetails struct {
+	CustomerInitiated bool `json:"customer_initiated"`
+	SellerKeyedIn     bool `json:"seller_keyed_in"`
 }
 
 func (c *Client) CreatePayment(ctx context.Context, token string, req CreatePayment) (*Payment, error) {
