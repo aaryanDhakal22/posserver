@@ -259,16 +259,14 @@ type DeliveryRun struct {
 	PlanID       string // "" when sent without an AUTO plan
 	SuggestedIDs []string
 	SentIDs      []string
-	// Stops: [{order_id, eta}] for online orders; a POS stop (2.1.0) is
-	// anonymous — {opaque_id, source:"pos", placed_at, sent_at, out_at,
-	// delivered_at, distance_m} — and stored as sent (no order lookup).
+	// Stops: [{order_id, eta}], stored as sent. (2.1.0's anonymous SoftTouch
+	// POS stops, {opaque_id, source:"pos", …}, are refused since H3.)
 	Stops json.RawMessage
 	At    time.Time
 }
 
 // ValidRunStops reports whether a delivery.run stops value is a JSON array of
-// objects, and whether it holds at least one stop. A POS-only run (2.1.0) may
-// have no sent_ids — its stops carry opaque ids instead.
+// objects that each carry an order_id, and how many stops it holds.
 func ValidRunStops(raw json.RawMessage) (ok bool, n int) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return true, 0
@@ -281,9 +279,7 @@ func ValidRunStops(raw json.RawMessage) (ok bool, n int) {
 		if s == nil {
 			return false, 0
 		}
-		_, hasOrder := s["order_id"]
-		_, hasOpaque := s["opaque_id"]
-		if !hasOrder && !hasOpaque {
+		if _, hasOrder := s["order_id"]; !hasOrder {
 			return false, 0
 		}
 	}

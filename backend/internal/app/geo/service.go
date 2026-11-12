@@ -63,59 +63,28 @@ type Queries interface {
 	ListOpenLocatedDeliveries(ctx context.Context, arg models.ListOpenLocatedDeliveriesParams) ([]models.ListOpenLocatedDeliveriesRow, error)
 	ListOrderGeoByIDs(ctx context.Context, arg models.ListOrderGeoByIDsParams) ([]models.ListOrderGeoByIDsRow, error)
 
-	UpsertExternalStop(ctx context.Context, arg models.UpsertExternalStopParams) (int64, error)
-	UpsertExternalWork(ctx context.Context, arg models.UpsertExternalWorkParams) error
-	GetExternalStop(ctx context.Context, arg models.GetExternalStopParams) (models.GeoExternalStop, error)
-	GetExternalWork(ctx context.Context, orderID pgtype.UUID) (models.GeoExternalWork, error)
 	GetLocationGeo(ctx context.Context, arg models.GetLocationGeoParams) (models.GetLocationGeoRow, error)
-	ListDueExternalStops(ctx context.Context, arg models.ListDueExternalStopsParams) ([]models.ListDueExternalStopsRow, error)
-	SaveExternalStopResult(ctx context.Context, arg models.SaveExternalStopResultParams) (pgtype.Timestamptz, error)
-	SaveExternalStopRetry(ctx context.Context, arg models.SaveExternalStopRetryParams) (int64, error)
-	MarkExternalStopPushed(ctx context.Context, arg models.MarkExternalStopPushedParams) (int64, error)
-	DeferExternalStopPush(ctx context.Context, arg models.DeferExternalStopPushParams) error
-	WakeLocationExternalStops(ctx context.Context, arg models.WakeLocationExternalStopsParams) (int64, error)
-	SetExternalStopPoint(ctx context.Context, arg models.SetExternalStopPointParams) (int64, error)
-	SetExternalWorkCandidates(ctx context.Context, arg models.SetExternalWorkCandidatesParams) (int64, error)
-	SetExternalWorkConfirmed(ctx context.Context, arg models.SetExternalWorkConfirmedParams) error
-	DeleteExternalWork(ctx context.Context, orderID pgtype.UUID) error
-	DeleteExternalWorkRead(ctx context.Context, arg models.DeleteExternalWorkReadParams) (int64, error)
-	DeleteExternalWorkIfDone(ctx context.Context, orderID pgtype.UUID) error
-	DeleteExternalStop(ctx context.Context, arg models.DeleteExternalStopParams) (int64, error)
-	PruneExternalStops(ctx context.Context, now pgtype.Timestamptz) (int64, error)
-	PruneExternalWork(ctx context.Context, now pgtype.Timestamptz) (int64, error)
-	ListLiveExternalStops(ctx context.Context, arg models.ListLiveExternalStopsParams) ([]models.ListLiveExternalStopsRow, error)
-	ListExternalStopsByIDs(ctx context.Context, arg models.ListExternalStopsByIDsParams) ([]models.ListExternalStopsByIDsRow, error)
-	RequeueLocationExternalStops(ctx context.Context, arg models.RequeueLocationExternalStopsParams) (int64, error)
 
 	// 2.2.0 location.radius.
 	SetLocationDeliveryRadius(ctx context.Context, arg models.SetLocationDeliveryRadiusParams) (int64, error)
 	ListOpenLocatedOrderGeoForRadius(ctx context.Context, arg models.ListOpenLocatedOrderGeoForRadiusParams) ([]models.ListOpenLocatedOrderGeoForRadiusRow, error)
 	SetOrderGeoOutsideArea(ctx context.Context, arg models.SetOrderGeoOutsideAreaParams) (int64, error)
-	ListLiveExternalStopsForRadius(ctx context.Context, arg models.ListLiveExternalStopsForRadiusParams) ([]models.ListLiveExternalStopsForRadiusRow, error)
-	SetExternalStopOutsideArea(ctx context.Context, arg models.SetExternalStopOutsideAreaParams) (int64, error)
 
 	// 2.2.2 geo.search.
 	SaveOrderGeoSearch(ctx context.Context, arg models.SaveOrderGeoSearchParams) (int64, error)
-	SaveExternalStopSearch(ctx context.Context, arg models.SaveExternalStopSearchParams) (int64, error)
-	UpsertExternalWorkSearch(ctx context.Context, arg models.UpsertExternalWorkSearchParams) error
 }
 
 const (
 	// openWindow bounds "open delivery" + the ingest safety sweep to the
 	// current service (orders received in the last 12 h).
 	openWindow = 12 * time.Hour
-	// maxTableOthers caps the online deliveries in the drive-time table and
-	// maxTableStops the external stops (OSRM's default table limit is 100
-	// coordinates; the store is one more).
+	// maxTableOthers caps the online deliveries in the drive-time table
+	// (OSRM's default table limit is 100 coordinates; the store is one more).
 	maxTableOthers = 50
-	maxTableStops  = 40
 	// routeRetries: a routing failure is retried this many times before the
 	// order is located without a route (a map pin beats no map).
 	routeRetries = 3
 	workers      = 6
-	// StopTTL: an external stop (a point only) is dropped this long after the
-	// agent asked to locate it, if geo.forget never came.
-	StopTTL = 24 * time.Hour
 )
 
 // Service is the geo worker + the agent-facing geo RPCs + store geocoding.
@@ -173,7 +142,7 @@ func newService(q Queries, tx func(context.Context, func(Queries) error) error, 
 		searches:     ratelimit.New(1, SearchGap),
 		spawn:        func(f func()) { go f() },
 	}
-	s.located, _ = m.Int64Counter("geo.orders", metric.WithDescription("Deliveries worked by the geo worker (online orders + external stops), by result (located / check / not_found / retry)"))
+	s.located, _ = m.Int64Counter("geo.orders", metric.WithDescription("Deliveries worked by the geo worker (online orders), by result (located / check / not_found / retry)"))
 	s.pushes, _ = m.Int64Counter("geo.pushes", metric.WithDescription("order.geo pushes to an agent, by result"))
 	s.prov.Store(Build(cfg))
 	return s
@@ -225,8 +194,8 @@ func (s *Service) OnOrderCreated(ctx context.Context, o *order.Order) {
 	s.poke()
 }
 
-// WakeLocation re-pushes everything a (re)connected agent has not acked —
-// online orders and external stops (broker subscribe hook). Runs after
+// WakeLocation re-pushes everything a (re)connected agent has not acked
+// (broker subscribe hook). Runs after
 // ConnectDelay, off the caller's path.
 func (s *Service) WakeLocation(scope sseBroker.Scope) {
 	go func() {
@@ -240,14 +209,8 @@ func (s *Service) WakeLocation(scope sseBroker.Scope) {
 			s.logger.Warn().Err(err).Msg("geo: wake location failed")
 			return
 		}
-		m, err := s.q.WakeLocationExternalStops(ctx, models.WakeLocationExternalStopsParams{
-			TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID),
-		})
-		if err != nil {
-			s.logger.Warn().Err(err).Msg("geo: wake location (external stops) failed")
-		}
-		if n+m > 0 {
-			s.logger.Info().Str("location_id", scope.LocationID.String()).Int64("rows", n).Int64("stops", m).Msg("geo: re-pushing unacked results to the reconnected agent")
+		if n > 0 {
+			s.logger.Info().Str("location_id", scope.LocationID.String()).Int64("rows", n).Msg("geo: re-pushing unacked results to the reconnected agent")
 			s.poke()
 		}
 	}()
@@ -255,7 +218,7 @@ func (s *Service) WakeLocation(scope sseBroker.Scope) {
 
 // --- worker ------------------------------------------------------------------------
 
-// Run works due order_geo rows and external stops until ctx ends.
+// Run works due order_geo rows until ctx ends.
 func (s *Service) Run(ctx context.Context) {
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
@@ -281,21 +244,10 @@ func (s *Service) Run(ctx context.Context) {
 			}
 			continue
 		}
-		stops, err := s.q.ListDueExternalStops(ctx, models.ListDueExternalStopsParams{Now: ts(now), MaxRows: 50})
-		if err != nil {
-			if ctx.Err() == nil {
-				s.logger.Warn().Err(err).Msg("geo: list due external stops failed")
-			}
-			stops = nil
-		}
-		jobs := make([]func(), 0, len(rows)+len(stops))
-		ids := make([]uuid.UUID, 0, len(rows)+len(stops))
+		jobs := make([]func(), 0, len(rows))
+		ids := make([]uuid.UUID, 0, len(rows))
 		for _, r := range rows {
 			jobs = append(jobs, func() { s.process(ctx, r) })
-			ids = append(ids, uuid.UUID(r.OrderID.Bytes))
-		}
-		for _, r := range stops {
-			jobs = append(jobs, func() { s.processStop(ctx, r) })
 			ids = append(ids, uuid.UUID(r.OrderID.Bytes))
 		}
 		for i, job := range jobs {
@@ -330,8 +282,7 @@ func (s *Service) Run(ctx context.Context) {
 }
 
 // sweep is the once-a-minute housekeeping: enqueue delivery orders the
-// after-ingest hook missed, drop expired external stops and any address text
-// past its 6 h limit.
+// after-ingest hook missed.
 func (s *Service) sweep(ctx context.Context, now time.Time) {
 	if n, err := s.q.EnqueueMissingOrderGeo(ctx, ts(now.Add(-openWindow))); err != nil {
 		if ctx.Err() == nil {
@@ -339,20 +290,6 @@ func (s *Service) sweep(ctx context.Context, now time.Time) {
 		}
 	} else if n > 0 {
 		s.logger.Info().Int64("rows", n).Msg("geo: sweep enqueued missed delivery orders")
-	}
-	if n, err := s.q.PruneExternalStops(ctx, ts(now)); err != nil {
-		if ctx.Err() == nil {
-			s.logger.Warn().Err(err).Msg("geo: prune external stops failed")
-		}
-	} else if n > 0 {
-		s.logger.Info().Int64("rows", n).Msg("geo: expired external stops dropped")
-	}
-	if n, err := s.q.PruneExternalWork(ctx, ts(now)); err != nil {
-		if ctx.Err() == nil {
-			s.logger.Warn().Err(err).Msg("geo: prune external addresses failed")
-		}
-	} else if n > 0 {
-		s.logger.Info().Int64("rows", n).Msg("geo: external stop addresses discarded (6 h)")
 	}
 }
 
@@ -408,21 +345,15 @@ type located struct {
 
 // locateIn is what one locate works from.
 type locateIn struct {
-	// tenantID + external: metric labels only (store; kind=external for a stop).
+	// tenantID: metric label only (store).
 	tenantID uuid.UUID
-	external bool
 	// locationID scopes the area retry: its box and its cache entries (2.2.2).
 	locationID uuid.UUID
 	key        string // geo_cache key; "" = none
 	addr       Address
 	hasAddr    bool
-	// fixed: a point already decided (an external stop's pin / choice, or a
-	// re-route after the store moved) — no geocode.
-	fixed          *Point
-	fixedQuality   string
-	fixedCorrected bool // the fixed point came from the area retry
-	store          *Point
-	radiusM        int
+	store      *Point
+	radiusM    int
 }
 
 // resolve geocodes (cache first, then the providers with the confidence
@@ -438,59 +369,49 @@ func (s *Service) resolve(ctx context.Context, in locateIn, attempts int, create
 		if !ok {
 			return true, nil // caller saves the final result
 		}
-		attrs := []attribute.KeyValue{attribute.String("result", "retry")}
-		if in.external {
-			attrs = append(attrs, attribute.String("kind", "external"))
-		}
-		s.located.Add(ctx, 1, observability.WithStore(ctx, in.tenantID, attrs...))
+		s.located.Add(ctx, 1, observability.WithStore(ctx, in.tenantID, attribute.String("result", "retry")))
 		s.logger.Info().Ctx(ctx).Err(cause).Time("next_try_at", next).Msg("geo: provider failure, will retry")
 		return false, saveRetry(next, cause)
 	}
 
+	cached, corrected, err := s.cached(ctx, in)
 	switch {
-	case in.fixed != nil:
-		pt := *in.fixed
-		res.pt, res.quality, res.corrected = &pt, in.fixedQuality, in.fixedCorrected
+	case err == nil:
+		pt := Point{Lat: cached.Lat, Lng: cached.Lng}
+		res.pt, res.quality, res.corrected = &pt, cached.Quality, corrected
+		if cached.Pinned {
+			res.quality = QualityPinned
+		}
+	case !errors.Is(err, pgx.ErrNoRows):
+		return res, false, err
+	case !in.hasAddr:
+		res.lastErr = "no delivery address"
 	default:
-		cached, corrected, err := s.cached(ctx, in)
+		g, gerr := s.geocode(ctx, prov, in)
 		switch {
-		case err == nil:
-			pt := Point{Lat: cached.Lat, Lng: cached.Lng}
-			res.pt, res.quality, res.corrected = &pt, cached.Quality, corrected
-			if cached.Pinned {
-				res.quality = QualityPinned
+		case gerr == nil && len(g.check) > 0:
+			res.state = StateCheck
+			res.candidates = g.check
+			return res, true, nil
+		case gerr == nil:
+			res.pt, res.quality, res.corrected = &g.res.Point, g.res.Quality, g.corrected
+			if g.cacheKey != "" {
+				if err := s.q.UpsertGeoCacheGeocoded(ctx, models.UpsertGeoCacheGeocodedParams{
+					AddressKey: g.cacheKey, Lat: g.res.Lat, Lng: g.res.Lng, Quality: g.res.Quality, Source: g.res.Source,
+				}); err != nil {
+					return res, false, err
+				}
 			}
-		case !errors.Is(err, pgx.ErrNoRows):
-			return res, false, err
-		case !in.hasAddr:
-			res.lastErr = "no delivery address"
+		case errors.Is(gerr, ErrNotFound):
+			res.lastErr = "no geocoder match"
 		default:
-			g, gerr := s.geocode(ctx, prov, in)
-			switch {
-			case gerr == nil && len(g.check) > 0:
-				res.state = StateCheck
-				res.candidates = g.check
-				return res, true, nil
-			case gerr == nil:
-				res.pt, res.quality, res.corrected = &g.res.Point, g.res.Quality, g.corrected
-				if g.cacheKey != "" {
-					if err := s.q.UpsertGeoCacheGeocoded(ctx, models.UpsertGeoCacheGeocodedParams{
-						AddressKey: g.cacheKey, Lat: g.res.Lat, Lng: g.res.Lng, Quality: g.res.Quality, Source: g.res.Source,
-					}); err != nil {
-						return res, false, err
-					}
-				}
-			case errors.Is(gerr, ErrNotFound):
-				res.lastErr = "no geocoder match"
-			default:
-				if ctx.Err() != nil {
-					return res, false, ctx.Err()
-				}
-				if done, err := retry(gerr); !done || err != nil {
-					return res, done, err
-				}
-				res.lastErr = "gave up: " + gerr.Error()
+			if ctx.Err() != nil {
+				return res, false, ctx.Err()
 			}
+			if done, err := retry(gerr); !done || err != nil {
+				return res, done, err
+			}
+			res.lastErr = "gave up: " + gerr.Error()
 		}
 	}
 
@@ -606,8 +527,7 @@ type TimePair struct {
 }
 
 // Push is the order.geo payload (contract/agent.md, main → agent). OrderID is
-// main's order id for an online order, the agent's own id for an external
-// stop (geo.locate).
+// main's order id.
 type Push struct {
 	OrderID     string     `json:"order_id"`
 	State       string     `json:"state"`
@@ -640,7 +560,7 @@ type Push struct {
 	Note string `json:"note,omitempty"`
 }
 
-// geoRow is the push-relevant part of an order_geo row or an external stop.
+// geoRow is the push-relevant part of an order_geo row.
 type geoRow struct {
 	state, quality, polyline string
 	lat, lng                 pgtype.Float8
@@ -773,9 +693,8 @@ func (s *Service) deliver(ctx context.Context, scope sseBroker.Scope, p Push, cr
 }
 
 // addTimes fills the drive times between this delivery, the store and every
-// other open located delivery of the location — online orders and external
-// stops alike, so the Pi's AUTO has one matrix (best effort: a routing
-// failure just leaves times out).
+// other open located delivery of the location, so the Pi's AUTO has one
+// matrix (best effort: a routing failure just leaves times out).
 func (s *Service) addTimes(ctx context.Context, scope sseBroker.Scope, id uuid.UUID, pt Point, p *Push) {
 	prov := s.Providers()
 	if !prov.Routing() {
@@ -793,22 +712,12 @@ func (s *Service) addTimes(ctx context.Context, scope sseBroker.Scope, id uuid.U
 		s.logger.Warn().Ctx(ctx).Err(err).Msg("geo: list open deliveries failed")
 		return
 	}
-	stops, err := s.q.ListLiveExternalStops(ctx, models.ListLiveExternalStopsParams{
-		TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID), ExcludeID: pgUUID(id), MaxRows: maxTableStops,
-	})
-	if err != nil {
-		s.logger.Warn().Ctx(ctx).Err(err).Msg("geo: list external stops failed")
-		return
-	}
 	type other struct {
 		id string
 		pt Point
 	}
-	others := make([]other, 0, len(online)+len(stops))
+	others := make([]other, 0, len(online))
 	for _, o := range online {
-		others = append(others, other{uuid.UUID(o.OrderID.Bytes).String(), Point{Lat: o.Lat.Float64, Lng: o.Lng.Float64}})
-	}
-	for _, o := range stops {
 		others = append(others, other{uuid.UUID(o.OrderID.Bytes).String(), Point{Lat: o.Lat.Float64, Lng: o.Lng.Float64}})
 	}
 	pts := []Point{{Lat: *loc.Lat, Lng: *loc.Lng}}
@@ -842,8 +751,7 @@ func (s *Service) addTimes(ctx context.Context, scope sseBroker.Scope, id uuid.U
 // HandlePin is the rpc.InboundHandler for geo.pin {order_id, lat, lng}: staff
 // dropped a pin for an order on the tablet. Saved pinned in geo_cache for the
 // order's normalized address (so the next order there lands right), then the
-// order is re-worked and order.geo pushed again with quality pinned. An
-// external stop (no orders row, 2.1.0) takes the pin as its point.
+// order is re-worked and order.geo pushed again with quality pinned.
 func (s *Service) HandlePin(ctx context.Context, scope sseBroker.Scope, payload json.RawMessage) (any, error) {
 	var b struct {
 		OrderID string   `json:"order_id"`
@@ -860,7 +768,7 @@ func (s *Service) HandlePin(ctx context.Context, scope sseBroker.Scope, payload 
 	q := s.q
 	o, err := q.GetOrderForGeo(ctx, models.GetOrderForGeoParams{OrderID: pgUUID(id), TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID)})
 	if errors.Is(err, pgx.ErrNoRows) {
-		return s.pinStop(ctx, scope, id, Point{Lat: *b.Lat, Lng: *b.Lng})
+		return map[string]any{"ok": false, "code": "not_found"}, nil
 	}
 	if err != nil {
 		return nil, err
@@ -923,18 +831,6 @@ func (s *Service) HandleTrip(ctx context.Context, scope sseBroker.Scope, payload
 	}
 	at := map[string]Point{}
 	for _, r := range rows {
-		if r.State == StateLocated && r.Lat.Valid && r.Lng.Valid {
-			at[uuid.UUID(r.OrderID.Bytes).String()] = Point{Lat: r.Lat.Float64, Lng: r.Lng.Float64}
-		}
-	}
-	// External stops (POS deliveries, 2.1.0) can share a run.
-	extStops, err := s.q.ListExternalStopsByIDs(ctx, models.ListExternalStopsByIDsParams{
-		TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID), Ids: ids,
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, r := range extStops {
 		if r.State == StateLocated && r.Lat.Valid && r.Lng.Valid {
 			at[uuid.UUID(r.OrderID.Bytes).String()] = Point{Lat: r.Lat.Float64, Lng: r.Lng.Float64}
 		}
@@ -1022,7 +918,7 @@ func (s *Service) GeocodeStoreAsync(locationID uuid.UUID) {
 
 // StoreMoved pushes the new store_config and re-works the location's open
 // deliveries (distances + outside_area are from the store). Their addresses
-// are cached (an external stop keeps its own point), so this is routing only.
+// are cached, so this is routing only.
 func (s *Service) StoreMoved(ctx context.Context, tenantID, locationID uuid.UUID) {
 	if s.storeChanged != nil {
 		s.storeChanged(ctx, tenantID, locationID)
@@ -1034,13 +930,7 @@ func (s *Service) StoreMoved(ctx context.Context, tenantID, locationID uuid.UUID
 		s.logger.Warn().Ctx(ctx).Err(err).Msg("geo: requeue open deliveries failed")
 		return
 	}
-	m, err := s.q.RequeueLocationExternalStops(ctx, models.RequeueLocationExternalStopsParams{
-		TenantID: pgUUID(tenantID), LocationID: pgUUID(locationID),
-	})
-	if err != nil {
-		s.logger.Warn().Ctx(ctx).Err(err).Msg("geo: requeue external stops failed")
-	}
-	if n+m > 0 {
+	if n > 0 {
 		s.poke()
 	}
 }

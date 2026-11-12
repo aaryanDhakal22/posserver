@@ -24,8 +24,8 @@ const (
 // RadiusResult is what a radius change touched.
 type RadiusResult struct {
 	RadiusM int `json:"radius_m"`
-	// Reflagged counts the open deliveries (online orders + external stops)
-	// whose outside_area flipped; each is pushed again as order.geo.
+	// Reflagged counts the open deliveries whose outside_area flipped;
+	// each is pushed again as order.geo.
 	Reflagged int `json:"-"`
 }
 
@@ -88,22 +88,6 @@ func (s *Service) SetRadius(ctx context.Context, scope sseBroker.Scope, radiusM 
 				continue
 			}
 			n, err := q.SetOrderGeoOutsideArea(ctx, models.SetOrderGeoOutsideAreaParams{OutsideArea: out, OrderID: g.OrderID})
-			if err != nil {
-				return err
-			}
-			res.Reflagged += int(n)
-		}
-		stops, err := q.ListLiveExternalStopsForRadius(ctx, models.ListLiveExternalStopsForRadiusParams{TenantID: tid, LocationID: lid})
-		if err != nil {
-			return err
-		}
-		for _, g := range stops {
-			out := OutsideArea(st, Point{Lat: g.Lat.Float64, Lng: g.Lng.Float64}, radiusM)
-			if out == g.OutsideArea {
-				continue
-			}
-			n, err := q.SetExternalStopOutsideArea(ctx, models.SetExternalStopOutsideAreaParams{
-				OutsideArea: out, OrderID: g.OrderID, TenantID: tid, LocationID: lid})
 			if err != nil {
 				return err
 			}

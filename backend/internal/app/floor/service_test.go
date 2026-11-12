@@ -16,7 +16,7 @@ import (
 )
 
 // fakeFloor records "seen" events; any other repository call panics (nil
-// embedded interface) — a POS stop must never touch an order.
+// embedded interface) — a delivery run must never touch an order.
 type fakeFloor struct {
 	order.FloorRepository
 	seen map[uuid.UUID]string
@@ -52,7 +52,7 @@ func (noOrders) GetByID(context.Context, order.Scope, order.ID) (*order.Order, e
 	panic("delivery.run must not look orders up")
 }
 
-func TestDeliveryRunWithPOSStops(t *testing.T) {
+func TestDeliveryRunStops(t *testing.T) {
 	meters, err := observability.NewMeters()
 	if err != nil {
 		t.Fatal(err)
@@ -64,9 +64,13 @@ func TestDeliveryRunWithPOSStops(t *testing.T) {
 	scope := sseBroker.Scope{TenantID: uuid.New(), LocationID: uuid.New()}
 	at := time.Date(2026, 10, 25, 18, 0, 0, 0, time.UTC).Format(time.RFC3339)
 	online := uuid.NewString()
+	// SoftTouch's anonymous POS stop (2.1.0): refused since H3.
 	posStop := map[string]any{"opaque_id": "pos:0123456789ab", "source": "pos", "placed_at": at, "sent_at": at,
 		"out_at": at, "delivered_at": nil, "distance_m": 2400}
 
+	run := map[string]any{"event_id": uuid.NewString(), "type": "delivery.run", "at": at, "driver_id": uuid.NewString(),
+		"driver_name": "Sam", "sent_ids": []string{online}, "suggested_ids": []string{online},
+		"stops": []any{map[string]any{"order_id": online, "eta": at, "distance_m": 2400}}}
 	mixed := map[string]any{"event_id": uuid.NewString(), "type": "delivery.run", "at": at, "driver_id": uuid.NewString(),
 		"driver_name": "Sam", "sent_ids": []string{online}, "suggested_ids": []string{online},
 		"stops": []any{map[string]any{"order_id": online, "eta": at}, posStop}}
@@ -76,7 +80,7 @@ func TestDeliveryRunWithPOSStops(t *testing.T) {
 	badStop := map[string]any{"event_id": uuid.NewString(), "type": "delivery.run", "at": at, "sent_ids": []string{online},
 		"stops": []any{map[string]any{"eta": at}}}
 
-	raw, _ := json.Marshal(map[string]any{"events": []any{mixed, posOnly, empty, badStop}})
+	raw, _ := json.Marshal(map[string]any{"events": []any{run, mixed, posOnly, empty, badStop}})
 	out, err := svc.Handle(context.Background(), scope, raw)
 	if err != nil {
 		t.Fatal(err)
@@ -86,8 +90,9 @@ func TestDeliveryRunWithPOSStops(t *testing.T) {
 		got[r.EventID] = r.Result
 	}
 	want := map[string]string{
-		mixed["event_id"].(string): order.FloorApplied, posOnly["event_id"].(string): order.FloorApplied,
-		empty["event_id"].(string): order.FloorInvalid, badStop["event_id"].(string): order.FloorInvalid,
+		run["event_id"].(string): order.FloorApplied, mixed["event_id"].(string): order.FloorInvalid,
+		posOnly["event_id"].(string): order.FloorInvalid, empty["event_id"].(string): order.FloorInvalid,
+		badStop["event_id"].(string): order.FloorInvalid,
 	}
 	for k, v := range want {
 		if got[k] != v {
@@ -95,20 +100,20 @@ func TestDeliveryRunWithPOSStops(t *testing.T) {
 		}
 	}
 
-	// Stored as sent: the POS stop is opaque, never resolved to an order.
-	r := runs.runs[uuid.MustParse(posOnly["event_id"].(string))]
+	// Stored as sent, never resolved to an order.
+	r := runs.runs[uuid.MustParse(run["event_id"].(string))]
 	var stops []map[string]any
 	if err := json.Unmarshal(r.Stops, &stops); err != nil || len(stops) != 1 {
 		t.Fatalf("stops = %s", r.Stops)
 	}
-	if stops[0]["opaque_id"] != "pos:0123456789ab" || stops[0]["source"] != "pos" || stops[0]["distance_m"] != float64(2400) {
+	if stops[0]["order_id"] != online || stops[0]["distance_m"] != float64(2400) {
 		t.Errorf("stop = %v", stops[0])
 	}
-	if len(r.SentIDs) != 0 || r.DriverName != "Ann" {
+	if len(r.SentIDs) != 1 || r.DriverName != "Sam" {
 		t.Errorf("run = %+v", r)
 	}
-	if m := runs.runs[uuid.MustParse(mixed["event_id"].(string))]; len(m.SentIDs) != 1 || len(m.Stops) == 0 {
-		t.Errorf("mixed run = %+v", m)
+	if len(runs.runs) != 1 {
+		t.Errorf("runs saved = %d, want 1", len(runs.runs))
 	}
 }
 

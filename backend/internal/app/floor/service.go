@@ -282,8 +282,8 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 		}
 		return res, err
 	case "delivery.run":
-		// POS stops (2.1.0) are anonymous ({opaque_id, source:"pos", …}) and
-		// stored as sent — no order lookup. A POS-only run has no sent_ids.
+		// Stops are stored as sent — no order lookup. Every stop needs an
+		// order_id (SoftTouch's opaque POS stops are refused since H3).
 		okStops, nStops := order.ValidRunStops(ev.Stops)
 		if s.runs == nil || ev.At.IsZero() || !okStops || (len(ev.SentIDs) == 0 && nStops == 0) {
 			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)

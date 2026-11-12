@@ -33,7 +33,7 @@ from conftest import ADMIN_V1, IS_DEV, STORE_V1, store_key, wait_order, wait_unt
 from sse import SSEStream
 
 # The fake_geo fixture swaps main's geo providers for everyone, so every module
-# using it runs on one xdist worker (also test_geo_locate, test_location_radius).
+# using it runs on one xdist worker (also test_geo_choose, test_location_radius).
 pytestmark = pytest.mark.xdist_group("geo")
 
 STORE = (40.6666, -74.1158)  # the test store's pin (Bayonne, Broadway)

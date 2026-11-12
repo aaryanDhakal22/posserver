@@ -328,10 +328,8 @@ func main() {
 	broker.OnSubscribe(geoService.WakeLocation)
 	requester.RegisterInbound(rpc.MsgGeoPin, geoService.HandlePin)
 	requester.RegisterInbound(rpc.MsgGeoTrip, geoService.HandleTrip)
-	// 2.1.0: POS deliveries (external stops — no orders row) + address
-	// candidates (geo.choose, for online orders and stops alike).
-	requester.RegisterInbound(rpc.MsgGeoLocate, geoService.HandleLocate)
-	requester.RegisterInbound(rpc.MsgGeoForget, geoService.HandleForget)
+	// 2.1.0: address candidates (geo.choose). geo.locate / geo.forget (the
+	// SoftTouch POS stops) are retired: unknown type, 202 no-op.
 	requester.RegisterInbound(rpc.MsgGeoChoose, geoService.HandleChoose)
 	requester.RegisterInbound(rpc.MsgGeoSearch, geoService.HandleSearch)
 	// 2.2.0: the tablet sets the delivery radius through the Pi.

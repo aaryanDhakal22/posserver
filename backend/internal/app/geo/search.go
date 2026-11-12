@@ -25,7 +25,7 @@ import (
 // then searches the store's area (StoreArea: every geocoder, merged, at most
 // MaxSearchResults) and pushes order.geo for the order: state check with the
 // matches (staff pick one with geo.choose, as for any check) or not_found
-// with a note. Online orders and external stops alike.
+// with a note.
 
 const (
 	// MaxSearchQuery is the longest query geo.search takes (characters).
@@ -55,14 +55,8 @@ func (s *Service) HandleSearch(ctx context.Context, scope sseBroker.Scope, paylo
 	if err != nil || query == "" || utf8.RuneCountInString(query) > MaxSearchQuery {
 		return nil, fmt.Errorf("%w: geo.search needs {order_id, query (1-%d characters)}", rpc.ErrBadPayload, MaxSearchQuery)
 	}
-	online := true
 	if _, err := s.q.GetOrderForGeo(ctx, models.GetOrderForGeoParams{OrderID: pgUUID(id), TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID)}); errors.Is(err, pgx.ErrNoRows) {
-		online = false
-		if _, err := s.q.GetExternalStop(ctx, models.GetExternalStopParams{OrderID: pgUUID(id), TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID)}); errors.Is(err, pgx.ErrNoRows) {
-			return map[string]any{"ok": false, "code": "not_found"}, nil
-		} else if err != nil {
-			return nil, err
-		}
+		return map[string]any{"ok": false, "code": "not_found"}, nil
 	} else if err != nil {
 		return nil, err
 	}
@@ -71,51 +65,33 @@ func (s *Service) HandleSearch(ctx context.Context, scope sseBroker.Scope, paylo
 		return map[string]any{"ok": false, "code": "too_soon", "retry_after_ms": s.searches.RetryAfter(key).Milliseconds()}, nil
 	}
 	s.searches.Add(key)
-	if online {
-		// A pickup order (or one the sweep has not reached) gets its row now.
-		if _, err := s.q.InsertOrderGeo(ctx, models.InsertOrderGeoParams{OrderID: pgUUID(id), TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID)}); err != nil {
-			return nil, err
-		}
+	// A pickup order (or one the sweep has not reached) gets its row now.
+	if _, err := s.q.InsertOrderGeo(ctx, models.InsertOrderGeoParams{OrderID: pgUUID(id), TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID)}); err != nil {
+		return nil, err
 	}
-	s.logger.Info().Ctx(ctx).Str("order_id", id.String()).Bool("online", online).Msg("geo: address search requested")
+	s.logger.Info().Ctx(ctx).Str("order_id", id.String()).Msg("geo: address search requested")
 	bg := context.WithoutCancel(ctx)
 	s.spawn(func() {
 		ctx, cancel := context.WithTimeout(bg, searchTimeout)
 		defer cancel()
-		s.runSearch(ctx, scope, id, online, query)
+		s.runSearch(ctx, scope, id, query)
 	})
 	return map[string]any{"ok": true}, nil
 }
 
-// runSearch searches, saves the answer on the order / stop and wakes the
-// worker to push it.
-func (s *Service) runSearch(ctx context.Context, scope sseBroker.Scope, id uuid.UUID, online bool, query string) {
+// runSearch searches, saves the answer on the order and wakes the worker to
+// push it.
+func (s *Service) runSearch(ctx context.Context, scope sseBroker.Scope, id uuid.UUID, query string) {
 	cands, note := s.search(ctx, scope, query)
 	state := StateCheck
 	if len(cands) == 0 {
 		state = StateNotFound
 	}
-	var n int64
-	var err error
-	if online {
-		n, err = s.q.SaveOrderGeoSearch(ctx, models.SaveOrderGeoSearchParams{
-			OrderID: pgUUID(id), TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID),
-			State: state, Candidates: candidatesJSON(cands), Note: note,
-		})
-	} else {
-		err = s.tx(ctx, func(q Queries) error {
-			if n, err = q.SaveExternalStopSearch(ctx, models.SaveExternalStopSearchParams{
-				OrderID: pgUUID(id), TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID),
-				State: state, Note: note,
-			}); err != nil || n == 0 {
-				return err // 0: forgotten meanwhile
-			}
-			return q.UpsertExternalWorkSearch(ctx, models.UpsertExternalWorkSearchParams{
-				OrderID: pgUUID(id), Candidates: candidatesJSON(cands), DiscardAt: ts(s.now().Add(AddressDiscardAfter)),
-			})
-		})
-	}
-	log := s.logger.With().Str("order_id", id.String()).Bool("online", online).Logger()
+	n, err := s.q.SaveOrderGeoSearch(ctx, models.SaveOrderGeoSearchParams{
+		OrderID: pgUUID(id), TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID),
+		State: state, Candidates: candidatesJSON(cands), Note: note,
+	})
+	log := s.logger.With().Str("order_id", id.String()).Logger()
 	switch {
 	case err != nil:
 		log.Warn().Ctx(ctx).Err(err).Msg("geo: saving the address search failed")
@@ -125,9 +101,6 @@ func (s *Service) runSearch(ctx context.Context, scope sseBroker.Scope, id uuid.
 		return
 	}
 	attrs := []attribute.KeyValue{attribute.String("result", state), attribute.String("via", "search")}
-	if !online {
-		attrs = append(attrs, attribute.String("kind", "external"))
-	}
 	s.located.Add(ctx, 1, observability.WithStore(ctx, scope.TenantID, attrs...))
 	log.Info().Ctx(ctx).Str("state", state).Int("candidates", len(cands)).Str("note", note).Msg("geo: address search answered")
 	s.poke()

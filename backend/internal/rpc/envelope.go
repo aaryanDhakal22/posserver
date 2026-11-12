@@ -44,12 +44,10 @@ const (
 	MsgGeoPin   = "geo.pin"
 	MsgGeoTrip  = "geo.trip"
 
-	// POS deliveries + address candidates (2.1.0), agent → main requests.
-	// geo.locate: locate a delivery main has no order for (an external stop,
-	// answered later by order.geo with the agent's id); geo.forget: drop it;
-	// geo.choose: staff picked candidate #index of a check result.
-	MsgGeoLocate = "geo.locate"
-	MsgGeoForget = "geo.forget"
+	// Address candidates (2.1.0), agent → main request: staff picked
+	// candidate #index of a check result. (2.1.0's geo.locate / geo.forget,
+	// the SoftTouch POS deliveries, were retired with SoftTouch in H3: main
+	// answers them as an unknown type, 202 and nothing done.)
 	MsgGeoChoose = "geo.choose"
 	// geo.search (2.2.2): staff typed an address for an order; main searches
 	// near the store and answers later with order.geo (check / not_found).

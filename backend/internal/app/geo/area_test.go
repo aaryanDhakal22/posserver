@@ -367,41 +367,6 @@ func TestAreaRetryProviderFailureRetries(t *testing.T) {
 	}
 }
 
-func TestAreaRetryExternalStop(t *testing.T) {
-	h := newHarness(t)
-	p := newAreaProvider("fake")
-	h.useGeocoder(p)
-	p.area["5415 york rd, md"] = []Candidate{yorkRd}
-	stop := uuid.New()
-	if got := h.rpc(h.svc.HandleLocate, locateBody(stop, "5415 YORK RD, AROMA PIZZA", "21286")); got["ok"] != true {
-		t.Fatalf("reply = %v", got)
-	}
-	h.drain()
-	push := onlyPush(t, h, stop)
-	if push.State != StateLocated || *push.Lat != yorkRd.Lat || !push.Corrected {
-		t.Fatalf("push = %+v", push)
-	}
-	if st := h.db.stops[stop]; !st.Corrected {
-		t.Errorf("stop = %+v", st)
-	}
-	key := NormalizeKey(Address{Line1: "5415 YORK RD, AROMA PIZZA", City: "Towson", State: "MD", Zip: "21286"})
-	if _, ok := h.db.cache[AreaCacheKey(h.scope.LocationID, key)]; !ok {
-		t.Error("stop's corrected result not cached for its input")
-	}
-	// The store moved: the stop keeps its own point, still corrected.
-	h.svc.StoreMoved(context.Background(), h.scope.TenantID, h.scope.LocationID)
-	h.drain()
-	if p := onlyPush(t, h, stop); !p.Corrected || *p.Lat != yorkRd.Lat {
-		t.Errorf("re-routed stop = %+v", p)
-	}
-	// A pin is staff's own point: not corrected.
-	h.rpc(h.svc.HandlePin, map[string]any{"order_id": stop.String(), "lat": 39.356, "lng": -76.61})
-	h.drain()
-	if p := onlyPush(t, h, stop); p.Corrected || p.Quality != QualityPinned {
-		t.Errorf("pinned stop = %+v", p)
-	}
-}
-
 // --- geo.search
 
 func searchBody(id uuid.UUID, q string) map[string]any {
@@ -534,43 +499,6 @@ func TestSearchProviderFailureSaysTryAgain(t *testing.T) {
 	h.drain()
 	if push := onlyPush(t, h, id); push.State != StateNotFound || push.Note != NoteSearchFailed {
 		t.Fatalf("push = %+v", push)
-	}
-}
-
-func TestSearchExternalStop(t *testing.T) {
-	h := newHarness(t)
-	p := newAreaProvider("fake")
-	h.useGeocoder(p)
-	p.full["100 york rd, towson, md 21204"] = []Candidate{cand("100 York Rd", "Towson", "21204", 39.4010, -76.6010)}
-	stop := uuid.New()
-	h.rpc(h.svc.HandleLocate, locateBody(stop, "100 York Rd", "21204"))
-	h.drain()
-	onlyPush(t, h, stop)
-	if _, ok := h.db.work[stop]; ok {
-		t.Fatal("located stop kept its address text")
-	}
-
-	p.area["5415 york rd, md"] = []Candidate{yorkRd}
-	if got := h.rpc(h.svc.HandleSearch, searchBody(stop, "5415 York Rd")); got["ok"] != true {
-		t.Fatalf("reply = %v", got)
-	}
-	h.drain()
-	push := onlyPush(t, h, stop)
-	if push.State != StateCheck || len(push.Candidates) != 1 || push.Candidates[0].Line1 != "5415 York Road" {
-		t.Fatalf("push = %+v", push)
-	}
-	if w := h.db.work[stop]; w == nil || string(w.Address) != "{}" || w.AddressKey != "" {
-		t.Fatalf("work row = %+v (candidates only, no address)", w)
-	}
-	h.rpc(h.svc.HandleChoose, map[string]any{"order_id": stop.String(), "index": 0})
-	h.drain()
-	if p := onlyPush(t, h, stop); p.State != StateLocated || p.Quality != QualityPinned || !p.Confirmed || *p.Lat != yorkRd.Lat {
-		t.Errorf("chosen = %+v", p)
-	}
-
-	// A stop main never heard of.
-	if got := h.rpc(h.svc.HandleSearch, searchBody(uuid.New(), "5415 York Rd")); got["code"] != "not_found" {
-		t.Errorf("unknown stop: %v", got)
 	}
 }
 
