@@ -99,17 +99,24 @@ def test_staff_crud_and_pins(mgr) -> None:
 
 APP_DEFAULTS = {"default_tab": "info", "show_history": False, "button_font": "barlow", "cashier_price_drop_pct": 20,
                 "click_sound": False, "prices_on_buttons": False, "out_of_area_margin_mi": 1, "name_on_paid_counter": False,
-                "card_tips": False, "card_tip_percents": [15, 18, 20], "employee_meal_pct": 50}
+                "card_tips": False, "card_tip_percents": [15, 18, 20], "employee_meal_pct": 50,
+                # terminal Stage 2
+                "cashier_payout_cents": 2000, "default_pickup_minutes": 15, "area_codes": ["410", "443", "667"]}
+
+
+def _known(got: dict, want: dict) -> dict:
+    """The settings this test knows (a field added later has its own test)."""
+    return {k: got.get(k) for k in want}
 
 
 def test_terminal_settings(mgr) -> None:
-    assert _ok(mgr.get(SETTINGS, timeout=5)) == {"cashier_refund_cents": 0, "cashier_discount_pct": 10, "auto_lock_minutes": 5,
-                                                 "counter_start": 1, "receipt_auto_done_seconds": 15, "auto_close_batch_at": "04:00",
-                                                 **APP_DEFAULTS}
+    first = {"cashier_refund_cents": 0, "cashier_discount_pct": 10, "auto_lock_minutes": 5, "counter_start": 1,
+             "receipt_auto_done_seconds": 15, "auto_close_batch_at": "04:00", **APP_DEFAULTS}
+    assert _known(_ok(mgr.get(SETTINGS, timeout=5)), first) == first
     want = {"cashier_refund_cents": 2000, "cashier_discount_pct": 15, "auto_lock_minutes": 3, "counter_start": 100,
             "receipt_auto_done_seconds": 0, "auto_close_batch_at": "03:30"}
-    assert _ok(mgr.put(SETTINGS, json=want, timeout=5)) == {**want, **APP_DEFAULTS}
-    assert _ok(mgr.get(SETTINGS, timeout=5)) == {**want, **APP_DEFAULTS}
+    assert _known(_ok(mgr.put(SETTINGS, json=want, timeout=5)), {**want, **APP_DEFAULTS}) == {**want, **APP_DEFAULTS}
+    assert _known(_ok(mgr.get(SETTINGS, timeout=5)), {**want, **APP_DEFAULTS}) == {**want, **APP_DEFAULTS}
     # A client that doesn't know auto_close_batch_at keeps the saved one; "" = off.
     older = {k: v for k, v in want.items() if k != "auto_close_batch_at"}
     assert _ok(mgr.put(SETTINGS, json=older, timeout=5))["auto_close_batch_at"] == "03:30"
