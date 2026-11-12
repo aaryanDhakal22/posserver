@@ -197,6 +197,23 @@ func TestImportAddressLimit(t *testing.T) {
 	}
 }
 
+// A line 1 of punctuation only ("." is a common placeholder) normalises to nothing, so it could never
+// match itself: every re-run would add it again. It is skipped as no_line1, and a re-run is unchanged.
+func TestImportPunctuationLine1IsSkippedAndReRunIsUnchanged(t *testing.T) {
+	f := newFake()
+	s := svcWith(f)
+	recs := []ImportRecord{{Phone: "4105550101", FirstName: "Ada", Addresses: []ImportAddress{
+		{Line1: ".", City: "Towson", Zip: "21286"}, {Line1: "@", Zip: "21286"}, {Line1: "1 Test St", Zip: "21286"}}}}
+	res, _ := s.Import(context.Background(), tenant, loc, recs, false)
+	if res.Addresses.Added != 1 || res.Addresses.SkipReasons["no_line1"] != 2 {
+		t.Fatalf("first: %+v", res.Addresses)
+	}
+	res, _ = s.Import(context.Background(), tenant, loc, recs, false)
+	if res.Unchanged != 1 || res.Addresses.Added != 0 || res.Addresses.Matched != 1 {
+		t.Fatalf("again: %+v / %+v", res, res.Addresses)
+	}
+}
+
 func TestImportTooMany(t *testing.T) {
 	s := svcWith(newFake())
 	if _, err := s.Import(context.Background(), tenant, loc, make([]ImportRecord, MaxImportBatch+1), false); err != ErrTooManyRecords {

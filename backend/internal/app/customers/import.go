@@ -91,7 +91,7 @@ func cleanImportAddress(a ImportAddress) (customer.Address, string) {
 	out := customer.Address{Label: t(a.Label, 40), Line1: t(a.Line1, 120), Line2: t(a.Line2, 120), City: t(a.City, 80),
 		State: strings.ToUpper(t(a.State, 2)), Zip: t(a.Zip, 10), Notes: clip(strings.TrimSpace(a.Notes), 300)}
 	switch {
-	case out.Line1 == "":
+	case customer.NormLine1(out.Line1) == "": // empty or only punctuation (".", "@"): it could never match itself again
 		return out, "no_line1"
 	case out.City == "" && out.Zip == "":
 		return out, "no_city_or_zip"
