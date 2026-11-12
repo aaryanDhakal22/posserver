@@ -34,7 +34,6 @@ type fakeDB struct {
 	orderGeo map[uuid.UUID]*models.OrderGeo
 	store    models.GetLocationGeoRow
 	scope    sseBroker.Scope
-	wakes    int
 }
 
 func newFakeDB(now func() time.Time, scope sseBroker.Scope, store Point) *fakeDB {
