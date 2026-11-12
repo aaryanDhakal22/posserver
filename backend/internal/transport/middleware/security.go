@@ -42,9 +42,13 @@ var (
 // main plus inline (Svelte writes style attributes), images from main, data:
 // / blob: (the image cropper) and https (map tiles, a store's website
 // images), frames only for the Website page's preview of the storefront
-// (https, plus plain http in dev where the storefront runs on localhost),
+// (https; plain http too outside prod),
 // and nobody may frame the app (clickjacking). API calls go to main only.
-func AppCSP(indexHTML []byte, dev bool) string {
+//
+// dev = APP_ENV dev (Vite's server and socket are allowed); httpFrames =
+// not prod (dev and staging preview a storefront served over plain http on
+// localhost / the LAN; prod's is https).
+func AppCSP(indexHTML []byte, dev, httpFrames bool) string {
 	scripts := []string{"'self'"}
 	for _, m := range inlineScript.FindAllSubmatch(indexHTML, -1) {
 		if scriptSrc.Match(m[1]) || len(m[2]) == 0 {
@@ -55,8 +59,10 @@ func AppCSP(indexHTML []byte, dev bool) string {
 	}
 	frames := "frame-src 'self' https:"
 	connect := "connect-src 'self'"
-	if dev {
+	if httpFrames {
 		frames += " http:"
+	}
+	if dev {
 		connect += " ws: http://localhost:* http://127.0.0.1:*" // Vite's dev server and HMR socket
 	}
 	return strings.Join([]string{

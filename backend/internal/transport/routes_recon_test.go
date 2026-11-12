@@ -100,7 +100,7 @@ func TestAppCSPFromEmbeddedBuild(t *testing.T) {
 	if !ok {
 		t.Fatal("index.html unreadable")
 	}
-	csp := appMiddleware.AppCSP(index, false)
+	csp := appMiddleware.AppCSP(index, false, false)
 	inline := strings.Count(string(index), "<script>") // SvelteKit and our theme snippet write bare <script>
 	if got := strings.Count(csp, "'sha256-"); got != inline || inline == 0 {
 		t.Fatalf("CSP has %d script hashes for %d inline scripts:\n%s", got, inline, csp)

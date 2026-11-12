@@ -27,7 +27,7 @@ func hashOf(s string) string {
 }
 
 func TestAppCSP(t *testing.T) {
-	csp := AppCSP([]byte(testIndex), false)
+	csp := AppCSP([]byte(testIndex), false, false)
 	for _, want := range []string{
 		"default-src 'self'", "object-src 'none'", "frame-ancestors 'none'", "base-uri 'self'", "form-action 'self'",
 		"connect-src 'self';", "frame-src 'self' https:;",
@@ -46,8 +46,12 @@ func TestAppCSP(t *testing.T) {
 	if n := strings.Count(script, "'sha256-"); n != 2 {
 		t.Errorf("script-src has %d hashes, want 2 (the two inline scripts; never the src one): %s", n, script)
 	}
-	if dev := AppCSP([]byte(testIndex), true); !strings.Contains(dev, "frame-src 'self' https: http:") || !strings.Contains(dev, "ws:") {
+	if dev := AppCSP([]byte(testIndex), true, true); !strings.Contains(dev, "frame-src 'self' https: http:") || !strings.Contains(dev, "ws:") {
 		t.Errorf("dev CSP must let the localhost storefront preview and Vite through: %s", dev)
+	}
+	// Staging: the storefront preview is plain http on the LAN, but nothing of Vite's.
+	if stg := AppCSP([]byte(testIndex), false, true); !strings.Contains(stg, "frame-src 'self' https: http:") || strings.Contains(stg, "ws:") || !strings.Contains(stg, "connect-src 'self';") {
+		t.Errorf("staging CSP = %s", stg)
 	}
 }
 

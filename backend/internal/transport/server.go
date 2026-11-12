@@ -100,7 +100,7 @@ func AddSecurityMiddlewares(e *echo.Echo, appEnv string, hstsMaxAge int) {
 		index, _ = fs.ReadFile(webapp.FS(), "index.html")
 	}
 	e.Use(appMiddleware.SecurityHeaders(appMiddleware.SecurityConfig{
-		AppCSP:     appMiddleware.AppCSP(index, dev),
+		AppCSP:     appMiddleware.AppCSP(index, dev, appEnv != "prod"),
 		HSTSMaxAge: hstsMaxAge,
 	}))
 	e.Use(appMiddleware.CrossSiteGuard(session.CookieName, storePrefix+"/session", dev))
