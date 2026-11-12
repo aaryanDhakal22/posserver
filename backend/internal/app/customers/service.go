@@ -20,6 +20,7 @@ import (
 	authSvc "quiccpos/main/internal/app/auth"
 	"quiccpos/main/internal/domain/customer"
 	"quiccpos/main/internal/infra/database/repositories"
+	"quiccpos/main/internal/shared/textclean"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -290,19 +291,16 @@ var emailRe = regexp.MustCompile(`^[^@\s]+@[^@\s]+\.[^@\s]+$`)
 // ValidEmail reports whether e looks like an email address ("" is fine).
 func ValidEmail(e string) bool { return e == "" || (len(e) <= 254 && emailRe.MatchString(e)) }
 
-func clip(s string, n int) string {
-	r := []rune(s)
-	if len(r) > n {
-		return string(r[:n])
-	}
-	return s
-}
+// clip cuts s to n characters and takes control characters out of it (H3:
+// every name, note and address line of a customer goes through here before
+// it is saved: it prints on tickets and receipts later).
+func clip(s string, n int) string { return textclean.Clean(s, n) }
 
 // UpdateProfile sets name and/or email (nil = keep).
 func (s *Service) UpdateProfile(ctx context.Context, c customer.Customer, name, email *string) (customer.Customer, error) {
 	n, e := c.Name, c.Email
 	if name != nil {
-		if n = strings.TrimSpace(*name); len([]rune(n)) > 80 {
+		if n = strings.TrimSpace(textclean.Strip(*name)); len([]rune(n)) > 80 {
 			return c, customer.ErrTooLong
 		}
 	}

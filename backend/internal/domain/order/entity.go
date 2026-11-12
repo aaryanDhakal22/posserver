@@ -387,6 +387,9 @@ func NewOrder(in NewOrderInput) (*Order, error) {
 	if !in.MoneyFlagged && !moneyReconcilesFor(in.Source, in.Money) {
 		return nil, ErrTotalMismatch
 	}
+	// Names, notes and addresses from outside: no control characters, cut
+	// to the order's text limits (H3, sanitize.go).
+	in.sanitize()
 
 	now := time.Now().UTC()
 	rawCopy := append([]byte(nil), in.RawPayload...)

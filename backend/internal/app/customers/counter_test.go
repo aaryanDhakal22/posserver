@@ -152,3 +152,29 @@ func TestCheckCounterRefusesBadEvents(t *testing.T) {
 		t.Errorf("unknown set field: %v", err)
 	}
 }
+
+// H3: a customer typed on the terminal (or imported) is saved without
+// control characters: the name and notes print on tickets later.
+func TestCheckCounterStripsControlCharacters(t *testing.T) {
+	raw := json.RawMessage(`{"id":"` + uuid.NewString() + `","phone":"4105551212",` +
+		`"first_name":"Bob\u001bp\u0000\u0019","last_name":"Smith\u001dV\u0000","notes":"gate 12\nPAID - CARD\u0010\u0014",` +
+		`"addresses":[{"line1":"931 Taylor Ave\u001b@","line2":"Apt\t4","city":"Towson","state":"MD","zip":"21286","notes":"ring\r\nbell\u001dV"}]}`)
+	c, err := CheckCounter(raw, []string{SetName, SetNotes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	texts := []string{c.first, c.last, c.notes}
+	for _, a := range c.addresses {
+		texts = append(texts, a.Line1, a.Line2, a.City, a.Notes)
+	}
+	for _, s := range texts {
+		for _, r := range s {
+			if r < 0x20 || r == 0x7f {
+				t.Errorf("control character %#x kept in %q", r, s)
+			}
+		}
+	}
+	if c.first != "Bobp" || c.last != "SmithV" || c.notes != "gate 12 PAID - CARD" {
+		t.Errorf("name / notes = %q %q %q", c.first, c.last, c.notes)
+	}
+}
