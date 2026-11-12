@@ -359,10 +359,14 @@ ORDER BY
 LIMIT sqlc.arg('lim') OFFSET sqlc.arg('off');
 
 -- name: MarkFloorEventSeen :execrows
--- Idempotency gate for agent floor events: 0 rows = already applied.
+-- Idempotency gate for agent floor events: 0 rows = already seen. An event
+-- main refused (invalid / not_found) is looked at again when the Pi sends it
+-- again (it keeps refused payments, counter orders and customers queued), so
+-- a newer main can still apply it.
 INSERT INTO floor_events_seen (event_id, tenant_id, location_id, order_id, type, result)
 VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (event_id) DO NOTHING;
+ON CONFLICT (event_id) DO UPDATE SET result = EXCLUDED.result, order_id = EXCLUDED.order_id, received_at = now()
+WHERE floor_events_seen.result IN ('invalid', 'not_found') AND floor_events_seen.location_id = EXCLUDED.location_id;
 
 -- name: UpdateOrderFloor :exec
 -- Applies an agent floor update (status + mirrored floor fields).

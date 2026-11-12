@@ -387,6 +387,11 @@ func main() {
 	customerService := customers.NewService(repositories.NewCustomerRepository(pool), signinCodes, lgr)
 	customerService.SetCardRemover(squareService)
 	go customerService.RunPrune(ctx)
+	// The counter's customers (terminal 1d): customer.upsert from the Pi, and
+	// customers.changed to a store's Pi when its customers change.
+	customerRepo := repositories.NewCustomerRepository(pool)
+	floorService.OnCustomers(customerService)
+	go customerService.WatchChanges(ctx, customerRepo, broker, broker)
 	orderPortService := orderport.NewService(pricingService, storeStatusService, menuViewService, menuService, svc,
 		repositories.NewChannelOrderRepository(pool), gateways, lgr)
 	orderPortService.SetNotifier(notifier) // a failed refund pages the owner

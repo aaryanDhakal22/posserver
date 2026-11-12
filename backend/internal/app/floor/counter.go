@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"quiccpos/main/internal/app/customers"
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/domain/staff"
 
@@ -17,6 +18,8 @@ import (
 
 // Counter orders from the Pi (TERMINAL-PLAN.md 0d, contract/main.md §2.5zb):
 // order.placed, order.payment, order.void, order.changed and journal.entries.
+// order.payment takes any order of the store (a counter order, or an online /
+// website pickup paid at the counter); the others only counter orders.
 
 func (s *Service) applyPlaced(ctx context.Context, sc order.Scope, eid uuid.UUID, ev event) (string, error) {
 	if s.counter == nil || len(ev.Snapshot) == 0 {
@@ -64,7 +67,12 @@ func (s *Service) applyPayment(ctx context.Context, sc order.Scope, eid uuid.UUI
 	if err != nil {
 		return s.invalid(ctx, sc, eid, ev, err)
 	}
-	return s.counter.AddCounterPayment(ctx, sc, eid, ev.Type, oid, cp)
+	res, err := s.counter.AddCounterPayment(ctx, sc, eid, ev.Type, oid, cp)
+	if err == nil && res == order.FloorApplied {
+		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Str("payment_id", cp.ID.String()).Str("method", cp.Method).
+			Int64("amount_cents", int64(cp.Amount)).Msg("terminal payment recorded")
+	}
+	return res, err
 }
 
 func (s *Service) applyVoid(ctx context.Context, sc order.Scope, eid uuid.UUID, ev event) (string, error) {
@@ -179,4 +187,17 @@ func (s *Service) applyJournal(ctx context.Context, sc order.Scope, eid uuid.UUI
 		return "", err
 	}
 	return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorApplied)
+}
+
+// applyCustomer is the counter's customer.upsert (terminal 1d, contract
+// §2.5zc): a customer made or changed at the counter.
+func (s *Service) applyCustomer(ctx context.Context, sc order.Scope, eid uuid.UUID, ev event) (string, error) {
+	if s.customers == nil {
+		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
+	}
+	res, err := s.customers.ApplyCounterEvent(ctx, uuid.UUID(sc.TenantID), uuid.UUID(sc.LocationID), eid, ev.Type, ev.Customer, ev.Set)
+	if errors.Is(err, customers.ErrBadCounterCustomer) {
+		return s.invalid(ctx, sc, eid, ev, err)
+	}
+	return res, err
 }

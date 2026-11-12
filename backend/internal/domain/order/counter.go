@@ -48,6 +48,9 @@ type CounterSnapshot struct {
 	// Payments as the Pi records them (Snapshot.Payments is the summary
 	// shape; a counter snapshot carries the full payment).
 	CounterPayments []CounterPayment `json:"payments"`
+	// CustomerID: the store customer the order is for (terminal 1d; the Pi's
+	// id of it), kept in source_metadata.customer_id.
+	CustomerID string `json:"customer_id"`
 }
 
 // CounterPayment is one payment (or, negative, refund) taken at the counter.
@@ -227,6 +230,9 @@ func NewCounterOrder(sc Scope, s CounterSnapshot, raw []byte) (*CounterOrder, er
 	}
 	if s.DeviceID != "" {
 		meta["device_id"] = s.DeviceID
+	}
+	if cid, err := uuid.Parse(s.CustomerID); err == nil {
+		meta["customer_id"] = cid.String()
 	}
 	o, err := NewOrder(NewOrderInput{
 		ID: ID(id), TenantID: sc.TenantID, LocationID: sc.LocationID, Source: SourceCounter, SourceEventID: sev,

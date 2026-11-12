@@ -69,6 +69,9 @@ type event struct {
 	Payment  json.RawMessage `json:"payment"`
 	StaffID  string          `json:"staff_id"`
 	Entries  json.RawMessage `json:"entries"`
+	// customer.upsert (terminal 1d): the customer + which fields it sets.
+	Customer json.RawMessage `json:"customer"`
+	Set      []string        `json:"set"`
 	Drivers  []struct {
 		ID       string `json:"id"`
 		Name     string `json:"name"`
@@ -97,22 +100,29 @@ type CounterOrders interface {
 	ChangeCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, o *order.Order) (string, error)
 }
 
+// Customers applies the counter's customer.upsert (the customers service):
+// an error wrapping customers.ErrBadCounterCustomer is answered invalid.
+type Customers interface {
+	ApplyCounterEvent(ctx context.Context, tenantID, locationID, eventID uuid.UUID, typ string, raw json.RawMessage, set []string) (string, error)
+}
+
 // Journal keeps the terminal's staff journal (the staff service).
 type Journal interface {
 	AddJournal(ctx context.Context, tenantID, locationID uuid.UUID, entries []staff.JournalEntry) (int, error)
 }
 
 type Service struct {
-	counter  CounterOrders
-	journal  Journal
-	onPlaced func(ctx context.Context, o *order.Order)
-	orders   OrderLoader
-	repo     order.FloorRepository
-	runs     DeliveryRunStore
-	holds    CardHolds
-	onCancel func(ctx context.Context, orderID uuid.UUID)
-	logger   zerolog.Logger
-	meters   observability.Meters
+	counter   CounterOrders
+	journal   Journal
+	customers Customers
+	onPlaced  func(ctx context.Context, o *order.Order)
+	orders    OrderLoader
+	repo      order.FloorRepository
+	runs      DeliveryRunStore
+	holds     CardHolds
+	onCancel  func(ctx context.Context, orderID uuid.UUID)
+	logger    zerolog.Logger
+	meters    observability.Meters
 }
 
 // CardHolds captures / voids online card holds as the floor moves (the
@@ -136,6 +146,10 @@ func (s *Service) OnCancelled(f func(ctx context.Context, orderID uuid.UUID)) { 
 // OnCounter plugs in counter orders + the staff journal (nil = the 0d event
 // types are answered invalid, as by an older main).
 func (s *Service) OnCounter(c CounterOrders, j Journal) { s.counter, s.journal = c, j }
+
+// OnCustomers plugs in the counter's customers (nil = customer.upsert is
+// answered invalid, as by an older main).
+func (s *Service) OnCustomers(c Customers) { s.customers = c }
 
 // OnCounterPlaced is told after a counter order was stored (the geo worker
 // locates a counter delivery).
@@ -275,6 +289,8 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 		return s.applyChanged(ctx, sc, eid, ev)
 	case "journal.entries":
 		return s.applyJournal(ctx, sc, eid, ev)
+	case "customer.upsert":
+		return s.applyCustomer(ctx, sc, eid, ev)
 	default:
 		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 	}

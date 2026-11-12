@@ -124,9 +124,11 @@ func (r *OrderRepository) CreateCounterOrder(ctx context.Context, sc order.Scope
 	return order.FloorApplied, nil
 }
 
-// AddCounterPayment adds a payment (or refund) to a counter order: applied,
-// duplicate (the event was seen or the payment id is there), not_found (no
-// such order in the scope) or invalid (not a counter order).
+// AddCounterPayment adds a payment (or refund) the Pi's terminal took to an
+// order of the store, any source (a counter order, or an online / website
+// "pay at pickup" order paid at the counter): applied, duplicate (the event
+// was seen or the payment id is there) or not_found (no such order in the
+// scope). Only the order's payments move; its snapshot stays as it was.
 func (r *OrderRepository) AddCounterPayment(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, p order.CheckedPayment) (string, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -135,17 +137,15 @@ func (r *OrderRepository) AddCounterPayment(ctx context.Context, sc order.Scope,
 	defer tx.Rollback(ctx) //nolint:errcheck
 	q := models.New(tx)
 
-	var source string
-	err = tx.QueryRow(ctx, `SELECT source FROM orders WHERE id = $1 AND tenant_id = $2 AND location_id = $3 FOR UPDATE`,
-		orderID, uuid.UUID(sc.TenantID), uuid.UUID(sc.LocationID)).Scan(&source)
+	var one int
+	err = tx.QueryRow(ctx, `SELECT 1 FROM orders WHERE id = $1 AND tenant_id = $2 AND location_id = $3 FOR UPDATE`,
+		orderID, uuid.UUID(sc.TenantID), uuid.UUID(sc.LocationID)).Scan(&one)
 	result := order.FloorApplied
 	switch {
 	case errors.Is(err, pgx.ErrNoRows):
 		result = order.FloorNotFound
 	case err != nil:
 		return "", fmt.Errorf("get order: %w", err)
-	case source != string(order.SourceCounter):
-		result = order.FloorInvalid
 	default:
 		added, err := insertCounterPayment(ctx, tx, orderID, p)
 		if err != nil {

@@ -5,7 +5,9 @@ The test plays the Pi: floor events over POST /store/v1/agent/rpc.
     the Pi's state with its counter number; idempotent (event and order id);
     never sent back over SSE (no order frame, no redelivery)
   * later order.status events move it like any order
-  * order.payment adds payments / refunds (idempotent by payment id)
+  * order.payment adds payments / refunds (idempotent by payment id), on
+    any order of the store (online "pay at pickup" too)
+  * an event main refused is looked at again when the Pi resends it
   * order.void cancels it with the reason, in any state
   * journal.entries → the staff journal (idempotent per entry), listed in
     Store › Staff
@@ -159,15 +161,48 @@ def test_status_payment_void(store) -> None:
     assert _get(store.key, oid)["status"] == "cancelled"
 
 
-def test_void_and_payment_only_for_counter_orders(store, publish) -> None:
+def test_void_only_for_counter_orders_payments_for_any(store, make_store, publish) -> None:
+    """A void is for counter orders only; a payment the terminal took is kept
+    on any order of the store (an online "pay at pickup" order paid in cash at
+    the counter), refunds as negative ones, idempotent by payment id."""
     o = store.order()
     publish(o)
-    oid = wait_order(store.key, o["order_id"])["id"]
+    online = wait_order(store.key, o["order_id"])
+    oid = online["id"]
+    before = online.get("payments") or []
     v = {"event_id": str(uuid.uuid4()), "type": "order.void", "order_id": oid, "reason": "x", "at": _now()}
-    p = {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid,
-         "payment": {"id": str(uuid.uuid4()), "method": "cash", "amount_cents": 100}}
-    assert _send(store.key, [v, p]) == {v["event_id"]: "invalid", p["event_id"]: "invalid"}
-    assert _get(store.key, oid)["status"] != "cancelled"
+    pay = {"id": str(uuid.uuid4()), "method": "cash", "amount_cents": 1234, "tip_cents": 100, "at": _now(), "staff_id": str(uuid.uuid4())}
+    p = {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid, "payment": pay}
+    refund = {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid,
+              "payment": {**pay, "id": str(uuid.uuid4()), "amount_cents": -200, "tip_cents": 0}}
+    again = {**p, "event_id": str(uuid.uuid4())}  # the same payment id
+    assert _send(store.key, [v, p, refund, again]) == {v["event_id"]: "invalid", p["event_id"]: "applied",
+                                                       refund["event_id"]: "applied", again["event_id"]: "duplicate"}
+    after = _get(store.key, oid)
+    assert after["status"] != "cancelled"
+    assert sorted(x["amount_cents"] for x in after["payments"]) == sorted([*(x["amount_cents"] for x in before), 1234, -200])
+    assert after["money"] == online["money"] and after["items"] == online["items"], "the snapshot never moves"
+
+    # Another store's Pi can't pay this order.
+    other = make_store()
+    foreign = {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid,
+               "payment": {**pay, "id": str(uuid.uuid4())}}
+    assert _send(other.key, [foreign]) == {foreign["event_id"]: "not_found"}
+
+
+def test_a_refused_event_is_looked_at_again(store) -> None:
+    """The Pi keeps a refused payment / counter order queued: the same event
+    sent again is checked again (not answered duplicate), so it applies once
+    the order is there."""
+    oid = _uuid7()
+    pay = {"id": str(uuid.uuid4()), "method": "cash", "amount_cents": 500, "at": _now()}
+    p = {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid, "payment": pay}
+    assert _send(store.key, [p]) == {p["event_id"]: "not_found"}
+    assert _send(store.key, [p]) == {p["event_id"]: "not_found"}, "a refused event is not a duplicate"
+    placed = _placed(_snapshot(oid, payments=[]))
+    assert _send(store.key, [placed, p]) == {placed["event_id"]: "applied", p["event_id"]: "applied"}
+    assert _send(store.key, [p]) == {p["event_id"]: "duplicate"}
+    assert [x["amount_cents"] for x in _get(store.key, oid)["payments"]] == [500]
 
 
 def test_bad_placed_events(store, make_store) -> None:

@@ -380,7 +380,10 @@ type Querier interface {
 	MarkDispatchFailed(ctx context.Context, arg MarkDispatchFailedParams) error
 	MarkDispatchSucceeded(ctx context.Context, arg MarkDispatchSucceededParams) error
 	MarkExternalStopPushed(ctx context.Context, arg MarkExternalStopPushedParams) (int64, error)
-	// Idempotency gate for agent floor events: 0 rows = already applied.
+	// Idempotency gate for agent floor events: 0 rows = already seen. An event
+	// main refused (invalid / not_found) is looked at again when the Pi sends it
+	// again (it keeps refused payments, counter orders and customers queued), so
+	// a newer main can still apply it.
 	MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeenParams) (int64, error)
 	// Only when nothing changed since the pushed result was read. An acked push
 	// spends confirmed (only the push right after geo.pin / geo.choose has it).

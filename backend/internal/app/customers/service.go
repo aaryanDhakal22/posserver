@@ -59,6 +59,10 @@ type Repo interface {
 	Changes(ctx context.Context, locationID uuid.UUID, afterAt time.Time, afterID uuid.UUID, limit int) ([]customer.Change, error)
 	ByIDs(ctx context.Context, ids []uuid.UUID) ([]customer.Customer, map[uuid.UUID][]customer.Address, error)
 	PruneTombstones(ctx context.Context, before time.Time) (int64, error)
+	// Terminal 1d (counter.go): a counter upsert in one transaction, marking
+	// its floor event seen with fn's result (duplicate: seen already, nothing kept).
+	CounterUpsert(ctx context.Context, tenantID, locationID, eventID uuid.UUID, typ string,
+		fn func(tx customer.CounterTx) (string, error)) (string, error)
 }
 
 // CardRemover turns a saved card off at the processor (Square).

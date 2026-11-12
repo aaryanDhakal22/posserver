@@ -8157,7 +8157,8 @@ func (q *Queries) MarkExternalStopPushed(ctx context.Context, arg MarkExternalSt
 const markFloorEventSeen = `-- name: MarkFloorEventSeen :execrows
 INSERT INTO floor_events_seen (event_id, tenant_id, location_id, order_id, type, result)
 VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (event_id) DO NOTHING
+ON CONFLICT (event_id) DO UPDATE SET result = EXCLUDED.result, order_id = EXCLUDED.order_id, received_at = now()
+WHERE floor_events_seen.result IN ('invalid', 'not_found') AND floor_events_seen.location_id = EXCLUDED.location_id
 `
 
 type MarkFloorEventSeenParams struct {
@@ -8169,7 +8170,10 @@ type MarkFloorEventSeenParams struct {
 	Result     string      `json:"result"`
 }
 
-// Idempotency gate for agent floor events: 0 rows = already applied.
+// Idempotency gate for agent floor events: 0 rows = already seen. An event
+// main refused (invalid / not_found) is looked at again when the Pi sends it
+// again (it keeps refused payments, counter orders and customers queued), so
+// a newer main can still apply it.
 func (q *Queries) MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeenParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markFloorEventSeen,
 		arg.EventID,

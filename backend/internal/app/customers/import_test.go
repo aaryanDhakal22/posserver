@@ -75,7 +75,9 @@ func (t *fakeTx) SetNamesNotes(_ context.Context, c customer.Customer) error {
 }
 
 func (t *fakeTx) AddAddress(_ context.Context, id uuid.UUID, a customer.Address) (customer.Address, error) {
-	a.ID = uuid.New()
+	if a.ID == uuid.Nil { // the counter keeps the Pi's id
+		a.ID = uuid.New()
+	}
 	t.addrs[id] = append(t.addrs[id], a)
 	return a, nil
 }
