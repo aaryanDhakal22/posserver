@@ -7,7 +7,9 @@ import (
 	"net/http"
 	"time"
 
+	siteApp "quiccpos/main/internal/app/site"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
+	"quiccpos/main/internal/domain/site"
 	"quiccpos/main/internal/domain/tenancy"
 	sseBroker "quiccpos/main/internal/infra/sse"
 	"quiccpos/main/internal/observability"
@@ -34,6 +36,7 @@ type SSEBroker interface {
 type SSEHandler struct {
 	broker  SSEBroker
 	tenancy *tenancyApp.Service
+	logos   ReceiptLogoSource
 	logger  zerolog.Logger
 	tracer  trace.Tracer
 	meters  observability.Meters
@@ -48,6 +51,14 @@ func NewSSEHandler(broker SSEBroker, tenancy *tenancyApp.Service, logger zerolog
 		meters:  meters,
 	}
 }
+
+// ReceiptLogoSource is the store's printable published logo (siteApp.Service).
+type ReceiptLogoSource interface {
+	ReceiptLogo(ctx context.Context, locationID uuid.UUID) (*site.Image, error)
+}
+
+// SetReceiptLogos adds receipt_logo to the store_config handshake.
+func (h *SSEHandler) SetReceiptLogos(src ReceiptLogoSource) { h.logos = src }
 
 // StreamOrders streams orders for the authenticated device's (tenant_id,
 // location_id) scope. On every connect, it sends a single `store_config`
@@ -144,7 +155,7 @@ func (h *SSEHandler) writeStoreConfig(ctx context.Context, w http.ResponseWriter
 	if dev == nil {
 		return fmt.Errorf("no device in context")
 	}
-	body, printerCount, err := loadStoreConfig(ctx, h.tenancy, dev.TenantID, dev.LocationID)
+	body, printerCount, err := loadStoreConfig(ctx, h.tenancy, h.logos, dev.TenantID, dev.LocationID)
 	if err != nil {
 		return err
 	}
@@ -160,7 +171,7 @@ func (h *SSEHandler) writeStoreConfig(ctx context.Context, w http.ResponseWriter
 
 // loadStoreConfig loads + marshals the StoreContext for one scope. Shared by
 // the connect handshake and the live push (StoreConfigPublisher).
-func loadStoreConfig(ctx context.Context, svc *tenancyApp.Service, tenantID, locationID uuid.UUID) ([]byte, int, error) {
+func loadStoreConfig(ctx context.Context, svc *tenancyApp.Service, logos ReceiptLogoSource, tenantID, locationID uuid.UUID) ([]byte, int, error) {
 	tenant, err := svc.GetTenant(ctx, tenantID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("load tenant: %w", err)
@@ -173,7 +184,15 @@ func loadStoreConfig(ctx context.Context, svc *tenancyApp.Service, tenantID, loc
 	if err != nil {
 		return nil, 0, fmt.Errorf("load printers: %w", err)
 	}
-	body, err := json.Marshal(buildStoreContext(*tenant, *location, printers))
+	sc := buildStoreContext(*tenant, *location, printers)
+	if logos != nil {
+		logo, err := logos.ReceiptLogo(ctx, locationID)
+		if err != nil {
+			return nil, 0, fmt.Errorf("load receipt logo: %w", err)
+		}
+		sc.ReceiptLogo = receiptLogoContext(logo)
+	}
+	body, err := json.Marshal(sc)
 	if err != nil {
 		return nil, 0, fmt.Errorf("marshal store_config: %w", err)
 	}
@@ -193,6 +212,7 @@ type FramePublisher interface {
 type StoreConfigPublisher struct {
 	broker  FramePublisher
 	tenancy *tenancyApp.Service
+	logos   ReceiptLogoSource
 	logger  zerolog.Logger
 }
 
@@ -200,12 +220,19 @@ func NewStoreConfigPublisher(broker FramePublisher, tenancy *tenancyApp.Service,
 	return &StoreConfigPublisher{broker: broker, tenancy: tenancy, logger: logger.With().Str("module", "store-config-push").Logger()}
 }
 
+// SetReceiptLogos adds receipt_logo to the pushed store_config.
+func (p *StoreConfigPublisher) SetReceiptLogos(src ReceiptLogoSource) {
+	if p != nil {
+		p.logos = src
+	}
+}
+
 // Publish is nil-safe so handlers can call it unconditionally.
 func (p *StoreConfigPublisher) Publish(ctx context.Context, tenantID, locationID uuid.UUID) {
 	if p == nil || p.broker == nil {
 		return
 	}
-	body, _, err := loadStoreConfig(ctx, p.tenancy, tenantID, locationID)
+	body, _, err := loadStoreConfig(ctx, p.tenancy, p.logos, tenantID, locationID)
 	if err != nil {
 		p.logger.Warn().Ctx(ctx).Err(err).Str("location_id", locationID.String()).Msg("store_config push: load failed")
 		return
@@ -271,6 +298,14 @@ func buildStoreContext(t tenancy.Tenant, l tenancy.Location, printers []tenancy.
 		},
 		Printers: prs,
 	}
+}
+
+// receiptLogoContext is store_config's receipt_logo, nil when none.
+func receiptLogoContext(img *site.Image) *sseTransport.ReceiptLogoContext {
+	if img == nil || !siteApp.PrintableLogo(img.ContentType) {
+		return nil
+	}
+	return &sseTransport.ReceiptLogoContext{ID: img.ID.String(), ETag: siteApp.LogoETag(img.Bytes), ContentType: img.ContentType}
 }
 
 // mapContext is the location's published map, nil when none.

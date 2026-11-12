@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	siteApp "quiccpos/main/internal/app/site"
 	"quiccpos/main/internal/domain/site"
@@ -319,4 +320,46 @@ func (h *SiteHandler) image(c *echo.Context, lid uuid.UUID) error {
 	hd.Set("X-Content-Type-Options", "nosniff")
 	hd.Set("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; sandbox")
 	return c.Blob(http.StatusOK, img.ContentType, img.Bytes)
+}
+
+// GET /store/v1/agent/receipt-logo (agent key) — the store's published logo
+// for the top of the Pi's receipts: the bytes with their Content-Type and
+// ETag (store_config's receipt_logo.etag; a matching If-None-Match is a 304);
+// 404 no_logo when the store has none or it is an SVG.
+func (h *SiteHandler) AgentReceiptLogo(c *echo.Context) error {
+	scope, _, ok := agentScope(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, errResp("device required"))
+	}
+	img, err := h.svc.ReceiptLogo(c.Request().Context(), scope.LocationID)
+	if err != nil {
+		return h.sErr(c, err)
+	}
+	if img == nil {
+		return c.JSON(http.StatusNotFound, errCode("the store has no printable logo", "no_logo"))
+	}
+	etag := siteApp.LogoETag(img.Bytes)
+	hd := c.Response().Header()
+	hd.Set("ETag", etag)
+	hd.Set("Cache-Control", "no-cache")
+	hd.Set("X-Content-Type-Options", "nosniff")
+	if etagMatches(c.Request().Header.Get("If-None-Match"), etag) {
+		return c.NoContent(http.StatusNotModified)
+	}
+	return c.Blob(http.StatusOK, img.ContentType, img.Bytes)
+}
+
+// etagMatches reads If-None-Match leniently: a list, weak tags, unquoted.
+func etagMatches(header, etag string) bool {
+	want := strings.Trim(etag, `"`)
+	for _, v := range strings.Split(header, ",") {
+		v = strings.TrimSpace(v)
+		if v == "*" {
+			return true
+		}
+		if strings.Trim(strings.TrimPrefix(v, "W/"), `"`) == want && want != "" {
+			return true
+		}
+	}
+	return false
 }
