@@ -163,8 +163,30 @@ func (s *Service) applyVoid(ctx context.Context, sc order.Scope, eid uuid.UUID, 
 			e = e.Str("staff_id", staffID.String())
 		}
 		e.Msg("counter order voided")
+		// A void of a sent order is a manager's (money-rules.json voids):
+		// one nobody approved, by someone with limits, is stored and flagged.
+		if flags := s.voidFlags(ctx, sc, staffID, ev.ApprovedBy); len(flags) > 0 {
+			if err := s.counter.FlagMoneyEvent(ctx, sc, eid, ev.Type, "order:"+oid.String(), flags); err != nil {
+				s.logger.Warn().Ctx(ctx).Err(err).Str("order_id", oid.String()).Msg("void flag not stored")
+			}
+			s.flagged(ctx, sc, eid, ev.Type, oid.String(), flags)
+		}
 	}
 	return out, nil
+}
+
+// voidFlags: order.VoidFlags for the person main's staff table says voided
+// it (no staff service / a failed read / nobody named = no flag).
+func (s *Service) voidFlags(ctx context.Context, sc order.Scope, staffID *uuid.UUID, approvedBy string) []order.MoneyFlag {
+	if s.staff == nil || staffID == nil {
+		return nil
+	}
+	people, err := s.staff.Refunders(ctx, uuid.UUID(sc.LocationID))
+	if err != nil {
+		s.logger.Warn().Ctx(ctx).Err(err).Msg("staff for the money rules (no permission flags on this event)")
+		return nil
+	}
+	return order.VoidFlags(order.Who(people, staffID), approvedBy)
 }
 
 // applyChanged replaces a counter order's lines and money with the Pi's

@@ -11,9 +11,26 @@ import "github.com/google/uuid"
 // three: quicc-ops contract/money-rules.json (testdata/money-rules.json here,
 // a byte copy; TestMoneyRules runs every case).
 
-// FlagCompNeedsManager: a driver's comp nobody approved (a cashier or a
-// manager comps freely, the owner 2026-11-12).
+// FlagCompNeedsManager: a comp by someone with limits (a cashier, a driver)
+// that nobody approved: a comp is a manager's (the owner, 2026-11-12
+// evening; that morning a cashier comped freely). A manager or anyone main
+// made unlimited comps alone.
 const FlagCompNeedsManager = "comp_needs_manager"
+
+// FlagVoidNeedsManager: a void (or waste) of a sent counter order by
+// someone with limits that nobody approved (the owner, 2026-11-12 evening:
+// the Pi asks a manager's PIN, 403 manager_required {action: void}). The
+// call center cancels its own unpaid orders without one.
+const FlagVoidNeedsManager = "void_needs_manager"
+
+// VoidFlags are the flags main stores on an order.void: by = who voided it
+// (unknown: no flag), approvedBy = the manager the Pi says allowed it.
+func VoidFlags(by Refunder, approvedBy string) []MoneyFlag {
+	if !by.Known || by.Unlimited || by.Role == "callcenter" || approvedBy != "" {
+		return nil
+	}
+	return []MoneyFlag{{Code: FlagVoidNeedsManager, Detail: map[string]any{"role": by.Role}}}
+}
 
 // FlagCashTip: a tip on a payment that isn't a card (cash, a comp): tips are
 // card only (the owner, 2026-11-12, money-rules.json tips T01-T09). The Pi
@@ -76,8 +93,8 @@ type RuleOrder struct {
 // and each payment of an order.placed), besides the refund_of ones the
 // repository checks itself. by = who took / gave it.
 //
-// A payment: order_cancelled, overpaid; a driver's comp nobody approved:
-// comp_needs_manager; a tip on a cash / comp payment (or a tip added
+// A payment: order_cancelled, overpaid; a comp by someone with limits (a
+// cashier, a driver) nobody approved: comp_needs_manager; a tip on a cash / comp payment (or a tip added
 // afterwards to one): cash_tip, for anyone. A refund (negative): more back than the order holds →
 // refund_exceeds_paid alone (the Pi refuses it: refund_too_big); more comp
 // back than was comped → refund_exceeds_tender (refused too); else, when
@@ -116,7 +133,7 @@ func PaymentFlags(o RuleOrder, p CheckedPayment, by Refunder) []MoneyFlag {
 		if amount > 0 && paidAmount+amount > o.Total {
 			flags = append(flags, MoneyFlag{Code: FlagOverpaid, Detail: map[string]any{"paid_cents": paidAmount + amount, "total_cents": o.Total}})
 		}
-		if amount > 0 && IsCompMethod(p.Method) && limited && by.Role != "cashier" && by.Role != "manager" {
+		if amount > 0 && IsCompMethod(p.Method) && limited {
 			flags = append(flags, MoneyFlag{Code: FlagCompNeedsManager, Detail: map[string]any{"role": by.Role, "comp_cents": amount}})
 		}
 		return flags

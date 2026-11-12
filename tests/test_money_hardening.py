@@ -176,9 +176,11 @@ def test_comps_and_their_reversal_follow_the_pis_rules(store) -> None:
     """The staging page of 2026-11-12 (flow VOID D6): a cashier comped an order, then voided it, which reverses
     the comp (a negative comp payment) with nobody approving. The Pi allows it (a comp moves no money); main
     used to flag every non-cash refund by a non-manager refund_needs_manager. Now main checks the Pi's rules
-    (contract/money-rules.json R12 / R13 / C01 / C03): a comp reversal is clean at any amount, a cashier's
-    comp is clean, a driver's comp nobody approved is comp_needs_manager, and a manager's own limits are
-    ignored (max refunds $25 in cash with a $5 limit of his own: clean)."""
+    (contract/money-rules.json R12 / R13 / C01 / C03): a comp reversal is clean at any amount; a comp is a
+    manager's since the evening of 2026-11-12 (a cashier's or a driver's comp nobody approved is
+    comp_needs_manager, one a manager approved is clean); a void of a sent order nobody approved, by someone
+    with limits, is void_needs_manager (V01); and a manager's own limits are ignored (max refunds $25 in cash
+    with a $5 limit of his own: clean)."""
     mgr = store.manager_session()
     cashier = _ok(mgr.post(f"{ME}/staff", json={"first_name": "Cara", "role": "cashier", "pin": "4824"}, timeout=10), 201)
     driver = _ok(mgr.post(f"{ME}/staff", json={"first_name": "Dev", "role": "driver", "pin": "4825"}, timeout=10), 201)
@@ -192,11 +194,21 @@ def test_comps_and_their_reversal_follow_the_pis_rules(store) -> None:
     oid3 = _place(store.key, total=3000)
     cash = _pay(oid3, 3000, staff_id=cashier["id"])
     own = _pay(oid3, -2500, staff_id=boss["id"])
-    assert set(_send(store.key, [comp, back, driver_comp, cash, own]).values()) == {"applied"}
+    oid4 = _place(store.key, total=700)
+    approved = _pay(oid4, 700, "comp", staff_id=cashier["id"])
+    approved["payment"]["approved_by"] = boss["id"]
+    assert set(_send(store.key, [comp, back, driver_comp, cash, own, approved]).values()) == {"applied"}
     sub = lambda e: f"payment:{e['payment']['id']}"  # noqa: E731
-    assert _codes(mgr, sub(comp)) == set() and _codes(mgr, sub(back)) == set()
+    assert _codes(mgr, sub(comp)) == {"comp_needs_manager"} and _codes(mgr, sub(back)) == set()
     assert _codes(mgr, sub(driver_comp)) == {"comp_needs_manager"}
+    assert _codes(mgr, sub(approved)) == set()
     assert _codes(mgr, sub(own)) == set()
+    # Voids of sent orders: a cashier's with nobody approving is flagged; with a manager, or a manager's own, clean.
+    a, b, c = (_place(store.key, total=900) for _ in range(3))
+    void = lambda oid, **kw: {"event_id": str(uuid.uuid4()), "type": "order.void", "order_id": oid, "reason": "left", "at": _now(), **kw}  # noqa: E731
+    va, vb, vc = void(a, staff_id=cashier["id"]), void(b, staff_id=cashier["id"], approved_by=boss["id"]), void(c, staff_id=boss["id"])
+    assert set(_send(store.key, [va, vb, vc]).values()) == {"applied"}
+    assert _codes(mgr, f"order:{a}") == {"void_needs_manager"} and _codes(mgr, f"order:{b}") == set() and _codes(mgr, f"order:{c}") == set()
 
 
 def test_carried_over_pickup_and_the_z_check(store) -> None:

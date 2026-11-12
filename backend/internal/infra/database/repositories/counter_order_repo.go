@@ -45,6 +45,24 @@ func insertMoneyFlags(ctx context.Context, tx pgx.Tx, sc order.Scope, eventID uu
 	return nil
 }
 
+// FlagMoneyEvent stores flags for an event the floor applied through
+// another write (an order.void: the void is in, the flag says nobody with
+// the right to allowed it).
+func (r *OrderRepository) FlagMoneyEvent(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ, subject string, flags []order.MoneyFlag) error {
+	if len(flags) == 0 {
+		return nil
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	if err := insertMoneyFlags(ctx, tx, sc, eventID, typ, subject, flags); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 func flagCodes(flags []order.MoneyFlag) []string {
 	out := make([]string, 0, len(flags))
 	for _, f := range flags {

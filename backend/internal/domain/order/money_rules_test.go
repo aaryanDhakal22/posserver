@@ -52,6 +52,7 @@ type ruleTable struct {
 	Refunds        []ruleCase            `json:"refunds"`
 	GeneralRefunds []ruleCase            `json:"general_refunds"`
 	Comps          []ruleCase            `json:"comps"`
+	Voids          []ruleCase            `json:"voids"`
 	Tips           []ruleCase            `json:"tips"`
 }
 
@@ -175,6 +176,14 @@ func TestMoneyRules(t *testing.T) {
 				p := CheckedPayment{Method: "comp", Amount: Money(c.Cents), StaffID: staffOf(c.By), ApprovedBy: approvedBy}
 				return PaymentFlags(RuleOrder{Total: c.Cents}, p, Who(people, p.StaffID))
 			})
+		}
+	})
+	t.Run("voids", func(t *testing.T) {
+		for _, c := range tab.Voids {
+			if c.Main == nil {
+				continue // a sent line taken off reaches main as order.changed only
+			}
+			check(t, c, func(approvedBy string) []MoneyFlag { return VoidFlags(Who(people, staffOf(c.By)), approvedBy) })
 		}
 	})
 }

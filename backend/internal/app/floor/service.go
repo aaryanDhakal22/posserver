@@ -68,6 +68,9 @@ type event struct {
 	Kind string `json:"kind"`
 	// order.void kind waste: the store's waste reason the cashier picked
 	WasteReason string `json:"waste_reason"`
+	// order.void: the manager who allowed it (a void of a sent order is a
+	// manager's, the owner 2026-11-12 evening); "" = nobody
+	ApprovedBy string `json:"approved_by"`
 	// delivery.run (2.0.9)
 	PlanID       string          `json:"plan_id"`
 	SuggestedIDs []string        `json:"suggested_ids"`
@@ -118,6 +121,9 @@ type DeliveryRunStore interface {
 type CounterOrders interface {
 	CreateCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, co *order.CounterOrder, agentStatus []byte, batchID *int64) (string, []order.MoneyFlag, error)
 	AddCounterPayment(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, p order.CheckedPayment) (string, []order.MoneyFlag, error)
+	// FlagMoneyEvent stores flags for an event applied outside the
+	// counter-order writes (an order.void).
+	FlagMoneyEvent(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ, subject string, flags []order.MoneyFlag) error
 	ChangeCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, o *order.Order, at time.Time, flags []order.MoneyFlag, extra order.ChangeExtra) (string, []order.MoneyFlag, error)
 }
 
