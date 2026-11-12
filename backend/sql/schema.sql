@@ -2697,3 +2697,7 @@ END $goose$;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO quicc_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO quicc_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO quicc_readonly;
+
+-- 00002_printer_print_columns: a printer's print width in font-A characters
+-- (48 = 576 dots, 42 = 512, 32 = 384); the Pi lays every slip out for it.
+ALTER TABLE public.printers ADD COLUMN print_columns smallint NOT NULL DEFAULT 48 CONSTRAINT printers_print_columns_check CHECK (print_columns IN (32, 42, 48));

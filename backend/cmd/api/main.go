@@ -311,6 +311,7 @@ func main() {
 	requester.RegisterInbound(rpc.MsgAgentUpdateStatus, agentSync.HandleUpdateStatus)
 	requester.RegisterInbound(rpc.MsgPrinterMoved, agentSync.HandlePrinterMoved)
 	requester.RegisterInbound(rpc.MsgPrinterAdd, agentSync.HandlePrinterAdd)
+	requester.RegisterInbound(rpc.MsgPrinterWidth, agentSync.HandlePrinterWidth)
 	storeConfigPub := handler.NewStoreConfigPublisher(broker, tenancyService, lgr)
 	agentSync.OnPrintersChanged(storeConfigPub.Publish)
 	safego.Loop(ctx, "agentsync.redeliver", agentSync.RunRedeliver)

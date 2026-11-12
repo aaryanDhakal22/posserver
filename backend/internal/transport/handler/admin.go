@@ -103,15 +103,19 @@ type deviceJSON struct {
 }
 
 type printerJSON struct {
-	ID         string    `json:"id"`
-	TenantID   string    `json:"tenant_id"`
-	LocationID string    `json:"location_id"`
-	Name       string    `json:"name"`
-	IP         string    `json:"ip"`
-	IsReceipt  bool      `json:"is_receipt"` // the location's receipt printer (else a kitchen station)
-	MAC        string    `json:"mac"`        // hardware address the Pi learned (empty = not known yet)
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID         string `json:"id"`
+	TenantID   string `json:"tenant_id"`
+	LocationID string `json:"location_id"`
+	Name       string `json:"name"`
+	IP         string `json:"ip"`
+	IsReceipt  bool   `json:"is_receipt"` // the location's receipt printer (else a kitchen station)
+	MAC        string `json:"mac"`        // hardware address the Pi learned (empty = not known yet)
+	// PrintColumns: font-A characters per line, 48 (576 dots) | 42 (512) | 32
+	// (384). Always set for main's UI; the agent's GET /store/v1/store-config
+	// leaves the default 48 out (golden-exact for older agents).
+	PrintColumns *int      `json:"print_columns,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func toTenantJSON(t tenancy.Tenant) tenantJSON {
@@ -153,10 +157,19 @@ func toDeviceJSON(d tenancy.Device) deviceJSON {
 	}
 }
 
+// printColumns is a printer's print width as sent (48 when unset).
+func printColumns(n int) int {
+	if n == 0 {
+		return tenancy.PrintColumns80
+	}
+	return n
+}
+
 func toPrinterJSON(p tenancy.Printer) printerJSON {
+	cols := printColumns(p.PrintColumns)
 	return printerJSON{
 		ID: p.ID.String(), TenantID: p.TenantID.String(), LocationID: p.LocationID.String(),
-		Name: p.Name, IP: p.IP, IsReceipt: p.IsReceipt, MAC: p.MAC,
+		Name: p.Name, IP: p.IP, IsReceipt: p.IsReceipt, MAC: p.MAC, PrintColumns: &cols,
 		CreatedAt: p.CreatedAt, UpdatedAt: p.UpdatedAt,
 	}
 }

@@ -481,11 +481,12 @@ func (r *TenancyRepository) RevokeDevice(ctx context.Context, id uuid.UUID) erro
 func (r *TenancyRepository) CreatePrinter(ctx context.Context, tenantID, locationID uuid.UUID, name, ip, mac string) (*tenancy.Printer, error) {
 	q := models.New(r.pool)
 	row, err := q.CreatePrinter(ctx, models.CreatePrinterParams{
-		TenantID:   pgtype.UUID{Bytes: tenantID, Valid: true},
-		LocationID: pgtype.UUID{Bytes: locationID, Valid: true},
-		Name:       name,
-		IP:         ip,
-		MAC:        mac,
+		TenantID:     pgtype.UUID{Bytes: tenantID, Valid: true},
+		LocationID:   pgtype.UUID{Bytes: locationID, Valid: true},
+		Name:         name,
+		IP:           ip,
+		MAC:          mac,
+		PrintColumns: tenancy.PrintColumns80,
 	})
 	if err != nil {
 		if isUniqueViolationOn(err, printerNameKey) {
@@ -608,6 +609,18 @@ func (r *TenancyRepository) MovePrinterIP(ctx context.Context, locationID, print
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit tx: %w", err)
+	}
+	return toDomainPrinter(row), nil
+}
+
+// SetPrinterColumns sets a printer's print width (the CHECK keeps it to 48 | 42 | 32).
+func (r *TenancyRepository) SetPrinterColumns(ctx context.Context, id uuid.UUID, cols int) (*tenancy.Printer, error) {
+	row, err := models.New(r.pool).SetPrinterColumns(ctx, models.SetPrinterColumnsParams{
+		ID:           pgtype.UUID{Bytes: id, Valid: true},
+		PrintColumns: int16(cols),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("set printer columns: %w", err)
 	}
 	return toDomainPrinter(row), nil
 }
@@ -760,6 +773,8 @@ func toDomainPrinter(row models.Printer) *tenancy.Printer {
 		IP:         row.IP,
 		IsReceipt:  row.IsReceipt,
 		MAC:        row.MAC,
+
+		PrintColumns: int(row.PrintColumns),
 	}
 	if row.CreatedAt.Valid {
 		p.CreatedAt = row.CreatedAt.Time

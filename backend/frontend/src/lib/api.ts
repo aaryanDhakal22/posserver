@@ -87,9 +87,19 @@ export interface Printer {
   is_receipt: boolean;
   /** Hardware address the Pi learned ('' = not known yet) — how it follows the printer to a new IP. */
   mac?: string;
+  /** Print width in font-A characters: 48 (80 mm, 576 dots), 42 (a 72 mm print area, 512 dots) or 32
+   * (58 mm, 384 dots). The Pi lays every slip out for it. */
+  print_columns: number;
   created_at: string;
   updated_at: string;
 }
+
+/** The print widths a printer can have (printers.print_columns), widest first. */
+export const PRINT_WIDTHS: { cols: number; label: string }[] = [
+  { cols: 48, label: '80 mm — 48 characters (576 dots)' },
+  { cols: 42, label: '72 mm print area — 42 characters (512 dots)' },
+  { cols: 32, label: '58 mm — 32 characters (384 dots)' }
+];
 
 /** A printer's name as the menu shows it: items on the receipt printer print
  * only on the receipt (agent ≥ 2.0.5) unless it is the store's only printer. */

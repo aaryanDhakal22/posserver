@@ -150,6 +150,8 @@ type Repository interface {
 	// its MAC unless mac is empty), logging the change — one transaction.
 	// ErrPrinterIPChanged when the printer's IP is no longer oldIP.
 	MovePrinterIP(ctx context.Context, locationID, printerID uuid.UUID, oldIP, newIP, mac, source string) (*Printer, error)
+	// SetPrinterColumns sets a printer's print width (48 | 42 | 32).
+	SetPrinterColumns(ctx context.Context, printerID uuid.UUID, cols int) (*Printer, error)
 	// SetPrinterMAC records a printer's hardware address.
 	SetPrinterMAC(ctx context.Context, printerID uuid.UUID, mac string) error
 	// InsertPrinterIPChange logs one printer IP change.

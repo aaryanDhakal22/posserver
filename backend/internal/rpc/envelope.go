@@ -36,6 +36,8 @@ const (
 	// Printer auto-follow + found printers (2.0.6), agent → main requests.
 	MsgPrinterMoved = "printer.moved" // {printer_id, old_ip, new_ip, mac} → {applied, reason}
 	MsgPrinterAdd   = "printer.add"   // {name, ip, mac} → {ok, id, name, ip} | {ok:false, code}
+	// MsgPrinterWidth: the Pi's width test saved a printer's print width.
+	MsgPrinterWidth = "printer.width" // {printer_id, print_columns} → {ok, id, name, print_columns} | {ok:false, code}
 
 	// Delivery maps (2.0.9). order.geo: main → agent, an order's location +
 	// route + drive times ({ok} | {ok:false, code:not_found}). geo.pin /

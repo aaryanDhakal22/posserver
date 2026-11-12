@@ -164,22 +164,22 @@ UPDATE devices SET last_used_at = now() WHERE id = $1;
 -- ───────────────────────────────────────────────────────────────────────────
 
 -- name: CreatePrinter :one
-INSERT INTO printers (tenant_id, location_id, name, ip, mac)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac;
+INSERT INTO printers (tenant_id, location_id, name, ip, mac, print_columns)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns;
 
 -- name: GetPrinterByID :one
-SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 FROM printers WHERE id = $1;
 
 -- name: ListPrintersByLocation :many
-SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 FROM printers WHERE location_id = $1 ORDER BY name ASC;
 
 -- name: UpdatePrinter :one
 UPDATE printers SET name = $2, ip = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac;
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns;
 
 -- name: ClearReceiptPrinter :exec
 -- Unflag the location's current receipt printer (one per location).
@@ -189,7 +189,7 @@ WHERE location_id = $1 AND is_receipt;
 -- name: SetPrinterReceipt :one
 UPDATE printers SET is_receipt = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac;
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns;
 
 -- name: MovePrinterIP :one
 -- The Pi followed a printer to a new IP. Applied only while the printer still
@@ -200,7 +200,14 @@ SET ip = sqlc.arg(new_ip),
     mac = CASE WHEN sqlc.arg(mac)::text = '' THEN mac ELSE sqlc.arg(mac)::text END,
     updated_at = now()
 WHERE id = sqlc.arg(id) AND location_id = sqlc.arg(location_id) AND ip = sqlc.arg(old_ip)
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac;
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns;
+
+-- name: SetPrinterColumns :one
+-- The printer's print width in font-A characters (32 | 42 | 48): Store ›
+-- Printers or the Pi's width test (RPC printer.width).
+UPDATE printers SET print_columns = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns;
 
 -- name: SetPrinterMAC :exec
 UPDATE printers SET mac = $2, updated_at = now() WHERE id = $1;

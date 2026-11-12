@@ -154,7 +154,7 @@ func TestBaselineEqualsChain(t *testing.T) {
 		db   *sql.DB
 	}{{"adopted", chainDSN, chainDB}, {"baseline", baseDSN, baseDB}} {
 		st, err := ReadStatus(ctx, d.dsn)
-		if err != nil || st.Current != BaselineVersion || st.Pending != 0 {
+		if err != nil || st.Current != st.Latest || st.Current < BaselineVersion || st.Pending != 0 {
 			t.Errorf("%s: status %+v %v", d.name, st, err)
 		}
 		name, from, err := Baseline(ctx, d.db)

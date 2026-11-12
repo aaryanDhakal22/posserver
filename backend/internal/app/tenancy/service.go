@@ -742,6 +742,32 @@ func (s *Service) UpdatePrinter(ctx context.Context, id uuid.UUID, name, ip stri
 	return p, nil
 }
 
+// ErrPrinterNotHere: no such printer at this location (SetPrinterColumns).
+var ErrPrinterNotHere = errors.New("printer not found")
+
+// SetPrinterColumns sets the print width of a printer of locationID: 48, 42
+// or 32 font-A characters (tenancy.ErrBadPrintColumns otherwise,
+// ErrPrinterNotHere for another location's or an unknown printer). Store ›
+// Printers and the Pi's width test (RPC printer.width) both land here.
+func (s *Service) SetPrinterColumns(ctx context.Context, locationID, id uuid.UUID, cols int) (*tenancy.Printer, error) {
+	if !tenancy.ValidPrintColumns(cols) {
+		return nil, tenancy.ErrBadPrintColumns
+	}
+	p, err := s.repo.GetPrinterByID(ctx, id)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil, ErrPrinterNotHere
+	case err != nil:
+		return nil, err
+	case p.LocationID != locationID:
+		return nil, ErrPrinterNotHere
+	}
+	if p.PrintColumns == cols {
+		return p, nil
+	}
+	return s.repo.SetPrinterColumns(ctx, id, cols)
+}
+
 func (s *Service) DeletePrinter(ctx context.Context, id uuid.UUID) error {
 	p, err := s.repo.GetPrinterByID(ctx, id)
 	if err != nil {

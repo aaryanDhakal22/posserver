@@ -5,6 +5,7 @@
     errText,
     fmtTime,
     hhmm,
+    PRINT_WIDTHS,
     storeApi,
     timeAgo,
     type FoundPrinter,
@@ -156,6 +157,19 @@
     }
   }
 
+  // The printer's print width: every slip the Pi prints on it is laid out for it.
+  async function setWidth(p: Printer, cols: number) {
+    if (cols === (p.print_columns || 48)) return;
+    try {
+      await storeApi('/me/printers/' + p.id, { method: 'PATCH', body: JSON.stringify({ print_columns: cols }) });
+      await loadPrinters();
+      toast.success(`“${p.name}” prints ${cols} characters a line now`);
+    } catch (err) {
+      toast.error(err);
+      await loadPrinters();
+    }
+  }
+
   async function remove(p: Printer) {
     // Deleting a printer unassigns it from the menu: items fall back to their
     // category's printer, and anything left without one prints on every station.
@@ -182,7 +196,7 @@
           label: 'Undo',
           run: async () => {
             try {
-              const back = await storeApi<Printer>('/me/printers', { method: 'POST', body: JSON.stringify({ name: p.name, ip: p.ip }) });
+              const back = await storeApi<Printer>('/me/printers', { method: 'POST', body: JSON.stringify({ name: p.name, ip: p.ip, print_columns: p.print_columns || 48 }) });
               if (p.is_receipt && back?.id)
                 await storeApi('/me/printers/' + back.id, { method: 'PATCH', body: JSON.stringify({ name: p.name, ip: p.ip, is_receipt: true }) });
               await loadPrinters();
@@ -313,6 +327,20 @@
           <div class="flex flex-wrap gap-1.5 items-center min-h-[22px]">
             {#if p.is_receipt}<Badge tone="brand">Receipts</Badge>{/if}
             <span class="text-[13px] text-text2">{usageText(p)}</span>
+          </div>
+          <div>
+            <label class="lbl" for="pw-{p.id}">Paper width</label>
+            <select
+              id="pw-{p.id}"
+              class="field"
+              value={p.print_columns || 48}
+              onchange={(e) => setWidth(p, Number((e.currentTarget as HTMLSelectElement).value))}
+            >
+              {#each PRINT_WIDTHS as w (w.cols)}<option value={w.cols}>{w.label}</option>{/each}
+            </select>
+            <p class="help">
+              Most printers take 80 mm paper. If a long line wraps on this printer, run the width test on the Pi's Printers page, or pick 42.
+            </p>
           </div>
           {#if st.down}
             <p class="m-0 text-[13px] text-bad">

@@ -1527,17 +1527,18 @@ func (q *Queries) CreatePlatformKey(ctx context.Context, arg CreatePlatformKeyPa
 
 const createPrinter = `-- name: CreatePrinter :one
 
-INSERT INTO printers (tenant_id, location_id, name, ip, mac)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+INSERT INTO printers (tenant_id, location_id, name, ip, mac, print_columns)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 `
 
 type CreatePrinterParams struct {
-	TenantID   pgtype.UUID `json:"tenant_id"`
-	LocationID pgtype.UUID `json:"location_id"`
-	Name       string      `json:"name"`
-	IP         string      `json:"ip"`
-	MAC        string      `json:"mac"`
+	TenantID     pgtype.UUID `json:"tenant_id"`
+	LocationID   pgtype.UUID `json:"location_id"`
+	Name         string      `json:"name"`
+	IP           string      `json:"ip"`
+	MAC          string      `json:"mac"`
+	PrintColumns int16       `json:"print_columns"`
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1550,6 +1551,7 @@ func (q *Queries) CreatePrinter(ctx context.Context, arg CreatePrinterParams) (P
 		arg.Name,
 		arg.IP,
 		arg.MAC,
+		arg.PrintColumns,
 	)
 	var i Printer
 	err := row.Scan(
@@ -1562,6 +1564,7 @@ func (q *Queries) CreatePrinter(ctx context.Context, arg CreatePrinterParams) (P
 		&i.UpdatedAt,
 		&i.IsReceipt,
 		&i.MAC,
+		&i.PrintColumns,
 	)
 	return i, err
 }
@@ -3913,7 +3916,7 @@ func (q *Queries) GetPlacement(ctx context.Context, arg GetPlacementParams) (Ord
 }
 
 const getPrinterByID = `-- name: GetPrinterByID :one
-SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 FROM printers WHERE id = $1
 `
 
@@ -3930,6 +3933,7 @@ func (q *Queries) GetPrinterByID(ctx context.Context, id pgtype.UUID) (Printer, 
 		&i.UpdatedAt,
 		&i.IsReceipt,
 		&i.MAC,
+		&i.PrintColumns,
 	)
 	return i, err
 }
@@ -7301,7 +7305,7 @@ func (q *Queries) ListPrinterIPChanges(ctx context.Context, arg ListPrinterIPCha
 }
 
 const listPrintersByLocation = `-- name: ListPrintersByLocation :many
-SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 FROM printers WHERE location_id = $1 ORDER BY name ASC
 `
 
@@ -7324,6 +7328,7 @@ func (q *Queries) ListPrintersByLocation(ctx context.Context, locationID pgtype.
 			&i.UpdatedAt,
 			&i.IsReceipt,
 			&i.MAC,
+			&i.PrintColumns,
 		); err != nil {
 			return nil, err
 		}
@@ -8109,7 +8114,7 @@ SET ip = $1,
     mac = CASE WHEN $2::text = '' THEN mac ELSE $2::text END,
     updated_at = now()
 WHERE id = $3 AND location_id = $4 AND ip = $5
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 `
 
 type MovePrinterIPParams struct {
@@ -8142,6 +8147,7 @@ func (q *Queries) MovePrinterIP(ctx context.Context, arg MovePrinterIPParams) (P
 		&i.UpdatedAt,
 		&i.IsReceipt,
 		&i.MAC,
+		&i.PrintColumns,
 	)
 	return i, err
 }
@@ -9576,6 +9582,37 @@ func (q *Queries) SetPlacementDueAlerted(ctx context.Context, arg SetPlacementDu
 	return err
 }
 
+const setPrinterColumns = `-- name: SetPrinterColumns :one
+UPDATE printers SET print_columns = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
+`
+
+type SetPrinterColumnsParams struct {
+	ID           pgtype.UUID `json:"id"`
+	PrintColumns int16       `json:"print_columns"`
+}
+
+// The printer's print width in font-A characters (32 | 42 | 48): Store ›
+// Printers or the Pi's width test (RPC printer.width).
+func (q *Queries) SetPrinterColumns(ctx context.Context, arg SetPrinterColumnsParams) (Printer, error) {
+	row := q.db.QueryRow(ctx, setPrinterColumns, arg.ID, arg.PrintColumns)
+	var i Printer
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Name,
+		&i.IP,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IsReceipt,
+		&i.MAC,
+		&i.PrintColumns,
+	)
+	return i, err
+}
+
 const setPrinterMAC = `-- name: SetPrinterMAC :exec
 UPDATE printers SET mac = $2, updated_at = now() WHERE id = $1
 `
@@ -9593,7 +9630,7 @@ func (q *Queries) SetPrinterMAC(ctx context.Context, arg SetPrinterMACParams) er
 const setPrinterReceipt = `-- name: SetPrinterReceipt :one
 UPDATE printers SET is_receipt = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 `
 
 type SetPrinterReceiptParams struct {
@@ -9614,6 +9651,7 @@ func (q *Queries) SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptPa
 		&i.UpdatedAt,
 		&i.IsReceipt,
 		&i.MAC,
+		&i.PrintColumns,
 	)
 	return i, err
 }
@@ -10672,7 +10710,7 @@ func (q *Queries) UpdateOrderFloor(ctx context.Context, arg UpdateOrderFloorPara
 const updatePrinter = `-- name: UpdatePrinter :one
 UPDATE printers SET name = $2, ip = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 `
 
 type UpdatePrinterParams struct {
@@ -10694,6 +10732,7 @@ func (q *Queries) UpdatePrinter(ctx context.Context, arg UpdatePrinterParams) (P
 		&i.UpdatedAt,
 		&i.IsReceipt,
 		&i.MAC,
+		&i.PrintColumns,
 	)
 	return i, err
 }

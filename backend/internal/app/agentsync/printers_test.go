@@ -84,6 +84,17 @@ func (f *fakeTenancy) MovePrinterIP(_ context.Context, lid, id uuid.UUID, oldIP,
 	return nil, tenancy.ErrPrinterIPChanged
 }
 
+func (f *fakeTenancy) SetPrinterColumns(_ context.Context, id uuid.UUID, cols int) (*tenancy.Printer, error) {
+	for _, p := range f.printers {
+		if p.ID == id {
+			p.PrintColumns = cols
+			cp := *p
+			return &cp, nil
+		}
+	}
+	return nil, fmt.Errorf("set printer columns: %w", pgx.ErrNoRows)
+}
+
 type pushRecorder struct{ scopes []sseBroker.Scope }
 
 func (r *pushRecorder) push(_ context.Context, tid, lid uuid.UUID) {
@@ -175,6 +186,46 @@ func TestHandlePrinterMoved(t *testing.T) {
 	}
 	if _, err := s.HandlePrinterMoved(context.Background(), scope, json.RawMessage(`{"printer_id":"x","old_ip":"","new_ip":""}`)); !errors.Is(err, rpc.ErrBadPayload) {
 		t.Fatalf("missing ips: err = %v, want ErrBadPayload", err)
+	}
+}
+
+func TestHandlePrinterWidth(t *testing.T) {
+	s, ft, rec, scope := newPrinterService()
+	p := &tenancy.Printer{ID: uuid.New(), TenantID: scope.TenantID, LocationID: scope.LocationID, Name: "Online", IP: "10.0.0.20", PrintColumns: 48}
+	ft.printers = append(ft.printers, p)
+
+	body := fmt.Sprintf(`{"printer_id":%q,"print_columns":42}`, p.ID)
+	got := call(t, s.HandlePrinterWidth, scope, body)
+	if got["ok"] != true || got["id"] != p.ID.String() || got["name"] != "Online" || got["print_columns"] != float64(42) {
+		t.Fatalf("reply = %v", got)
+	}
+	if p.PrintColumns != 42 || len(rec.scopes) != 1 || rec.scopes[0] != scope {
+		t.Fatalf("columns=%d pushes=%v, want 42 and one store_config push", p.PrintColumns, rec.scopes)
+	}
+	// The same width again (the test run twice): ok, no second push.
+	if got := call(t, s.HandlePrinterWidth, scope, body); got["ok"] != true || len(rec.scopes) != 1 {
+		t.Fatalf("repeat reply = %v pushes=%d, want ok and no push", got, len(rec.scopes))
+	}
+
+	other := sseBroker.Scope{TenantID: scope.TenantID, LocationID: uuid.New()}
+	if got := call(t, s.HandlePrinterWidth, other, body); got["ok"] != false || got["code"] != "not_found" {
+		t.Fatalf("other location reply = %v, want not_found", got)
+	}
+	if got := call(t, s.HandlePrinterWidth, scope, fmt.Sprintf(`{"printer_id":%q,"print_columns":42}`, uuid.New())); got["code"] != "not_found" {
+		t.Fatalf("unknown printer reply = %v, want not_found", got)
+	}
+	for _, bad := range []string{
+		fmt.Sprintf(`{"printer_id":%q,"print_columns":40}`, p.ID),
+		fmt.Sprintf(`{"printer_id":%q}`, p.ID),
+		`{"printer_id":"nope","print_columns":42}`,
+		`not json`,
+	} {
+		if got := call(t, s.HandlePrinterWidth, scope, bad); got["ok"] != false || got["code"] != "bad_request" {
+			t.Errorf("%s → %v, want bad_request", bad, got)
+		}
+	}
+	if p.PrintColumns != 42 || len(rec.scopes) != 1 {
+		t.Fatalf("a refused width must change nothing (columns=%d pushes=%d)", p.PrintColumns, len(rec.scopes))
 	}
 }
 

@@ -215,6 +215,15 @@ func (p *StoreConfigPublisher) Publish(ctx context.Context, tenantID, locationID
 	p.logger.Debug().Ctx(ctx).Str("location_id", locationID.String()).Int("delivered", n).Msg("store_config pushed")
 }
 
+// wirePrintColumns is a printer's width as store_config sends it: 0 (left
+// out) for the default 48.
+func wirePrintColumns(n int) int {
+	if n == 0 || n == tenancy.PrintColumns80 {
+		return 0
+	}
+	return n
+}
+
 func buildStoreContext(t tenancy.Tenant, l tenancy.Location, printers []tenancy.Printer) sseTransport.StoreContext {
 	tCfg := t.Config
 	if tCfg == nil {
@@ -233,6 +242,8 @@ func buildStoreContext(t tenancy.Tenant, l tenancy.Location, printers []tenancy.
 			IsReceipt: p.IsReceipt,
 			MAC:       p.MAC,
 			UpdatedAt: p.UpdatedAt,
+
+			PrintColumns: wirePrintColumns(p.PrintColumns),
 		})
 	}
 	return sseTransport.StoreContext{

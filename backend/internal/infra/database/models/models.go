@@ -792,15 +792,16 @@ type PricingSetting struct {
 }
 
 type Printer struct {
-	ID         pgtype.UUID        `json:"id"`
-	TenantID   pgtype.UUID        `json:"tenant_id"`
-	LocationID pgtype.UUID        `json:"location_id"`
-	Name       string             `json:"name"`
-	IP         string             `json:"ip"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
-	IsReceipt  bool               `json:"is_receipt"`
-	MAC        string             `json:"mac"`
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	Name         string             `json:"name"`
+	IP           string             `json:"ip"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	IsReceipt    bool               `json:"is_receipt"`
+	MAC          string             `json:"mac"`
+	PrintColumns int16              `json:"print_columns"`
 }
 
 type PrinterIpChange struct {

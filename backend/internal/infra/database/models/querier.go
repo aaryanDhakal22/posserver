@@ -492,6 +492,9 @@ type Querier interface {
 	// A new radius flipped the flag: re-push the row (the worker sends order.geo).
 	SetOrderGeoOutsideArea(ctx context.Context, arg SetOrderGeoOutsideAreaParams) (int64, error)
 	SetPlacementDueAlerted(ctx context.Context, arg SetPlacementDueAlertedParams) error
+	// The printer's print width in font-A characters (32 | 42 | 48): Store ›
+	// Printers or the Pi's width test (RPC printer.width).
+	SetPrinterColumns(ctx context.Context, arg SetPrinterColumnsParams) (Printer, error)
 	SetPrinterMAC(ctx context.Context, arg SetPrinterMACParams) error
 	SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptParams) (Printer, error)
 	SetSiteDomainVerified(ctx context.Context, arg SetSiteDomainVerifiedParams) (SiteDomain, error)
