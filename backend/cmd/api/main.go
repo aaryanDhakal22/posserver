@@ -362,8 +362,11 @@ func main() {
 	// Pi's counter orders / payments / voids / journal, menu.changed pushes.
 	staffService := staffApp.NewService(repositories.NewStaffRepository(pool), broker, lgr)
 	floorService.OnCounter(repo, staffService)
+	floorService.OnStaffLimits(staffService) // M-7: refunds over a person's limit are flagged
+	floorService.SetNotifier(notifier)       // flagged money pages the owner (≤ 1/h per store)
 	// Drawers per cashier shift + the Z report (terminal Stage 2): drawer.* / z.report from the Pi.
 	dayCloseService := daycloseApp.NewService(repositories.NewDayCloseRepository(pool), repositories.NoRows, lgr)
+	dayCloseService.SetMeters(&meters) // CM-14: drawers' over / short, Z differences
 	floorService.OnDayClose(dayCloseService)
 	floorService.OnCounterPlaced(geoService.OnOrderCreated)
 	safego.Loop(ctx, "staff.watch_menus", func(ctx context.Context) { staffService.WatchMenus(ctx, menuBankRepo, broker) })
@@ -398,6 +401,7 @@ func main() {
 	}
 	cardHolds := cardholdApp.NewService(squareRepo, map[string]payment.Holder{squarepay.GatewayName: squareService.Gateway()}, repo, lgr)
 	cardHolds.SetNotifier(notifier)
+	cardHolds.SetMeters(&meters) // L-3: captures, voids, refunds, failures
 	safego.Loop(ctx, "cardhold.worker", cardHolds.Run)
 	floorService.OnCardHolds(cardHolds)
 	// Website customer accounts (weborder stage 2): phone + code sign-in.

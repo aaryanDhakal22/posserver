@@ -19,6 +19,10 @@ const (
 	FloorStale     = "stale"     // nothing newer than what main has
 	FloorNotFound  = "not_found" // no such order in the agent's scope
 	FloorInvalid   = "invalid"   // malformed / unknown status
+	// FloorConflict: a money event whose payment id / client_key / processor
+	// reference is another payment's (a different body): not stored as a
+	// payment, kept whole in money_flags (hardening M-7).
+	FloorConflict = "conflict"
 )
 
 // floorRank orders the lifecycle for forward-only application. Rejected /

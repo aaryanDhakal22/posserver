@@ -57,7 +57,7 @@ func (h *StoreStatusHandler) sErr(c *echo.Context, err error) error {
 		return c.JSON(http.StatusConflict, errCode(err.Error(), "asap_only"))
 	case errors.Is(err, storestatusApp.ErrNoteTooLong), errors.Is(err, storestatusApp.ErrBadAddress),
 		errors.Is(err, storestatus.ErrBadSettings), errors.Is(err, storestatus.ErrBadType), errors.Is(err, storestatus.ErrBadDate),
-		errors.Is(err, storestatus.ErrBadPause), errors.Is(err, storestatus.ErrBadException):
+		errors.Is(err, storestatus.ErrBadPause), errors.Is(err, storestatus.ErrBadException), errors.Is(err, storestatus.ErrBadTipCap):
 		return c.JSON(http.StatusBadRequest, errCode(err.Error(), "bad_request"))
 	}
 	h.logger.Error().Err(err).Msg("store status")
@@ -91,10 +91,14 @@ func (h *StoreStatusHandler) MeOrdering(c *echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{"settings": st, "exceptions": exc})
 }
 
-// PUT /store/v1/me/ordering {pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days}
+// PUT /store/v1/me/ordering {pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days,
+// tip_max_cents}: decoded over the saved settings, so a field left out keeps its value.
 func (h *StoreStatusHandler) MeUpdateOrdering(c *echo.Context) error {
 	tid, lid, _ := meScope(c)
-	var req storestatus.Settings
+	req, err := h.svc.Settings(c.Request().Context(), tid, lid)
+	if err != nil {
+		return h.sErr(c, err)
+	}
 	if err := echo.BindBody(c, &req); err != nil {
 		return badBody(c)
 	}

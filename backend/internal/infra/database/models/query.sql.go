@@ -141,9 +141,9 @@ func (q *Queries) CardHoldCancelled(ctx context.Context, arg CardHoldCancelledPa
 	return err
 }
 
-const cardHoldCaptured = `-- name: CardHoldCaptured :exec
+const cardHoldCaptured = `-- name: CardHoldCaptured :execrows
 UPDATE card_holds SET status = 'captured', captured_cents = $2, tip_payment_ref = $3, tip_note = $4, captured_at = now(),
-    last_error = '', updated_at = now() WHERE order_id = $1
+    last_error = '', updated_at = now() WHERE order_id = $1 AND status = 'held' AND added_tip_cents = $5
 `
 
 type CardHoldCapturedParams struct {
@@ -151,16 +151,23 @@ type CardHoldCapturedParams struct {
 	CapturedCents int64       `json:"captured_cents"`
 	TipPaymentRef string      `json:"tip_payment_ref"`
 	TipNote       string      `json:"tip_note"`
+	AddedTipCents int64       `json:"added_tip_cents"`
 }
 
-func (q *Queries) CardHoldCaptured(ctx context.Context, arg CardHoldCapturedParams) error {
-	_, err := q.db.Exec(ctx, cardHoldCaptured,
+// M-14: only the hold the worker read (still held, the added tip it saw): a
+// tip set meanwhile makes this 0 rows and the capture is looked at again.
+func (q *Queries) CardHoldCaptured(ctx context.Context, arg CardHoldCapturedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cardHoldCaptured,
 		arg.OrderID,
 		arg.CapturedCents,
 		arg.TipPaymentRef,
 		arg.TipNote,
+		arg.AddedTipCents,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const cardHoldFailed = `-- name: CardHoldFailed :exec
@@ -303,8 +310,12 @@ UPDATE card_holds SET next_try_at = now() + interval '2 minutes', updated_at = n
 WHERE order_id IN (
     SELECT h.order_id FROM card_holds h
     WHERE h.status = 'held' AND h.next_try_at <= now() AND (h.due_at <= now() OR h.capture_requested_at IS NOT NULL)
+      -- M-3: never capture a hold whose order was cancelled / rejected or
+      -- whose void is owed (the cancel worker releases those).
+      AND h.cancel_requested_at IS NULL
+      AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = h.order_id AND o.status IN ('cancelled', 'rejected'))
     ORDER BY h.next_try_at LIMIT $1 FOR UPDATE SKIP LOCKED)
-RETURNING order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at
+RETURNING order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at, payment_id, cancel_requested_at, refund_requested_at, refunded_cents, refund_ref, tip_payment_id
 `
 
 // Holds to capture now (asked for, or past their safety time), leased for
@@ -341,6 +352,12 @@ func (q *Queries) ClaimCardHolds(ctx context.Context, limit int32) ([]CardHold, 
 			&i.CancelledAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PaymentID,
+			&i.CancelRequestedAt,
+			&i.RefundRequestedAt,
+			&i.RefundedCents,
+			&i.RefundRef,
+			&i.TipPaymentID,
 		); err != nil {
 			return nil, err
 		}
@@ -462,7 +479,7 @@ func (q *Queries) ClearSitePrimary(ctx context.Context, locationID pgtype.UUID) 
 const clearStorePause = `-- name: ClearStorePause :one
 UPDATE store_ordering SET paused_at = NULL, paused_until = NULL, pause_note = '', updated_at = now()
 WHERE location_id = $1
-RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at
+RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at, tip_max_cents
 `
 
 func (q *Queries) ClearStorePause(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error) {
@@ -481,6 +498,7 @@ func (q *Queries) ClearStorePause(ctx context.Context, locationID pgtype.UUID) (
 		&i.PauseNote,
 		&i.RestockedAt,
 		&i.UpdatedAt,
+		&i.TipMaxCents,
 	)
 	return i, err
 }
@@ -1579,9 +1597,9 @@ func (q *Queries) CreateStatusEvent(ctx context.Context, arg CreateStatusEventPa
 
 const createTenant = `-- name: CreateTenant :one
 
-INSERT INTO tenants (slug, name, username, password_hash, store_id)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, slug, name, config, username, password_hash, created_at, store_id
+INSERT INTO tenants (slug, name, username, password_hash, store_id, test_store)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at
 `
 
 type CreateTenantParams struct {
@@ -1590,6 +1608,7 @@ type CreateTenantParams struct {
 	Username     pgtype.Text `json:"username"`
 	PasswordHash pgtype.Text `json:"password_hash"`
 	StoreID      pgtype.Int8 `json:"store_id"`
+	TestStore    bool        `json:"test_store"`
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1605,6 +1624,7 @@ func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) (Ten
 		arg.Username,
 		arg.PasswordHash,
 		arg.StoreID,
+		arg.TestStore,
 	)
 	var i Tenant
 	err := row.Scan(
@@ -1616,6 +1636,8 @@ func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) (Ten
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.StoreID,
+		&i.TestStore,
+		&i.RetiredAt,
 	)
 	return i, err
 }
@@ -2579,7 +2601,7 @@ func (q *Queries) GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKPara
 }
 
 const getCardHold = `-- name: GetCardHold :one
-SELECT order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at FROM card_holds WHERE order_id = $1
+SELECT order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at, payment_id, cancel_requested_at, refund_requested_at, refunded_cents, refund_ref, tip_payment_id FROM card_holds WHERE order_id = $1
 `
 
 func (q *Queries) GetCardHold(ctx context.Context, orderID pgtype.UUID) (CardHold, error) {
@@ -2608,12 +2630,18 @@ func (q *Queries) GetCardHold(ctx context.Context, orderID pgtype.UUID) (CardHol
 		&i.CancelledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PaymentID,
+		&i.CancelRequestedAt,
+		&i.RefundRequestedAt,
+		&i.RefundedCents,
+		&i.RefundRef,
+		&i.TipPaymentID,
 	)
 	return i, err
 }
 
 const getCardHoldByRef = `-- name: GetCardHoldByRef :one
-SELECT order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at FROM card_holds WHERE location_id = $1 AND payment_ref = $2
+SELECT order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at, payment_id, cancel_requested_at, refund_requested_at, refunded_cents, refund_ref, tip_payment_id FROM card_holds WHERE location_id = $1 AND payment_ref = $2
 `
 
 type GetCardHoldByRefParams struct {
@@ -2647,6 +2675,12 @@ func (q *Queries) GetCardHoldByRef(ctx context.Context, arg GetCardHoldByRefPara
 		&i.CancelledAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.PaymentID,
+		&i.CancelRequestedAt,
+		&i.RefundRequestedAt,
+		&i.RefundedCents,
+		&i.RefundRef,
+		&i.TipPaymentID,
 	)
 	return i, err
 }
@@ -3392,7 +3426,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2 AND source = $3 AND source_event_id = $4
 `
@@ -3450,6 +3485,12 @@ func (q *Queries) GetOrderBySourceEventInScope(ctx context.Context, arg GetOrder
 		&i.AgentStatus,
 		&i.AgentStatusAt,
 		&i.AgentBatchID,
+		&i.DeliveryFeeCents,
+		&i.DriverFeeCents,
+		&i.ServiceFeeCents,
+		&i.CardFeeCents,
+		&i.DiscountCents,
+		&i.MoneyChangedAt,
 	)
 	return i, err
 }
@@ -3545,7 +3586,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE id = $1 AND tenant_id = $2 AND location_id = $3
 `
@@ -3599,6 +3641,12 @@ func (q *Queries) GetOrderInScope(ctx context.Context, arg GetOrderInScopeParams
 		&i.AgentStatus,
 		&i.AgentStatusAt,
 		&i.AgentBatchID,
+		&i.DeliveryFeeCents,
+		&i.DriverFeeCents,
+		&i.ServiceFeeCents,
+		&i.CardFeeCents,
+		&i.DiscountCents,
+		&i.MoneyChangedAt,
 	)
 	return i, err
 }
@@ -3611,7 +3659,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE id = $1 AND tenant_id = $2 AND location_id = $3
 FOR UPDATE
@@ -3666,6 +3715,12 @@ func (q *Queries) GetOrderInScopeForUpdate(ctx context.Context, arg GetOrderInSc
 		&i.AgentStatus,
 		&i.AgentStatusAt,
 		&i.AgentBatchID,
+		&i.DeliveryFeeCents,
+		&i.DriverFeeCents,
+		&i.ServiceFeeCents,
+		&i.CardFeeCents,
+		&i.DiscountCents,
+		&i.MoneyChangedAt,
 	)
 	return i, err
 }
@@ -3678,7 +3733,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2
 ORDER BY received_at DESC
@@ -3744,6 +3800,12 @@ func (q *Queries) GetOrdersPageInScope(ctx context.Context, arg GetOrdersPageInS
 			&i.AgentStatus,
 			&i.AgentStatusAt,
 			&i.AgentBatchID,
+			&i.DeliveryFeeCents,
+			&i.DriverFeeCents,
+			&i.ServiceFeeCents,
+			&i.CardFeeCents,
+			&i.DiscountCents,
+			&i.MoneyChangedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -4004,7 +4066,7 @@ func (q *Queries) GetStatusEventsByOrderID(ctx context.Context, orderID pgtype.U
 }
 
 const getStoreOrdering = `-- name: GetStoreOrdering :one
-SELECT location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at FROM store_ordering WHERE location_id = $1
+SELECT location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at, tip_max_cents FROM store_ordering WHERE location_id = $1
 `
 
 func (q *Queries) GetStoreOrdering(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error) {
@@ -4023,6 +4085,7 @@ func (q *Queries) GetStoreOrdering(ctx context.Context, locationID pgtype.UUID) 
 		&i.PauseNote,
 		&i.RestockedAt,
 		&i.UpdatedAt,
+		&i.TipMaxCents,
 	)
 	return i, err
 }
@@ -4073,7 +4136,7 @@ func (q *Queries) GetTenantAuthByUsername(ctx context.Context, username pgtype.T
 }
 
 const getTenantByID = `-- name: GetTenantByID :one
-SELECT id, slug, name, config, username, password_hash, created_at, store_id FROM tenants WHERE id = $1
+SELECT id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at FROM tenants WHERE id = $1
 `
 
 func (q *Queries) GetTenantByID(ctx context.Context, id pgtype.UUID) (Tenant, error) {
@@ -4088,12 +4151,14 @@ func (q *Queries) GetTenantByID(ctx context.Context, id pgtype.UUID) (Tenant, er
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.StoreID,
+		&i.TestStore,
+		&i.RetiredAt,
 	)
 	return i, err
 }
 
 const getTenantByStoreID = `-- name: GetTenantByStoreID :one
-SELECT id, slug, name, config, username, password_hash, created_at, store_id FROM tenants WHERE store_id = $1
+SELECT id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at FROM tenants WHERE store_id = $1 AND retired_at IS NULL
 `
 
 // Order routing: the external vendor's store_id → tenant (see app/tenancy.ResolveStore).
@@ -4109,6 +4174,8 @@ func (q *Queries) GetTenantByStoreID(ctx context.Context, storeID pgtype.Int8) (
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.StoreID,
+		&i.TestStore,
+		&i.RetiredAt,
 	)
 	return i, err
 }
@@ -4967,6 +5034,18 @@ func (q *Queries) LatestChannelEvent(ctx context.Context, channelID pgtype.UUID)
 	return column_1, err
 }
 
+const linkCardHoldPayment = `-- name: LinkCardHoldPayment :exec
+UPDATE card_holds h SET payment_id = (
+    SELECT p.id FROM payments p WHERE p.order_id = h.order_id AND p.processor = 'card' ORDER BY p.id LIMIT 1)
+WHERE h.order_id = $1
+`
+
+// The hold's own payment row (M-4), written in the order's transaction.
+func (q *Queries) LinkCardHoldPayment(ctx context.Context, orderID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, linkCardHoldPayment, orderID)
+	return err
+}
+
 const listAddressesOfCustomers = `-- name: ListAddressesOfCustomers :many
 SELECT id, customer_id, label, line1, line2, city, state, zip, notes, is_default, created_at FROM customer_addresses WHERE customer_id = ANY($1::uuid[]) ORDER BY customer_id, is_default DESC, created_at
 `
@@ -5266,7 +5345,7 @@ func (q *Queries) ListAppReleases(ctx context.Context, app string) ([]ListAppRel
 }
 
 const listCardHolds = `-- name: ListCardHolds :many
-SELECT order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at FROM card_holds WHERE location_id = $1 ORDER BY created_at DESC LIMIT $2
+SELECT order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at, payment_id, cancel_requested_at, refund_requested_at, refunded_cents, refund_ref, tip_payment_id FROM card_holds WHERE location_id = $1 ORDER BY created_at DESC LIMIT $2
 `
 
 type ListCardHoldsParams struct {
@@ -5306,6 +5385,12 @@ func (q *Queries) ListCardHolds(ctx context.Context, arg ListCardHoldsParams) ([
 			&i.CancelledAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PaymentID,
+			&i.CancelRequestedAt,
+			&i.RefundRequestedAt,
+			&i.RefundedCents,
+			&i.RefundRef,
+			&i.TipPaymentID,
 		); err != nil {
 			return nil, err
 		}
@@ -5318,7 +5403,7 @@ func (q *Queries) ListCardHolds(ctx context.Context, arg ListCardHoldsParams) ([
 }
 
 const listCardHoldsWithOrders = `-- name: ListCardHoldsWithOrders :many
-SELECT h.order_id, h.tenant_id, h.location_id, h.gateway, h.payment_ref, h.amount_cents, h.tip_cents, h.added_tip_cents, h.status, h.capture_reason, h.due_at, h.capture_requested_at, h.next_try_at, h.attempts, h.last_error, h.captured_cents, h.tip_payment_ref, h.tip_note, h.captured_at, h.cancelled_at, h.created_at, h.updated_at, o.customer_display_name, o.fulfillment_type, o.placed_at, o.status AS order_status
+SELECT h.order_id, h.tenant_id, h.location_id, h.gateway, h.payment_ref, h.amount_cents, h.tip_cents, h.added_tip_cents, h.status, h.capture_reason, h.due_at, h.capture_requested_at, h.next_try_at, h.attempts, h.last_error, h.captured_cents, h.tip_payment_ref, h.tip_note, h.captured_at, h.cancelled_at, h.created_at, h.updated_at, h.payment_id, h.cancel_requested_at, h.refund_requested_at, h.refunded_cents, h.refund_ref, h.tip_payment_id, o.customer_display_name, o.fulfillment_type, o.placed_at, o.status AS order_status
 FROM card_holds h JOIN orders o ON o.id = h.order_id
 WHERE h.location_id = $1 AND ($3::text IS NULL OR h.status = $3)
 ORDER BY h.created_at DESC LIMIT $2
@@ -5353,6 +5438,12 @@ type ListCardHoldsWithOrdersRow struct {
 	CancelledAt         pgtype.Timestamptz `json:"cancelled_at"`
 	CreatedAt           pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	PaymentID           pgtype.UUID        `json:"payment_id"`
+	CancelRequestedAt   pgtype.Timestamptz `json:"cancel_requested_at"`
+	RefundRequestedAt   pgtype.Timestamptz `json:"refund_requested_at"`
+	RefundedCents       int64              `json:"refunded_cents"`
+	RefundRef           string             `json:"refund_ref"`
+	TipPaymentID        pgtype.UUID        `json:"tip_payment_id"`
 	CustomerDisplayName string             `json:"customer_display_name"`
 	FulfillmentType     string             `json:"fulfillment_type"`
 	PlacedAt            pgtype.Timestamptz `json:"placed_at"`
@@ -5392,6 +5483,12 @@ func (q *Queries) ListCardHoldsWithOrders(ctx context.Context, arg ListCardHolds
 			&i.CancelledAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.PaymentID,
+			&i.CancelRequestedAt,
+			&i.RefundRequestedAt,
+			&i.RefundedCents,
+			&i.RefundRef,
+			&i.TipPaymentID,
 			&i.CustomerDisplayName,
 			&i.FulfillmentType,
 			&i.PlacedAt,
@@ -7703,7 +7800,7 @@ func (q *Queries) ListTabletTokens(ctx context.Context, locationID pgtype.UUID) 
 }
 
 const listTenants = `-- name: ListTenants :many
-SELECT id, slug, name, config, username, password_hash, created_at, store_id FROM tenants ORDER BY created_at ASC
+SELECT id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at FROM tenants ORDER BY created_at ASC
 `
 
 func (q *Queries) ListTenants(ctx context.Context) ([]Tenant, error) {
@@ -7724,6 +7821,8 @@ func (q *Queries) ListTenants(ctx context.Context) ([]Tenant, error) {
 			&i.PasswordHash,
 			&i.CreatedAt,
 			&i.StoreID,
+			&i.TestStore,
+			&i.RetiredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -8253,7 +8352,7 @@ func (q *Queries) QueueFinalReceipt(ctx context.Context, orderID pgtype.UUID) (i
 const requestCardHoldCapture = `-- name: RequestCardHoldCapture :execrows
 UPDATE card_holds SET capture_requested_at = COALESCE(capture_requested_at, now()),
     capture_reason = CASE WHEN capture_reason = '' THEN $3 ELSE capture_reason END, next_try_at = LEAST(next_try_at, now()), updated_at = now()
-WHERE location_id = $1 AND order_id = ANY($2::uuid[]) AND status = 'held'
+WHERE location_id = $1 AND order_id = ANY($2::uuid[]) AND status = 'held' AND cancel_requested_at IS NULL
 `
 
 type RequestCardHoldCaptureParams struct {
@@ -8275,7 +8374,7 @@ UPDATE card_holds h SET capture_requested_at = COALESCE(h.capture_requested_at, 
     capture_reason = CASE WHEN h.capture_reason = '' THEN 'batch_close' ELSE h.capture_reason END,
     next_try_at = LEAST(h.next_try_at, now()), updated_at = now()
 FROM orders o
-WHERE o.id = h.order_id AND h.location_id = $1 AND h.status = 'held' AND o.agent_batch_id = $2
+WHERE o.id = h.order_id AND h.location_id = $1 AND h.status = 'held' AND h.cancel_requested_at IS NULL AND o.agent_batch_id = $2
 `
 
 type RequestCardHoldCaptureForBatchParams struct {
@@ -8295,7 +8394,7 @@ const requestCardHoldCaptureForDriver = `-- name: RequestCardHoldCaptureForDrive
 UPDATE card_holds h SET capture_requested_at = COALESCE(h.capture_requested_at, now()),
     capture_reason = CASE WHEN h.capture_reason = '' THEN 'clock_out' ELSE h.capture_reason END,
     next_try_at = LEAST(h.next_try_at, now()), updated_at = now()
-WHERE h.location_id = $1 AND h.status = 'held' AND h.order_id::text IN (
+WHERE h.location_id = $1 AND h.status = 'held' AND h.cancel_requested_at IS NULL AND h.order_id::text IN (
     SELECT jsonb_array_elements_text(r.sent_ids) FROM delivery_runs r
     WHERE r.location_id = $1 AND r.driver_id = $2 AND r.at >= $3 AND r.at <= $4)
 `
@@ -8715,7 +8814,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2
   AND ($3::text = '' OR customer_display_name ILIKE '%' || $3 || '%'
@@ -8803,6 +8903,12 @@ func (q *Queries) SearchOrdersInScope(ctx context.Context, arg SearchOrdersInSco
 			&i.AgentStatus,
 			&i.AgentStatusAt,
 			&i.AgentBatchID,
+			&i.DeliveryFeeCents,
+			&i.DriverFeeCents,
+			&i.ServiceFeeCents,
+			&i.CardFeeCents,
+			&i.DiscountCents,
+			&i.MoneyChangedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -8815,7 +8921,8 @@ func (q *Queries) SearchOrdersInScope(ctx context.Context, arg SearchOrdersInSco
 }
 
 const setCardHoldAddedTip = `-- name: SetCardHoldAddedTip :execrows
-UPDATE card_holds SET added_tip_cents = $3, updated_at = now() WHERE location_id = $1 AND order_id = $2 AND status = 'held'
+UPDATE card_holds SET added_tip_cents = $3, updated_at = now()
+WHERE location_id = $1 AND order_id = $2 AND status = 'held' AND cancel_requested_at IS NULL
 `
 
 type SetCardHoldAddedTipParams struct {
@@ -9381,22 +9488,25 @@ func (q *Queries) SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStat
 }
 
 const setOrderCardPayment = `-- name: SetOrderCardPayment :exec
-UPDATE payments SET status = $2, amount_cents = $3, captured_at = $4 WHERE order_id = $1 AND processor = 'card'
+UPDATE payments SET status = $2, amount_cents = $3, tip_cents = $4, captured_at = $5 WHERE id = $1
 `
 
 type SetOrderCardPaymentParams struct {
-	OrderID     pgtype.UUID        `json:"order_id"`
+	ID          pgtype.UUID        `json:"id"`
 	Status      string             `json:"status"`
 	AmountCents int64              `json:"amount_cents"`
+	TipCents    int64              `json:"tip_cents"`
 	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
 }
 
-// The order's card payment row follows its hold (authorized → captured / refunded).
+// The hold's own payment row follows it (authorized → captured / voided);
+// M-4: by the payment's id, never every card row of the order.
 func (q *Queries) SetOrderCardPayment(ctx context.Context, arg SetOrderCardPaymentParams) error {
 	_, err := q.db.Exec(ctx, setOrderCardPayment,
-		arg.OrderID,
+		arg.ID,
 		arg.Status,
 		arg.AmountCents,
+		arg.TipCents,
 		arg.CapturedAt,
 	)
 	return err
@@ -9568,7 +9678,7 @@ func (q *Queries) SetSquareLocation(ctx context.Context, arg SetSquareLocationPa
 const setStorePause = `-- name: SetStorePause :one
 UPDATE store_ordering SET paused_at = $2, paused_until = $3, pause_note = $4, updated_at = now()
 WHERE location_id = $1
-RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at
+RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at, tip_max_cents
 `
 
 type SetStorePauseParams struct {
@@ -9599,6 +9709,7 @@ func (q *Queries) SetStorePause(ctx context.Context, arg SetStorePauseParams) (S
 		&i.PauseNote,
 		&i.RestockedAt,
 		&i.UpdatedAt,
+		&i.TipMaxCents,
 	)
 	return i, err
 }
@@ -9635,7 +9746,7 @@ func (q *Queries) SetTenantCredentials(ctx context.Context, arg SetTenantCredent
 
 const setTenantStoreID = `-- name: SetTenantStoreID :one
 UPDATE tenants SET store_id = $2 WHERE id = $1
-RETURNING id, slug, name, config, username, password_hash, created_at, store_id
+RETURNING id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at
 `
 
 type SetTenantStoreIDParams struct {
@@ -9656,6 +9767,8 @@ func (q *Queries) SetTenantStoreID(ctx context.Context, arg SetTenantStoreIDPara
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.StoreID,
+		&i.TestStore,
+		&i.RetiredAt,
 	)
 	return i, err
 }
@@ -10578,9 +10691,9 @@ func (q *Queries) UpdateSquareTokens(ctx context.Context, arg UpdateSquareTokens
 
 const updateStoreOrdering = `-- name: UpdateStoreOrdering :one
 UPDATE store_ordering SET pickup_enabled = $2, delivery_enabled = $3, pickup_eta_minutes = $4,
-       delivery_eta_minutes = $5, schedule_days = $6, updated_at = now()
+       delivery_eta_minutes = $5, schedule_days = $6, tip_max_cents = $7, updated_at = now()
 WHERE location_id = $1
-RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at
+RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at, tip_max_cents
 `
 
 type UpdateStoreOrderingParams struct {
@@ -10590,6 +10703,7 @@ type UpdateStoreOrderingParams struct {
 	PickupEtaMinutes   int32       `json:"pickup_eta_minutes"`
 	DeliveryEtaMinutes int32       `json:"delivery_eta_minutes"`
 	ScheduleDays       int32       `json:"schedule_days"`
+	TipMaxCents        int64       `json:"tip_max_cents"`
 }
 
 func (q *Queries) UpdateStoreOrdering(ctx context.Context, arg UpdateStoreOrderingParams) (StoreOrdering, error) {
@@ -10600,6 +10714,7 @@ func (q *Queries) UpdateStoreOrdering(ctx context.Context, arg UpdateStoreOrderi
 		arg.PickupEtaMinutes,
 		arg.DeliveryEtaMinutes,
 		arg.ScheduleDays,
+		arg.TipMaxCents,
 	)
 	var i StoreOrdering
 	err := row.Scan(
@@ -10615,13 +10730,14 @@ func (q *Queries) UpdateStoreOrdering(ctx context.Context, arg UpdateStoreOrderi
 		&i.PauseNote,
 		&i.RestockedAt,
 		&i.UpdatedAt,
+		&i.TipMaxCents,
 	)
 	return i, err
 }
 
 const updateTenantConfig = `-- name: UpdateTenantConfig :one
 UPDATE tenants SET config = $2 WHERE id = $1
-RETURNING id, slug, name, config, username, password_hash, created_at, store_id
+RETURNING id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at
 `
 
 type UpdateTenantConfigParams struct {
@@ -10641,6 +10757,8 @@ func (q *Queries) UpdateTenantConfig(ctx context.Context, arg UpdateTenantConfig
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.StoreID,
+		&i.TestStore,
+		&i.RetiredAt,
 	)
 	return i, err
 }

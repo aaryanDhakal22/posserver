@@ -6,12 +6,12 @@
 -- username/password_hash are optional (sqlc.narg → NULL when absent) so admin
 -- can still create credential-less tenants. Full-column RETURNING keeps sqlc
 -- mapping to the models.Tenant table struct (see toDomainTenant).
-INSERT INTO tenants (slug, name, username, password_hash, store_id)
-VALUES ($1, $2, sqlc.narg('username'), sqlc.narg('password_hash'), sqlc.narg('store_id'))
-RETURNING id, slug, name, config, username, password_hash, created_at, store_id;
+INSERT INTO tenants (slug, name, username, password_hash, store_id, test_store)
+VALUES ($1, $2, sqlc.narg('username'), sqlc.narg('password_hash'), sqlc.narg('store_id'), sqlc.arg('test_store'))
+RETURNING id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at;
 
 -- name: GetTenantByID :one
-SELECT id, slug, name, config, username, password_hash, created_at, store_id FROM tenants WHERE id = $1;
+SELECT id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at FROM tenants WHERE id = $1;
 
 -- name: GetTenantAuthByUsername :one
 -- Login lookup: tenant id + stored password hash for a username.
@@ -22,20 +22,20 @@ SELECT id, password_hash FROM tenants WHERE username = $1;
 UPDATE tenants SET username = $2, password_hash = $3 WHERE id = $1;
 
 -- name: ListTenants :many
-SELECT id, slug, name, config, username, password_hash, created_at, store_id FROM tenants ORDER BY created_at ASC;
+SELECT id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at FROM tenants ORDER BY created_at ASC;
 
 -- name: GetTenantByStoreID :one
 -- Order routing: the external vendor's store_id → tenant (see app/tenancy.ResolveStore).
-SELECT id, slug, name, config, username, password_hash, created_at, store_id FROM tenants WHERE store_id = $1;
+SELECT id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at FROM tenants WHERE store_id = $1 AND retired_at IS NULL;
 
 -- name: SetTenantStoreID :one
 -- Set/clear (NULL) a tenant's vendor store_id. Unique when present.
 UPDATE tenants SET store_id = sqlc.narg('store_id') WHERE id = $1
-RETURNING id, slug, name, config, username, password_hash, created_at, store_id;
+RETURNING id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at;
 
 -- name: UpdateTenantConfig :one
 UPDATE tenants SET config = $2 WHERE id = $1
-RETURNING id, slug, name, config, username, password_hash, created_at, store_id;
+RETURNING id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at;
 
 -- name: DeleteTenantOutboxEvents :exec
 DELETE FROM outbox_events WHERE tenant_id = $1;
@@ -287,7 +287,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE id = $1 AND tenant_id = $2 AND location_id = $3;
 
@@ -301,7 +302,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE id = $1 AND tenant_id = $2 AND location_id = $3
 FOR UPDATE;
@@ -314,7 +316,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2 AND source = $3 AND source_event_id = $4;
 
@@ -326,7 +329,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2
 ORDER BY received_at DESC
@@ -345,7 +349,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE tenant_id = sqlc.arg('tenant_id') AND location_id = sqlc.arg('location_id')
   AND (sqlc.arg('q')::text = '' OR customer_display_name ILIKE '%' || sqlc.arg('q') || '%'
@@ -1361,7 +1366,7 @@ SELECT * FROM store_ordering WHERE location_id = $1;
 
 -- name: UpdateStoreOrdering :one
 UPDATE store_ordering SET pickup_enabled = $2, delivery_enabled = $3, pickup_eta_minutes = $4,
-       delivery_eta_minutes = $5, schedule_days = $6, updated_at = now()
+       delivery_eta_minutes = $5, schedule_days = $6, tip_max_cents = $7, updated_at = now()
 WHERE location_id = $1
 RETURNING *;
 
@@ -1642,36 +1647,43 @@ UPDATE card_holds SET next_try_at = now() + interval '2 minutes', updated_at = n
 WHERE order_id IN (
     SELECT h.order_id FROM card_holds h
     WHERE h.status = 'held' AND h.next_try_at <= now() AND (h.due_at <= now() OR h.capture_requested_at IS NOT NULL)
+      -- M-3: never capture a hold whose order was cancelled / rejected or
+      -- whose void is owed (the cancel worker releases those).
+      AND h.cancel_requested_at IS NULL
+      AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = h.order_id AND o.status IN ('cancelled', 'rejected'))
     ORDER BY h.next_try_at LIMIT $1 FOR UPDATE SKIP LOCKED)
 RETURNING *;
 
 -- name: RequestCardHoldCapture :execrows
 UPDATE card_holds SET capture_requested_at = COALESCE(capture_requested_at, now()),
     capture_reason = CASE WHEN capture_reason = '' THEN $3 ELSE capture_reason END, next_try_at = LEAST(next_try_at, now()), updated_at = now()
-WHERE location_id = $1 AND order_id = ANY($2::uuid[]) AND status = 'held';
+WHERE location_id = $1 AND order_id = ANY($2::uuid[]) AND status = 'held' AND cancel_requested_at IS NULL;
 
 -- name: RequestCardHoldCaptureForBatch :execrows
 UPDATE card_holds h SET capture_requested_at = COALESCE(h.capture_requested_at, now()),
     capture_reason = CASE WHEN h.capture_reason = '' THEN 'batch_close' ELSE h.capture_reason END,
     next_try_at = LEAST(h.next_try_at, now()), updated_at = now()
 FROM orders o
-WHERE o.id = h.order_id AND h.location_id = $1 AND h.status = 'held' AND o.agent_batch_id = $2;
+WHERE o.id = h.order_id AND h.location_id = $1 AND h.status = 'held' AND h.cancel_requested_at IS NULL AND o.agent_batch_id = $2;
 
 -- name: RequestCardHoldCaptureForDriver :execrows
 -- A driver clocked out: their deliveries sent between clock-in and clock-out.
 UPDATE card_holds h SET capture_requested_at = COALESCE(h.capture_requested_at, now()),
     capture_reason = CASE WHEN h.capture_reason = '' THEN 'clock_out' ELSE h.capture_reason END,
     next_try_at = LEAST(h.next_try_at, now()), updated_at = now()
-WHERE h.location_id = $1 AND h.status = 'held' AND h.order_id::text IN (
+WHERE h.location_id = $1 AND h.status = 'held' AND h.cancel_requested_at IS NULL AND h.order_id::text IN (
     SELECT jsonb_array_elements_text(r.sent_ids) FROM delivery_runs r
     WHERE r.location_id = $1 AND r.driver_id = $2 AND r.at >= $3 AND r.at <= $4);
 
 -- name: SetCardHoldAddedTip :execrows
-UPDATE card_holds SET added_tip_cents = $3, updated_at = now() WHERE location_id = $1 AND order_id = $2 AND status = 'held';
+UPDATE card_holds SET added_tip_cents = $3, updated_at = now()
+WHERE location_id = $1 AND order_id = $2 AND status = 'held' AND cancel_requested_at IS NULL;
 
--- name: CardHoldCaptured :exec
+-- name: CardHoldCaptured :execrows
+-- M-14: only the hold the worker read (still held, the added tip it saw): a
+-- tip set meanwhile makes this 0 rows and the capture is looked at again.
 UPDATE card_holds SET status = 'captured', captured_cents = $2, tip_payment_ref = $3, tip_note = $4, captured_at = now(),
-    last_error = '', updated_at = now() WHERE order_id = $1;
+    last_error = '', updated_at = now() WHERE order_id = $1 AND status = 'held' AND added_tip_cents = $5;
 
 -- name: CardHoldCancelled :exec
 UPDATE card_holds SET status = 'cancelled', cancelled_at = now(), last_error = $2, updated_at = now() WHERE order_id = $1;
@@ -1683,8 +1695,15 @@ UPDATE card_holds SET attempts = attempts + 1, next_try_at = $2, last_error = $3
 UPDATE card_holds SET status = 'failed', attempts = attempts + 1, last_error = $2, updated_at = now() WHERE order_id = $1;
 
 -- name: SetOrderCardPayment :exec
--- The order's card payment row follows its hold (authorized → captured / refunded).
-UPDATE payments SET status = $2, amount_cents = $3, captured_at = $4 WHERE order_id = $1 AND processor = 'card';
+-- The hold's own payment row follows it (authorized → captured / voided);
+-- M-4: by the payment's id, never every card row of the order.
+UPDATE payments SET status = $2, amount_cents = $3, tip_cents = $4, captured_at = $5 WHERE id = $1;
+
+-- name: LinkCardHoldPayment :exec
+-- The hold's own payment row (M-4), written in the order's transaction.
+UPDATE card_holds h SET payment_id = (
+    SELECT p.id FROM payments p WHERE p.order_id = h.order_id AND p.processor = 'card' ORDER BY p.id LIMIT 1)
+WHERE h.order_id = $1;
 
 -- name: GetCardHoldByRef :one
 SELECT * FROM card_holds WHERE location_id = $1 AND payment_ref = $2;

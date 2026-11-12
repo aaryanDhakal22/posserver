@@ -27,6 +27,26 @@ type CreateTenantParams struct {
 	Slug, Name, Username, PasswordHash string
 	StoreID                            *int64
 	LocationSlug, Timezone             string
+	TestStore                          bool
+}
+
+// ErrHasMoney: the store (or order) holds money records (payments, card
+// holds, drawers, Z reports, the staff journal) and isn't a test store:
+// retire the store instead of deleting it (S-1).
+var ErrHasMoney = errors.New("this store has money records: retire it instead of deleting it")
+
+// MoneyRecords counts what a delete would take with it.
+type MoneyRecords struct {
+	Payments  int64 `json:"payments"`
+	CardHolds int64 `json:"card_holds"`
+	Drawers   int64 `json:"drawers"`
+	ZReports  int64 `json:"z_reports"`
+	Journal   int64 `json:"journal"`
+}
+
+// Any reports whether there is anything.
+func (m MoneyRecords) Any() bool {
+	return m.Payments+m.CardHolds+m.Drawers+m.ZReports+m.Journal > 0
 }
 
 // CreateDeviceParams is what the service hands the repo on mint. KeyHash is
@@ -89,6 +109,11 @@ type Repository interface {
 	// devices, locations, then the tenant itself. All in one transaction.
 	// Used by the admin endpoint + the project-level test suite's teardown.
 	DeleteTenantCascade(ctx context.Context, id uuid.UUID) error
+	// TenantMoneyRecords counts the store's money records (S-1).
+	TenantMoneyRecords(ctx context.Context, id uuid.UUID) (MoneyRecords, error)
+	// RetireTenant marks the store retired and revokes its devices (their
+	// ids are returned, so their streams can be cut); false = no such store.
+	RetireTenant(ctx context.Context, id uuid.UUID) ([]uuid.UUID, bool, error)
 
 	GetLocationByID(ctx context.Context, id uuid.UUID) (*Location, error)
 	ListLocationsByTenant(ctx context.Context, tenantID uuid.UUID) ([]Location, error)

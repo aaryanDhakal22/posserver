@@ -2,12 +2,14 @@ package repositories
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	domainAuth "quiccpos/main/internal/domain/auth"
 	"quiccpos/main/internal/infra/database/models"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/rs/zerolog"
@@ -38,6 +40,20 @@ func (r *DeviceAuthRepository) GetActiveByKeyHash(ctx context.Context, hash stri
 		return nil, fmt.Errorf("get device by key hash: %w", err)
 	}
 	return toDomainDevice(row), nil
+}
+
+// RevokedKey: a revoked device row, or a deleted device's tombstone (F-4).
+func (r *DeviceAuthRepository) RevokedKey(ctx context.Context, hash string) (*uuid.UUID, bool, error) {
+	var id uuid.UUID
+	err := r.pool.QueryRow(ctx, `SELECT id FROM devices WHERE key_hash = $1 AND revoked_at IS NOT NULL
+		UNION ALL SELECT device_id FROM device_tombstones WHERE key_hash = $1 LIMIT 1`, hash).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return &id, true, nil
 }
 
 func (r *DeviceAuthRepository) Touch(ctx context.Context, id uuid.UUID) error {

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -66,7 +67,29 @@ const defaultTimezone = "America/New_York"
 // CreateTenant creates a restaurant: the tenant and its single location (slug
 // "main", same name, default timezone) in one transaction. The location's
 // details (address, phone, timezone…) are edited afterwards via UpdateLocation.
-func (s *Service) CreateTenant(ctx context.Context, slug, name, username, password string, storeID *int64) (*tenancy.Tenant, *tenancy.Location, error) {
+// DevEnv reports whether main runs on dev (APP_ENV=dev): every store is a
+// test store unless created with test: false. A var so tests can switch it.
+var DevEnv = func() bool { return os.Getenv("APP_ENV") == "dev" }
+
+// StagingEnv: staging only ever sees test traffic, so every store there may
+// be deleted with its money (the console's cleanup, throwaway test stores).
+var StagingEnv = func() bool { return os.Getenv("APP_ENV") == "staging" }
+
+// MoneyDeletable reports whether a store's money records may be deleted:
+// a test store, or anything on staging (S-1). Prod and dev protect every
+// other store (dev: created with test: false).
+func MoneyDeletable(t *tenancy.Tenant) bool { return t.TestStore || StagingEnv() }
+
+// TestStoreDefault is a new store's test flag when the request doesn't say:
+// true on dev, false everywhere else (S-1).
+func TestStoreDefault(test *bool) bool {
+	if test != nil {
+		return *test
+	}
+	return DevEnv()
+}
+
+func (s *Service) CreateTenant(ctx context.Context, slug, name, username, password string, storeID *int64, test ...bool) (*tenancy.Tenant, *tenancy.Location, error) {
 	slug = strings.TrimSpace(slug)
 	name = strings.TrimSpace(name)
 	username = strings.TrimSpace(username)
@@ -93,7 +116,7 @@ func (s *Service) CreateTenant(ctx context.Context, slug, name, username, passwo
 	}
 	return s.repo.CreateTenant(ctx, tenancy.CreateTenantParams{
 		Slug: slug, Name: name, Username: username, PasswordHash: passwordHash, StoreID: storeID,
-		LocationSlug: defaultLocationSlug, Timezone: defaultTimezone,
+		LocationSlug: defaultLocationSlug, Timezone: defaultTimezone, TestStore: len(test) > 0 && test[0],
 	})
 }
 
@@ -255,6 +278,9 @@ func (s *Service) ResolveStoreByName(ctx context.Context, storeName string) (uui
 	}
 	var match *tenancy.Tenant
 	for i := range tenants {
+		if tenants[i].RetiredAt != nil {
+			continue // a retired store takes no orders
+		}
 		if strings.HasPrefix(strings.ToLower(tenants[i].Name), term) {
 			if match != nil {
 				return uuid.Nil, uuid.Nil, ErrStoreUnresolved // ambiguous prefix
@@ -295,7 +321,61 @@ func (s *Service) DeleteTenant(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return errors.New("tenant id is required")
 	}
+	if _, err := s.Deletable(ctx, id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // gone already: deleting twice is fine (golden: 204)
+		}
+		return err
+	}
 	return s.repo.DeleteTenantCascade(ctx, id)
+}
+
+// PurgeTenant deletes a store with its money whatever it is (dev only: the
+// admin handler allows ?purge=1 only when DevEnv()).
+func (s *Service) PurgeTenant(ctx context.Context, id uuid.UUID) error {
+	if id == uuid.Nil {
+		return errors.New("tenant id is required")
+	}
+	return s.repo.DeleteTenantCascade(ctx, id)
+}
+
+// Deletable says whether a store may be deleted with its money (S-1): a test
+// store may; any other store only while it has no money records — else
+// ErrHasMoney with the counts (retire it instead). pgx.ErrNoRows = no store.
+func (s *Service) Deletable(ctx context.Context, id uuid.UUID) (tenancy.MoneyRecords, error) {
+	t, err := s.repo.GetTenantByID(ctx, id)
+	if err != nil {
+		return tenancy.MoneyRecords{}, err
+	}
+	if MoneyDeletable(t) {
+		return tenancy.MoneyRecords{}, nil
+	}
+	m, err := s.repo.TenantMoneyRecords(ctx, id)
+	if err != nil {
+		return m, err
+	}
+	if m.Any() {
+		s.logger.Warn().Ctx(ctx).Str("tenant_id", id.String()).Interface("money", m).Msg("store delete refused: it has money records")
+		return m, tenancy.ErrHasMoney
+	}
+	return m, nil
+}
+
+// RetireTenant keeps a store with all its records but takes it out of use:
+// its devices are revoked (their streams cut; the Pi hears device_revoked)
+// and no vendor order routes to it any more.
+func (s *Service) RetireTenant(ctx context.Context, id uuid.UUID) (*tenancy.Tenant, error) {
+	ids, ok, err := s.repo.RetireTenant(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, pgx.ErrNoRows
+	}
+	for _, d := range ids {
+		s.deviceGone(d)
+	}
+	return s.repo.GetTenantByID(ctx, id)
 }
 
 // --- Locations -------------------------------------------------------------

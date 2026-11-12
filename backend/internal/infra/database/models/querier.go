@@ -17,7 +17,9 @@ type Querier interface {
 	AuthenticatePlatformKey(ctx context.Context, keyHash string) (PlatformKey, error)
 	BuiltinChannel(ctx context.Context, arg BuiltinChannelParams) (Channel, error)
 	CardHoldCancelled(ctx context.Context, arg CardHoldCancelledParams) error
-	CardHoldCaptured(ctx context.Context, arg CardHoldCapturedParams) error
+	// M-14: only the hold the worker read (still held, the added tip it saw): a
+	// tip set meanwhile makes this 0 rows and the capture is looked at again.
+	CardHoldCaptured(ctx context.Context, arg CardHoldCapturedParams) (int64, error)
 	CardHoldFailed(ctx context.Context, arg CardHoldFailedParams) error
 	CardHoldRetry(ctx context.Context, arg CardHoldRetryParams) error
 	ChannelEventExists(ctx context.Context, arg ChannelEventExistsParams) (bool, error)
@@ -275,6 +277,8 @@ type Querier interface {
 	LastDiagPage(ctx context.Context, arg LastDiagPageParams) (pgtype.Timestamptz, error)
 	LastFloorEventAt(ctx context.Context, arg LastFloorEventAtParams) (pgtype.Timestamptz, error)
 	LatestChannelEvent(ctx context.Context, channelID pgtype.UUID) (int64, error)
+	// The hold's own payment row (M-4), written in the order's transaction.
+	LinkCardHoldPayment(ctx context.Context, orderID pgtype.UUID) error
 	ListAddressesOfCustomers(ctx context.Context, ids []pgtype.UUID) ([]CustomerAddress, error)
 	ListAgentBackups(ctx context.Context, locationID pgtype.UUID) ([]ListAgentBackupsRow, error)
 	ListAgentHealth(ctx context.Context) ([]ListAgentHealthRow, error)
@@ -478,7 +482,8 @@ type Querier interface {
 	SetOptionPosition(ctx context.Context, arg SetOptionPositionParams) error
 	SetOptionStock(ctx context.Context, arg SetOptionStockParams) (SetOptionStockRow, error)
 	SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStatusParams) (int64, error)
-	// The order's card payment row follows its hold (authorized → captured / refunded).
+	// The hold's own payment row follows it (authorized → captured / voided);
+	// M-4: by the payment's id, never every card row of the order.
 	SetOrderCardPayment(ctx context.Context, arg SetOrderCardPaymentParams) error
 	// A new radius flipped the flag: re-push the row (the worker sends order.geo).
 	SetOrderGeoOutsideArea(ctx context.Context, arg SetOrderGeoOutsideAreaParams) (int64, error)

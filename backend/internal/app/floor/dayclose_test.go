@@ -32,9 +32,9 @@ func (f *fakeDayClose) OpenDrawer(_ context.Context, _ order.Scope, _ uuid.UUID,
 	return order.FloorApplied, nil
 }
 
-func (f *fakeDayClose) CloseDrawer(_ context.Context, _ order.Scope, _ uuid.UUID, _ string, d dayclose.Drawer) (string, error) {
+func (f *fakeDayClose) CloseDrawer(_ context.Context, _ order.Scope, _ uuid.UUID, _ string, d dayclose.Drawer) (string, bool, error) {
 	f.drawers[d.ID] = d
-	return order.FloorApplied, nil
+	return order.FloorApplied, false, nil
 }
 
 func (f *fakeDayClose) AddMovement(_ context.Context, _ order.Scope, _ uuid.UUID, _ string, m dayclose.Movement) (string, error) {
@@ -45,9 +45,9 @@ func (f *fakeDayClose) AddMovement(_ context.Context, _ order.Scope, _ uuid.UUID
 	return order.FloorApplied, nil
 }
 
-func (f *fakeDayClose) SaveZ(_ context.Context, _ order.Scope, _ uuid.UUID, _ string, z dayclose.Z) (string, error) {
+func (f *fakeDayClose) SaveZ(_ context.Context, _ order.Scope, _ uuid.UUID, _ string, z dayclose.Z) (string, dayclose.Check, error) {
 	f.zs[z.BatchID] = z
-	return order.FloorApplied, nil
+	return order.FloorApplied, dayclose.CheckZ(z.Report, nil), nil
 }
 
 func TestDayCloseEvents(t *testing.T) {

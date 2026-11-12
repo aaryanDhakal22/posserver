@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -215,6 +216,112 @@ type Z struct {
 	ClosedAt     *time.Time
 	Report       json.RawMessage
 	ReceivedAt   time.Time
+	// 00043: the version (a rebuilt Z for the batch counts up), flagged (the
+	// Pi's Z or main's check doesn't balance), main's check against the
+	// payments it has (M-12).
+	Version             int
+	Flagged             bool
+	MainCheck           json.RawMessage
+	MainDifferenceCents *int64
+}
+
+// Flag is one money flag (money_flags): main stored the money but doesn't
+// agree with it (or couldn't store a payment under its id: a conflict).
+type Flag struct {
+	ID         int64           `json:"id"`
+	At         time.Time       `json:"at"`
+	EventID    *uuid.UUID      `json:"event_id"`
+	EventType  string          `json:"event_type"`
+	Subject    string          `json:"subject"`
+	Code       string          `json:"code"`
+	Detail     json.RawMessage `json:"detail"`
+	ResolvedAt *time.Time      `json:"resolved_at"`
+}
+
+// ZVersion is a Z that a rebuilt one for the same batch replaced (M-9).
+type ZVersion struct {
+	ID           uuid.UUID `json:"id"`
+	Version      int       `json:"version"`
+	ReceivedAt   time.Time `json:"received_at"`
+	SupersededAt time.Time `json:"superseded_at"`
+	SupersededBy uuid.UUID `json:"superseded_by"`
+}
+
+// Revision is a closed drawer session as it was before a later
+// drawer.closed changed it (M-9).
+type Revision struct {
+	Seq       int64           `json:"seq"`
+	Before    json.RawMessage `json:"before"`
+	RevisedAt time.Time       `json:"revised_at"`
+}
+
+// TenderCheck is one tender of main's Z check: the Pi's net and main's.
+type TenderCheck struct {
+	Tender    string `json:"tender"`
+	PiCents   int64  `json:"pi_cents"`
+	MainCents int64  `json:"main_cents"`
+}
+
+// Check is main's check of a Z (M-12): the Pi's own difference (reconcile)
+// and, per tender, the Pi's net against the counter payments main has for
+// the batch. Checked=false when the report lists no tenders.
+type Check struct {
+	Checked        bool          `json:"checked"`
+	Tenders        []TenderCheck `json:"tenders"`
+	MainDifference *int64        `json:"main_difference_cents"`
+	PiDifference   int64         `json:"pi_difference_cents"`
+	Version        int           `json:"-"`
+	Flags          []string      `json:"-"`
+}
+
+// Matches reports whether main's payments agree with every tender.
+func (c Check) Matches() bool {
+	for _, t := range c.Tenders {
+		if t.PiCents != t.MainCents {
+			return false
+		}
+	}
+	return true
+}
+
+// Balanced: the Pi's Z balances and main agrees.
+func (c Check) Balanced() bool { return c.PiDifference == 0 && c.Matches() }
+
+// CheckZ compares a Z report's tenders (net_cents) with main's net per
+// method (Σ amount + tip of the batch's counter payments).
+func CheckZ(report json.RawMessage, mainNet map[string]int64) Check {
+	var r struct {
+		Tenders *[]struct {
+			Tender   string `json:"tender"`
+			NetCents int64  `json:"net_cents"`
+		} `json:"tenders"`
+		Reconcile struct {
+			DifferenceCents int64 `json:"difference_cents"`
+		} `json:"reconcile"`
+	}
+	_ = json.Unmarshal(report, &r)
+	c := Check{PiDifference: r.Reconcile.DifferenceCents, Tenders: []TenderCheck{}}
+	if r.Tenders == nil {
+		return c
+	}
+	c.Checked = true
+	seen := map[string]bool{}
+	var piSum, mainSum int64
+	for _, t := range *r.Tenders {
+		seen[t.Tender] = true
+		c.Tenders = append(c.Tenders, TenderCheck{Tender: t.Tender, PiCents: t.NetCents, MainCents: mainNet[t.Tender]})
+		piSum += t.NetCents
+	}
+	for m, n := range mainNet {
+		mainSum += n
+		if !seen[m] && n != 0 {
+			c.Tenders = append(c.Tenders, TenderCheck{Tender: m, MainCents: n})
+		}
+	}
+	sort.Slice(c.Tenders, func(i, j int) bool { return c.Tenders[i].Tender < c.Tenders[j].Tender })
+	d := mainSum - piSum
+	c.MainDifference = &d
+	return c
 }
 
 // ParseZ checks z.report's report: an object with id, batch_id and

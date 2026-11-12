@@ -5,7 +5,8 @@ The test plays the Pi: floor events over POST /store/v1/agent/rpc; the store's m
     (date = the store-local date the session opened; movements with their session)
   * a replayed drawer.opened never reopens a closed session (stale); a replay of the same event is a duplicate;
     drawer.closed applies without an opened before it; a movement may come before its session
-  * z.report → GET /store/v1/me/reports/z[?date=] + /me/reports/z/:id (one per batch: a rebuilt Z replaces it)
+  * z.report → GET /store/v1/me/reports/z[?date=] + /me/reports/z/:id (one per batch: a rebuilt Z supersedes it;
+    the old one stays readable as a version)
   * another store's ids are 404; bad events are answered invalid; a bad date is 400
 """
 
@@ -175,12 +176,17 @@ def test_z_reports(make_store) -> None:
     full = _ok(mgr.get(f"{ME}/reports/z/{z2['id']}", timeout=5))
     assert full["report"] == z2 and full["received_at"]
 
-    # A rebuilt Z for the same batch replaces it (new id); the old id is gone.
+    # A rebuilt Z for the same batch supersedes it (new id, version 2); the
+    # old one stays readable from the history (hardening M-9: never
+    # overwritten in place).
     z2b = _z(8, "2026-11-11", sales={**z2["sales"], "total_cents": 7000})
     ev = _ev("z.report", report=z2b)
     assert _send(store.key, [ev]) == {ev["event_id"]: "applied"}
-    assert mgr.get(f"{ME}/reports/z/{z2['id']}", timeout=5).status_code == 404
-    assert _ok(mgr.get(f"{ME}/reports/z/{z2b['id']}", timeout=5))["report"]["sales"]["total_cents"] == 7000
+    old = _ok(mgr.get(f"{ME}/reports/z/{z2['id']}", timeout=5))
+    assert old["report"] == z2 and old["version"] == 1 and old["superseded"]["superseded_by"] == z2b["id"]
+    cur = _ok(mgr.get(f"{ME}/reports/z/{z2b['id']}", timeout=5))
+    assert cur["report"]["sales"]["total_cents"] == 7000 and cur["version"] == 2
+    assert [v["id"] for v in cur["versions"]] == [z2["id"]]
     assert len(_ok(mgr.get(f"{ME}/reports/z", params={"date": "2026-11-11"}, timeout=5))["reports"]) == 2
 
     # Another store: never sees them, can't take a report id over.

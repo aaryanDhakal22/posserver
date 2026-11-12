@@ -39,6 +39,7 @@ const lookAhead = 14
 
 var (
 	ErrBadSettings  = errors.New("eta minutes must be 0..240 and schedule days 0..30")
+	ErrBadTipCap    = errors.New("the tip limit must be $0 to $1000")
 	ErrBadType      = errors.New("type must be pickup or delivery")
 	ErrTypeOff      = errors.New("that order type is off")
 	ErrScheduleOff  = errors.New("this store takes ASAP orders only")
@@ -57,13 +58,26 @@ type Settings struct {
 	PausedAt           *time.Time `json:"paused_at"`
 	PausedUntil        *time.Time `json:"paused_until"`
 	PauseNote          string     `json:"pause_note"`
+	// TipMaxCents caps a website tip (and a tip added after the order): X,
+	// default $50 (M-20, the owner's D7). Larger tips are refused with a
+	// message.
+	TipMaxCents int64 `json:"tip_max_cents"`
 }
+
+// DefaultTipMaxCents / MaxTipCapCents bound the tip cap.
+const (
+	DefaultTipMaxCents = 5000
+	MaxTipCapCents     = 100000
+)
 
 // Validate checks the editable numbers.
 func (s Settings) Validate() error {
 	if s.PickupETAMinutes < 0 || s.PickupETAMinutes > 240 || s.DeliveryETAMinutes < 0 || s.DeliveryETAMinutes > 240 ||
 		s.ScheduleDays < 0 || s.ScheduleDays > 30 {
 		return ErrBadSettings
+	}
+	if s.TipMaxCents < 0 || s.TipMaxCents > MaxTipCapCents {
+		return ErrBadTipCap
 	}
 	return nil
 }

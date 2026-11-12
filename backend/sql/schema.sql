@@ -1,3 +1,11 @@
+-- 00043: money helpers for the generated money columns (orders, z_reports).
+CREATE FUNCTION money_cents(v text) RETURNS bigint LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $f$
+    SELECT CASE WHEN v ~ '^-?[0-9]{1,18}$' THEN v::bigint END $f$;
+CREATE FUNCTION money_fee_cents(fees jsonb, typ text, field text) RETURNS bigint LANGUAGE sql IMMUTABLE PARALLEL SAFE AS $f$
+    SELECT COALESCE(sum(COALESCE(public.money_cents(f ->> field), 0)), 0)::bigint
+    FROM jsonb_array_elements(CASE WHEN jsonb_typeof(fees) = 'array' THEN fees ELSE '[]'::jsonb END) f
+    WHERE typ = '' OR f ->> 'Type' = typ $f$;
+
 CREATE TABLE tenants (
     id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     slug          text        NOT NULL UNIQUE,
@@ -6,7 +14,10 @@ CREATE TABLE tenants (
     username      text,
     password_hash text,
     created_at    timestamptz NOT NULL DEFAULT now(),
-    store_id      bigint
+    store_id      bigint,
+    -- 00043: a throwaway test store (deletable with its money) / a retired store.
+    test_store    boolean     NOT NULL DEFAULT false,
+    retired_at    timestamptz
 );
 CREATE UNIQUE INDEX idx_tenants_username ON tenants (username) WHERE username IS NOT NULL;
 CREATE UNIQUE INDEX idx_tenants_store_id ON tenants (store_id) WHERE store_id IS NOT NULL;
@@ -118,8 +129,20 @@ CREATE TABLE orders (
     agent_status          jsonb,
     agent_status_at       timestamptz,
     agent_batch_id        bigint,
+    -- 00043: the money in fees / discounts as columns, and the newest order.changed.
+    delivery_fee_cents    bigint GENERATED ALWAYS AS (money_fee_cents(fees, 'delivery', 'Amount')) STORED,
+    driver_fee_cents      bigint GENERATED ALWAYS AS (money_fee_cents(fees, 'delivery', 'DriverCents')) STORED,
+    service_fee_cents     bigint GENERATED ALWAYS AS (money_fee_cents(fees, 'service', 'Amount')) STORED,
+    card_fee_cents        bigint GENERATED ALWAYS AS (money_fee_cents(fees, 'card', 'Amount')) STORED,
+    discount_cents        bigint GENERATED ALWAYS AS (money_fee_cents(discounts, '', 'Amount')) STORED,
+    money_changed_at      timestamptz,
 
     UNIQUE (tenant_id, source, source_event_id),
+    CONSTRAINT orders_money_ck CHECK (subtotal_cents >= 0 AND tax_cents >= 0 AND tip_cents >= 0 AND total_cents >= 0),
+    CONSTRAINT orders_status_ck CHECK (status IN ('received', 'validated', 'scheduled', 'accepted', 'preparing', 'ready',
+        'on_delivery', 'completed', 'rejected', 'cancelled')),
+    CONSTRAINT orders_fulfillment_ck CHECK (fulfillment_type IN ('pickup', 'delivery', 'dine_in', 'counter')),
+    CONSTRAINT orders_source_ck CHECK (source IN ('online', 'mobile', 'pos', 'kiosk', 'counter', 'web', 'operator', 'vendor')),
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE RESTRICT
 );
 CREATE INDEX idx_orders_received_at ON orders(received_at DESC);
@@ -145,14 +168,15 @@ CREATE TABLE line_items (
     routing           text     NOT NULL DEFAULT '',
     -- migration 00032: half and half on modifier children
     portion           text     NOT NULL DEFAULT '',
-    mode              text     NOT NULL DEFAULT ''
+    mode              text     NOT NULL DEFAULT '',
+    CONSTRAINT line_items_quantity_ck CHECK (quantity > 0)
 );
 CREATE INDEX idx_line_items_order_id ON line_items(order_id);
 CREATE INDEX idx_line_items_parent_id ON line_items(parent_id);
 
 CREATE TABLE payments (
     id            uuid        PRIMARY KEY,
-    order_id      uuid        NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    order_id      uuid        NOT NULL REFERENCES orders(id) ON DELETE RESTRICT, -- 00043
     processor     text        NOT NULL,
     status        text        NOT NULL,
     amount_cents  bigint      NOT NULL,
@@ -162,9 +186,28 @@ CREATE TABLE payments (
     auth_code     text        NOT NULL DEFAULT '',
     -- 00034: counter payments (the tip taken with it, who took it)
     tip_cents     bigint      NOT NULL DEFAULT 0,
-    staff_id      uuid
+    staff_id      uuid,
+    -- 00043: what a refund refunds, when main got it, the store (a trigger
+    -- fills it), the Pi's idempotency key, origin ('counter' = the Pi's
+    -- terminal), the Pi's batch, who approved it, and what main flagged.
+    refund_of     uuid        REFERENCES payments(id),
+    received_at   timestamptz NOT NULL DEFAULT now(),
+    location_id   uuid,
+    client_key    text        NOT NULL DEFAULT '',
+    origin        text        NOT NULL DEFAULT '',
+    batch_id      bigint,
+    approved_by   text        NOT NULL DEFAULT '',
+    flags         text[]      NOT NULL DEFAULT '{}',
+    CONSTRAINT payments_status_ck CHECK (status IN ('pending', 'authorized', 'captured', 'failed', 'refunded', 'voided')),
+    CONSTRAINT payments_tip_ck CHECK (tip_cents >= 0),
+    CONSTRAINT payments_refund_sign_ck CHECK ((status = 'refunded') = (amount_cents < 0))
 );
 CREATE INDEX idx_payments_order_id ON payments(order_id);
+CREATE UNIQUE INDEX payments_client_key_uq ON payments (location_id, client_key) WHERE client_key <> '';
+CREATE INDEX idx_payments_refund_of ON payments (refund_of) WHERE refund_of IS NOT NULL;
+CREATE INDEX idx_payments_counter_batch ON payments (location_id, batch_id) WHERE origin = 'counter';
+CREATE UNIQUE INDEX payments_counter_ref_uq ON payments (location_id, processor, token)
+    WHERE origin = 'counter' AND token <> '' AND amount_cents > 0;
 
 CREATE TABLE status_events (
     order_id    uuid        NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
@@ -358,7 +401,8 @@ CREATE TABLE floor_events_seen (
     order_id    uuid,
     type        text        NOT NULL,
     result      text        NOT NULL,
-    received_at timestamptz NOT NULL DEFAULT now()
+    received_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT floor_events_seen_result_ck CHECK (result IN ('applied', 'duplicate', 'stale', 'not_found', 'invalid', 'conflict'))
 );
 CREATE INDEX idx_floor_events_seen_location ON floor_events_seen (location_id, received_at DESC);
 
@@ -720,6 +764,8 @@ CREATE TABLE store_ordering (
     pause_note           text        NOT NULL DEFAULT '',
     restocked_at         timestamptz,
     updated_at           timestamptz NOT NULL DEFAULT now(),
+    -- 00043: the website's tip cap (X, default $50)
+    tip_max_cents        bigint      NOT NULL DEFAULT 5000 CHECK (tip_max_cents BETWEEN 0 AND 100000),
     FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
 );
 
@@ -768,7 +814,7 @@ CREATE UNIQUE INDEX idx_deals_code ON deals (location_id, upper(code)) WHERE kin
 
 -- 00022_channel_orders (main 3.0): an order's channel + idempotency key + payment ref.
 CREATE TABLE channel_orders (
-    order_id        uuid        PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+    order_id        uuid        PRIMARY KEY REFERENCES orders(id) ON DELETE RESTRICT, -- 00043
     channel_id      uuid        REFERENCES channels(id) ON DELETE SET NULL,
     tenant_id       uuid        NOT NULL,
     location_id     uuid        NOT NULL,
@@ -850,7 +896,7 @@ CREATE TABLE square_connections (
 CREATE INDEX idx_square_connections_merchant ON square_connections (merchant_id);
 
 CREATE TABLE card_holds (
-    order_id             uuid        PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+    order_id             uuid        PRIMARY KEY REFERENCES orders(id) ON DELETE RESTRICT, -- 00043
     tenant_id            uuid        NOT NULL,
     location_id          uuid        NOT NULL,
     gateway              text        NOT NULL,
@@ -858,7 +904,7 @@ CREATE TABLE card_holds (
     amount_cents         bigint      NOT NULL,
     tip_cents            bigint      NOT NULL DEFAULT 0,
     added_tip_cents      bigint      NOT NULL DEFAULT 0,
-    status               text        NOT NULL DEFAULT 'held' CHECK (status IN ('held', 'captured', 'cancelled', 'failed')),
+    status               text        NOT NULL DEFAULT 'held' CHECK (status IN ('held', 'captured', 'cancelled', 'failed', 'refunded')),
     capture_reason       text        NOT NULL DEFAULT '',
     due_at               timestamptz NOT NULL,
     capture_requested_at timestamptz,
@@ -872,10 +918,24 @@ CREATE TABLE card_holds (
     cancelled_at         timestamptz,
     created_at           timestamptz NOT NULL DEFAULT now(),
     updated_at           timestamptz NOT NULL DEFAULT now(),
-    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+    -- 00043: the payment row it moves, the cancel / refund the worker owes,
+    -- the separate tip charge's payment row.
+    payment_id           uuid        REFERENCES payments(id),
+    cancel_requested_at  timestamptz,
+    refund_requested_at  timestamptz,
+    refunded_cents       bigint      NOT NULL DEFAULT 0,
+    refund_ref           text        NOT NULL DEFAULT '',
+    tip_payment_id       uuid        REFERENCES payments(id),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE RESTRICT,
+    CONSTRAINT card_holds_money_ck CHECK (amount_cents >= 0 AND tip_cents >= 0 AND added_tip_cents >= 0
+        AND captured_cents >= 0 AND refunded_cents >= 0),
+    CONSTRAINT card_holds_captured_ck CHECK (status <> 'captured' OR captured_at IS NOT NULL)
 );
 CREATE INDEX idx_card_holds_work ON card_holds (next_try_at) WHERE status = 'held';
 CREATE INDEX idx_card_holds_location ON card_holds (location_id, created_at DESC);
+CREATE INDEX idx_card_holds_undo ON card_holds (next_try_at)
+    WHERE cancel_requested_at IS NOT NULL OR refund_requested_at IS NOT NULL;
+CREATE UNIQUE INDEX card_holds_ref_uq ON card_holds (gateway, payment_ref);
 
 -- 00027_customers (weborder stage 2): customer accounts, sessions, saved cards, receipts queue
 -- (+ channel_orders.customer_id, site_settings.reply_email above).
@@ -988,7 +1048,7 @@ CREATE INDEX idx_site_images_location ON site_images (location_id);
 
 -- 00030_order_placements (DURABILITY-PLAN.md: a channel order is a placement first)
 CREATE TABLE order_placements (
-    channel_id         uuid        NOT NULL REFERENCES channels(id) ON DELETE CASCADE,
+    channel_id         uuid        NOT NULL REFERENCES channels(id) ON DELETE RESTRICT, -- 00043
     client_order_id    text        NOT NULL,
     tenant_id          uuid        NOT NULL,
     location_id        uuid        NOT NULL,
@@ -1069,7 +1129,7 @@ CREATE TABLE staff_journal (
     order_id    uuid,
     detail      jsonb       NOT NULL DEFAULT '{}'::jsonb,
     received_at timestamptz NOT NULL DEFAULT now(),
-    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE RESTRICT -- 00043
 );
 CREATE INDEX idx_staff_journal_location_at ON staff_journal (location_id, at DESC);
 
@@ -1103,7 +1163,8 @@ CREATE TABLE drawer_sessions (
     no_sales           integer     NOT NULL DEFAULT 0,
     payments           integer     NOT NULL DEFAULT 0,
     updated_at         timestamptz NOT NULL DEFAULT now(),
-    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE RESTRICT, -- 00043
+    CONSTRAINT drawer_sessions_close_reason_ck CHECK (close_reason IN ('', 'counted', 'handover', 'batch_close'))
 );
 CREATE INDEX idx_drawer_sessions_location ON drawer_sessions (location_id, opened_at DESC);
 
@@ -1118,7 +1179,7 @@ CREATE TABLE drawer_movements (
     staff_id     text        NOT NULL DEFAULT '',
     approved_by  text        NOT NULL DEFAULT '',
     at           timestamptz NOT NULL,
-    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE RESTRICT -- 00043
 );
 CREATE INDEX idx_drawer_movements_drawer ON drawer_movements (drawer_id, at);
 
@@ -1132,7 +1193,95 @@ CREATE TABLE z_reports (
     closed_at     timestamptz,
     report        jsonb       NOT NULL,
     received_at   timestamptz NOT NULL DEFAULT now(),
+    -- 00043: versions kept in z_report_versions; flagged = the Pi's Z or
+    -- main's check doesn't balance; main_check = main's payments by tender;
+    -- the headline totals as columns.
+    version               integer NOT NULL DEFAULT 1,
+    flagged               boolean NOT NULL DEFAULT false,
+    main_check            jsonb,
+    main_difference_cents bigint,
+    sales_total_cents     bigint GENERATED ALWAYS AS (money_cents(report #>> '{sales,total_cents}')) STORED,
+    sales_tax_cents       bigint GENERATED ALWAYS AS (money_cents(report #>> '{sales,tax_cents}')) STORED,
+    tips_card_cents       bigint GENERATED ALWAYS AS (money_cents(report #>> '{tips,card_cents}')) STORED,
+    tips_cash_cents       bigint GENERATED ALWAYS AS (money_cents(report #>> '{tips,cash_cents}')) STORED,
+    refunds_cents         bigint GENERATED ALWAYS AS (money_cents(report #>> '{refunds,cents}')) STORED,
+    over_short_cents      bigint GENERATED ALWAYS AS (money_cents(report #>> '{over_short_cents}')) STORED,
+    difference_cents      bigint GENERATED ALWAYS AS (money_cents(report #>> '{reconcile,difference_cents}')) STORED,
     PRIMARY KEY (location_id, batch_id),
-    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE CASCADE
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE RESTRICT -- 00043
 );
 CREATE INDEX idx_z_reports_date ON z_reports (location_id, business_date, closed_at DESC);
+
+-- 00043 (hardening C1): deleted devices' key hashes (F-4: device_revoked).
+CREATE TABLE device_tombstones (
+    key_hash    text        PRIMARY KEY,
+    device_id   uuid        NOT NULL,
+    tenant_id   uuid        NOT NULL,
+    location_id uuid        NOT NULL,
+    kind        text        NOT NULL,
+    deleted_at  timestamptz NOT NULL DEFAULT now()
+);
+
+-- Every money change of an order (order.changed), before and after (M-12).
+CREATE TABLE order_money_changes (
+    id          bigserial   PRIMARY KEY,
+    order_id    uuid        NOT NULL,
+    tenant_id   uuid        NOT NULL,
+    location_id uuid        NOT NULL,
+    event_id    uuid        NOT NULL,
+    at          timestamptz NOT NULL,
+    before      jsonb       NOT NULL,
+    after       jsonb       NOT NULL,
+    after_z     boolean     NOT NULL DEFAULT false,
+    received_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_order_money_changes_order ON order_money_changes (order_id, id);
+
+-- A Z replaced by a rebuilt one (M-9).
+CREATE TABLE z_report_versions (
+    seq           bigserial   PRIMARY KEY,
+    id            uuid        NOT NULL,
+    tenant_id     uuid        NOT NULL,
+    location_id   uuid        NOT NULL,
+    batch_id      bigint      NOT NULL,
+    version       integer     NOT NULL,
+    business_date date        NOT NULL,
+    opened_at     timestamptz,
+    closed_at     timestamptz,
+    report        jsonb       NOT NULL,
+    received_at   timestamptz NOT NULL,
+    superseded_at timestamptz NOT NULL DEFAULT now(),
+    superseded_by uuid        NOT NULL,
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE RESTRICT
+);
+CREATE INDEX idx_z_report_versions_batch ON z_report_versions (location_id, batch_id, seq);
+CREATE INDEX idx_z_report_versions_id ON z_report_versions (location_id, id);
+
+-- A closed drawer session's row before a later drawer.closed changed it (M-9).
+CREATE TABLE drawer_session_revisions (
+    seq         bigserial   PRIMARY KEY,
+    drawer_id   uuid        NOT NULL,
+    tenant_id   uuid        NOT NULL,
+    location_id uuid        NOT NULL,
+    event_id    uuid        NOT NULL,
+    old         jsonb       NOT NULL,
+    revised_at  timestamptz NOT NULL DEFAULT now(),
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE RESTRICT
+);
+CREATE INDEX idx_drawer_session_revisions_drawer ON drawer_session_revisions (drawer_id, seq);
+
+-- Money main stored but disagrees with (M-2 / M-7 / M-12 / M-13).
+CREATE TABLE money_flags (
+    id          bigserial   PRIMARY KEY,
+    tenant_id   uuid        NOT NULL,
+    location_id uuid        NOT NULL,
+    at          timestamptz NOT NULL DEFAULT now(),
+    event_id    uuid,
+    event_type  text        NOT NULL,
+    subject     text        NOT NULL DEFAULT '',
+    code        text        NOT NULL,
+    detail      jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    resolved_at timestamptz,
+    FOREIGN KEY (location_id, tenant_id) REFERENCES locations(id, tenant_id) ON DELETE RESTRICT
+);
+CREATE INDEX idx_money_flags_location ON money_flags (location_id, at DESC);

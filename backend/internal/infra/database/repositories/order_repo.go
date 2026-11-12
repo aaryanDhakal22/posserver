@@ -140,6 +140,9 @@ func (r *OrderRepository) createInTx(ctx context.Context, q *models.Queries, o *
 			}); err != nil {
 				return fmt.Errorf("create card hold: %w", err)
 			}
+			if err := q.LinkCardHoldPayment(ctx, toPgUUID(uuid.UUID(o.ID()))); err != nil {
+				return fmt.Errorf("link card hold payment: %w", err)
+			}
 		}
 		if ch.Receipt {
 			if err := q.InsertEmailReceipt(ctx, models.InsertEmailReceiptParams{OrderID: toPgUUID(uuid.UUID(o.ID())),
@@ -284,6 +287,13 @@ func (r *OrderRepository) DeleteByID(ctx context.Context, id order.ID) error {
 	if err := q.DeleteOrderOutbox(ctx, pid); err != nil {
 		return fmt.Errorf("delete order outbox: %w", err)
 	}
+	// The money rows are RESTRICT (00043): the admin handler allowed this
+	// delete (dev, a test store, or no money), so they go on purpose.
+	for _, sql := range orderMoneyDeletes {
+		if _, err := tx.Exec(ctx, sql+` = $1`, uuid.UUID(id)); err != nil {
+			return fmt.Errorf("delete order money: %w", err)
+		}
+	}
 	if err := q.DeleteOrderByID(ctx, pid); err != nil {
 		return fmt.Errorf("delete order: %w", err)
 	}
@@ -334,6 +344,34 @@ func (r *OrderRepository) ListSummaries(ctx context.Context, f order.ListFilter)
 	return out, rows.Err()
 }
 
+// orderMoneyDeletes clear an order's RESTRICT children (each followed by
+// "= $1", the order id).
+var orderMoneyDeletes = []string{
+	`DELETE FROM card_holds WHERE order_id`,
+	`DELETE FROM payments WHERE order_id`,
+	`DELETE FROM channel_orders WHERE order_id`,
+	`DELETE FROM order_money_changes WHERE order_id`,
+}
+
+// OrderMoney reports an order's tenant and whether it holds money records
+// (payments, card holds): pgx.ErrNoRows = no such order.
+func (r *OrderRepository) OrderMoney(ctx context.Context, id uuid.UUID) (uuid.UUID, bool, error) {
+	var tenant uuid.UUID
+	var money bool
+	err := r.pool.QueryRow(ctx, `SELECT o.tenant_id, EXISTS (SELECT 1 FROM payments WHERE order_id = o.id AND status IN ('captured', 'refunded', 'authorized'))
+		OR EXISTS (SELECT 1 FROM card_holds WHERE order_id = o.id) FROM orders o WHERE o.id = $1`, id).Scan(&tenant, &money)
+	return tenant, money, err
+}
+
+// TenantOrderMoney reports whether any of a tenant's orders holds money.
+func (r *OrderRepository) TenantOrderMoney(ctx context.Context, tenantID uuid.UUID) (bool, error) {
+	var money bool
+	err := r.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM payments p JOIN orders o ON o.id = p.order_id
+			WHERE o.tenant_id = $1 AND p.status IN ('captured', 'refunded', 'authorized'))
+		OR EXISTS (SELECT 1 FROM card_holds WHERE tenant_id = $1)`, tenantID).Scan(&money)
+	return money, err
+}
+
 // DeleteAll bulk-deletes orders + their outbox rows in one transaction. Empty
 // tenantID wipes every order; a non-empty tenantID scopes to one tenant. Order
 // children (line_items, payments, status_events) cascade via FK; outbox_events
@@ -350,12 +388,22 @@ func (r *OrderRepository) DeleteAll(ctx context.Context, tenantID string) (int64
 		if _, err := tx.Exec(ctx, `DELETE FROM outbox_events WHERE tenant_id = $1::uuid`, tenantID); err != nil {
 			return 0, fmt.Errorf("delete outbox by tenant: %w", err)
 		}
+		for _, sql := range orderMoneyDeletes {
+			if _, err := tx.Exec(ctx, sql+` IN (SELECT id FROM orders WHERE tenant_id = $1::uuid)`, tenantID); err != nil {
+				return 0, fmt.Errorf("delete order money by tenant: %w", err)
+			}
+		}
 		if tag, err = tx.Exec(ctx, `DELETE FROM orders WHERE tenant_id = $1::uuid`, tenantID); err != nil {
 			return 0, fmt.Errorf("delete orders by tenant: %w", err)
 		}
 	} else {
 		if _, err := tx.Exec(ctx, `DELETE FROM outbox_events`); err != nil {
 			return 0, fmt.Errorf("delete all outbox: %w", err)
+		}
+		for _, sql := range orderMoneyDeletes {
+			if _, err := tx.Exec(ctx, sql+` IN (SELECT id FROM orders)`); err != nil {
+				return 0, fmt.Errorf("delete all order money: %w", err)
+			}
 		}
 		if tag, err = tx.Exec(ctx, `DELETE FROM orders`); err != nil {
 			return 0, fmt.Errorf("delete all orders: %w", err)

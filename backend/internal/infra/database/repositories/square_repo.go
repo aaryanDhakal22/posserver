@@ -2,6 +2,7 @@ package repositories
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -133,6 +134,21 @@ type CardHold struct {
 	CapturedAt         *time.Time `json:"captured_at"`
 	CancelledAt        *time.Time `json:"cancelled_at"`
 	CreatedAt          time.Time  `json:"created_at"`
+	// 00043: the hold's payment row, the void / refund the worker owes (M-3).
+	PaymentID         *uuid.UUID `json:"payment_id"`
+	CancelRequestedAt *time.Time `json:"cancel_requested_at"`
+	RefundRequestedAt *time.Time `json:"refund_requested_at"`
+	RefundedCents     int64      `json:"refunded_cents"`
+	RefundRef         string     `json:"refund_ref"`
+	TipPaymentID      *uuid.UUID `json:"tip_payment_id"`
+}
+
+func uuidPtr(v pgtype.UUID) *uuid.UUID {
+	if !v.Valid {
+		return nil
+	}
+	id := uuid.UUID(v.Bytes)
+	return &id
 }
 
 func holdOf(r models.CardHold) CardHold {
@@ -140,7 +156,9 @@ func holdOf(r models.CardHold) CardHold {
 		PaymentRef: r.PaymentRef, AmountCents: r.AmountCents, TipCents: r.TipCents, AddedTipCents: r.AddedTipCents,
 		Status: r.Status, CaptureReason: r.CaptureReason, DueAt: r.DueAt.Time, CaptureRequestedAt: tsPtr(r.CaptureRequestedAt),
 		Attempts: int(r.Attempts), LastError: r.LastError, CapturedCents: r.CapturedCents, TipPaymentRef: r.TipPaymentRef,
-		TipNote: r.TipNote, CapturedAt: tsPtr(r.CapturedAt), CancelledAt: tsPtr(r.CancelledAt), CreatedAt: r.CreatedAt.Time}
+		TipNote: r.TipNote, CapturedAt: tsPtr(r.CapturedAt), CancelledAt: tsPtr(r.CancelledAt), CreatedAt: r.CreatedAt.Time,
+		PaymentID: uuidPtr(r.PaymentID), CancelRequestedAt: tsPtr(r.CancelRequestedAt), RefundRequestedAt: tsPtr(r.RefundRequestedAt),
+		RefundedCents: r.RefundedCents, RefundRef: r.RefundRef, TipPaymentID: uuidPtr(r.TipPaymentID)}
 }
 
 // Hold is an order's hold (pgx.ErrNoRows = none).
@@ -203,26 +221,48 @@ func (r *SquareRepository) SetAddedTip(ctx context.Context, locationID, orderID 
 	return n > 0, err
 }
 
-// Captured marks a hold captured and its order's card payment with it.
-func (r *SquareRepository) Captured(ctx context.Context, orderID uuid.UUID, cents int64, tipRef, tipNote string) error {
+// Captured marks a hold captured and its own payment row with it (M-4: by
+// the hold's payment id, never every card row of the order). onHold is what
+// was charged on the hold (its tip included: tip), separate the tip charged
+// on its own payment (tipRef; 0 = none), which gets a payments row of its own
+// (M-14). seenTip is the added tip the worker read: a tip set meanwhile makes
+// this a no-op (false) and the capture is looked at again.
+func (r *SquareRepository) Captured(ctx context.Context, h CardHold, onHold, tip, separate int64, tipRef, tipNote string, seenTip int64) (bool, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	q := models.New(tx)
-	if err := q.CardHoldCaptured(ctx, models.CardHoldCapturedParams{OrderID: pgID(orderID), CapturedCents: cents,
-		TipPaymentRef: tipRef, TipNote: tipNote}); err != nil {
-		return err
+	n, err := q.CardHoldCaptured(ctx, models.CardHoldCapturedParams{OrderID: pgID(h.OrderID), CapturedCents: onHold + separate,
+		TipPaymentRef: tipRef, TipNote: tipNote, AddedTipCents: seenTip})
+	if err != nil {
+		return false, err
 	}
-	if err := q.SetOrderCardPayment(ctx, models.SetOrderCardPaymentParams{OrderID: pgID(orderID), Status: "captured",
-		AmountCents: cents, CapturedAt: ts(time.Now())}); err != nil {
-		return err
+	if n == 0 {
+		return false, nil
 	}
-	return tx.Commit(ctx)
+	now := time.Now()
+	if h.PaymentID != nil {
+		if err := q.SetOrderCardPayment(ctx, models.SetOrderCardPaymentParams{ID: pgID(*h.PaymentID), Status: "captured",
+			AmountCents: onHold, TipCents: tip, CapturedAt: ts(now)}); err != nil {
+			return false, err
+		}
+	}
+	if separate > 0 && tipRef != "" {
+		id := uuid.Must(uuid.NewV7())
+		if _, err := tx.Exec(ctx, `INSERT INTO payments (id, order_id, processor, status, amount_cents, token, captured_at, tip_cents, origin)
+			VALUES ($1, $2, 'card', 'captured', $3, $4, $5, $3, 'card_hold_tip')`, id, h.OrderID, separate, tipRef, now); err != nil {
+			return false, fmt.Errorf("tip payment: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `UPDATE card_holds SET tip_payment_id = $2 WHERE order_id = $1`, h.OrderID, id); err != nil {
+			return false, err
+		}
+	}
+	return true, tx.Commit(ctx)
 }
 
-// Cancelled marks a hold voided (and its order's card payment refunded).
+// Cancelled marks a hold released (voided) and its own payment row voided.
 func (r *SquareRepository) Cancelled(ctx context.Context, orderID uuid.UUID, note string) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -237,11 +277,90 @@ func (r *SquareRepository) Cancelled(ctx context.Context, orderID uuid.UUID, not
 	if err != nil {
 		return err
 	}
-	if err := q.SetOrderCardPayment(ctx, models.SetOrderCardPaymentParams{OrderID: pgID(orderID), Status: "refunded",
-		AmountCents: h.AmountCents + h.TipCents}); err != nil {
-		return err
+	if h.PaymentID.Valid {
+		if err := q.SetOrderCardPayment(ctx, models.SetOrderCardPaymentParams{ID: h.PaymentID, Status: "voided",
+			AmountCents: h.AmountCents + h.TipCents, TipCents: h.TipCents}); err != nil {
+			return err
+		}
 	}
 	return tx.Commit(ctx)
+}
+
+// Refunded records the refund of a captured hold (a cancelled order): the
+// hold is refunded and each refunded charge gets a negative payments row
+// pointing at it (refund_of).
+func (r *SquareRepository) Refunded(ctx context.Context, h CardHold, cents int64, ref string, tipCents int64, tipRef, note string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, `UPDATE card_holds SET status = 'refunded', refunded_cents = $2, refund_ref = $3, last_error = $4,
+		cancelled_at = now(), updated_at = now() WHERE order_id = $1 AND status = 'captured'`, h.OrderID, cents+tipCents, ref, note); err != nil {
+		return err
+	}
+	now := time.Now()
+	add := func(of *uuid.UUID, amount int64, ref string) error {
+		if amount <= 0 {
+			return nil
+		}
+		_, err := tx.Exec(ctx, `INSERT INTO payments (id, order_id, processor, status, amount_cents, token, captured_at, refund_of, origin)
+			VALUES ($1, $2, 'card', 'refunded', $3, $4, $5, $6, 'card_hold_refund')`, uuid.Must(uuid.NewV7()), h.OrderID, -amount, ref, now, of)
+		return err
+	}
+	if err := add(h.PaymentID, cents, ref); err != nil {
+		return fmt.Errorf("refund payment: %w", err)
+	}
+	if err := add(h.TipPaymentID, tipCents, tipRef); err != nil {
+		return fmt.Errorf("tip refund payment: %w", err)
+	}
+	return tx.Commit(ctx)
+}
+
+// ClaimUndo leases up to n holds whose void (held) or refund (captured) is
+// owed: the order was cancelled (M-3).
+func (r *SquareRepository) ClaimUndo(ctx context.Context, n int) ([]CardHold, error) {
+	rows, err := r.pool.Query(ctx, `UPDATE card_holds SET next_try_at = now() + interval '2 minutes', updated_at = now()
+		WHERE order_id IN (
+			SELECT h.order_id FROM card_holds h
+			WHERE h.next_try_at <= now() AND (
+				(h.status = 'held' AND h.cancel_requested_at IS NOT NULL) OR
+				(h.status = 'captured' AND (h.refund_requested_at IS NOT NULL OR h.cancel_requested_at IS NOT NULL)))
+			ORDER BY h.next_try_at LIMIT $1 FOR UPDATE SKIP LOCKED)
+		RETURNING *`, n)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []CardHold{}
+	for rows.Next() {
+		var x models.CardHold
+		if err := rows.Scan(&x.OrderID, &x.TenantID, &x.LocationID, &x.Gateway, &x.PaymentRef, &x.AmountCents, &x.TipCents,
+			&x.AddedTipCents, &x.Status, &x.CaptureReason, &x.DueAt, &x.CaptureRequestedAt, &x.NextTryAt, &x.Attempts,
+			&x.LastError, &x.CapturedCents, &x.TipPaymentRef, &x.TipNote, &x.CapturedAt, &x.CancelledAt, &x.CreatedAt,
+			&x.UpdatedAt, &x.PaymentID, &x.CancelRequestedAt, &x.RefundRequestedAt, &x.RefundedCents, &x.RefundRef,
+			&x.TipPaymentID); err != nil {
+			return nil, err
+		}
+		out = append(out, holdOf(x))
+	}
+	return out, rows.Err()
+}
+
+// UndoFailed stops retrying a void / refund (the owner settles it in Square).
+func (r *SquareRepository) UndoFailed(ctx context.Context, orderID uuid.UUID, lastError string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE card_holds SET status = CASE WHEN status = 'held' THEN 'failed' ELSE status END,
+		cancel_requested_at = NULL, refund_requested_at = NULL, attempts = attempts + 1, last_error = $2, updated_at = now()
+		WHERE order_id = $1`, orderID, lastError)
+	return err
+}
+
+// TipCap is the store's tip cap (the ordering setting tip_max_cents, default
+// $50) for tips added after the order (M-20).
+func (r *SquareRepository) TipCap(ctx context.Context, locationID uuid.UUID) (int64, error) {
+	var c int64
+	err := r.pool.QueryRow(ctx, `SELECT COALESCE((SELECT tip_max_cents FROM store_ordering WHERE location_id = $1), 5000)`, locationID).Scan(&c)
+	return c, err
 }
 
 func (r *SquareRepository) Retry(ctx context.Context, orderID uuid.UUID, next time.Time, lastError string) error {
@@ -290,7 +409,9 @@ func (r *SquareRepository) HoldRows(ctx context.Context, locationID uuid.UUID, s
 			PaymentRef: x.PaymentRef, AmountCents: x.AmountCents, TipCents: x.TipCents, AddedTipCents: x.AddedTipCents, Status: x.Status,
 			CaptureReason: x.CaptureReason, DueAt: x.DueAt, CaptureRequestedAt: x.CaptureRequestedAt, NextTryAt: x.NextTryAt,
 			Attempts: x.Attempts, LastError: x.LastError, CapturedCents: x.CapturedCents, TipPaymentRef: x.TipPaymentRef,
-			TipNote: x.TipNote, CapturedAt: x.CapturedAt, CancelledAt: x.CancelledAt, CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt})
+			TipNote: x.TipNote, CapturedAt: x.CapturedAt, CancelledAt: x.CancelledAt, CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt,
+			PaymentID: x.PaymentID, CancelRequestedAt: x.CancelRequestedAt, RefundRequestedAt: x.RefundRequestedAt,
+			RefundedCents: x.RefundedCents, RefundRef: x.RefundRef, TipPaymentID: x.TipPaymentID})
 		id := h.OrderID.String()
 		out = append(out, HoldRow{CardHold: h, OrderRef: "#" + strings.ToUpper(id[len(id)-6:]), Customer: x.CustomerDisplayName,
 			Type: x.FulfillmentType, PlacedAt: x.PlacedAt.Time, OrderStatus: x.OrderStatus})

@@ -68,11 +68,31 @@ func (h *DayCloseHandler) MeZ(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusNotFound, errCode("not found", "not_found"))
 	}
-	z, err := h.svc.ZReport(c.Request().Context(), lid, id)
+	z, versions, superseded, err := h.svc.ZReport(c.Request().Context(), lid, id)
 	if err != nil {
 		return h.fail(c, err)
 	}
-	return c.JSON(http.StatusOK, map[string]any{"report": json.RawMessage(z.Report), "received_at": z.ReceivedAt})
+	if superseded != nil {
+		// A Z a rebuilt one replaced (M-9): readable from the history.
+		return c.JSON(http.StatusOK, map[string]any{"report": json.RawMessage(z.Report), "received_at": z.ReceivedAt,
+			"version": z.Version, "superseded": superseded})
+	}
+	out := map[string]any{"report": json.RawMessage(z.Report), "received_at": z.ReceivedAt, "version": z.Version,
+		"flagged": z.Flagged, "main_difference_cents": z.MainDifferenceCents, "versions": versions}
+	if len(z.MainCheck) > 0 {
+		out["main_check"] = json.RawMessage(z.MainCheck)
+	}
+	return c.JSON(http.StatusOK, out)
+}
+
+// GET /store/v1/me/reports/flags — money main stored but flagged, newest first.
+func (h *DayCloseHandler) MeMoneyFlags(c *echo.Context) error {
+	_, lid, _ := meScope(c)
+	list, err := h.svc.MoneyFlags(c.Request().Context(), lid)
+	if err != nil {
+		return h.fail(c, err)
+	}
+	return c.JSON(http.StatusOK, map[string]any{"flags": list})
 }
 
 // GET /store/v1/me/drawers?date=YYYY-MM-DD
@@ -96,9 +116,9 @@ func (h *DayCloseHandler) MeDrawer(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusNotFound, errCode("not found", "not_found"))
 	}
-	d, moves, err := h.svc.Drawer(c.Request().Context(), lid, id)
+	d, moves, revs, err := h.svc.Drawer(c.Request().Context(), lid, id)
 	if err != nil {
 		return h.fail(c, err)
 	}
-	return c.JSON(http.StatusOK, map[string]any{"drawer": d, "movements": moves})
+	return c.JSON(http.StatusOK, map[string]any{"drawer": d, "movements": moves, "revisions": revs})
 }

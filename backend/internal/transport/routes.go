@@ -229,6 +229,7 @@ func routeTable(d RouterDeps) []routeDef {
 	sseH := handler.NewSSEHandler(d.Broker, d.TenancyService, d.Logger, d.Meters)
 	cfgPub := handler.NewStoreConfigPublisher(d.Publisher, d.TenancyService, d.Logger)
 	adminH := handler.NewAdminHandler(d.TenancyService, d.Service, cfgPub, d.SessionSigner, d.Logger)
+	whoamiH := handler.NewWhoamiHandler(d.AuthService, d.TenancyService, d.Logger)
 	storeH := handler.NewStoreHandler(d.TenancyService, d.SessionSigner, cfgPub, d.Logger)
 	agentRPCH := handler.NewAgentRPCHandler(d.Requester, d.Logger)
 	printerStatusH := handler.NewPrinterStatusHandler(d.PrinterCache, d.Requester, d.Meters, d.Logger)
@@ -308,7 +309,8 @@ func routeTable(d RouterDeps) []routeDef {
 		def("PATCH", adminPrefix+"/tenants/:id/credentials", "admin", "Set/rotate a tenant's store-manager login", adminH.SetTenantCredentials, admin),
 		def("PATCH", adminPrefix+"/tenants/:id/store-id", "admin", "Set/clear a tenant's external vendor store_id (online order routing key)", adminH.SetTenantStoreID, admin),
 		def("POST", adminPrefix+"/tenants/:id/store-session", "admin", "Open this tenant's store as its manager (sets a 2h store session cookie; audited)", adminH.OpenStoreSession, admin),
-		def("DELETE", adminPrefix+"/tenants/:id", "admin", "Cascade-delete a tenant + its locations/orders/devices", adminH.DeleteTenant, admin),
+		def("DELETE", adminPrefix+"/tenants/:id", "admin", "Cascade-delete a tenant + its locations/orders/devices (409 has_money_records for a store with money that isn't a test store: retire it)", adminH.DeleteTenant, admin),
+		def("POST", adminPrefix+"/tenants/:id/retire", "admin", "Retire a store: kept with its records, devices revoked, no orders routed (S-1)", adminH.RetireTenant, admin),
 		def("GET", adminPrefix+"/orders", "admin", "Cross-tenant order list (?source_event_id/tenant_id/limit)", adminH.ListOrders, admin),
 		def("DELETE", adminPrefix+"/orders", "admin", "Bulk-delete orders (?tenant_id, absent=all)", adminH.DeleteOrders, admin),
 		def("DELETE", adminPrefix+"/orders/:id", "admin", "Delete a single order + children (cleanup)", adminH.DeleteOrder, admin),
@@ -397,6 +399,7 @@ func routeTable(d RouterDeps) []routeDef {
 		// password mint login is gone.
 		def("GET", storePrefix+"/store-config", "device", "This store's config (scope from the key) — agent keys only", storeH.GetStoreConfig, device, agentOnly),
 		def("POST", storePrefix+"/agent/link", "none", "Link a blank agent with the store manager login → agent key + secrets (revokes the old agent; throttled)", agentLinkH.Link),
+		def("GET", storePrefix+"/agent/whoami", "device-key", "Is this key still good? (F-4) 200 {device_id, agent_id, kind, tenant_id, location_id, tenant, location, revoked:false} · 401 {code: device_revoked|unknown_key|missing_key, revoked}", whoamiH.Whoami),
 		def("GET", storePrefix+"/agent/restore", "device", "Open batch for a replacement agent (state + orders + drivers) — agent keys only", agentLinkH.Restore, device, agentOnly),
 		def("GET", storePrefix+"/agent/credential", "device", "Manager login hash for offline web-UI unlock — agent keys only", agentLinkH.Credential, device, agentOnly),
 		def("GET", storePrefix+"/agent/secrets", "device", "Current Pushover secrets {pushover_app_token, pushover_user_key, pushover_boss_key, pushover_admin_devices} (no-store) — agent keys only", agentLinkH.Secrets, device, agentOnly),
@@ -486,6 +489,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("PATCH", storePrefix+"/me/staff/:id", "store-session", "Change a person {first_name, last_name, role, limits, active, pin}", staffH.MeUpdate, storeSession),
 		def("POST", storePrefix+"/me/staff/:id/pin", "store-session", "Reset a person's PIN {pin}", staffH.MeResetPin, storeSession),
 		def("DELETE", storePrefix+"/me/staff/:id", "store-session", "Delete a person", staffH.MeDelete, storeSession),
+		def("GET", storePrefix+"/me/reports/flags", "store-session", "Money main stored but flagged (M-2/M-7/M-12/M-13), newest 200: {flags[{id, at, event_id, event_type, subject, code, detail, resolved_at}]}", dayCloseH.MeMoneyFlags, storeSession),
 		def("GET", storePrefix+"/me/reports/z", "store-session", "The Pi's Z reports (one per closed batch), newest first: ?date=YYYY-MM-DD = that business date, none = the newest 30", dayCloseH.MeZList, storeSession),
 		def("GET", storePrefix+"/me/reports/z/:id", "store-session", "One Z report as the Pi sent it", dayCloseH.MeZ, storeSession),
 		def("GET", storePrefix+"/me/drawers", "store-session", "Cash drawer sessions (per terminal + cashier), newest first: ?date=YYYY-MM-DD = opened that store-local date, none = the newest 50", dayCloseH.MeDrawers, storeSession),

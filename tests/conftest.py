@@ -130,12 +130,15 @@ class Store:
     """A throwaway tenant + location. `name` starts with a unique 8-char prefix
     so main's store_name fallback resolves it unambiguously."""
 
-    def __init__(self, admin: requests.Session, *, with_store_id: bool = True) -> None:
+    def __init__(self, admin: requests.Session, *, with_store_id: bool = True, test: bool = True) -> None:
         self.admin = admin
         self.tag = secrets.token_hex(4)  # 8 chars — the fallback match key
         self.name = f"{self.tag} Test Pizza"
         self.store_id = unique_store_id() if with_store_id else None
-        body: dict[str, Any] = {"slug": f"t-{self.tag}", "name": self.name}
+        # test: a throwaway test store, deletable with its money records
+        # (hardening S-1; test=False plays a real store: purged on dev only).
+        self.test = test
+        body: dict[str, Any] = {"slug": f"t-{self.tag}", "name": self.name, "test": test}
         if self.store_id is not None:
             body["store_id"] = self.store_id
         # Creating a tenant creates its one location (one tenant = one restaurant).
@@ -197,7 +200,7 @@ class Store:
             self._stream.close()
             self._stream = None
         try:
-            r = self.admin.delete(f"{ADMIN_V1}/tenants/{self.tenant_id}", timeout=10)
+            r = self.admin.delete(f"{ADMIN_V1}/tenants/{self.tenant_id}", params={} if self.test else {"purge": "1"}, timeout=10)
         except requests.RequestException:
             return  # main went away; the session sweep retries
         if r.status_code in (200, 204, 404):

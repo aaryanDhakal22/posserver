@@ -349,6 +349,9 @@ func (s *Service) work(ctx context.Context, ch channelDom.Channel, req Request, 
 	if len(q.Errors) > 0 {
 		return refused(&Error{Status: http.StatusUnprocessableEntity, Code: "cart_invalid", Message: q.Errors[0].Message, Issues: q.Errors})
 	}
+	if e := s.tipCapped(ctx, ch, q.TipCents); e != nil && !resume {
+		return refused(e)
+	}
 	if req.ExpectedTotalCents != nil && *req.ExpectedTotalCents != q.TotalCents {
 		return refused(refuse(http.StatusConflict, "price_changed", "Prices changed — refresh and check your order."))
 	}
@@ -447,6 +450,30 @@ func (s *Service) work(ctx context.Context, ch channelDom.Channel, req Request, 
 	return outcome{view: viewOf(o, req.ClientOrderID, token), created: true}
 }
 
+// tipCapped refuses a tip over the store's cap (M-20: the ordering setting
+// tip_max_cents, X, default $50; the owner's D7).
+func (s *Service) tipCapped(ctx context.Context, ch channelDom.Channel, tip int64) *Error {
+	if tip <= 0 {
+		return nil
+	}
+	tc, ok := s.status.(interface {
+		TipCap(ctx context.Context, tenantID, locationID uuid.UUID) (int64, error)
+	})
+	if !ok {
+		return nil
+	}
+	limit, err := tc.TipCap(ctx, ch.TenantID, ch.LocationID)
+	if err != nil {
+		s.logger.Warn().Ctx(ctx).Err(err).Msg("tip cap not read; the order's tip is taken as is")
+		return nil
+	}
+	if tip > limit {
+		return refuse(http.StatusUnprocessableEntity, "tip_too_big",
+			fmt.Sprintf("Tips online are limited to $%d.%02d. Please choose a smaller tip (you can tip more in cash).", limit/100, limit%100))
+	}
+	return nil
+}
+
 // chargeFor is the card call for an order: always the same for the same
 // request and total, so a re-issue with its idempotency key is the same call.
 func (s *Service) chargeFor(ctx context.Context, ch channelDom.Channel, req Request, q pricing.Quote) (payment.Charge, *Error) {
@@ -487,6 +514,24 @@ func (s *Service) refund(ctx context.Context, ch channelDom.Channel, gw payment.
 		return
 	}
 	ctx = context.WithoutCancel(ctx)
+	// M-5: the processor's idempotency key (channel:client_order_id) gives a
+	// racer that lost the duplicate the SAME payment the saved order holds:
+	// refunding it would void the saved order's money. Only a payment no
+	// saved order holds is refunded; a failed lookup refunds nothing (paged).
+	if hr, ok := s.links.(interface {
+		HoldRefSaved(ctx context.Context, gateway, ref string) (bool, error)
+	}); ok {
+		saved, err := hr.HoldRefSaved(ctx, res.Gateway, res.Ref)
+		if err != nil || saved {
+			s.logger.Warn().Ctx(ctx).Err(err).Bool("saved", saved).Str("payment_ref", res.Ref).
+				Msg("not refunding a card payment a saved order holds (or the check failed)")
+			if err != nil && s.notifier != nil {
+				_ = s.notifier.Notify(ctx, notify.Notice{LocationID: ch.LocationID, Kind: notify.KindRefundFailed, Title: "Check a card payment",
+					Message: fmt.Sprintf("An order failed to save after its card was charged (ref %s) and main couldn't check whether another order holds that payment. Check it in Square.", res.Ref)})
+			}
+			return
+		}
+	}
 	if err := gw.Refund(ctx, ch.LocationID, res.Ref, amount); err != nil {
 		s.logger.Error().Ctx(ctx).Err(err).Str("gateway", res.Gateway).Msg("REFUND FAILED after a failed save — refund it by hand")
 		if s.notifier != nil {

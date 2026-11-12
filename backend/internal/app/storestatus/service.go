@@ -111,6 +111,15 @@ func (s *Service) Settings(ctx context.Context, tenantID, locationID uuid.UUID) 
 	return s.repo.Settings(ctx, tenantID, locationID)
 }
 
+// TipCap is the store's website tip cap (M-20).
+func (s *Service) TipCap(ctx context.Context, tenantID, locationID uuid.UUID) (int64, error) {
+	st, err := s.repo.Settings(ctx, tenantID, locationID)
+	if err != nil {
+		return 0, err
+	}
+	return st.TipMaxCents, nil
+}
+
 // UpdateSettings saves the order types, ETAs and scheduling days (the pause
 // is its own call).
 func (s *Service) UpdateSettings(ctx context.Context, tenantID, locationID uuid.UUID, in storestatus.Settings) (storestatus.Settings, error) {

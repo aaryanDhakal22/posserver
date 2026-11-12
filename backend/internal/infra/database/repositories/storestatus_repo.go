@@ -41,6 +41,7 @@ func settingsOf(row models.StoreOrdering) storestatus.Settings {
 		PickupEnabled: row.PickupEnabled, DeliveryEnabled: row.DeliveryEnabled,
 		PickupETAMinutes: int(row.PickupEtaMinutes), DeliveryETAMinutes: int(row.DeliveryEtaMinutes),
 		ScheduleDays: int(row.ScheduleDays), PausedAt: tsPtr(row.PausedAt), PausedUntil: tsPtr(row.PausedUntil), PauseNote: row.PauseNote,
+		TipMaxCents: row.TipMaxCents,
 	}
 }
 
@@ -66,6 +67,7 @@ func (r *StoreStatusRepository) UpdateSettings(ctx context.Context, locationID u
 	row, err := models.New(r.pool).UpdateStoreOrdering(ctx, models.UpdateStoreOrderingParams{
 		LocationID: pgID(locationID), PickupEnabled: s.PickupEnabled, DeliveryEnabled: s.DeliveryEnabled,
 		PickupEtaMinutes: int32(s.PickupETAMinutes), DeliveryEtaMinutes: int32(s.DeliveryETAMinutes), ScheduleDays: int32(s.ScheduleDays),
+		TipMaxCents: s.TipMaxCents,
 	})
 	if err != nil {
 		return storestatus.Settings{}, err

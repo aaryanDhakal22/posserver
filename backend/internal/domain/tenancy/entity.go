@@ -28,6 +28,11 @@ type Tenant struct {
 	// on the vendor; the online caster then falls back to the store_name match.
 	StoreID   *int64
 	CreatedAt time.Time
+	// TestStore: a throwaway test store, deletable with its money records
+	// (00043). RetiredAt: retired instead of deleted (devices revoked, no
+	// order routed to it); nil = in use.
+	TestStore bool
+	RetiredAt *time.Time
 }
 
 type Location struct {

@@ -49,10 +49,10 @@ func TestNewCounterOrder(t *testing.T) {
 		func(s *CounterSnapshot) { s.Status = "scheduled" },
 		func(s *CounterSnapshot) { s.Fulfillment.Type = "dine_in" },
 		func(s *CounterSnapshot) { s.Items = nil },
-		func(s *CounterSnapshot) { s.Money.Total = 999 },
+		func(s *CounterSnapshot) { s.Money.Total = -1 },
 		func(s *CounterSnapshot) { s.Items[0].Children[0].Mode = "double" },
 		func(s *CounterSnapshot) { s.CounterPayments[0].Method = "bitcoin" },
-		func(s *CounterSnapshot) { s.CounterPayments[0].AmountCents = 0 },
+		func(s *CounterSnapshot) { s.CounterPayments[0].TipCents = -1 },
 		func(s *CounterSnapshot) { s.StaffID = "x" },
 	}
 	for i, f := range bad {
@@ -122,5 +122,46 @@ func TestCounterDeliveryDriverShare(t *testing.T) {
 	co, _ = NewCounterOrder(sc, s, nil)
 	if f := co.Order.Money().Fees[0]; f.DriverCents != 0 {
 		t.Fatalf("share over the fee kept: %+v", f)
+	}
+	if len(co.Flags) != 1 || co.Flags[0].Code != FlagDriverShareOverFee {
+		t.Fatalf("the dropped share is flagged (M-13): %+v", co.Flags)
+	}
+}
+
+// M-2 / M-13: money that doesn't add up is stored and flagged, never refused
+// (the Pi's drawer has moved); exact, no cent of slack.
+func TestCounterMoneyFlags(t *testing.T) {
+	sc := Scope{TenantID: TenantID(uuid.New()), LocationID: LocationID(uuid.New())}
+	s := counterSnap()
+	co, err := NewCounterOrder(sc, s, nil)
+	if err != nil || len(co.Flags) != 0 {
+		t.Fatalf("clean order: %v %+v", err, co.Flags)
+	}
+	s.Money.Total = 1061 // one cent off
+	co, err = NewCounterOrder(sc, s, nil)
+	if err != nil || len(co.Flags) != 1 || co.Flags[0].Code != FlagMoneyMismatch || co.Flags[0].Detail["difference_cents"] != int64(1) {
+		t.Fatalf("1 cent off: %v %+v", err, co.Flags)
+	}
+	if co.Order.Money().Total != 1061 {
+		t.Fatalf("stored as sent: %d", co.Order.Money().Total)
+	}
+	s = counterSnap()
+	s.Items[0].LineTotal = 900 // lines 900, subtotal 1000
+	co, err = NewCounterOrder(sc, s, nil)
+	if err != nil || len(co.Flags) != 1 || co.Flags[0].Code != FlagLinesSubtotal {
+		t.Fatalf("lines vs subtotal: %v %+v", err, co.Flags)
+	}
+}
+
+// The vendor keeps a cent of slack; every other source must add up exactly.
+func TestMoneyReconcilesFor(t *testing.T) {
+	m := MoneyBreakdown{Subtotal: 1000, Tax: 60, Total: 1061}
+	if !moneyReconcilesFor(SourceOnline, m) {
+		t.Error("vendor: a cent of slack")
+	}
+	for _, src := range []Source{SourceCounter, "web", "operator"} {
+		if moneyReconcilesFor(src, m) {
+			t.Errorf("%s: must be exact", src)
+		}
 	}
 }

@@ -3,6 +3,7 @@ package handler
 import (
 	"errors"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -64,6 +65,9 @@ type tenantJSON struct {
 	HasLogin  bool           `json:"has_login"`
 	StoreID   *int64         `json:"store_id"` // external vendor store id; null = routes by store_name only
 	CreatedAt time.Time      `json:"created_at"`
+	// 00043 (S-1): a throwaway test store (deletable with its money) / retired.
+	TestStore bool       `json:"test_store"`
+	RetiredAt *time.Time `json:"retired_at"`
 }
 
 type locationJSON struct {
@@ -118,7 +122,7 @@ func toTenantJSON(t tenancy.Tenant) tenantJSON {
 	return tenantJSON{
 		ID: t.ID.String(), Slug: t.Slug, Name: t.Name, Config: cfg,
 		Username: t.Username, HasLogin: t.Username != "",
-		StoreID: t.StoreID, CreatedAt: t.CreatedAt,
+		StoreID: t.StoreID, CreatedAt: t.CreatedAt, TestStore: t.TestStore, RetiredAt: t.RetiredAt,
 	}
 }
 
@@ -167,11 +171,15 @@ func (h *AdminHandler) CreateTenant(c *echo.Context) error {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		StoreID  *int64 `json:"store_id"` // optional external vendor store id
+		// Test: a throwaway test store, deletable with its money records
+		// (S-1). Absent = true on dev, false elsewhere.
+		Test *bool `json:"test"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
 	}
-	t, loc, err := h.svc.CreateTenant(c.Request().Context(), req.Slug, req.Name, req.Username, req.Password, req.StoreID)
+	t, loc, err := h.svc.CreateTenant(c.Request().Context(), req.Slug, req.Name, req.Username, req.Password, req.StoreID,
+		tenancyApp.TestStoreDefault(req.Test))
 	if err != nil {
 		h.logger.Error().Err(err).Msg("CreateTenant failed")
 		if errors.Is(err, tenancy.ErrStoreIDTaken) || errors.Is(err, tenancy.ErrUsernameTaken) {
@@ -295,6 +303,22 @@ func (h *AdminHandler) DeleteOrder(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("id must be a uuid"))
 	}
+	if !orderDeletes() {
+		return c.JSON(http.StatusNotFound, errResp("not found"))
+	}
+	// S-1: an order with money (payments, a card hold) goes only on dev or
+	// with a test store.
+	tenant, money, err := h.orderSvc.OrderMoney(c.Request().Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return c.NoContent(http.StatusNoContent)
+	}
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, errResp("delete failed"))
+	}
+	if money && !h.moneyDeletable(c, tenant) {
+		return c.JSON(http.StatusConflict, map[string]any{"error": "this order has money records (payments / a card hold): it can't be deleted",
+			"code": "has_money_records"})
+	}
 	if err := h.orderSvc.DeleteByID(c.Request().Context(), order.ID(id)); err != nil {
 		h.logger.Error().Err(err).Str("order_id", id.String()).Msg("DeleteOrder failed")
 		return c.JSON(http.StatusInternalServerError, errResp("delete failed"))
@@ -348,12 +372,41 @@ func (h *AdminHandler) ListOrders(c *echo.Context) error {
 // scopes to one tenant; absent deletes ALL orders. Dev cleanup. Returns
 // {"deleted": N}.
 func (h *AdminHandler) DeleteOrders(c *echo.Context) error {
-	n, err := h.orderSvc.DeleteAll(c.Request().Context(), c.QueryParam("tenant_id"))
+	if !orderDeletes() {
+		return c.JSON(http.StatusNotFound, errResp("not found"))
+	}
+	tid := c.QueryParam("tenant_id")
+	if tid == "" && !tenancyApp.DevEnv() && !tenancyApp.StagingEnv() {
+		// Every store's orders at once: dev / staging only.
+		return c.JSON(http.StatusBadRequest, map[string]any{"error": "tenant_id is required here", "code": "tenant_required"})
+	}
+	if tid != "" {
+		tenant, err := uuid.Parse(tid)
+		if err != nil {
+			return c.JSON(http.StatusBadRequest, errResp("tenant_id must be a uuid"))
+		}
+		money, err := h.orderSvc.TenantOrderMoney(c.Request().Context(), tenant)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, errResp("bulk delete failed"))
+		}
+		if money && !h.moneyDeletable(c, tenant) {
+			return c.JSON(http.StatusConflict, map[string]any{"error": "this store's orders have money records: they can't be deleted",
+				"code": "has_money_records"})
+		}
+	}
+	n, err := h.orderSvc.DeleteAll(c.Request().Context(), tid)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("DeleteOrders (bulk) failed")
 		return c.JSON(http.StatusInternalServerError, errResp("bulk delete failed"))
 	}
 	return c.JSON(http.StatusOK, map[string]int64{"deleted": n})
+}
+
+// moneyDeletable: an order's money may be deleted only with a test store
+// (S-1; on dev every store is a test store unless created with test: false).
+func (h *AdminHandler) moneyDeletable(c *echo.Context, tenantID uuid.UUID) bool {
+	t, err := h.svc.GetTenant(c.Request().Context(), tenantID)
+	return err == nil && tenancyApp.MoneyDeletable(t)
 }
 
 // GET /admin/v1/tenants
@@ -380,11 +433,46 @@ func (h *AdminHandler) DeleteTenant(c *echo.Context) error {
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("id must be a uuid"))
 	}
-	if err := h.svc.DeleteTenant(c.Request().Context(), id); err != nil {
+	del := h.svc.DeleteTenant
+	if c.QueryParam("purge") == "1" && tenancyApp.DevEnv() {
+		del = h.svc.PurgeTenant // dev only: the tests' cleanup of a non-test store
+	}
+	if err := del(c.Request().Context(), id); err != nil {
+		if errors.Is(err, tenancy.ErrHasMoney) {
+			// S-1: a real store's money is never deleted: retire it.
+			m, _ := h.svc.Deletable(c.Request().Context(), id)
+			return c.JSON(http.StatusConflict, map[string]any{"error": err.Error(), "code": "has_money_records", "money": m,
+				"retire": "POST /admin/v1/tenants/" + id.String() + "/retire"})
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return c.JSON(http.StatusNotFound, errResp("tenant not found"))
+		}
 		return c.JSON(http.StatusBadRequest, errResp(err.Error()))
 	}
 	return c.NoContent(http.StatusNoContent)
 }
+
+// POST /admin/v1/tenants/:id/retire — keep a store with all its records but
+// take it out of use (S-1): devices revoked (their streams cut; the Pi hears
+// device_revoked), no vendor order routed to it. Idempotent.
+func (h *AdminHandler) RetireTenant(c *echo.Context) error {
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errResp("id must be a uuid"))
+	}
+	t, err := h.svc.RetireTenant(c.Request().Context(), id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return c.JSON(http.StatusNotFound, errResp("tenant not found"))
+	}
+	if err != nil {
+		h.logger.Error().Ctx(c.Request().Context()).Err(err).Msg("RetireTenant failed")
+		return c.JSON(http.StatusInternalServerError, errResp("retire failed"))
+	}
+	return c.JSON(http.StatusOK, toTenantJSON(*t))
+}
+
+// orderDeletes: prod never deletes orders through the admin API (S-1: 404).
+func orderDeletes() bool { return os.Getenv("APP_ENV") != "prod" }
 
 // PATCH /admin/v1/tenants/:id/config
 func (h *AdminHandler) UpdateTenantConfig(c *echo.Context) error {

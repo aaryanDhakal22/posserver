@@ -12,12 +12,16 @@ import (
 	"fmt"
 	"time"
 
+	"quiccpos/main/internal/app/cardhold"
 	"quiccpos/main/internal/app/dayclose"
+	"quiccpos/main/internal/domain/notify"
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/domain/staff"
 	sseBroker "quiccpos/main/internal/infra/sse"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
+	"quiccpos/main/internal/shared/ratelimit"
+	"quiccpos/main/internal/shared/safego"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -59,6 +63,10 @@ type event struct {
 	TipCents *int64 `json:"tip_cents"`
 	// order.status cancelled by hand (weborder stage 3): customer_asked | couldnt_deliver | other
 	Reason string `json:"reason"`
+	// order.void: "void" (default) or "waste" (made already; the owner, 2026-11-12)
+	Kind string `json:"kind"`
+	// order.void kind waste: the store's waste reason the cashier picked
+	WasteReason string `json:"waste_reason"`
 	// delivery.run (2.0.9)
 	PlanID       string          `json:"plan_id"`
 	SuggestedIDs []string        `json:"suggested_ids"`
@@ -101,9 +109,15 @@ type DeliveryRunStore interface {
 // CounterOrders stores the Pi's counter orders and their payments
 // (repositories.OrderRepository).
 type CounterOrders interface {
-	CreateCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, co *order.CounterOrder, agentStatus []byte, batchID *int64) (string, error)
-	AddCounterPayment(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, p order.CheckedPayment) (string, error)
-	ChangeCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, o *order.Order) (string, error)
+	CreateCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, co *order.CounterOrder, agentStatus []byte, batchID *int64) (string, []order.MoneyFlag, error)
+	AddCounterPayment(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, p order.CheckedPayment) (string, []order.MoneyFlag, error)
+	ChangeCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, o *order.Order, at time.Time, flags []order.MoneyFlag) (string, []order.MoneyFlag, error)
+}
+
+// StaffLimits tells a refunder's role and refund limit (the staff service):
+// found=false = no such person at the store; limit nil = unlimited.
+type StaffLimits interface {
+	RefundLimit(ctx context.Context, locationID, staffID uuid.UUID) (role string, limit *int64, found bool, err error)
 }
 
 // Customers applies the counter's customer.upsert (the customers service):
@@ -120,10 +134,13 @@ type Journal interface {
 // DayClose stores the Pi's drawer sessions and Z reports (the dayclose
 // service): a *dayclose.Refused error is answered invalid.
 type DayClose interface {
-	Apply(ctx context.Context, sc order.Scope, eventID uuid.UUID, ev dayclose.Event) (string, error)
+	Apply(ctx context.Context, sc order.Scope, eventID uuid.UUID, ev dayclose.Event) (string, []order.MoneyFlag, error)
 }
 
 type Service struct {
+	staff     StaffLimits
+	notifier  notify.Notifier
+	flagPages *ratelimit.Window
 	dayClose  DayClose
 	counter   CounterOrders
 	journal   Journal
@@ -160,6 +177,14 @@ func (s *Service) OnCancelled(f func(ctx context.Context, orderID uuid.UUID)) { 
 // types are answered invalid, as by an older main).
 func (s *Service) OnCounter(c CounterOrders, j Journal) { s.counter, s.journal = c, j }
 
+// OnStaffLimits plugs in the refunders' limits (M-7: a refund over the
+// person's limit nobody approved is flagged).
+func (s *Service) OnStaffLimits(l StaffLimits) { s.staff = l }
+
+// SetNotifier pages the owner when main flags money (at most one page per
+// store per FlagPageEvery; every flag is logged and counted).
+func (s *Service) SetNotifier(n notify.Notifier) { s.notifier = n }
+
 // OnCustomers plugs in the counter's customers (nil = customer.upsert is
 // answered invalid, as by an older main).
 func (s *Service) OnCustomers(c Customers) { s.customers = c }
@@ -172,15 +197,22 @@ func (s *Service) OnDayClose(d DayClose) { s.dayClose = d }
 // locates a counter delivery).
 func (s *Service) OnCounterPlaced(f func(ctx context.Context, o *order.Order)) { s.onPlaced = f }
 
-// MaxTipCents bounds an added tip ($500).
-const MaxTipCents = 50000
+// FlagPageEvery: at most one "money flagged" page per store in this window
+// (every flag is still logged, counted and kept in money_flags).
+const FlagPageEvery = time.Hour
+
+// MaxTipCents bounds an added tip absolutely ($1,000); the store's own cap
+// (the ordering setting tip_max_cents, default $50, M-20) is the card
+// holds' to check.
+const MaxTipCents = 100000
 
 // OnDeliveryRun sets where delivery.run events are stored (nil = answered
 // invalid, as before 2.0.9).
 func (s *Service) OnDeliveryRun(st DeliveryRunStore) { s.runs = st }
 
 func NewService(orders OrderLoader, repo order.FloorRepository, logger zerolog.Logger, meters observability.Meters) *Service {
-	return &Service{orders: orders, repo: repo, logger: logger.With().Str("module", "floor").Logger(), meters: meters}
+	return &Service{orders: orders, repo: repo, logger: logger.With().Str("module", "floor").Logger(), meters: meters,
+		flagPages: ratelimit.New(1, FlagPageEvery)}
 }
 
 // Handle is the rpc.InboundHandler for floor.events. An infrastructure error
@@ -265,6 +297,9 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 		}
 		// Absolute (the whole added tip), so a replay is harmless: set it, then mark the event seen.
 		ok, err := s.holds.SetTip(ctx, uuid.UUID(sc.LocationID), oid, *ev.TipCents)
+		if errors.Is(err, cardhold.ErrTipTooBig) {
+			return s.seen(ctx, sc, eid, &oid, ev.Type, order.FloorInvalid)
+		}
 		if err != nil {
 			return "", err
 		}
@@ -422,13 +457,14 @@ func (s *Service) cancelled(ctx context.Context, sc order.Scope, oid uuid.UUID, 
 	if st != order.StatusCancelled || (s.holds == nil && s.onCancel == nil) {
 		return
 	}
-	ctx = context.WithoutCancel(ctx)
-	go func() {
+	// The hold's release was already asked for in the order's transaction
+	// (M-3: the card_holds_on_order_cancel trigger); this only does it now.
+	safego.Go(context.WithoutCancel(ctx), "floor.order_cancelled", func(ctx context.Context) {
 		if s.holds != nil {
 			s.holds.OrderCancelled(ctx, uuid.UUID(sc.LocationID), oid)
 		}
 		if s.onCancel != nil {
 			s.onCancel(ctx, oid)
 		}
-	}()
+	})
 }

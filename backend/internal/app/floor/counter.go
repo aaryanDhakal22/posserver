@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"quiccpos/main/internal/app/customers"
 	"quiccpos/main/internal/app/dayclose"
+	"quiccpos/main/internal/domain/notify"
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/domain/staff"
 
@@ -37,12 +39,20 @@ func (s *Service) applyPlaced(ctx context.Context, sc order.Scope, eid uuid.UUID
 	if err != nil {
 		return s.invalid(ctx, sc, eid, ev, err)
 	}
-	res, err := s.counter.CreateCounterOrder(ctx, sc, eid, ev.Type, co, ev.AgentStatus, ev.BatchID)
+	for i := range co.Payments {
+		s.refundLimit(ctx, sc, &co.Payments[i])
+	}
+	res, flags, err := s.counter.CreateCounterOrder(ctx, sc, eid, ev.Type, co, ev.AgentStatus, ev.BatchID)
 	if err != nil {
 		return "", err
 	}
 	if res == order.FloorApplied {
-		s.logger.Info().Ctx(ctx).Str("order_id", snap.ID).Str("status", string(co.Order.Status())).Msg("counter order stored")
+		s.logger.Info().Ctx(ctx).Str("order_id", snap.ID).Str("status", string(co.Order.Status())).
+			Int64("total_cents", int64(co.Order.Money().Total)).Msg("counter order stored")
+		for _, p := range co.Payments {
+			s.meters.RecordCounterPayment(ctx, uuid.UUID(sc.LocationID), p.Method, int64(p.Amount), int64(p.Tip))
+		}
+		s.flagged(ctx, sc, eid, ev.Type, snap.ID, flags)
 		if s.onPlaced != nil {
 			s.onPlaced(ctx, co.Order)
 		}
@@ -68,17 +78,61 @@ func (s *Service) applyPayment(ctx context.Context, sc order.Scope, eid uuid.UUI
 	if err != nil {
 		return s.invalid(ctx, sc, eid, ev, err)
 	}
-	res, err := s.counter.AddCounterPayment(ctx, sc, eid, ev.Type, oid, cp)
-	if err == nil && res == order.FloorApplied {
-		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Str("payment_id", cp.ID.String()).Str("method", cp.Method).
-			Int64("amount_cents", int64(cp.Amount)).Msg("terminal payment recorded")
+	if cp.BatchID == nil {
+		cp.BatchID = ev.BatchID
 	}
-	return res, err
+	s.refundLimit(ctx, sc, &cp)
+	res, flags, err := s.counter.AddCounterPayment(ctx, sc, eid, ev.Type, oid, cp)
+	if err != nil {
+		return "", err
+	}
+	switch res {
+	case order.FloorApplied:
+		e := s.logger.Info()
+		if cp.Amount < 0 {
+			e = s.logger.Warn() // L-3: refunds at Warn, with who gave them
+		}
+		e = e.Ctx(ctx).Str("order_id", oid.String()).Str("payment_id", cp.ID.String()).Str("method", cp.Method).
+			Int64("amount_cents", int64(cp.Amount)).Int64("tip_cents", int64(cp.Tip)).Str("approved_by", cp.ApprovedBy)
+		if cp.StaffID != nil {
+			e = e.Str("staff_id", cp.StaffID.String())
+		}
+		e.Msg("terminal payment recorded")
+		s.meters.RecordCounterPayment(ctx, uuid.UUID(sc.LocationID), cp.Method, int64(cp.Amount), int64(cp.Tip))
+		s.flagged(ctx, sc, eid, ev.Type, oid.String(), flags)
+	case order.FloorConflict:
+		s.flagged(ctx, sc, eid, ev.Type, oid.String(), flags)
+	}
+	return res, nil
 }
 
 func (s *Service) applyVoid(ctx context.Context, sc order.Scope, eid uuid.UUID, ev event) (string, error) {
 	oid, err := uuid.Parse(ev.OrderID)
 	reason := strings.TrimSpace(ev.Reason)
+	// A void is the Pi's record (its refunds came first as order.payment):
+	// stored whatever its reason looks like (M-2), never refused for it.
+	if reason == "" {
+		reason = "no reason given"
+	}
+	if utf8.RuneCountInString(reason) > staff.MaxReasonLen {
+		reason = string([]rune(reason)[:staff.MaxReasonLen])
+	}
+	// kind waste (the owner, 2026-11-12): made already, nothing prints; the
+	// reason is one of the store's waste_reasons and the Z lists it.
+	if ev.Kind == "waste" {
+		w := strings.TrimSpace(ev.WasteReason)
+		switch {
+		case w == "":
+			reason = "waste: " + reason
+		case reason == "no reason given" || reason == w:
+			reason = "waste: " + w
+		default:
+			reason = "waste: " + w + " (" + reason + ")"
+		}
+		if utf8.RuneCountInString(reason) > staff.MaxReasonLen+20 {
+			reason = string([]rune(reason)[:staff.MaxReasonLen+20])
+		}
+	}
 	var staffID *uuid.UUID
 	if ev.StaffID != "" {
 		id, perr := uuid.Parse(ev.StaffID)
@@ -87,7 +141,7 @@ func (s *Service) applyVoid(ctx context.Context, sc order.Scope, eid uuid.UUID, 
 		}
 		staffID = &id
 	}
-	if s.counter == nil || err != nil || reason == "" || utf8.RuneCountInString(reason) > staff.MaxReasonLen {
+	if s.counter == nil || err != nil {
 		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 	}
 	out, err := s.repo.ApplyFloorUpdate(ctx, sc, order.ID(oid), eid, ev.Type, func(o *order.Order) string {
@@ -103,7 +157,11 @@ func (s *Service) applyVoid(ctx context.Context, sc order.Scope, eid uuid.UUID, 
 		return "", err
 	}
 	if out == order.FloorApplied {
-		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Msg("counter order voided")
+		e := s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Str("reason", reason).Str("kind", ev.Kind)
+		if staffID != nil {
+			e = e.Str("staff_id", staffID.String())
+		}
+		e.Msg("counter order voided")
 	}
 	return out, nil
 }
@@ -127,12 +185,14 @@ func (s *Service) applyChanged(ctx context.Context, sc order.Scope, eid uuid.UUI
 	if err != nil {
 		return s.invalid(ctx, sc, eid, ev, err)
 	}
-	res, err := s.counter.ChangeCounterOrder(ctx, sc, eid, ev.Type, oid, co.Order)
+	res, flags, err := s.counter.ChangeCounterOrder(ctx, sc, eid, ev.Type, oid, co.Order, ev.At, co.Flags)
 	if err != nil {
 		return "", err
 	}
 	if res == order.FloorApplied {
-		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Int("lines", len(co.Order.Items())).Msg("counter order changed")
+		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Int("lines", len(co.Order.Items())).
+			Int64("total_cents", int64(co.Order.Money().Total)).Msg("counter order changed")
+		s.flagged(ctx, sc, eid, ev.Type, oid.String(), flags)
 	}
 	return res, nil
 }
@@ -187,7 +247,15 @@ func (s *Service) applyJournal(ctx context.Context, sc order.Scope, eid uuid.UUI
 	if _, err := s.journal.AddJournal(ctx, uuid.UUID(sc.TenantID), uuid.UUID(sc.LocationID), entries); err != nil {
 		return "", err
 	}
-	return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorApplied)
+	res, err := s.seen(ctx, sc, eid, nil, ev.Type, order.FloorApplied)
+	if err == nil && res == order.FloorApplied {
+		// CM-13: once per event (a replayed event is a duplicate; entries
+		// themselves are idempotent by id).
+		for i, e := range entries {
+			s.meters.RecordJournal(ctx, uuid.UUID(sc.LocationID), e.Action, roleOf(in[i].Detail))
+		}
+	}
+	return res, err
 }
 
 // applyCustomer is the counter's customer.upsert (terminal 1d, contract
@@ -209,10 +277,61 @@ func (s *Service) applyDayClose(ctx context.Context, sc order.Scope, eid uuid.UU
 	if s.dayClose == nil {
 		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 	}
-	res, err := s.dayClose.Apply(ctx, sc, eid, dayclose.Event{Type: ev.Type, Drawer: ev.Drawer, Movement: ev.Movement, Report: ev.Report})
+	res, flags, err := s.dayClose.Apply(ctx, sc, eid, dayclose.Event{Type: ev.Type, Drawer: ev.Drawer, Movement: ev.Movement, Report: ev.Report})
 	var ref *dayclose.Refused
 	if errors.As(err, &ref) {
 		return s.invalid(ctx, sc, eid, ev, ref.Err)
 	}
+	if err == nil && res == order.FloorApplied {
+		s.flagged(ctx, sc, eid, ev.Type, "", flags)
+	}
 	return res, err
+}
+
+// roleOf reads a journal entry's detail.role (CM-13), "" when none.
+func roleOf(detail json.RawMessage) string {
+	var d struct {
+		Role string `json:"role"`
+	}
+	_ = json.Unmarshal(detail, &d)
+	return d.Role
+}
+
+// refundLimit puts the refunder's limit on a refund (M-7: main flags a
+// refund over it that nobody approved) and flags a cashier's card refund
+// without a manager (the owner, 2026-11-12: card refunds are a manager's).
+func (s *Service) refundLimit(ctx context.Context, sc order.Scope, p *order.CheckedPayment) {
+	if s.staff == nil || p.Amount >= 0 || p.StaffID == nil || p.ApprovedBy != "" {
+		return
+	}
+	role, limit, found, err := s.staff.RefundLimit(ctx, uuid.UUID(sc.LocationID), *p.StaffID)
+	if err != nil || !found {
+		return
+	}
+	p.RefundLimit = limit
+	if role != staff.RoleManager && p.Method != "cash" {
+		p.Flags = append(p.Flags, order.MoneyFlag{Code: order.FlagRefundNeedsManager, Detail: map[string]any{"role": role, "method": p.Method}})
+	}
+}
+
+// flagged logs, counts and (at most once an hour per store) pages money main
+// stored but flagged.
+func (s *Service) flagged(ctx context.Context, sc order.Scope, eid uuid.UUID, typ, subject string, flags []order.MoneyFlag) {
+	if len(flags) == 0 {
+		return
+	}
+	codes := make([]string, 0, len(flags))
+	for _, f := range flags {
+		codes = append(codes, f.Code)
+		s.meters.RecordMoneyFlag(ctx, uuid.UUID(sc.LocationID), typ, f.Code)
+	}
+	s.logger.Warn().Ctx(ctx).Str("event_id", eid.String()).Str("type", typ).Str("order_id", subject).Strs("flags", codes).
+		Msg("money event flagged (stored)")
+	key := uuid.UUID(sc.LocationID).String()
+	if s.notifier == nil || s.flagPages == nil || !s.flagPages.Allow(key) {
+		return
+	}
+	s.flagPages.Add(key)
+	_ = s.notifier.Notify(context.WithoutCancel(ctx), notify.Notice{LocationID: uuid.UUID(sc.LocationID), Kind: notify.KindPaymentProblem,
+		Title: "Money to check", Message: fmt.Sprintf("main stored a %s it doesn't agree with (%s). See Store > Reports > Flags.", typ, strings.Join(codes, ", "))})
 }

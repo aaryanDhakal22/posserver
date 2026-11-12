@@ -98,9 +98,34 @@ func (r *DayCloseRepository) OpenDrawer(ctx context.Context, sc order.Scope, eve
 }
 
 // CloseDrawer stores drawer.closed: the whole session (it needs no
-// drawer.opened before it).
-func (r *DayCloseRepository) CloseDrawer(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, d dayclose.Drawer) (string, error) {
-	return r.apply(ctx, sc, eventID, typ, func(tx pgx.Tx) (string, error) {
+// drawer.opened before it). A session closed already that closes again with
+// other numbers keeps its old row in drawer_session_revisions and is flagged
+// (M-9: never overwritten silently); revised reports that.
+func (r *DayCloseRepository) CloseDrawer(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, d dayclose.Drawer) (res string, revised bool, err error) {
+	res, err = r.apply(ctx, sc, eventID, typ, func(tx pgx.Tx) (string, error) {
+		revised = false
+		var old []byte
+		var sameClose bool
+		err := tx.QueryRow(ctx, `SELECT to_jsonb(d.*), (d.counted_cents IS NOT DISTINCT FROM $3 AND d.expected_cents IS NOT DISTINCT FROM $4
+				AND d.over_short_cents IS NOT DISTINCT FROM $5 AND d.close_reason = $6 AND d.cash_sales_cents = $7 AND d.cash_refunds_cents = $8
+				AND d.cash_tips_cents = $9 AND d.pay_ins_cents = $10 AND d.pay_outs_cents = $11)
+			FROM drawer_sessions d WHERE d.id = $1 AND d.location_id = $2 AND d.closed_at IS NOT NULL FOR UPDATE`,
+			d.ID, uuid.UUID(sc.LocationID), d.CountedCents, d.ExpectedCents, d.OverShortCents, d.CloseReason, d.CashSalesCents,
+			d.CashRefundsCents, d.CashTipsCents, d.PayInsCents, d.PayOutsCents).Scan(&old, &sameClose)
+		switch {
+		case err == nil && !sameClose:
+			if _, err := tx.Exec(ctx, `INSERT INTO drawer_session_revisions (drawer_id, tenant_id, location_id, event_id, old)
+				VALUES ($1, $2, $3, $4, $5)`, d.ID, uuid.UUID(sc.TenantID), uuid.UUID(sc.LocationID), eventID, old); err != nil {
+				return "", fmt.Errorf("drawer revision: %w", err)
+			}
+			revised = true
+			if err := insertMoneyFlags(ctx, tx, sc, eventID, typ, "drawer:"+d.ID.String(), []order.MoneyFlag{{Code: order.FlagDrawerRecount,
+				Detail: map[string]any{"previous": json.RawMessage(old)}}}); err != nil {
+				return "", err
+			}
+		case err != nil && !errors.Is(err, pgx.ErrNoRows):
+			return "", fmt.Errorf("closed drawer: %w", err)
+		}
 		var denoms []byte
 		if d.Denominations != nil {
 			denoms, _ = json.Marshal(d.Denominations)
@@ -129,10 +154,12 @@ func (r *DayCloseRepository) CloseDrawer(ctx context.Context, sc order.Scope, ev
 			return "", fmt.Errorf("close drawer: %w", err)
 		}
 		if tag.RowsAffected() == 0 {
+			revised = false
 			return order.FloorInvalid, nil // another store's id
 		}
 		return order.FloorApplied, nil
 	})
+	return res, revised && res == order.FloorApplied, err
 }
 
 // AddMovement stores drawer.movement (no session row needed); a movement
@@ -154,10 +181,15 @@ func (r *DayCloseRepository) AddMovement(ctx context.Context, sc order.Scope, ev
 	})
 }
 
-// SaveZ stores z.report: one per store per batch (a rebuilt Z replaces it).
-// A report id another store or batch holds is invalid.
-func (r *DayCloseRepository) SaveZ(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, z dayclose.Z) (string, error) {
-	return r.apply(ctx, sc, eventID, typ, func(tx pgx.Tx) (string, error) {
+// SaveZ stores z.report: one per store per batch. A rebuilt Z (another
+// report for the batch) supersedes it, and the one it replaces is kept in
+// z_report_versions (M-9). main checks the Z against the counter payments it
+// has for the batch (M-12, main_check) and flags a Z that doesn't balance
+// (the Pi's own reconcile) or doesn't match. A report id another store or
+// batch holds is invalid.
+func (r *DayCloseRepository) SaveZ(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, z dayclose.Z) (string, dayclose.Check, error) {
+	var check dayclose.Check
+	res, err := r.apply(ctx, sc, eventID, typ, func(tx pgx.Tx) (string, error) {
 		var loc uuid.UUID
 		var batch int64
 		err := tx.QueryRow(ctx, `SELECT location_id, batch_id FROM z_reports WHERE id = $1`, z.ID).Scan(&loc, &batch)
@@ -167,28 +199,193 @@ func (r *DayCloseRepository) SaveZ(ctx context.Context, sc order.Scope, eventID 
 		case err != nil && !errors.Is(err, pgx.ErrNoRows):
 			return "", err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO z_reports (id, tenant_id, location_id, batch_id, business_date, opened_at, closed_at, report)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		// The batch's Z so far (if any): kept as a version when this one differs.
+		var curID uuid.UUID
+		var curVersion int
+		var same bool
+		err = tx.QueryRow(ctx, `SELECT id, version, report = $3::jsonb FROM z_reports WHERE location_id = $1 AND batch_id = $2 FOR UPDATE`,
+			uuid.UUID(sc.LocationID), z.BatchID, []byte(z.Report)).Scan(&curID, &curVersion, &same)
+		version := 1
+		switch {
+		case err == nil && same && curID == z.ID:
+			check, err = zCheck(ctx, tx, sc, z.BatchID)
+			if err != nil {
+				return "", err
+			}
+			check.Version = curVersion
+			return order.FloorApplied, nil // the same report again under a new event: nothing changes
+		case err == nil:
+			if _, err := tx.Exec(ctx, `INSERT INTO z_report_versions (id, tenant_id, location_id, batch_id, version, business_date,
+					opened_at, closed_at, report, received_at, superseded_by)
+				SELECT id, tenant_id, location_id, batch_id, version, business_date, opened_at, closed_at, report, received_at, $3
+				FROM z_reports WHERE location_id = $1 AND batch_id = $2`, uuid.UUID(sc.LocationID), z.BatchID, z.ID); err != nil {
+				return "", fmt.Errorf("z version: %w", err)
+			}
+			version = curVersion + 1
+		case !errors.Is(err, pgx.ErrNoRows):
+			return "", fmt.Errorf("current z: %w", err)
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO z_reports (id, tenant_id, location_id, batch_id, business_date, opened_at, closed_at, report, version)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			ON CONFLICT (location_id, batch_id) DO UPDATE SET id = EXCLUDED.id, business_date = EXCLUDED.business_date,
-				opened_at = EXCLUDED.opened_at, closed_at = EXCLUDED.closed_at, report = EXCLUDED.report, received_at = now()`,
-			z.ID, uuid.UUID(sc.TenantID), uuid.UUID(sc.LocationID), z.BatchID, z.BusinessDate, z.OpenedAt, z.ClosedAt, []byte(z.Report))
+				opened_at = EXCLUDED.opened_at, closed_at = EXCLUDED.closed_at, report = EXCLUDED.report, version = EXCLUDED.version,
+				received_at = now()`,
+			z.ID, uuid.UUID(sc.TenantID), uuid.UUID(sc.LocationID), z.BatchID, z.BusinessDate, z.OpenedAt, z.ClosedAt, []byte(z.Report), version)
 		if err != nil {
 			return "", fmt.Errorf("save z report: %w", err)
 		}
-		return order.FloorApplied, nil
+		check, err = zCheck(ctx, tx, sc, z.BatchID)
+		if err != nil {
+			return "", err
+		}
+		check.Version = version
+		var flags []order.MoneyFlag
+		if check.PiDifference != 0 {
+			flags = append(flags, order.MoneyFlag{Code: order.FlagZUnbalanced, Detail: map[string]any{"difference_cents": check.PiDifference}})
+		}
+		if !check.Matches() {
+			flags = append(flags, order.MoneyFlag{Code: order.FlagZMismatch, Detail: map[string]any{"tenders": check.Tenders,
+				"difference_cents": check.MainDifference}})
+		}
+		for _, f := range flags {
+			check.Flags = append(check.Flags, f.Code)
+		}
+		return order.FloorApplied, insertMoneyFlags(ctx, tx, sc, eventID, typ, fmt.Sprintf("z:%d", z.BatchID), flags)
 	})
+	if res != order.FloorApplied {
+		check = dayclose.Check{}
+	}
+	return res, check, err
 }
 
-const zCols = `id, batch_id, business_date, opened_at, closed_at, report, received_at`
+// zCheck compares the batch's Z (its tenders' net_cents) with the counter
+// payments main has for the batch (Σ amount + tip per method) and stores
+// the result on the Z (main_check, main_difference_cents, flagged).
+func zCheck(ctx context.Context, tx pgx.Tx, sc order.Scope, batch int64) (dayclose.Check, error) {
+	var report []byte
+	if err := tx.QueryRow(ctx, `SELECT report FROM z_reports WHERE location_id = $1 AND batch_id = $2`, uuid.UUID(sc.LocationID), batch).
+		Scan(&report); err != nil {
+		return dayclose.Check{}, err
+	}
+	rows, err := tx.Query(ctx, `SELECT processor, COALESCE(sum(amount_cents + tip_cents), 0)::bigint FROM payments
+		WHERE location_id = $1 AND origin = 'counter' AND batch_id = $2 GROUP BY processor`, uuid.UUID(sc.LocationID), batch)
+	if err != nil {
+		return dayclose.Check{}, err
+	}
+	mainNet := map[string]int64{}
+	for rows.Next() {
+		var m string
+		var n int64
+		if err := rows.Scan(&m, &n); err != nil {
+			rows.Close()
+			return dayclose.Check{}, err
+		}
+		mainNet[m] = n
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return dayclose.Check{}, err
+	}
+	c := dayclose.CheckZ(report, mainNet)
+	raw, _ := json.Marshal(c.Tenders)
+	if _, err := tx.Exec(ctx, `UPDATE z_reports SET main_check = $3, main_difference_cents = $4, flagged = $5
+		WHERE location_id = $1 AND batch_id = $2`, uuid.UUID(sc.LocationID), batch, raw, c.MainDifference, !c.Balanced()); err != nil {
+		return dayclose.Check{}, fmt.Errorf("z check: %w", err)
+	}
+	return c, nil
+}
+
+// RecheckZ runs main's check again for a batch whose Z is stored (a counter
+// payment of that batch arrived after it); a Z that matched and now doesn't
+// is flagged. ok=false: the batch has no Z.
+func RecheckZ(ctx context.Context, tx pgx.Tx, sc order.Scope, eventID uuid.UUID, typ string, batch int64) error {
+	var had *int64
+	err := tx.QueryRow(ctx, `SELECT main_difference_cents FROM z_reports WHERE location_id = $1 AND batch_id = $2 FOR UPDATE`,
+		uuid.UUID(sc.LocationID), batch).Scan(&had)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	c, err := zCheck(ctx, tx, sc, batch)
+	if err != nil {
+		return err
+	}
+	if !c.Matches() && (had == nil || *had == 0) {
+		return insertMoneyFlags(ctx, tx, sc, eventID, typ, fmt.Sprintf("z:%d", batch), []order.MoneyFlag{{Code: order.FlagZMismatch,
+			Detail: map[string]any{"tenders": c.Tenders, "difference_cents": c.MainDifference, "late_payment": true}}})
+	}
+	return nil
+}
+
+const zCols = `id, batch_id, business_date, opened_at, closed_at, report, received_at, version, flagged, main_check, main_difference_cents`
 
 func scanZ(row pgx.Row) (dayclose.Z, error) {
 	var z dayclose.Z
-	var report []byte
-	if err := row.Scan(&z.ID, &z.BatchID, &z.BusinessDate, &z.OpenedAt, &z.ClosedAt, &report, &z.ReceivedAt); err != nil {
+	var report, check []byte
+	if err := row.Scan(&z.ID, &z.BatchID, &z.BusinessDate, &z.OpenedAt, &z.ClosedAt, &report, &z.ReceivedAt, &z.Version, &z.Flagged,
+		&check, &z.MainDifferenceCents); err != nil {
 		return z, err
 	}
 	z.Report = report
+	z.MainCheck = check
 	return z, nil
+}
+
+// ZVersions lists the versions a batch's Z replaced, oldest first.
+func (r *DayCloseRepository) ZVersions(ctx context.Context, locationID uuid.UUID, batch int64) ([]dayclose.ZVersion, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id, version, received_at, superseded_at, superseded_by FROM z_report_versions
+		WHERE location_id = $1 AND batch_id = $2 ORDER BY seq`, locationID, batch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []dayclose.ZVersion{}
+	for rows.Next() {
+		var v dayclose.ZVersion
+		if err := rows.Scan(&v.ID, &v.Version, &v.ReceivedAt, &v.SupersededAt, &v.SupersededBy); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+// GetZVersion is a superseded Z by its id (pgx.ErrNoRows = none).
+func (r *DayCloseRepository) GetZVersion(ctx context.Context, locationID, id uuid.UUID) (dayclose.Z, dayclose.ZVersion, error) {
+	var z dayclose.Z
+	var v dayclose.ZVersion
+	var report []byte
+	err := r.pool.QueryRow(ctx, `SELECT id, batch_id, business_date, opened_at, closed_at, report, received_at, version,
+			superseded_at, superseded_by
+		FROM z_report_versions WHERE location_id = $1 AND id = $2 ORDER BY seq DESC LIMIT 1`, locationID, id).
+		Scan(&z.ID, &z.BatchID, &z.BusinessDate, &z.OpenedAt, &z.ClosedAt, &report, &z.ReceivedAt, &z.Version, &v.SupersededAt, &v.SupersededBy)
+	z.Report = report
+	v.ID, v.Version, v.ReceivedAt = z.ID, z.Version, z.ReceivedAt
+	return z, v, err
+}
+
+// DrawerRevisions lists what a closed drawer session was before each later
+// drawer.closed changed it, oldest first.
+func (r *DayCloseRepository) DrawerRevisions(ctx context.Context, locationID, drawerID uuid.UUID) ([]dayclose.Revision, error) {
+	rows, err := r.pool.Query(ctx, `SELECT seq, old, revised_at FROM drawer_session_revisions
+		WHERE location_id = $1 AND drawer_id = $2 ORDER BY seq`, locationID, drawerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []dayclose.Revision{}
+	for rows.Next() {
+		var v dayclose.Revision
+		var old []byte
+		if err := rows.Scan(&v.Seq, &old, &v.RevisedAt); err != nil {
+			return nil, err
+		}
+		v.Before = old
+		out = append(out, v)
+	}
+	return out, rows.Err()
 }
 
 // ListZ lists a store's Z reports, newest first (date nil = any date).
@@ -283,4 +480,26 @@ func (r *DayCloseRepository) GetDrawer(ctx context.Context, locationID, id uuid.
 		moves = append(moves, m)
 	}
 	return d, moves, rows.Err()
+}
+
+// MoneyFlags lists a store's money flags, newest first (M-2 / M-7 / M-12 /
+// M-13): what main stored but doesn't agree with.
+func (r *DayCloseRepository) MoneyFlags(ctx context.Context, locationID uuid.UUID, limit int) ([]dayclose.Flag, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id, at, event_id, event_type, subject, code, detail, resolved_at FROM money_flags
+		WHERE location_id = $1 ORDER BY at DESC, id DESC LIMIT $2`, locationID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []dayclose.Flag{}
+	for rows.Next() {
+		var f dayclose.Flag
+		var detail []byte
+		if err := rows.Scan(&f.ID, &f.At, &f.EventID, &f.EventType, &f.Subject, &f.Code, &detail, &f.ResolvedAt); err != nil {
+			return nil, err
+		}
+		f.Detail = detail
+		out = append(out, f)
+	}
+	return out, rows.Err()
 }

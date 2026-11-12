@@ -293,3 +293,63 @@ def test_payments_page_api(admin, store, mgr, make_store) -> None:
     assert _ok(mgr.get(f"{STORE_V1}/me/site/contact", timeout=5)) == {"reply_email": ""}
     assert _ok(mgr.put(f"{STORE_V1}/me/site/contact", json={"reply_email": "owner@example.com"}, timeout=5)) == {"reply_email": "owner@example.com"}
     assert _ok(mgr.put(f"{STORE_V1}/me/site/contact", json={"reply_email": ""}, timeout=5)) == {"reply_email": ""}
+
+
+# --- hardening C1 (HARDENING-PLAN.md M-3 / M-4 / M-14 / M-20) ---------------------------
+
+
+def test_cancel_is_asked_in_the_orders_transaction_and_never_captured(admin, store, mgr) -> None:
+    """M-3: the cancel asks the hold's release in the order's own transaction;
+    a hold of a cancelled order is never captured, even when it falls due."""
+    _connect(mgr)
+    r, _web = _card_order(admin, store, mgr, "cnon:card-nonce-ok")
+    o = check(r, "placeOrder")
+    cancel = _ev("order.status", order_id=o["id"], status="cancelled")
+    assert _floor(store, cancel) == {cancel["event_id"]: "applied"}
+    h = _hold(admin, o["id"])
+    assert h["cancel_requested_at"], "asked in the cancelling transaction"
+    # Made due + the worker: released, never charged.
+    _ok(admin.post(f"{ADMIN_V1}/card-holds/tick", timeout=30))
+    assert wait_until(lambda: _hold(admin, o["id"])["status"] == "cancelled", timeout=15)
+    h = _ok(admin.post(f"{ADMIN_V1}/card-holds/{o['id']}/due", timeout=30))
+    assert h["status"] == "cancelled" and h["captured_cents"] == 0
+    assert _fake_payment(h["payment_ref"])["status"] == "CANCELED"
+
+
+def test_capture_moves_only_the_holds_own_payment(admin, store, mgr) -> None:
+    """M-4: a counter card refund on a website order (a -500 row) stays as it
+    is when the hold is captured; M-14: the capture writes its tip."""
+    _connect(mgr)
+    r, _web = _card_order(admin, store, mgr, "cnon:card-nonce-ok", tip_cents=300)
+    o = check(r, "placeOrder")
+    total = o["money"]["total_cents"]
+    refund = _ev("order.payment", order_id=o["id"], payment={"id": str(uuid.uuid4()), "method": "card", "amount_cents": -500,
+                                                             "tip_cents": 0, "at": _now(), "approved_by": "mgr"})
+    assert _floor(store, refund) == {refund["event_id"]: "applied"}
+    h = _ok(admin.post(f"{ADMIN_V1}/card-holds/{o['id']}/due", timeout=30))
+    assert h["status"] == "captured" and h["payment_id"]
+    got = requests.get(f"{MAIN_BASE_URL}/api/v1/orders/{o['id']}", headers=store_key(store.key), timeout=5).json()
+    assert sorted(p["amount_cents"] for p in got["payments"]) == [-500, total], "the refund row didn't move"
+
+
+def test_website_tip_cap(admin, store, mgr) -> None:
+    """M-20: tips over the store's cap (X, default $50) are refused with a
+    message; the cap is the store's ordering setting."""
+    _connect(mgr)
+    m = _menu(mgr)
+    web = _channel(admin, store, "web")
+    r = _place(web, _order([_pizza(m)], method="card", token="cnon:card-nonce-ok", tip_cents=5001))
+    body = check(r, "placeOrder")
+    assert r.status_code == 422 and body["code"] == "tip_too_big" and "$50.00" in body["error"]
+    st = _ok(mgr.get(f"{STORE_V1}/me/ordering", timeout=5))["settings"]
+    assert st["tip_max_cents"] == 5000
+    # Raised to $80 (only the cap sent: the other settings stay).
+    st = _ok(mgr.put(f"{STORE_V1}/me/ordering", json={"tip_max_cents": 8000}, timeout=5))
+    assert st["tip_max_cents"] == 8000 and st["pickup_eta_minutes"] == 20
+    assert mgr.put(f"{STORE_V1}/me/ordering", json={"tip_max_cents": 100001}, timeout=5).status_code == 400
+    o = check(_place(web, _order([_pizza(m)], method="card", token="cnon:card-nonce-ok", tip_cents=6000)), "placeOrder")
+    # A tip added after the order: the same cap.
+    over = _ev("order.tip", order_id=o["id"], tip_cents=8001)
+    fine = _ev("order.tip", order_id=o["id"], tip_cents=7000)
+    assert _floor(store, over) == {over["event_id"]: "invalid"}
+    assert _floor(store, fine) == {fine["event_id"]: "applied"}

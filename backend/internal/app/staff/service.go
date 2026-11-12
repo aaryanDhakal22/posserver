@@ -106,6 +106,25 @@ func (s *Service) List(ctx context.Context, locationID uuid.UUID) ([]View, error
 	return out, nil
 }
 
+// RefundLimit is a person's role and refund limit at the store (nil =
+// unlimited, a manager); found=false when the store has no such person.
+func (s *Service) RefundLimit(ctx context.Context, locationID, staffID uuid.UUID) (string, *int64, bool, error) {
+	people, err := s.repo.List(ctx, locationID)
+	if err != nil {
+		return "", nil, false, err
+	}
+	st, _, err := s.Settings(ctx, locationID)
+	if err != nil {
+		return "", nil, false, err
+	}
+	for _, p := range people {
+		if p.ID == staffID {
+			return p.Role, staff.EffectiveLimits(p, st).RefundCents, true, nil
+		}
+	}
+	return "", nil, false, nil
+}
+
 // Config is what the store's Pi pulls: the settings and the active staff
 // with their PIN hashes.
 func (s *Service) Config(ctx context.Context, locationID uuid.UUID) (Config, error) {

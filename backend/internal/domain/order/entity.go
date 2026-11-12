@@ -298,6 +298,10 @@ type NewOrderInput struct {
 	SourceMetadata map[string]any
 	RawPayload     []byte
 
+	// MoneyFlagged: the caller checked the money itself and flags a mismatch
+	// (a counter order is stored and flagged, never refused, M-2 / M-13).
+	MoneyFlagged bool
+
 	// Channel: the sales channel (main 3.0), saved with the order.
 	Channel *ChannelRef
 }
@@ -371,7 +375,7 @@ func NewOrder(in NewOrderInput) (*Order, error) {
 	if in.PlacedAt.IsZero() {
 		return nil, ErrPlacedAtZero
 	}
-	if !moneyReconciles(in.Money) {
+	if !in.MoneyFlagged && !moneyReconcilesFor(in.Source, in.Money) {
 		return nil, ErrTotalMismatch
 	}
 
@@ -550,6 +554,27 @@ func (o *Order) Transition(to Status, actor string, actorID uuid.UUID, reason st
 func (o *Order) AttachPayment(p Payment) {
 	o.payments = append(o.payments, p)
 	o.updatedAt = time.Now().UTC()
+}
+
+// moneyReconcilesFor: exact for every source but the vendor's (its float
+// dollars may round by a cent), M-13.
+func moneyReconcilesFor(src Source, m MoneyBreakdown) bool {
+	if src == SourceOnline {
+		return moneyReconciles(m)
+	}
+	return moneyDiff(m) == 0
+}
+
+// moneyDiff is total − (subtotal + tax + tip + fees − discounts).
+func moneyDiff(m MoneyBreakdown) Money {
+	var fees, discounts Money
+	for _, f := range m.Fees {
+		fees += f.Amount
+	}
+	for _, d := range m.Discounts {
+		discounts += d.Amount
+	}
+	return m.Total - (m.Subtotal + m.Tax + m.Tip + fees - discounts)
 }
 
 func moneyReconciles(m MoneyBreakdown) bool {

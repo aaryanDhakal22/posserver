@@ -69,7 +69,44 @@ type CounterPayment struct {
 	Ref         string    `json:"ref"`
 	At          time.Time `json:"at"`
 	StaffID     string    `json:"staff_id"`
+	// Hardening (all optional): the terminal's idempotency key (unique per
+	// store: the same key with another body is a conflict), the payment a
+	// refund gives back, the manager who approved it, the Pi's batch.
+	ClientKey  string `json:"client_key"`
+	RefundOf   string `json:"refund_of"`
+	ApprovedBy string `json:"approved_by"`
+	BatchID    *int64 `json:"batch_id"`
 }
+
+// MoneyFlag is a problem main found in money it stored anyway (M-2 / M-7 /
+// M-12 / M-13): the Pi's drawer already moved, so main never refuses money it
+// can store; it flags it (payments.flags, money_flags, a log, a metric, a page).
+type MoneyFlag struct {
+	Code   string         `json:"code"`
+	Detail map[string]any `json:"detail,omitempty"`
+}
+
+// Money flag codes.
+const (
+	FlagZeroAmount          = "zero_amount"           // amount 0 and no tip
+	FlagAmountOutOfRange    = "amount_out_of_range"   // |amount| over MaxPaymentCents
+	FlagOrderCancelled      = "order_cancelled"       // a payment on a cancelled order
+	FlagOverpaid            = "overpaid"              // payments add up to more than the total
+	FlagRefundExceedsPaid   = "refund_exceeds_paid"   // refunds add up to more than was paid
+	FlagRefundExceedsTender = "refund_exceeds_tender" // more back on a tender than it took, nobody approved
+	FlagRefundExceedsOrig   = "refund_exceeds_original"
+	FlagRefundOfUnknown     = "refund_of_unknown"    // refund_of names no payment of this order
+	FlagOverStaffLimit      = "over_staff_limit"     // a refund over the person's limit, nobody approved
+	FlagRefundNeedsManager  = "refund_needs_manager" // a cashier's card refund, nobody approved
+	FlagMoneyMismatch       = "money_mismatch"       // total != subtotal + tax + tip + fees − discounts
+	FlagLinesSubtotal       = "lines_subtotal_mismatch"
+	FlagDriverShareOverFee  = "driver_share_over_fee" // the share was dropped
+	FlagPaymentConflict     = "payment_conflict"      // the id / key / ref is another payment's
+	FlagZMismatch           = "z_mismatch"            // the Z's tenders differ from main's payments
+	FlagZUnbalanced         = "z_unbalanced"          // the Pi's own Z doesn't balance
+	FlagChangedAfterZ       = "changed_after_z"       // order.changed after its batch's Z
+	FlagDrawerRecount       = "drawer_recount"        // a closed drawer closed again with other numbers
+)
 
 // CheckedPayment is a validated CounterPayment.
 type CheckedPayment struct {
@@ -83,6 +120,21 @@ type CheckedPayment struct {
 	Ref      string
 	At       time.Time
 	StaffID  *uuid.UUID
+
+	ClientKey  string
+	RefundOf   *uuid.UUID
+	ApprovedBy string
+	BatchID    *int64
+	// Flags found by Check (the repo adds its own); RefundLimit is the
+	// refunder's limit (nil = unlimited / unknown) for over_staff_limit.
+	Flags       []MoneyFlag
+	RefundLimit *int64
+}
+
+// Fingerprint is what must match for a replay of the same payment id /
+// client_key to be the same payment.
+func (p CheckedPayment) Fingerprint() string {
+	return fmt.Sprintf("%s|%d|%d|%s", p.Method, p.Amount, p.Tip, p.Ref)
 }
 
 func optID(s, what string) (*uuid.UUID, error) {
@@ -113,21 +165,32 @@ func (p CounterPayment) Check() (CheckedPayment, error) {
 		return CheckedPayment{}, badCounter("payment method %q (cash, card, square_app, manual_card, comp, other)", p.Method)
 	}
 	// A zero amount is a tip added to a card payment afterwards (the Pi's
-	// POST …/payments/{id}/tip, agent contract 2.10p): it must carry a tip.
-	if (p.AmountCents == 0 && p.TipCents == 0) || p.AmountCents > MaxPaymentCents || p.AmountCents < -MaxPaymentCents {
-		return CheckedPayment{}, badCounter("payment amount_cents must be within ±%d, non-zero unless it is a tip (tip_cents > 0)", MaxPaymentCents)
+	// POST …/payments/{id}/tip, agent contract 2.10p): it should carry a tip.
+	// Money main can store is stored and flagged, never refused (M-2): only
+	// a negative tip (it can't be stored as sent) is refused.
+	var flags []MoneyFlag
+	if p.AmountCents == 0 && p.TipCents == 0 {
+		flags = append(flags, MoneyFlag{Code: FlagZeroAmount})
 	}
-	if p.TipCents < 0 || p.TipCents > MaxPaymentCents {
-		return CheckedPayment{}, badCounter("payment tip_cents out of range")
+	if p.AmountCents > MaxPaymentCents || p.AmountCents < -MaxPaymentCents || p.TipCents > MaxPaymentCents {
+		flags = append(flags, MoneyFlag{Code: FlagAmountOutOfRange, Detail: map[string]any{"amount_cents": p.AmountCents, "tip_cents": p.TipCents}})
+	}
+	if p.TipCents < 0 {
+		return CheckedPayment{}, badCounter("payment tip_cents can't be negative")
 	}
 	staffID, err := optID(p.StaffID, "payment staff_id")
 	if err != nil {
 		return CheckedPayment{}, err
 	}
-	for _, f := range []struct{ v, what string }{{p.Last4, "last4"}, {p.AuthCode, "auth_code"}, {p.Ref, "ref"}} {
+	for _, f := range []struct{ v, what string }{{p.Last4, "last4"}, {p.AuthCode, "auth_code"}, {p.Ref, "ref"},
+		{p.ClientKey, "client_key"}, {p.ApprovedBy, "approved_by"}} {
 		if _, err := short(f.v, 100, "payment "+f.what); err != nil {
 			return CheckedPayment{}, err
 		}
+	}
+	refundOf, err := optID(p.RefundOf, "payment refund_of")
+	if err != nil {
+		return CheckedPayment{}, err
 	}
 	at := p.At.UTC()
 	if p.At.IsZero() {
@@ -138,7 +201,8 @@ func (p CounterPayment) Check() (CheckedPayment, error) {
 		st = PaymentRefunded
 	}
 	return CheckedPayment{ID: id, Method: p.Method, Status: st, Amount: Money(p.AmountCents), Tip: Money(p.TipCents),
-		Last4: p.Last4, AuthCode: p.AuthCode, Ref: p.Ref, At: at, StaffID: staffID}, nil
+		Last4: p.Last4, AuthCode: p.AuthCode, Ref: p.Ref, At: at, StaffID: staffID,
+		ClientKey: strings.TrimSpace(p.ClientKey), RefundOf: refundOf, ApprovedBy: p.ApprovedBy, BatchID: p.BatchID, Flags: flags}, nil
 }
 
 // CounterOrder is a counter snapshot made into an order (+ its payments and
@@ -147,6 +211,8 @@ type CounterOrder struct {
 	Order    *Order
 	Payments []CheckedPayment
 	Floor    FloorUpdate
+	// Flags: money problems the order is stored with (M-13).
+	Flags []MoneyFlag
 }
 
 // NewCounterOrder builds the order the Pi placed, in the Pi's scope (the
@@ -210,18 +276,35 @@ func NewCounterOrder(sc Scope, s CounterSnapshot, raw []byte) (*CounterOrder, er
 		pays = append(pays, cp)
 	}
 	m := MoneyBreakdown{Subtotal: Money(s.Money.Subtotal), Tax: Money(s.Money.Tax), Tip: Money(s.Money.Tip), Total: Money(s.Money.Total)}
+	// Negative money can't be stored (orders_money_ck): refused. Anything
+	// else that doesn't add up is stored and flagged (M-13).
+	if m.Subtotal < 0 || m.Tax < 0 || m.Tip < 0 || m.Total < 0 {
+		return nil, badCounter("subtotal, tax, tip and total can't be negative")
+	}
+	var flags []MoneyFlag
 	for _, f := range s.Money.Fees {
 		fee := Fee{Type: f.Type, Label: f.Label, Amount: Money(f.Amount)}
-		if f.Type == "delivery" && f.DriverCents > 0 && f.DriverCents <= f.Amount {
-			fee.DriverCents = Money(f.DriverCents)
+		if f.Type == "delivery" && f.DriverCents > 0 {
+			if f.DriverCents <= f.Amount {
+				fee.DriverCents = Money(f.DriverCents)
+			} else {
+				flags = append(flags, MoneyFlag{Code: FlagDriverShareOverFee, Detail: map[string]any{"fee_cents": f.Amount, "driver_cents": f.DriverCents}})
+			}
 		}
 		m.Fees = append(m.Fees, fee)
 	}
 	for _, d := range s.Money.Discounts {
 		m.Discounts = append(m.Discounts, Discount{Type: d.Type, Code: d.Code, Label: d.Label, Amount: Money(d.Amount)})
 	}
-	if !moneyReconciles(m) {
-		return nil, badCounter("money doesn't add up (total = subtotal + tax + tip + fees − discounts)")
+	if d := moneyDiff(m); d != 0 {
+		flags = append(flags, MoneyFlag{Code: FlagMoneyMismatch, Detail: map[string]any{"total_cents": int64(m.Total), "difference_cents": int64(d)}})
+	}
+	var lines Money
+	for _, it := range s.Items {
+		lines += Money(it.LineTotal)
+	}
+	if lines != m.Subtotal {
+		flags = append(flags, MoneyFlag{Code: FlagLinesSubtotal, Detail: map[string]any{"subtotal_cents": int64(m.Subtotal), "lines_cents": int64(lines)}})
 	}
 	var addr *Address
 	if a := s.Fulfillment.Address; a != nil {
@@ -246,12 +329,12 @@ func NewCounterOrder(sc Scope, s CounterSnapshot, raw []byte) (*CounterOrder, er
 		Customer:    Customer{DisplayName: s.Customer.DisplayName, Email: s.Customer.Email, Phone: s.Customer.Phone},
 		Fulfillment: Fulfillment{Type: ft, Address: addr, PromisedAt: s.Fulfillment.PromisedAt},
 		Items:       items, Money: m, Currency: cur, PlacedAt: s.PlacedAt, Notes: s.Notes,
-		SourceMetadata: meta, RawPayload: raw,
+		SourceMetadata: meta, RawPayload: raw, MoneyFlagged: true,
 	})
 	if err != nil {
 		return nil, badCounter("%v", err)
 	}
-	return &CounterOrder{Order: o, Payments: pays, Floor: FloorUpdate{Status: status, KitchenNumber: s.KitchenNumber,
+	return &CounterOrder{Order: o, Payments: pays, Flags: flags, Floor: FloorUpdate{Status: status, KitchenNumber: s.KitchenNumber,
 		EstimatedReadyAt: s.EstimatedReadyAt, DriverName: s.DriverName, At: s.PlacedAt}}, nil
 }
 

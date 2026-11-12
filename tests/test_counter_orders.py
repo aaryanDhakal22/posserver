@@ -141,15 +141,20 @@ def test_status_payment_void(store) -> None:
     assert sorted(p["amount_cents"] for p in pays) == [-500, 2303]
     assert {p["method"] for p in pays} == {"card"} and any(p.get("last4") == "4242" for p in pays)
 
-    # Bad payments / unknown order.
+    # Bad payments / unknown order: only what main can't store is invalid
+    # (an unknown tender, a negative tip); a zero amount with no tip is
+    # stored and flagged (hardening M-2).
     bad = [
         {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid, "payment": {**pay, "id": str(uuid.uuid4()), "method": "iou"}},
         {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid,
-         "payment": {**pay, "id": str(uuid.uuid4()), "amount_cents": 0, "tip_cents": 0}},  # a zero amount needs a tip
+         "payment": {**pay, "id": str(uuid.uuid4()), "tip_cents": -1}},
     ]
+    zero = {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid,
+            "payment": {**pay, "id": str(uuid.uuid4()), "amount_cents": 0, "tip_cents": 0, "ref": ""}}
     nf = {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": str(uuid.uuid4()), "payment": {**pay, "id": str(uuid.uuid4())}}
-    res = _send(store.key, [*bad, nf])
+    res = _send(store.key, [*bad, zero, nf])
     assert [res[b["event_id"]] for b in bad] == ["invalid", "invalid"] and res[nf["event_id"]] == "not_found"
+    assert res[zero["event_id"]] == "applied"
     # A tip added to a card payment afterwards (agent §2.10p): a zero amount with a tip is taken.
     tip = {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid,
            "payment": {**pay, "id": str(uuid.uuid4()), "amount_cents": 0, "tip_cents": 200, "ref": pay["id"]}}
@@ -161,8 +166,8 @@ def test_status_payment_void(store) -> None:
     v1 = {"event_id": str(uuid.uuid4()), "type": "order.void", "order_id": oid, "reason": "customer changed their mind",
           "staff_id": snap["staff_id"], "at": _now()}
     v2 = {**v1, "event_id": str(uuid.uuid4())}
-    v3 = {**v1, "event_id": str(uuid.uuid4()), "reason": ""}
-    assert _send(store.key, [v1, v2, v3]) == {v1["event_id"]: "applied", v2["event_id"]: "stale", v3["event_id"]: "invalid"}
+    v3 = {**v1, "event_id": str(uuid.uuid4()), "reason": ""}  # no reason: stored all the same (stale: voided already)
+    assert _send(store.key, [v1, v2, v3]) == {v1["event_id"]: "applied", v2["event_id"]: "stale", v3["event_id"]: "stale"}
     assert _get(store.key, oid)["status"] == "cancelled"
 
 
@@ -215,12 +220,20 @@ def test_bad_placed_events(store, make_store) -> None:
         return _placed(_snapshot(_uuid7(), **kw))
 
     cases = [ev(source="online"), ev(items=[]), ev(status="scheduled"), ev(fulfillment={"type": "dine_in"}),
-             ev(money={"subtotal_cents": 100, "tax_cents": 0, "tip_cents": 0, "total_cents": 999})]
+             ev(money={"subtotal_cents": -100, "tax_cents": 0, "tip_cents": 0, "total_cents": 0})]
     nosnap = {"event_id": str(uuid.uuid4()), "type": "order.placed", "order_id": _uuid7(), "at": _now()}
     mismatch = _placed(_snapshot(_uuid7()))
     mismatch["order_id"] = _uuid7()
     res = _send(store.key, [*cases, nosnap, mismatch])
     assert set(res.values()) == {"invalid"}, res
+
+    # Money that doesn't add up is the Pi's sale all the same: stored and
+    # flagged, never refused (hardening M-2 / M-13).
+    off = ev(money={"subtotal_cents": 2399, "tax_cents": 0, "tip_cents": 0, "total_cents": 999}, payments=[])
+    assert _send(store.key, [off]) == {off["event_id"]: "applied"}
+    assert _get(store.key, off["order_id"])["money"]["total_cents"] == 999
+    flags = store.manager_session().get(f"{STORE_V1}/me/reports/flags", timeout=5).json()["flags"]
+    assert any(f["code"] == "money_mismatch" and f["subject"] == f"order:{off['order_id']}" for f in flags), flags
 
     # The same id from another store's Pi: its own scope, a different order — refused as a duplicate.
     oid = _uuid7()
@@ -288,8 +301,9 @@ def test_order_changed_replaces_lines_and_money(store, publish) -> None:
     assert _send(store.key, [again]) == {again["event_id"]: "applied"}
     assert len(_get(store.key, oid)["items"]) == 2
 
-    # Money that doesn't add up, a snapshot for another id, an unknown order: refused.
-    bad_money = {**ch, "event_id": str(uuid.uuid4()), "snapshot": {**changed, "money": {**changed["money"], "total_cents": 1}}}
+    # Negative money (it can't be stored), a snapshot for another id, an unknown order: refused.
+    # (Money that only doesn't add up is applied and flagged: test_money_hardening.py.)
+    bad_money = {**ch, "event_id": str(uuid.uuid4()), "snapshot": {**changed, "money": {**changed["money"], "total_cents": -1}}}
     other_id = {**ch, "event_id": str(uuid.uuid4()), "order_id": str(uuid.uuid4())}
     unknown = _snapshot(_uuid7())
     nf = {"event_id": str(uuid.uuid4()), "type": "order.changed", "order_id": unknown["id"], "at": _now(), "snapshot": unknown}

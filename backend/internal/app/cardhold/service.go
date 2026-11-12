@@ -23,6 +23,7 @@ import (
 	"quiccpos/main/internal/domain/payment"
 	"quiccpos/main/internal/infra/database/repositories"
 	"quiccpos/main/internal/infra/square"
+	"quiccpos/main/internal/observability"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -39,8 +40,12 @@ type Repo interface {
 	RequestCaptureForBatch(ctx context.Context, locationID uuid.UUID, batchID int64) (int64, error)
 	RequestCaptureForDriver(ctx context.Context, locationID uuid.UUID, driverID string, from, to time.Time) (int64, error)
 	SetAddedTip(ctx context.Context, locationID, orderID uuid.UUID, cents int64) (bool, error)
-	Captured(ctx context.Context, orderID uuid.UUID, cents int64, tipRef, tipNote string) error
+	Captured(ctx context.Context, h repositories.CardHold, onHold, tip, separate int64, tipRef, tipNote string, seenTip int64) (bool, error)
 	Cancelled(ctx context.Context, orderID uuid.UUID, note string) error
+	Refunded(ctx context.Context, h repositories.CardHold, cents int64, ref string, tipCents int64, tipRef, note string) error
+	ClaimUndo(ctx context.Context, n int) ([]repositories.CardHold, error)
+	UndoFailed(ctx context.Context, orderID uuid.UUID, lastError string) error
+	TipCap(ctx context.Context, locationID uuid.UUID) (int64, error)
 	Retry(ctx context.Context, orderID uuid.UUID, next time.Time, lastError string) error
 	Failed(ctx context.Context, orderID uuid.UUID, lastError string) error
 	SetDue(ctx context.Context, orderID uuid.UUID, due time.Time) error
@@ -61,7 +66,14 @@ type Service struct {
 	now      func() time.Time
 	kick     chan struct{} // wakes the worker (a clock-out / Close batch asked for captures)
 	final    func(ctx context.Context, orderID uuid.UUID)
+	meters   *observability.Meters
 }
+
+// SetMeters records captures, voids, refunds and failures (L-3).
+func (s *Service) SetMeters(m *observability.Meters) { s.meters = m }
+
+// ErrTipTooBig: an added tip over the store's cap (M-20).
+var ErrTipTooBig = errors.New("the tip is over the store's tip cap")
 
 // OnAmountChanged is told when a capture charged more than the hold showed
 // (a late tip), so the customer gets a final receipt.
@@ -98,7 +110,7 @@ func backoff(attempt int) time.Duration {
 func money(c int64) string { return fmt.Sprintf("$%d.%02d", c/100, c%100) }
 
 func (s *Service) page(ctx context.Context, locationID uuid.UUID, title, msg string) {
-	s.logger.Warn().Str("location_id", locationID.String()).Msg(title + ": " + msg)
+	s.logger.Warn().Ctx(ctx).Str("location_id", locationID.String()).Msg(title + ": " + msg)
 	if s.notifier != nil {
 		_ = s.notifier.Notify(context.WithoutCancel(ctx), notify.Notice{LocationID: locationID, Kind: notify.KindPaymentProblem, Title: title, Message: msg})
 	}
@@ -139,46 +151,124 @@ func (s *Service) SetTip(ctx context.Context, locationID, orderID uuid.UUID, cen
 	if cents < 0 {
 		return false, fmt.Errorf("tip can't be negative")
 	}
+	limit, err := s.repo.TipCap(ctx, locationID)
+	if err != nil {
+		return false, err
+	}
+	if cents > limit {
+		s.logger.Warn().Ctx(ctx).Str("order_id", orderID.String()).Int64("tip_cents", cents).Int64("cap_cents", limit).
+			Msg("added tip over the store's tip cap: refused")
+		return false, ErrTipTooBig
+	}
 	return s.repo.SetAddedTip(ctx, locationID, orderID, cents)
 }
 
-// OrderCancelled voids the order's hold, or refunds it if it was captured.
+// OrderCancelled releases a cancelled order's hold now (voids it while held,
+// refunds it once captured). The order's own transaction already asked for
+// it (the card_holds_on_order_cancel trigger, M-3), so nothing captures it
+// any more and the worker keeps retrying a void / refund that fails; this
+// only does the work at once instead of at the worker's next tick.
 func (s *Service) OrderCancelled(ctx context.Context, locationID, orderID uuid.UUID) {
-	ctx = context.WithoutCancel(ctx)
-	h, err := s.repo.Hold(ctx, orderID)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && h.LocationID != locationID) {
+	s.TickUndo(context.WithoutCancel(ctx))
+}
+
+// TickUndo voids / refunds the holds of cancelled orders that are due; it
+// returns how many it worked on.
+func (s *Service) TickUndo(ctx context.Context) int {
+	n := 0
+	for {
+		hs, err := s.repo.ClaimUndo(ctx, 20)
+		if err != nil {
+			s.logger.Error().Ctx(ctx).Err(err).Msg("claim card holds to release")
+			return n
+		}
+		for _, h := range hs {
+			s.undo(ctx, h)
+		}
+		n += len(hs)
+		if len(hs) < 20 {
+			return n
+		}
+	}
+}
+
+func (s *Service) undoRetry(ctx context.Context, h repositories.CardHold, what string, err error) {
+	s.count(ctx, h.LocationID, "failed", what, 0)
+	if h.Attempts+1 >= MaxAttempts || payment.IsPermanent(err) {
+		if ferr := s.repo.UndoFailed(ctx, h.OrderID, err.Error()); ferr != nil {
+			s.logger.Error().Ctx(ctx).Err(ferr).Str("order_id", h.OrderID.String()).Msg("card hold: could not record the failed release")
+		}
+		title, act := "Card hold not released", "Void payment "+h.PaymentRef+" in Square."
+		if what == "refund" {
+			title, act = "Refund failed", "Refund payment "+h.PaymentRef+" in Square."
+		}
+		s.page(ctx, h.LocationID, title, fmt.Sprintf("A cancelled order's %s card payment couldn't be released (%v). %s",
+			money(h.AmountCents+h.TipCents+h.AddedTipCents), err, act))
 		return
 	}
-	if err != nil {
-		s.logger.Error().Err(err).Msg("cancel: read hold")
-		return
+	if rerr := s.repo.Retry(ctx, h.OrderID, s.now().Add(backoff(h.Attempts)), err.Error()); rerr != nil {
+		s.logger.Error().Ctx(ctx).Err(rerr).Str("order_id", h.OrderID.String()).Msg("card hold: could not schedule the retry")
 	}
+	s.logger.Warn().Ctx(ctx).Err(err).Str("order_id", h.OrderID.String()).Str("payment_ref", h.PaymentRef).Str("op", what).
+		Int("attempt", h.Attempts+1).Msg("card hold release will retry")
+}
+
+func (s *Service) undo(ctx context.Context, h repositories.CardHold) {
 	gw, ok := s.holders[h.Gateway]
 	if !ok {
+		if err := s.repo.UndoFailed(ctx, h.OrderID, "no adapter for "+h.Gateway); err != nil {
+			s.logger.Error().Ctx(ctx).Err(err).Msg("card hold: could not record the failed release")
+		}
 		return
 	}
 	switch h.Status {
 	case "held":
-		if err := gw.Void(ctx, holdOf(h)); err != nil {
-			s.page(ctx, locationID, "Card hold not released", fmt.Sprintf("An order was cancelled but its %s card hold couldn't be released (%v). Void payment %s in Square.",
-				money(h.AmountCents+h.TipCents), err, h.PaymentRef))
+		if err := gw.Void(ctx, holdOf(h)); err != nil && !errors.Is(err, payment.ErrHoldGone) {
+			s.undoRetry(ctx, h, "void", err)
 			return
 		}
-		_ = s.repo.Cancelled(ctx, orderID, "order cancelled")
+		if err := s.repo.Cancelled(ctx, h.OrderID, "order cancelled"); err != nil {
+			s.logger.Error().Ctx(ctx).Err(err).Str("order_id", h.OrderID.String()).Msg("card hold voided at Square but not saved (the next try voids again: harmless)")
+			return
+		}
+		s.count(ctx, h.LocationID, "voided", "void", h.AmountCents+h.TipCents)
+		s.logger.Info().Ctx(ctx).Str("order_id", h.OrderID.String()).Str("payment_ref", h.PaymentRef).
+			Int64("cents", h.AmountCents+h.TipCents).Str("reason", "order cancelled").Msg("card hold voided")
 	case "captured":
-		if err := gw.Refund(ctx, locationID, h.PaymentRef, h.CapturedCents-tipCharged(h)); err != nil {
-			s.page(ctx, locationID, "Refund failed", fmt.Sprintf("A cancelled order's %s card payment couldn't be refunded (%v). Refund payment %s in Square.",
-				money(h.CapturedCents), err, h.PaymentRef))
-			return
-		}
-		if h.TipPaymentRef != "" {
-			if err := gw.Refund(ctx, locationID, h.TipPaymentRef, h.AddedTipCents); err != nil {
-				s.page(ctx, locationID, "Refund failed", fmt.Sprintf("A cancelled order's separate %s tip couldn't be refunded (%v). Refund payment %s in Square.",
-					money(h.AddedTipCents), err, h.TipPaymentRef))
+		main := h.CapturedCents - tipCharged(h) - h.RefundedCents
+		if main > 0 {
+			if err := gw.Refund(ctx, h.LocationID, h.PaymentRef, main); err != nil {
+				s.undoRetry(ctx, h, "refund", err)
+				return
 			}
 		}
-		_ = s.repo.Cancelled(ctx, orderID, "order cancelled after capture: refunded")
+		tip := int64(0)
+		if h.TipPaymentRef != "" && h.AddedTipCents > 0 {
+			if err := gw.Refund(ctx, h.LocationID, h.TipPaymentRef, h.AddedTipCents); err != nil {
+				// The main refund went through (its idempotency key keeps a
+				// retry to one refund); only the tip is retried.
+				s.undoRetry(ctx, h, "refund", err)
+				return
+			}
+			tip = h.AddedTipCents
+		}
+		if err := s.repo.Refunded(ctx, h, main, h.PaymentRef, tip, h.TipPaymentRef, "order cancelled after capture: refunded"); err != nil {
+			s.logger.Error().Ctx(ctx).Err(err).Str("order_id", h.OrderID.String()).Msg("card refund made at Square but not saved (the next try refunds again with the same key)")
+			return
+		}
+		s.count(ctx, h.LocationID, "refunded", "refund", main+tip)
+		s.logger.Info().Ctx(ctx).Str("order_id", h.OrderID.String()).Str("payment_ref", h.PaymentRef).
+			Int64("cents", main+tip).Str("reason", "order cancelled after capture").Msg("card hold refunded")
 	}
+}
+
+// count records a hold outcome (L-3): payments.card_holds{result, op} and,
+// for money that moved, payments.captured_cents / payments.refunded_cents.
+func (s *Service) count(ctx context.Context, locationID uuid.UUID, result, op string, cents int64) {
+	if s.meters == nil {
+		return
+	}
+	s.meters.RecordCardHold(ctx, locationID, result, op, cents)
 }
 
 // tipCharged is the part of CapturedCents that went on the separate tip payment.
@@ -199,7 +289,7 @@ func (s *Service) SquarePayment(ctx context.Context, locationID uuid.UUID, p *sq
 	if err != nil || h.Status != "held" {
 		return
 	}
-	_ = s.repo.Cancelled(ctx, h.OrderID, "voided at Square")
+	s.must(ctx, h, "cancelled", s.repo.Cancelled(ctx, h.OrderID, "voided at Square"))
 	s.page(ctx, locationID, "Card hold voided", fmt.Sprintf("A %s card hold was voided in Square before main captured it (payment %s). The order is unpaid.",
 		money(h.AmountCents+h.TipCents), p.ID))
 }
@@ -212,6 +302,7 @@ func (s *Service) Run(ctx context.Context) {
 	defer t.Stop()
 	for {
 		s.Tick(ctx)
+		s.TickUndo(ctx)
 		select {
 		case <-ctx.Done():
 			return
@@ -266,19 +357,20 @@ func (s *Service) Holds(ctx context.Context, locationID uuid.UUID, limit int) ([
 
 func (s *Service) retry(ctx context.Context, h repositories.CardHold, err error) {
 	if h.Attempts+1 >= MaxAttempts || payment.IsPermanent(err) {
-		_ = s.repo.Failed(ctx, h.OrderID, err.Error())
+		s.must(ctx, h, "failed", s.repo.Failed(ctx, h.OrderID, err.Error()))
+		s.count(ctx, h.LocationID, "failed", "capture", 0)
 		s.page(ctx, h.LocationID, "Card capture failed", fmt.Sprintf("main couldn't capture a %s card hold (payment %s): %v. Capture it in Square before it expires (7 days).",
 			money(h.AmountCents+h.TipCents+h.AddedTipCents), h.PaymentRef, err))
 		return
 	}
-	_ = s.repo.Retry(ctx, h.OrderID, s.now().Add(backoff(h.Attempts)), err.Error())
+	s.must(ctx, h, "retry", s.repo.Retry(ctx, h.OrderID, s.now().Add(backoff(h.Attempts)), err.Error()))
 	s.logger.Warn().Err(err).Str("order_id", h.OrderID.String()).Int("attempt", h.Attempts+1).Msg("card capture will retry")
 }
 
 func (s *Service) capture(ctx context.Context, h repositories.CardHold) {
 	gw, ok := s.holders[h.Gateway]
 	if !ok {
-		_ = s.repo.Failed(ctx, h.OrderID, "no adapter for "+h.Gateway)
+		s.must(ctx, h, "failed", s.repo.Failed(ctx, h.OrderID, "no adapter for "+h.Gateway))
 		return
 	}
 	hold := holdOf(h)
@@ -335,14 +427,44 @@ func (s *Service) capture(ctx context.Context, h repositories.CardHold) {
 			cents += separateTip
 		}
 	}
-	if err := s.repo.Captured(ctx, h.OrderID, cents, tipRef, tipNote); err != nil {
-		s.logger.Error().Err(err).Str("order_id", h.OrderID.String()).Msg("card hold captured but not saved (the next try sees it captured)")
+	onHold := cents
+	if tipRef != "" {
+		onHold -= separateTip
+	}
+	saved, err := s.repo.Captured(ctx, h, onHold, hold.TipCents, cents-onHold, tipRef, tipNote, h.AddedTipCents)
+	if err != nil {
+		s.logger.Error().Ctx(ctx).Err(err).Str("order_id", h.OrderID.String()).Msg("card hold captured but not saved (the next try sees it captured)")
+		s.count(ctx, h.LocationID, "failed", "save", 0)
+		s.page(ctx, h.LocationID, "Card capture not saved", fmt.Sprintf("A %s card payment (%s) was captured but main couldn't record it (%v). It is retried.",
+			money(cents), h.PaymentRef, err))
 		return
 	}
-	s.logger.Info().Str("order_id", h.OrderID.String()).Int64("cents", cents).Str("reason", reasonOr(h.CaptureReason, "safety")).Msg("card hold captured")
+	if !saved {
+		// A tip was added (or the order cancelled) while capturing: look again.
+		s.logger.Warn().Ctx(ctx).Str("order_id", h.OrderID.String()).Msg("card hold changed while capturing: looked at again")
+		if err := s.repo.Retry(ctx, h.OrderID, s.now(), "changed while capturing"); err != nil {
+			s.logger.Error().Ctx(ctx).Err(err).Msg("card hold: could not requeue")
+		}
+		s.wake()
+		return
+	}
+	s.count(ctx, h.LocationID, "captured", "capture", cents)
+	s.logger.Info().Ctx(ctx).Str("order_id", h.OrderID.String()).Str("payment_ref", h.PaymentRef).Int64("cents", cents).
+		Str("reason", reasonOr(h.CaptureReason, "safety")).Msg("card hold captured")
 	if s.final != nil && cents != h.AmountCents+h.TipCents {
 		s.final(ctx, h.OrderID)
 	}
+}
+
+// must logs and pages a hold write that failed (L-3: they were discarded).
+func (s *Service) must(ctx context.Context, h repositories.CardHold, what string, err error) {
+	if err == nil {
+		return
+	}
+	s.logger.Error().Ctx(ctx).Err(err).Str("order_id", h.OrderID.String()).Str("payment_ref", h.PaymentRef).Str("write", what).
+		Msg("card hold write failed")
+	s.page(ctx, h.LocationID, "Card hold not saved", fmt.Sprintf("main couldn't record a card hold change (%s, payment %s): %v. Check it on the Payments page.",
+		what, h.PaymentRef, err))
 }
 
 func reasonOr(r, d string) string {
@@ -353,7 +475,7 @@ func reasonOr(r, d string) string {
 }
 
 func (s *Service) gone(ctx context.Context, h repositories.CardHold) {
-	_ = s.repo.Cancelled(ctx, h.OrderID, "voided or expired at the processor")
+	s.must(ctx, h, "cancelled", s.repo.Cancelled(ctx, h.OrderID, "voided or expired at the processor"))
 	s.page(ctx, h.LocationID, "Card hold gone", fmt.Sprintf("A %s card hold was voided or expired before main could capture it (payment %s). The order is unpaid.",
 		money(h.AmountCents+h.TipCents), h.PaymentRef))
 }

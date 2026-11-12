@@ -8,6 +8,7 @@ import (
 	domainAuth "quiccpos/main/internal/domain/auth"
 	"quiccpos/main/internal/shared/touch"
 
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
@@ -36,6 +37,19 @@ func NewService(repo domainAuth.Repository, lg zerolog.Logger) *Service {
 func HashKey(rawKey string) string {
 	sum := sha256.Sum256([]byte(rawKey))
 	return hex.EncodeToString(sum[:])
+}
+
+// KeyState says why a key isn't accepted (F-4): domainAuth.KeyRevoked
+// (revoked, or its device / location / store deleted) or KeyUnknown.
+func (s *Service) KeyState(ctx context.Context, rawKey string) (string, *uuid.UUID, error) {
+	id, revoked, err := s.repo.RevokedKey(ctx, HashKey(rawKey))
+	if err != nil {
+		return "", nil, err
+	}
+	if revoked {
+		return domainAuth.KeyRevoked, id, nil
+	}
+	return domainAuth.KeyUnknown, nil, nil
 }
 
 func (s *Service) Authenticate(ctx context.Context, rawKey string) (*domainAuth.Device, error) {
