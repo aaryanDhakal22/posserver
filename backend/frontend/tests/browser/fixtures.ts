@@ -89,8 +89,15 @@ export class TestStore {
 
   async destroy() {
     if (!this.tenantId) return;
-    const r = await this.adminCall('DELETE', `/tenants/${this.tenantId}`).catch(() => null);
-    if (r && ![200, 204, 404].includes(r.status)) throw new Error(`deleting test store ${this.tag}: ${r.status}`);
+    let r = await this.adminCall('DELETE', `/tenants/${this.tenantId}`).catch(() => null);
+    if (r && r.status === 400) {
+      // A deadlock with a request that was still running (main answers the database's error as a
+      // 400): once more, now that nothing else touches the store.
+      r = await this.adminCall('DELETE', `/tenants/${this.tenantId}`).catch(() => null);
+    }
+    if (r && ![200, 204, 404].includes(r.status)) {
+      throw new Error(`deleting test store ${this.tag}: ${r.status} ${JSON.stringify(r.data ?? '')}`);
+    }
   }
 }
 
@@ -119,6 +126,10 @@ export const test = base.extend<Fixtures>({
     const r = await page.request.post('/store/v1/session', { data: { username: s.username, password: s.password } });
     expect(r.status()).toBe(200);
     await use(s);
+    // Stop the page first: a request it still had in flight (a screen polling or saving) could
+    // take locks the store's delete needs, and Postgres ends such a deadlock after 1 s (the delete
+    // answered 400 once on grace, 2026-11-12).
+    await page.goto('about:blank').catch(() => null);
     await s.destroy();
   },
   page: async ({ page }, use) => {
