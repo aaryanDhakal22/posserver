@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,19 +28,32 @@ import (
 // shelf — it never pushes anything.
 
 const (
-	maxAppAPK    = 100 << 20
-	keepReleases = 5
+	// defaultMaxAppAPKMB: the upload cap unless APP_RELEASE_MAX_MB says
+	// otherwise. 256 MB since 2026-11-12: the terminal's release APK carries
+	// Square's Mobile Payments SDK whole (Square doesn't support R8 shrinking).
+	defaultMaxAppAPKMB = 256
+	keepReleases       = 5
 )
+
+// AppAPKCap is the upload cap in bytes: APP_RELEASE_MAX_MB (a whole number
+// of MB, 1–1024) or the default. A value it can't read is the default.
+func AppAPKCap(getenv func(string) string) int64 {
+	if mb, err := strconv.ParseInt(strings.TrimSpace(getenv("APP_RELEASE_MAX_MB")), 10, 64); err == nil && mb >= 1 && mb <= 1024 {
+		return mb << 20
+	}
+	return defaultMaxAppAPKMB << 20
+}
 
 var appNameRe = regexp.MustCompile(`^[a-z][a-z0-9_-]{1,31}$`)
 
 type AppReleaseHandler struct {
 	pool   *pgxpool.Pool
 	logger zerolog.Logger
+	maxAPK int64 // bytes (AppAPKCap)
 }
 
 func NewAppReleaseHandler(pool *pgxpool.Pool, logger zerolog.Logger) *AppReleaseHandler {
-	return &AppReleaseHandler{pool: pool, logger: logger.With().Str("module", "app-release-handler").Logger()}
+	return &AppReleaseHandler{pool: pool, logger: logger.With().Str("module", "app-release-handler").Logger(), maxAPK: AppAPKCap(os.Getenv)}
 }
 
 // AppRelease is the public shape of a release (no bytes).
@@ -74,12 +89,12 @@ func (h *AppReleaseHandler) Upload(c *echo.Context) error {
 	if name == "" || len(name) > 64 {
 		return c.JSON(http.StatusBadRequest, errResp("version_name is required (max 64)"))
 	}
-	body, err := io.ReadAll(io.LimitReader(c.Request().Body, maxAppAPK+1))
+	body, err := io.ReadAll(io.LimitReader(c.Request().Body, h.maxAPK+1))
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("could not read the upload"))
 	}
-	if len(body) > maxAppAPK {
-		return c.JSON(http.StatusRequestEntityTooLarge, errResp("APK too large (max 100 MB)"))
+	if int64(len(body)) > h.maxAPK {
+		return c.JSON(http.StatusRequestEntityTooLarge, errResp(fmt.Sprintf("APK too large (max %d MB, APP_RELEASE_MAX_MB)", h.maxAPK>>20)))
 	}
 	if len(body) < 4 || !bytes.Equal(body[:4], []byte("PK\x03\x04")) {
 		return c.JSON(http.StatusBadRequest, errResp("body is not an APK (zip)"))

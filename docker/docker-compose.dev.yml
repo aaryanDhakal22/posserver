@@ -56,6 +56,9 @@ services:
       GOOGLE_MAPS_API_KEY:
       GEO_CENSUS_URL:
       GEO_NOMINATIM_URL:
+      # The app-release upload cap in MB (default 256; the terminal APK carries
+      # Square's SDK whole). Unset = the default.
+      APP_RELEASE_MAX_MB:
       # weborder stage 2. SQUARE_ENV unset on dev = the in-process fake Square.
       SITE_BASE_DOMAIN:
       SQUARE_ENV:

@@ -67,6 +67,9 @@ services:
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
       GEO_CENSUS_URL: ${GEO_CENSUS_URL:-}
       GEO_NOMINATIM_URL: ${GEO_NOMINATIM_URL:-}
+      # The app-release upload cap in MB (default 256; the terminal APK carries
+      # Square's SDK whole). Unset = the default.
+      APP_RELEASE_MAX_MB: ${APP_RELEASE_MAX_MB:-}
       # weborder stage 2: store websites + Square. SQUARE_ENV unset = off
       # (the test card); sandbox once the owner's Square app exists; fake = the
       # in-process fake. Doppler main/stg holds the values.

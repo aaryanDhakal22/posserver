@@ -24,7 +24,7 @@ var streams = appMiddleware.NewDrain()
 // (its own LimitReader, with its own error text). Keep a route here when it
 // takes files or documents; routes_bodylimit_test.go checks each still exists.
 var BodyLimits = map[string]int64{
-	"POST /admin/v1/app-releases":                   0, // APK, ≤ 100 MB (maxAppAPK)
+	"POST /admin/v1/app-releases":                   0, // APK, ≤ APP_RELEASE_MAX_MB (default 256 MB, handler.AppAPKCap)
 	"POST /admin/v1/locations/:id/customers/import": 0, // ≤ 32 MB (maxImportBody)
 	"POST /store/v1/agent/backup":                   0, // the Pi's SQLite copy, ≤ 64 MB (agentsync.MaxBackup)
 	"POST /store/v1/agent/rpc":                      8 << 20,
