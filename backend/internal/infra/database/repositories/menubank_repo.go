@@ -82,8 +82,18 @@ func loadBank(ctx context.Context, q *models.Queries, locationID uuid.UUID) (*me
 	if err != nil {
 		return nil, fmt.Errorf("option prices: %w", err)
 	}
+	fams, itemFam, optFam, err := loadFamilies(ctx, q.Raw(), locationID)
+	if err != nil {
+		return nil, err
+	}
 	b := &menu.Bank{LocationID: locationID, Version: ver.Version, Sizes: []menu.Size{}, Menus: []menu.BankMenu{},
-		Groups: map[uuid.UUID]menu.BankGroup{}}
+		Groups: map[uuid.UUID]menu.BankGroup{}, Families: fams}
+	famOf := func(m map[uuid.UUID]uuid.UUID, id uuid.UUID) *uuid.UUID {
+		if f, ok := m[id]; ok {
+			return &f
+		}
+		return nil
+	}
 	for _, s := range sizes {
 		b.Sizes = append(b.Sizes, sizeOf(s))
 	}
@@ -99,7 +109,7 @@ func loadBank(ctx context.Context, q *models.Queries, locationID uuid.UUID) (*me
 			prices = []menu.OptionPrice{}
 		}
 		optsByGroup[g] = append(optsByGroup[g], menu.BankOption{ModifierOption: toDomainOption(o), IsDefault: o.IsDefault,
-			KitchenName: o.KitchenName, Prices: prices})
+			KitchenName: o.KitchenName, Prices: prices, FamilyID: famOf(optFam, idOf(o.ID))})
 	}
 	for _, g := range groups {
 		o := optsByGroup[idOf(g.ID)]
@@ -120,7 +130,7 @@ func loadBank(ctx context.Context, q *models.Queries, locationID uuid.UUID) (*me
 	itemsByCat := map[uuid.UUID][]menu.BankItem{}
 	for _, it := range items {
 		bi := menu.BankItem{Item: toDomainItem(it), KitchenName: it.KitchenName, SKU: it.Sku,
-			Sizes: sizesByItem[idOf(it.ID)], GroupIDs: groupIDs[idOf(it.ID)]}
+			Sizes: sizesByItem[idOf(it.ID)], GroupIDs: groupIDs[idOf(it.ID)], FamilyID: famOf(itemFam, idOf(it.ID))}
 		if bi.Sizes == nil {
 			bi.Sizes = []menu.ItemSize{}
 		}

@@ -45,6 +45,17 @@ type Document struct {
 	Menus  []Menu  `json:"menus"`
 	Views  []View  `json:"views"`
 	Deals  []Deal  `json:"deals"`
+	// Families are the store's item / mod families (00045); items and
+	// options name theirs, coupon parts name item families.
+	Families []Family `json:"families,omitempty"`
+}
+
+// Family is a family by name: kind item | mod, a mod family's class
+// regular | premium | unpriced (absent: regular).
+type Family struct {
+	Name  string `json:"name"`
+	Kind  string `json:"kind"`
+	Class string `json:"class,omitempty"`
 }
 
 // Size is a store size ("12 Medium", short "12\"").
@@ -73,6 +84,8 @@ type Option struct {
 	IsDefault   bool             `json:"is_default"`
 	KitchenName string           `json:"kitchen_name"`
 	Prices      map[string]int64 `json:"prices,omitempty"`
+	// Family: a mod family's name (absent keeps, "" = none).
+	Family *string `json:"family,omitempty"`
 }
 
 // Menu → Category → Item is the bank's tree.
@@ -121,6 +134,8 @@ type Item struct {
 	// this order" (receipt only; wins over Printer). nil = keep, new rows
 	// false.
 	NoKitchenTicket *bool `json:"no_kitchen_ticket,omitempty"`
+	// Family: an item family's name (absent keeps, "" = none).
+	Family *string `json:"family,omitempty"`
 }
 
 // ItemSize is a size an item comes in.
@@ -268,6 +283,11 @@ type Tx interface {
 	ReplaceEntries(ctx context.Context, view menuview.View, entries []menuview.Entry) error
 	Layout(ctx context.Context, viewID uuid.UUID) (*menuview.Layout, error)
 	SetLayout(ctx context.Context, viewID uuid.UUID, l *menuview.Layout) error
+
+	CreateFamily(ctx context.Context, f menu.Family) (uuid.UUID, error)
+	UpdateFamily(ctx context.Context, f menu.Family) error // name, class
+	DeleteFamily(ctx context.Context, id uuid.UUID) error
+	SetFamily(ctx context.Context, option bool, ids []uuid.UUID, family *uuid.UUID) error // items, or options
 
 	CreateDeal(ctx context.Context, d pricing.StoreDeal) error
 	UpdateDeal(ctx context.Context, id uuid.UUID, d pricing.StoreDeal) error

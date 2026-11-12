@@ -73,7 +73,7 @@ type Result struct {
 }
 
 // Kinds counted in a Result.
-var kinds = []string{"sizes", "groups", "options", "menus", "categories", "items", "views", "entries", "deals", "layouts"}
+var kinds = []string{"sizes", "groups", "options", "menus", "categories", "items", "views", "entries", "deals", "layouts", "families", "family_links"}
 
 type Service struct {
 	repo   Repo
@@ -215,6 +215,17 @@ func checkShape(doc *bankdoc.Document) error {
 			return bad(p+".layout", "only a counter view has a layout")
 		}
 	}
+	fams := map[string]string{}
+	for i, f := range doc.Families {
+		p := fmt.Sprintf("families[%d]", i)
+		mf := menu.Family{Kind: f.Kind, Name: f.Name, Class: f.Class}
+		if err := mf.Normalize(); err != nil {
+			return bad(p, "%v", err)
+		}
+		if err := uniq(p, "family", fams, f.Kind+"|"+f.Name); err != nil {
+			return err
+		}
+	}
 	deals := map[string]string{}
 	for i, d := range doc.Deals {
 		if err := uniq(fmt.Sprintf("deals[%d]", i), "deal", deals, d.Name); err != nil {
@@ -236,6 +247,7 @@ type applier struct {
 	printers map[string]uuid.UUID // norm name → id
 	sizes    map[string]uuid.UUID // norm name → id (the document's first, then the bank's)
 	groups   map[string]uuid.UUID
+	fams     map[string]uuid.UUID // "item|<norm name>" / "mod|<norm name>" → id
 	menus    map[string]uuid.UUID
 	cats     map[string]uuid.UUID
 	items    map[string]uuid.UUID
@@ -291,6 +303,9 @@ func (a *applier) run(ctx context.Context) error {
 	}
 	a.refsFromBank()
 	if err := a.applyHalfBases(ctx); err != nil {
+		return err
+	}
+	if err := a.applyFamilies(ctx); err != nil {
 		return err
 	}
 	if err := a.applyViews(ctx); err != nil {
@@ -1029,6 +1044,11 @@ func (a *applier) applyDeals(ctx context.Context) error {
 		}
 		for j := range d.Slots {
 			if err := a.eligible(fmt.Sprintf("%s.slots[%d].eligible", path, j), &d.Slots[j].Eligible); err != nil {
+				return err
+			}
+		}
+		for j := range d.Parts {
+			if err := a.couponPart(fmt.Sprintf("%s.parts[%d]", path, j), &d.Parts[j]); err != nil {
 				return err
 			}
 		}

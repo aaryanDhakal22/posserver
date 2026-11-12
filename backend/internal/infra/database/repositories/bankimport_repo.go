@@ -396,3 +396,29 @@ func (t *bankTx) DeleteDeal(ctx context.Context, id uuid.UUID) error {
 	_, err := t.q.DeleteDeal(ctx, models.DeleteDealParams{ID: pgID(id), LocationID: t.L()})
 	return err
 }
+
+// --- families (00045) ---------------------------------------------------------------
+
+func (t *bankTx) CreateFamily(ctx context.Context, f menu.Family) (uuid.UUID, error) {
+	out, err := createFamily(ctx, t.q.Raw(), t.tenant, t.loc, f)
+	return out.ID, err
+}
+
+func (t *bankTx) UpdateFamily(ctx context.Context, f menu.Family) error {
+	_, err := updateFamily(ctx, t.q.Raw(), t.loc, f)
+	return err
+}
+
+func (t *bankTx) DeleteFamily(ctx context.Context, id uuid.UUID) error {
+	_, err := deleteFamily(ctx, t.q.Raw(), t.loc, id)
+	return err
+}
+
+func (t *bankTx) SetFamily(ctx context.Context, option bool, ids []uuid.UUID, family *uuid.UUID) error {
+	table := "menu_items"
+	if option {
+		table = "modifier_options"
+	}
+	_, err := setFamilies(ctx, t.q.Raw(), table, t.loc, ids, family)
+	return err
+}

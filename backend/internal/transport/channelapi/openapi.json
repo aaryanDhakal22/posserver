@@ -3075,6 +3075,29 @@
               "boolean",
               "null"
             ]
+          },
+          "coupons": {
+            "type": "array",
+            "description": "Applied coupons: a coupon deal and the cart line units it takes (one index per unit)",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "lines"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "lines": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "additionalProperties": false
@@ -3126,6 +3149,10 @@
           "custom": {
             "type": "boolean",
             "description": "A custom line (absent otherwise)"
+          },
+          "coupon_cents": {
+            "type": "integer",
+            "description": "The line's total once its units in coupons are priced in them (absent when none is)"
           }
         },
         "additionalProperties": false
@@ -3143,7 +3170,8 @@
             "enum": [
               "deal",
               "code",
-              "cash"
+              "cash",
+              "coupon"
             ]
           },
           "deal_id": {
@@ -3168,7 +3196,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "description": "empty, unknown_item, unknown_size, unknown_option, option_rules, sold_out, deal_ended, deal_unavailable, deal_slot, code_invalid, code_minimum, code_first_order, code_not_combinable, type_off, bad_type, delivery_minimum, open_price, custom_line"
+            "description": "empty, unknown_item, unknown_size, unknown_option, option_rules, sold_out, deal_ended, deal_unavailable, deal_slot, code_invalid, code_minimum, code_first_order, code_not_combinable, type_off, bad_type, delivery_minimum, open_price, custom_line, coupon_ended, coupon_unavailable, coupon_fit"
           },
           "message": {
             "type": "string",
@@ -3261,6 +3289,157 @@
               "$ref": "#/components/schemas/Issue"
             },
             "description": "Warnings about a line, with its index; each message is in warnings too. Today: the counter's missed required group / min_select (code option_rules), which other channels get as an error. Absent when there are none"
+          },
+          "coupons": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "index",
+                "id",
+                "name",
+                "card",
+                "price_cents",
+                "lines",
+                "regular_cents",
+                "total_cents",
+                "saved_cents",
+                "units"
+              ],
+              "properties": {
+                "index": {
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "card": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "price_cents": {
+                  "type": "integer"
+                },
+                "lines": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                "regular_cents": {
+                  "type": "integer"
+                },
+                "total_cents": {
+                  "type": "integer"
+                },
+                "saved_cents": {
+                  "type": "integer"
+                },
+                "units": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "line",
+                      "part",
+                      "carrier",
+                      "item_cents",
+                      "mods_cents",
+                      "free_mods",
+                      "unit_cents",
+                      "regular_cents"
+                    ],
+                    "properties": {
+                      "line": {
+                        "type": "integer"
+                      },
+                      "part": {
+                        "type": "integer"
+                      },
+                      "carrier": {
+                        "type": "boolean"
+                      },
+                      "item_cents": {
+                        "type": "integer"
+                      },
+                      "mods_cents": {
+                        "type": "integer"
+                      },
+                      "free_mods": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "unit_cents": {
+                        "type": "integer"
+                      },
+                      "regular_cents": {
+                        "type": "integer"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "The cart's coupons that apply (absent when none)"
+          },
+          "coupon_offers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "card",
+                "price_cents",
+                "lines",
+                "regular_cents",
+                "total_cents",
+                "saved_cents"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "card": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "price_cents": {
+                  "type": "integer"
+                },
+                "lines": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                "regular_cents": {
+                  "type": "integer"
+                },
+                "total_cents": {
+                  "type": "integer"
+                },
+                "saved_cents": {
+                  "type": "integer"
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "Live coupons the units not in a coupon fully fit, best savings first (absent when none)"
           }
         },
         "additionalProperties": false
@@ -3319,7 +3498,8 @@
               "mix",
               "nth",
               "code",
-              "free_item"
+              "free_item",
+              "coupon"
             ]
           },
           "name": {
@@ -3420,6 +3600,50 @@
           },
           "min_subtotal_cents": {
             "type": "integer"
+          },
+          "card": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A coupon: the card's lines"
+          },
+          "parts": {
+            "type": "array",
+            "description": "A coupon: its parts (qty items of these item families, at these sizes when any; the N cheapest regular mods free on each)",
+            "items": {
+              "type": "object",
+              "required": [
+                "label",
+                "families",
+                "qty",
+                "regular_mods_included"
+              ],
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "families": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "sizes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "qty": {
+                  "type": "integer"
+                },
+                "regular_mods_included": {
+                  "type": "integer"
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "additionalProperties": false
@@ -3568,6 +3792,10 @@
                 "open_price": {
                   "type": "boolean",
                   "description": "The line carries its own price (price_cents); only the counter may sell one"
+                },
+                "family": {
+                  "type": "string",
+                  "description": "The item's family (an item family id); absent = none (never in a coupon)"
                 }
               },
               "additionalProperties": false
@@ -3601,6 +3829,26 @@
               }
             },
             "additionalProperties": false
+          },
+          "options": {
+            "type": "object",
+            "description": "Modifier option id → its family and class (only options with a family; coupons)",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "family": {
+                  "type": "string"
+                },
+                "class": {
+                  "enum": [
+                    "regular",
+                    "premium",
+                    "unpriced"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "additionalProperties": false

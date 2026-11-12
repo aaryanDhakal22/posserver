@@ -52,9 +52,9 @@ def test_import_export_round_trip(mgr) -> None:
     assert exp.status_code == 200
     assert exp.headers["Content-Type"].startswith("text/csv")
     lines = exp.text.splitlines()
-    assert lines[0] == "menu,category,item,price,printer,description,no_kitchen_ticket"
-    assert "Main,Pizza,Garlic Knots,4.00,Sub,,no" in lines
-    assert "Main,Subs,Philly Cheese Steak,9.50,,,no" in lines
+    assert lines[0] == "menu,category,item,price,printer,description,no_kitchen_ticket,family"
+    assert "Main,Pizza,Garlic Knots,4.00,Sub,,no," in lines
+    assert "Main,Subs,Philly Cheese Steak,9.50,,,no," in lines
 
     # Export → import is a no-op too.
     assert _import(mgr, exp.text).json()["changes"] == []
@@ -78,7 +78,7 @@ def test_no_kitchen_ticket_column(mgr) -> None:
     res = _import(mgr, body).json()
     assert (res["items_no_kitchen"], res["item_no_kitchen_changed"], res["items_no_printer"]) == (1, 1, 0), res
     lines = mgr.get(f"{STORE_V1}/me/menu/export.csv", timeout=5).text.splitlines()
-    assert "Main,Misc,Coke,2.00,,,yes" in lines and "Main,Misc,Ranch,0.75,Sub,,no" in lines, lines
+    assert "Main,Misc,Coke,2.00,,,yes," in lines and "Main,Misc,Ranch,0.75,Sub,,no," in lines, lines
     assert _import(mgr, "\n".join(lines) + "\n").json()["changes"] == []
     # blank keeps it, "no" clears it
     assert _import(mgr, "category,item,no_kitchen_ticket\nMisc,Coke,\n").json()["changes"] == []

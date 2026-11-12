@@ -38,7 +38,20 @@ type Service struct {
 	listPrinters func(ctx context.Context, locationID uuid.UUID) ([]tenancyDom.Printer, error)
 	// vendor maps vendor item names to bank items (the vendor view, 3.0); nil = none.
 	vendor VendorMapper
+	// families backs the CSV's family column (00045); nil = the column is ignored.
+	families CSVFamilies
 }
+
+// CSVFamilies is what the menu CSV reads and writes of item families
+// (repositories.FamilyRepository).
+type CSVFamilies interface {
+	ItemFamilies(ctx context.Context, locationID uuid.UUID) ([]menuDom.Family, map[uuid.UUID]uuid.UUID, error)
+	Create(ctx context.Context, tenantID, locationID uuid.UUID, f menuDom.Family) (menuDom.Family, error)
+	Assign(ctx context.Context, locationID uuid.UUID, family *uuid.UUID, items, options []uuid.UUID) (int, int, error)
+}
+
+// SetFamilies plugs in the item families for the CSV (set once at startup).
+func (s *Service) SetFamilies(f CSVFamilies) { s.families = f }
 
 // VendorMapper is a location's vendor name → menu item mappings, keyed by the
 // normalized vendor name (menuviewApp.Service.VendorMaps).

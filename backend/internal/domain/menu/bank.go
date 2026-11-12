@@ -61,6 +61,7 @@ type Bank struct {
 	Sizes      []Size                  `json:"sizes"`
 	Menus      []BankMenu              `json:"menus"`
 	Groups     map[uuid.UUID]BankGroup `json:"groups"`
+	Families   []Family                `json:"families"`
 }
 
 // BankMenu / BankCategory / BankItem are the bank's tree.
@@ -80,6 +81,7 @@ type BankItem struct {
 	SKU         string      `json:"sku"`
 	Sizes       []ItemSize  `json:"sizes"`
 	GroupIDs    []uuid.UUID `json:"group_ids"` // attached modifier groups, in attach order
+	FamilyID    *uuid.UUID  `json:"family_id"` // an item family (nil = no family yet)
 }
 
 // BankGroup is a modifier group with its options and their bank data.
@@ -94,6 +96,17 @@ type BankOption struct {
 	IsDefault   bool          `json:"is_default"`
 	KitchenName string        `json:"kitchen_name"`
 	Prices      []OptionPrice `json:"prices"`
+	FamilyID    *uuid.UUID    `json:"family_id"` // a mod family (nil = no family yet)
+}
+
+// FamilyByID finds a store family.
+func (b *Bank) FamilyByID(id uuid.UUID) (Family, bool) {
+	for _, f := range b.Families {
+		if f.ID == id {
+			return f, true
+		}
+	}
+	return Family{}, false
 }
 
 // Item finds a bank item by id.

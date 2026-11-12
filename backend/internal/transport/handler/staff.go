@@ -221,11 +221,23 @@ func (h *StaffHandler) TerminalConfig(c *echo.Context) error {
 
 // CounterPricing is what the Pi's engine needs besides the build's menu.
 type CounterPricing struct {
-	Items      map[string]pricing.ItemFacts `json:"items"`
-	Settings   pricing.Settings             `json:"settings"`
-	Deals      []pricing.Deal               `json:"deals"`
-	Timezone   string                       `json:"timezone"`
-	OpenPrices bool                         `json:"open_prices"`
+	Items map[string]pricing.ItemFacts `json:"items"`
+	// Options: modifier option id → family + class (coupons; only options
+	// with a family). The Pi decodes the body's pricing as its
+	// pricing.Context, so the names match the Context's.
+	Options    map[string]pricing.OptionFacts `json:"options,omitempty"`
+	Settings   pricing.Settings               `json:"settings"`
+	Deals      []pricing.Deal                 `json:"deals"`
+	Timezone   string                         `json:"timezone"`
+	OpenPrices bool                           `json:"open_prices"`
+}
+
+// CounterFamily is one of the store's families as the counter menu lists them.
+type CounterFamily struct {
+	ID    string `json:"id"`
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	Class string `json:"class"`
 }
 
 // GET /store/v1/agent/counter-menu — the counter view's whole build (with
@@ -257,6 +269,14 @@ func (h *StaffHandler) CounterMenu(c *echo.Context) error {
 	if err != nil {
 		return h.err(c, err)
 	}
+	bank, err := h.views.Bank(ctx, scope.LocationID)
+	if err != nil {
+		return h.err(c, err)
+	}
+	fams := []CounterFamily{}
+	for _, f := range bank.Families {
+		fams = append(fams, CounterFamily{ID: f.ID.String(), Kind: f.Kind, Name: f.Name, Class: f.Class})
+	}
 	routes := map[uuid.UUID]menuApp.ItemPrinter{}
 	if h.menu != nil {
 		if routes, err = h.menu.ItemPrinters(ctx, scope.LocationID); err != nil {
@@ -269,7 +289,8 @@ func (h *StaffHandler) CounterMenu(c *echo.Context) error {
 		"view_id":      v.ID,
 		"build":        build,
 		"routes":       routes,
-		"pricing": CounterPricing{Items: pc.Items, Settings: pc.Settings, Deals: pc.Deals, Timezone: pc.Timezone,
+		"pricing": CounterPricing{Items: pc.Items, Options: pc.Options, Settings: pc.Settings, Deals: pc.Deals, Timezone: pc.Timezone,
 			OpenPrices: true},
+		"families": fams,
 	})
 }

@@ -119,6 +119,7 @@ func export(ctx context.Context, tx bankdoc.Tx) (*bankdoc.Document, error) {
 		doc.Menus = append(doc.Menus, dm)
 	}
 	exportHalfBases(bank, doc, item)
+	famName := exportFamilies(bank, doc)
 	menuName := map[string]string{}
 	for _, m := range bank.Menus {
 		menuName[m.ID.String()] = m.Name
@@ -183,6 +184,17 @@ func export(ctx context.Context, tx bankdoc.Tx) (*bankdoc.Document, error) {
 		names(d.Eligible)
 		for i := range d.Slots {
 			names(&d.Slots[i].Eligible)
+		}
+		for i := range d.Parts {
+			p := &d.Parts[i]
+			for j, id := range p.Families {
+				p.Families[j] = nameOr(famName, id)
+			}
+			for j, id := range p.Sizes {
+				if u, err := uuid.Parse(id); err == nil && size[u] != "" {
+					p.Sizes[j] = size[u]
+				}
+			}
 		}
 		d.ID = ""
 		d.Position = 0

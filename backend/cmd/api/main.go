@@ -37,6 +37,7 @@ import (
 	cardholdApp "quiccpos/main/internal/app/cardhold"
 	channelApp "quiccpos/main/internal/app/channel"
 	"quiccpos/main/internal/app/customers"
+	familiesApp "quiccpos/main/internal/app/families"
 	"quiccpos/main/internal/app/kitchen"
 	menuApp "quiccpos/main/internal/app/menu"
 	menuviewApp "quiccpos/main/internal/app/menuview"
@@ -262,6 +263,7 @@ func main() {
 	menuViewService := menuviewApp.NewService(menuBankRepo, menuService, lgr)
 	bankImportService := bankimport.NewService(repositories.NewBankImportRepository(pool), lgr)
 	menuService.SetVendorMapper(menuViewService)
+	menuService.SetFamilies(repositories.NewFamilyRepository(pool))
 
 	// Agent reliability + headless recovery: order acks + re-sends, the
 	// agent's state/health reports, link with the manager login, restore,
@@ -518,6 +520,7 @@ func main() {
 		FakeMail:          fakeMail,
 		MenuViewService:   menuViewService,
 		BankImport:        bankImportService,
+		Families:          familiesApp.NewService(repositories.NewFamilyRepository(pool)),
 		StoreStatus:       storeStatusService,
 		Kitchen:           kitchenLiveness,
 		Pricing:           pricingService,

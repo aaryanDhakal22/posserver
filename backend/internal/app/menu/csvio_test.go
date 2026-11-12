@@ -266,8 +266,8 @@ func TestImportCSV(t *testing.T) {
 	if err := svc.ExportCSV(ctx, lid, &buf); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "Main,Pizza,Cheese Pizza,10.00,Pizza,,no\n") ||
-		!strings.Contains(buf.String(), "Main,Pizza,Garlic Knots,4.00,Sub,,no\n") {
+	if !strings.Contains(buf.String(), "Main,Pizza,Cheese Pizza,10.00,Pizza,,no,\n") ||
+		!strings.Contains(buf.String(), "Main,Pizza,Garlic Knots,4.00,Sub,,no,\n") {
 		t.Errorf("export =\n%s", buf.String())
 	}
 	rt, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, buf.String()), false, false)
@@ -389,7 +389,7 @@ func TestImportCSVNoKitchen(t *testing.T) {
 	// Ranch + Napkins have the category default (Wings) as their printer:
 	// the category's flag only reaches items with no printer of their own
 	// - here every item inherits, so every one is receipt only.
-	for _, want := range []string{"Main,Misc,Coke,2.00,,,yes\n", "Main,Misc,Ranch,0.75,,,yes\n"} {
+	for _, want := range []string{"Main,Misc,Coke,2.00,,,yes,\n", "Main,Misc,Ranch,0.75,,,yes,\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("export lacks %q:\n%s", want, out)
 		}
@@ -400,5 +400,77 @@ func TestImportCSVNoKitchen(t *testing.T) {
 	cl, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, "category,item,no_kitchen_ticket\nMisc,Coke,no\n"), false, false)
 	if err != nil || cl.ItemNoKitchenChanged != 1 || cl.ItemsNoKitchen != 0 {
 		t.Fatalf("clear: %+v %v", cl, err)
+	}
+}
+
+// fakeFamilies is the CSV's family store in memory.
+type fakeFamilies struct {
+	fams  []menuDom.Family
+	items map[uuid.UUID]uuid.UUID
+}
+
+func (f *fakeFamilies) ItemFamilies(context.Context, uuid.UUID) ([]menuDom.Family, map[uuid.UUID]uuid.UUID, error) {
+	out := map[uuid.UUID]uuid.UUID{}
+	for k, v := range f.items {
+		out[k] = v
+	}
+	return f.fams, out, nil
+}
+
+func (f *fakeFamilies) Create(_ context.Context, _, loc uuid.UUID, fm menuDom.Family) (menuDom.Family, error) {
+	fm.ID, fm.LocationID = uuid.New(), loc
+	f.fams = append(f.fams, fm)
+	return fm, nil
+}
+
+func (f *fakeFamilies) Assign(_ context.Context, _ uuid.UUID, family *uuid.UUID, items, _ []uuid.UUID) (int, int, error) {
+	for _, id := range items {
+		if family == nil {
+			delete(f.items, id)
+		} else {
+			f.items[id] = *family
+		}
+	}
+	return len(items), 0, nil
+}
+
+// TestImportCSVFamily: the family column sets an item's family by name (a new
+// name creates the family), blank leaves it alone; export writes it.
+func TestImportCSVFamily(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _ := newImportSvc(t, "Pizza")
+	fams := &fakeFamilies{items: map[uuid.UUID]uuid.UUID{}}
+	svc.SetFamilies(fams)
+	tid, lid := uuid.New(), uuid.New()
+	in := "category,item,price,family\nDrinks,Coke Can,1.50,Can Soda\nDrinks,Sprite Can,1.50,can  soda\nDrinks,Water,1.00,\n"
+	dry, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, in), true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dry.FamiliesCreated != 1 || dry.ItemFamiliesChanged != 2 || len(fams.fams) != 0 {
+		t.Fatalf("dry run = %+v, families %v", dry, fams.fams)
+	}
+	res, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, in), false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.FamiliesCreated != 1 || res.ItemFamiliesChanged != 2 || len(fams.fams) != 1 || len(fams.items) != 2 {
+		t.Fatalf("import = %+v, families %v, items %v", res, fams.fams, fams.items)
+	}
+	again, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, in), false, false)
+	if err != nil || again.FamiliesCreated != 0 || again.ItemFamiliesChanged != 0 {
+		t.Fatalf("again = %+v, %v", again, err)
+	}
+	var buf strings.Builder
+	if err := svc.ExportCSV(ctx, lid, &buf); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{",Coke Can,1.50,,,no,Can Soda\n", ",Water,1.00,,,no,\n"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("export lacks %q:\n%s", want, buf.String())
+		}
+	}
+	if _, err := ParseMenuCSV(strings.NewReader("category,item,family\nX,Y," + strings.Repeat("f", 61) + "\n")); !IsCSVError(err) {
+		t.Fatalf("long family: %v", err)
 	}
 }

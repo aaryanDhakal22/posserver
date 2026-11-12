@@ -17,6 +17,9 @@ package menuApp
 //	             this order", receipt only. Blank leaves it alone (a new item:
 //	             no). Export writes "yes" for an item that has it, its own or
 //	             its category's (then with a blank printer).
+//	family       the item's family (00045; optional): blank leaves it alone, a
+//	             name sets it (a family the store doesn't have is created).
+//	             Export writes each item's family.
 //
 // Rules: menus, categories and items are matched by normalized name and
 // reused, so a re-import is idempotent. A blank price/printer/description cell
@@ -52,7 +55,7 @@ const DefaultImportMenu = "Main"
 // MaxImportRows bounds one import.
 const MaxImportRows = 5000
 
-var exportHeader = []string{"menu", "category", "item", "price", "printer", "description", "no_kitchen_ticket"}
+var exportHeader = []string{"menu", "category", "item", "price", "printer", "description", "no_kitchen_ticket", "family"}
 
 // CSVRow is one parsed import row. Has* report a non-blank cell.
 type CSVRow struct {
@@ -63,6 +66,8 @@ type CSVRow struct {
 	HasPrice, HasDescription bool
 	// NoKitchen: the no_kitchen_ticket cell (nil = blank, leave it alone).
 	NoKitchen *bool
+	// Family: the family cell ("" = blank, leave it alone).
+	Family string
 }
 
 // CSVError is a parse or validation failure the caller should fix in the file.
@@ -149,6 +154,10 @@ func ParseMenuCSV(r io.Reader) ([]CSVRow, error) {
 		}
 		row.Printer, _ = cell(rec, "printer")
 		row.Description, row.HasDescription = cell(rec, "description")
+		row.Family, _ = cell(rec, "family")
+		if len([]rune(row.Family)) > menuDom.MaxFamilyName {
+			return nil, &CSVError{Line: line, Msg: "a family name is up to 60 characters"}
+		}
 		if v, ok := cell(rec, "no_kitchen_ticket"); ok {
 			b, err := parseYesNo(v)
 			if err != nil {
@@ -229,8 +238,11 @@ type ImportResult struct {
 	// own or their category's): receipt only, no station.
 	ItemsNoKitchen int `json:"items_no_kitchen"`
 	// ItemNoKitchenChanged counts items whose own flag the file changed.
-	ItemNoKitchenChanged int      `json:"item_no_kitchen_changed"`
-	Changes              []string `json:"changes"`
+	ItemNoKitchenChanged int `json:"item_no_kitchen_changed"`
+	// FamiliesCreated / ItemFamiliesChanged: the family column (00045).
+	FamiliesCreated     int      `json:"families_created"`
+	ItemFamiliesChanged int      `json:"item_families_changed"`
+	Changes             []string `json:"changes"`
 }
 
 // PrinterItems is one entry of ImportResult.PrintsOn.
@@ -289,6 +301,21 @@ func (s *Service) ImportCSV(ctx context.Context, tenantID, locationID uuid.UUID,
 	}
 
 	res = &ImportResult{DryRun: dryRun, Replace: replace, Rows: len(rows), PrintsOn: []PrinterItems{}, Changes: []string{}}
+	// The family column: item families by name, each item's family.
+	famID := map[string]uuid.UUID{}
+	itemFam := map[uuid.UUID]uuid.UUID{}
+	if s.families != nil {
+		fams, links, err := s.families.ItemFamilies(ctx, locationID)
+		if err != nil {
+			return nil, fmt.Errorf("families: %w", err)
+		}
+		for _, f := range fams {
+			if f.Kind == menuDom.FamilyItem {
+				famID[normalizeItemName(f.Name)] = f.ID
+			}
+		}
+		itemFam = links
+	}
 	printsOn := map[uuid.UUID]int{}
 	defer func() {
 		for _, p := range printers {
@@ -501,6 +528,35 @@ func (s *Service) ImportCSV(ctx context.Context, tenantID, locationID uuid.UUID,
 					}
 					it.NoKitchenTicket = *r.NoKitchen
 				}
+				if r.Family != "" && s.families != nil {
+					fk := normalizeItemName(r.Family)
+					fid, ok := famID[fk]
+					if !ok {
+						res.FamiliesCreated++
+						res.note("  + family %q", r.Family)
+						fid = uuid.New() // a dry run's stand-in
+						if !dryRun {
+							f, err := s.families.Create(ctx, tenantID, locationID, menuDom.Family{Kind: menuDom.FamilyItem, Name: r.Family})
+							if err != nil {
+								return res, fmt.Errorf("line %d: create family %q: %w", r.Line, r.Family, err)
+							}
+							fid = f.ID
+						}
+						famID[fk] = fid
+					}
+					if cur, ok := itemFam[it.ID]; it.ID == uuid.Nil || !ok || cur != fid { // Nil: a dry run's new item
+						res.ItemFamiliesChanged++
+						res.note("  ~ %q family → %s", it.Name, r.Family)
+						if !dryRun {
+							if _, _, err := s.families.Assign(ctx, locationID, &fid, []uuid.UUID{it.ID}, nil); err != nil {
+								return res, fmt.Errorf("line %d: set family for %q: %w", r.Line, it.Name, err)
+							}
+						}
+						if it.ID != uuid.Nil {
+							itemFam[it.ID] = fid
+						}
+					}
+				}
 				if r.Printer == "" {
 					continue // blank = leave the item's printer alone
 				}
@@ -587,6 +643,18 @@ func (s *Service) ExportCSV(ctx context.Context, locationID uuid.UUID, w io.Writ
 	if err != nil {
 		return err
 	}
+	famName := map[uuid.UUID]string{}
+	itemFam := map[uuid.UUID]uuid.UUID{}
+	if s.families != nil {
+		fams, links, err := s.families.ItemFamilies(ctx, locationID)
+		if err != nil {
+			return fmt.Errorf("families: %w", err)
+		}
+		for _, f := range fams {
+			famName[f.ID] = f.Name
+		}
+		itemFam = links
+	}
 	cw := csv.NewWriter(w)
 	if err := cw.Write(exportHeader); err != nil {
 		return err
@@ -611,7 +679,11 @@ func (s *Service) ExportCSV(ctx context.Context, locationID uuid.UUID, w io.Writ
 				case c.DefaultPrinterID != nil:
 					printer = printerName[*c.DefaultPrinterID]
 				}
-				if err := cw.Write([]string{m.Name, c.Name, it.Name, formatPrice(it.PriceCents), printer, it.Description, noKitchen}); err != nil {
+				family := ""
+				if f, ok := itemFam[it.ID]; ok {
+					family = famName[f]
+				}
+				if err := cw.Write([]string{m.Name, c.Name, it.Name, formatPrice(it.PriceCents), printer, it.Description, noKitchen, family}); err != nil {
 					return err
 				}
 			}

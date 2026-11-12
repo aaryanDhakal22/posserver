@@ -31,7 +31,7 @@ func (h *PricingHandler) pErr(c *echo.Context, err error) error {
 		return c.JSON(http.StatusNotFound, errCode(err.Error(), "not_found"))
 	case errors.Is(err, repositories.ErrCodeTaken):
 		return c.JSON(http.StatusConflict, errCode(err.Error(), "code_taken"))
-	case errors.Is(err, pricingApp.ErrBadKind), errors.Is(err, pricingApp.ErrNotTheStore),
+	case errors.Is(err, pricingApp.ErrBadKind), errors.Is(err, pricingApp.ErrNotTheStore), errors.Is(err, pricingApp.ErrNotFamily),
 		errors.Is(err, pricing.ErrBadSettings), errors.Is(err, pricing.ErrBadDeal):
 		return c.JSON(http.StatusBadRequest, errCode(err.Error(), "bad_request"))
 	}
@@ -154,12 +154,13 @@ func quoteChannel(c *echo.Context) (bool, error) {
 // channelContext is the pricing context a channel previews with: everything
 // but the menu (read it from /channel/v1/menu, same version).
 type channelContext struct {
-	MenuVersion int64                        `json:"menu_version"`
-	Items       map[string]pricing.ItemFacts `json:"items"`
-	Settings    pricing.Settings             `json:"settings"`
-	Deals       []pricing.Deal               `json:"deals"`
-	Timezone    string                       `json:"timezone"`
-	Types       pricing.Types                `json:"types"`
+	MenuVersion int64                          `json:"menu_version"`
+	Items       map[string]pricing.ItemFacts   `json:"items"`
+	Options     map[string]pricing.OptionFacts `json:"options,omitempty"`
+	Settings    pricing.Settings               `json:"settings"`
+	Deals       []pricing.Deal                 `json:"deals"`
+	Timezone    string                         `json:"timezone"`
+	Types       pricing.Types                  `json:"types"`
 }
 
 // GET /channel/v1/pricing
@@ -172,7 +173,7 @@ func (h *PricingHandler) ChannelPricing(c *echo.Context) error {
 	if err != nil {
 		return h.chErr(c, err)
 	}
-	return c.JSON(http.StatusOK, channelContext{MenuVersion: ver, Items: pc.Items, Settings: pc.Settings, Deals: pc.Deals,
+	return c.JSON(http.StatusOK, channelContext{MenuVersion: ver, Items: pc.Items, Options: pc.Options, Settings: pc.Settings, Deals: pc.Deals,
 		Timezone: pc.Timezone, Types: pc.Types})
 }
 

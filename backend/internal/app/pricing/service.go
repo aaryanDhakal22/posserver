@@ -27,6 +27,7 @@ var (
 	ErrNotFound    = errors.New("not found in this location")
 	ErrBadKind     = errors.New("kind must be one of: web, operator, counter, vendor")
 	ErrNotTheStore = errors.New("an item, category or size in the deal isn't this store's")
+	ErrNotFamily   = errors.New("a coupon part names a family that isn't one of this store's item families, or a size that isn't the store's")
 )
 
 // Repo is the pricing store (repositories.PricingRepository).
@@ -75,6 +76,8 @@ type factsAt struct {
 	items   map[string]pricing.ItemFacts
 	cats    map[string]bool
 	sizes   map[string]bool
+	opts    map[string]pricing.OptionFacts // options with a family
+	itemFam map[string]bool                // item family ids
 }
 
 func NewService(repo Repo, views Views, ordering Ordering, locs Locations, lg zerolog.Logger) *Service {
@@ -213,6 +216,18 @@ func (s *Service) validDeal(ctx context.Context, locationID uuid.UUID, d *pricin
 			return err
 		}
 	}
+	for _, p := range d.Parts {
+		for _, id := range p.Families {
+			if !f.itemFam[id] {
+				return ErrNotFamily
+			}
+		}
+		for _, id := range p.Sizes {
+			if !f.sizes[id] {
+				return ErrNotFamily
+			}
+		}
+	}
 	return nil
 }
 
@@ -232,13 +247,33 @@ func (s *Service) itemFacts(ctx context.Context, locationID uuid.UUID) (factsAt,
 	if err != nil {
 		return factsAt{}, err
 	}
-	f := factsAt{version: bank.Version, items: map[string]pricing.ItemFacts{}, cats: map[string]bool{}, sizes: map[string]bool{}}
+	f := factsAt{version: bank.Version, items: map[string]pricing.ItemFacts{}, cats: map[string]bool{}, sizes: map[string]bool{},
+		opts: map[string]pricing.OptionFacts{}, itemFam: map[string]bool{}}
+	class := map[uuid.UUID]string{}
+	for _, fm := range bank.Families {
+		if fm.Kind == menu.FamilyItem {
+			f.itemFam[fm.ID.String()] = true
+		} else {
+			class[fm.ID] = fm.Class
+		}
+	}
 	for _, m := range bank.Menus {
 		for _, c := range m.Categories {
 			f.cats[c.ID.String()] = true
 			for _, it := range c.Items {
-				f.items[it.ID.String()] = pricing.ItemFacts{CategoryID: c.ID.String(), TaxBps: it.TaxRateBps, HalfBase: pricing.HalfBaseOf(it.Attributes),
+				facts := pricing.ItemFacts{CategoryID: c.ID.String(), TaxBps: it.TaxRateBps, HalfBase: pricing.HalfBaseOf(it.Attributes),
 					NoTax: pricing.FlagOf(it.Attributes, pricing.NoTaxAttr), OpenPrice: pricing.FlagOf(it.Attributes, pricing.OpenPriceAttr)}
+				if it.FamilyID != nil {
+					facts.Family = it.FamilyID.String()
+				}
+				f.items[it.ID.String()] = facts
+			}
+		}
+	}
+	for _, g := range bank.Groups {
+		for _, o := range g.Options {
+			if o.FamilyID != nil {
+				f.opts[o.ID.String()] = pricing.OptionFacts{Family: o.FamilyID.String(), Class: class[*o.FamilyID]}
 			}
 		}
 	}
@@ -303,7 +338,11 @@ func (s *Service) Context(ctx context.Context, tenantID, locationID uuid.UUID, k
 	if err != nil {
 		return nil, 0, err
 	}
-	return &pricing.Context{Menu: m, Items: f.items, Settings: pricing.Effective(st, over[kind]), Deals: deals, Timezone: l.Timezone,
+	var opts map[string]pricing.OptionFacts
+	if len(f.opts) > 0 {
+		opts = f.opts
+	}
+	return &pricing.Context{Menu: m, Items: f.items, Options: opts, Settings: pricing.Effective(st, over[kind]), Deals: deals, Timezone: l.Timezone,
 		Types: pricing.Types{Pickup: ord.PickupEnabled, Delivery: ord.DeliveryEnabled}, OpenPrices: kind == string(menuview.KindCounter),
 		Counter: kind == string(menuview.KindCounter)}, version, nil
 }

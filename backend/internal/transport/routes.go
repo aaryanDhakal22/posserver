@@ -31,6 +31,7 @@ import (
 	"quiccpos/main/internal/app/customers"
 	daycloseApp "quiccpos/main/internal/app/dayclose"
 	diagApp "quiccpos/main/internal/app/diag"
+	familiesApp "quiccpos/main/internal/app/families"
 	geoApp "quiccpos/main/internal/app/geo"
 	menuApp "quiccpos/main/internal/app/menu"
 	menuviewApp "quiccpos/main/internal/app/menuview"
@@ -154,6 +155,8 @@ type RouterDeps struct {
 	DevNotices *notify.Recorder
 	// Staff backs the counter terminal's staff + terminal settings (TERMINAL-PLAN 0d).
 	Staff *staffApp.Service
+	// Families backs Store › Menu › Families (00045).
+	Families *familiesApp.Service
 	// DayClose backs the Pi's drawer sessions + Z reports (terminal Stage 2).
 	DayClose *daycloseApp.Service
 }
@@ -245,6 +248,7 @@ func routeTable(d RouterDeps) []routeDef {
 	member := appMiddleware.CustomerAuth(d.Customers.Authenticate, true)
 	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
 	bankDocH := handler.NewBankImportHandler(d.BankImport, d.Logger)
+	famH := handler.NewFamiliesHandler(d.Families, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
 	staffH := handler.NewStaffHandler(d.Staff, d.MenuViewService, d.Pricing, d.MenuService, d.Logger)
 	dayCloseH := handler.NewDayCloseHandler(d.DayClose, d.Logger)
@@ -500,13 +504,19 @@ func routeTable(d RouterDeps) []routeDef {
 		def("PUT", storePrefix+"/me/pricing", "store-session", "Replace the pricing settings {store, kinds}", pricingH.MeSavePricing, storeSession),
 		def("GET", storePrefix+"/me/pricing/context", "store-session", "What a channel kind prices with (?kind=web) — for previews", pricingH.MeContext, storeSession),
 		def("GET", storePrefix+"/me/deals", "store-session", "The store's deals", pricingH.MeDeals, storeSession),
-		def("POST", storePrefix+"/me/deals", "store-session", "Add a deal (bundle, mix, nth, code, free_item)", pricingH.MeCreateDeal, storeSession),
+		def("POST", storePrefix+"/me/deals", "store-session", "Add a deal (bundle, mix, nth, code, free_item, coupon)", pricingH.MeCreateDeal, storeSession),
 		def("PUT", storePrefix+"/me/deals/:id", "store-session", "Replace a deal", pricingH.MeUpdateDeal, storeSession),
 		def("DELETE", storePrefix+"/me/deals/:id", "store-session", "Delete a deal", pricingH.MeDeleteDeal, storeSession),
 		// The menu bank + views (main 3.0).
 		def("GET", storePrefix+"/me/menu/bank", "store-session", "The whole menu bank (sizes, items with sizes + groups, options with prices)", viewH.MeBank, storeSession),
 		def("GET", storePrefix+"/me/menu/bank/document", "store-session", "The bank, views and deals as one document (names, no ids)", bankDocH.MeExport, storeSession),
 		def("POST", storePrefix+"/me/menu/bank/apply", "store-session", "Apply a bank document in one transaction (?dry_run=1 reports + rolls back, ?prune=1 deletes what it doesn't name)", bankDocH.MeApply, storeSession),
+		def("GET", storePrefix+"/me/menu/families", "store-session", "The store's item / mod families with their members (Families editor)", famH.MeList, storeSession),
+		def("POST", storePrefix+"/me/menu/families", "store-session", "Add a family {kind item|mod, name, class?}", famH.MeCreate, storeSession),
+		def("POST", storePrefix+"/me/menu/families/assign", "store-session", "Set the family of items / options {family_id|null, items, options}", famH.MeAssign, storeSession),
+		def("PATCH", storePrefix+"/me/menu/families/:id", "store-session", "Rename a family / change a mod family's class", famH.MeUpdate, storeSession),
+		def("DELETE", storePrefix+"/me/menu/families/:id", "store-session", "Delete a family (its members: no family; 409 while a coupon names it)", famH.MeDelete, storeSession),
+		def("POST", storePrefix+"/me/menu/families/:id/merge", "store-session", "Merge a family into another {into} (members + coupons move)", famH.MeMerge, storeSession),
 		def("GET", storePrefix+"/me/menu/sizes", "store-session", "List the store's sizes", viewH.MeListSizes, storeSession),
 		def("POST", storePrefix+"/me/menu/sizes", "store-session", "Add a size {name, short}", viewH.MeCreateSize, storeSession),
 		def("POST", storePrefix+"/me/menu/sizes/reorder", "store-session", "Reorder sizes {ids}", viewH.MeReorderSizes, storeSession),
