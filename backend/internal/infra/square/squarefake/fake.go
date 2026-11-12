@@ -200,6 +200,7 @@ func decode(r *http.Request, v any) bool { return json.NewDecoder(r.Body).Decode
 func (f *Fake) Handler(prefix, redirect string) http.Handler {
 	mux := http.NewServeMux()
 	p := strings.TrimRight(prefix, "/")
+	f.mountPOS(mux, p) // the Point of Sale API's side (pos.go)
 
 	// --- OAuth ---
 	mux.HandleFunc("GET "+p+"/oauth2/authorize", func(w http.ResponseWriter, r *http.Request) {

@@ -102,7 +102,20 @@ type Settings struct {
 	// Picked, never typed; the terminal adds no "Other" of its own, so keep
 	// one in the list. X: edited on Store › Staff.
 	VoidReasons []string `json:"void_reasons"`
+
+	// PhoneChargeTimeoutSeconds (the owner's X, 2026-11-12, "Send to phone",
+	// agent contract §2.10z): a card charge sent to a cashier's phone that
+	// nobody finishes in Square within this long expires (a late tap is still
+	// recorded). 0 in a stored body = the default. Edited on Store › Staff.
+	PhoneChargeTimeoutSeconds int `json:"phone_charge_timeout_seconds"`
 }
+
+// Send to phone's timeout: default and bounds (seconds).
+const (
+	DefaultPhoneChargeTimeoutS = 180
+	MinPhoneChargeTimeoutS     = 30
+	MaxPhoneChargeTimeoutS     = 1800
+)
 
 // DefaultVoidReasons are the owner's defaults (2026-11-12).
 func DefaultVoidReasons() []string {
@@ -184,7 +197,7 @@ func DefaultSettings() Settings {
 		DefaultTab:       "info", ButtonFont: "barlow", CashierPriceDropPct: 20, OutOfAreaMarginMi: 1,
 		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: DefaultEmployeeMealPct, ToppingMaxCount: 3,
 		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes(), DrawerStartCents: 10000,
-		WasteReasons: DefaultWasteReasons(), VoidReasons: DefaultVoidReasons()}
+		WasteReasons: DefaultWasteReasons(), VoidReasons: DefaultVoidReasons(), PhoneChargeTimeoutSeconds: DefaultPhoneChargeTimeoutS}
 }
 
 // Ranges.
@@ -261,6 +274,8 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: auto_lock_minutes must be 1–%d", ErrBadSettings, MaxAutoLock)
 	case s.CounterStart < 1 || s.CounterStart > MaxCounterStart:
 		return fmt.Errorf("%w: counter_start must be 1–%d", ErrBadSettings, MaxCounterStart)
+	case s.PhoneChargeTimeoutSeconds != 0 && (s.PhoneChargeTimeoutSeconds < MinPhoneChargeTimeoutS || s.PhoneChargeTimeoutSeconds > MaxPhoneChargeTimeoutS):
+		return fmt.Errorf("%w: phone_charge_timeout_seconds must be %d–%d", ErrBadSettings, MinPhoneChargeTimeoutS, MaxPhoneChargeTimeoutS)
 	case s.ReceiptAutoDoneSeconds < 0 || s.ReceiptAutoDoneSeconds > MaxReceiptDoneS:
 		return fmt.Errorf("%w: receipt_auto_done_seconds must be 0–%d", ErrBadSettings, MaxReceiptDoneS)
 	case !ValidHHMM(s.AutoCloseBatchAt):
@@ -340,6 +355,9 @@ func (s *Settings) Normalize() {
 	s.OutOfAreaMarginMi = math.Round(s.OutOfAreaMarginMi*10) / 10
 	s.WasteReasons = normalizeReasons(s.WasteReasons, DefaultWasteReasons)
 	s.VoidReasons = normalizeReasons(s.VoidReasons, DefaultVoidReasons)
+	if s.PhoneChargeTimeoutSeconds == 0 {
+		s.PhoneChargeTimeoutSeconds = DefaultPhoneChargeTimeoutS
+	}
 }
 
 // normalizeReasons: nil = the defaults; else trimmed, blanks and repeats (any

@@ -223,6 +223,7 @@ test('terminal settings: the defaults, plain labels with units, every field save
   await bar.getByRole('button', { name: 'Save terminal settings' }).click();
   await expect(bar.getByRole('alert')).toContainText('Lock the terminal after');
   await field('Lock the terminal after').fill('7');
+  await field('A charge sent to a phone expires after').fill('240');
   await bar.getByRole('button', { name: 'Save terminal settings' }).click();
   await expect(bar).toContainText('All changes saved');
 
@@ -232,7 +233,7 @@ test('terminal settings: the defaults, plain labels with units, every field save
     prices_on_buttons: true, click_sound: true, counter_start: 100, employee_meal_pct: 40, out_of_area_margin_mi: 1.5,
     name_on_paid_counter: true, card_tips: true, card_tip_percents: [10, 15, 20, 25], auto_close_batch_at: '03:30',
     cashier_payout_cents: 3500, default_pickup_minutes: 20, area_codes: ['410', '443', '202'],
-    topping_max_count: 4
+    topping_max_count: 4, phone_charge_timeout_seconds: 240
   };
   await expect.poll(async () => (await store.me('GET', '/terminal/settings', undefined, 200)).data).toMatchObject(want);
   await expect(field('Local area codes')).toHaveValue('410, 443, 202'); // as main saved it

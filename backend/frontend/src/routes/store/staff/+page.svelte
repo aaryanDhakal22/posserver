@@ -304,7 +304,7 @@
     autoClose: boolean; autoCloseAt: string; defaultTab: string; showHistory: boolean; font: string;
     priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean; toppingMax: string;
     cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string; drawerStart: string;
-    wasteReasons: string; voidReasons: string;
+    wasteReasons: string; voidReasons: string; phoneTimeout: string;
   };
   type TextKey = { [K in keyof SettingsForm]: SettingsForm[K] extends string ? K : never }[keyof SettingsForm];
   let saved = $state<TerminalSettings | null>(null);
@@ -320,6 +320,7 @@
     return {
       refund: centsInput(s.cashier_refund_cents), discount: String(s.cashier_discount_pct), lock: String(s.auto_lock_minutes),
       counterStart: String(s.counter_start), receiptDone: String(s.receipt_auto_done_seconds),
+      phoneTimeout: String(s.phone_charge_timeout_seconds || TERMINAL_DEFAULTS.phone_charge_timeout_seconds),
       autoClose: s.auto_close_batch_at !== '', autoCloseAt: s.auto_close_batch_at || '04:00',
       defaultTab: s.default_tab, showHistory: s.show_history, font: s.button_font, priceDrop: String(s.cashier_price_drop_pct),
       clickSound: s.click_sound, pricesOnButtons: s.prices_on_buttons, margin: String(s.out_of_area_margin_mi),
@@ -389,6 +390,7 @@
       auto_lock_minutes: int(f, 'lock', 'Lock the terminal after', 1, 240),
       counter_start: int(f, 'counterStart', 'Counter numbers start at', 1, 999_999),
       receipt_auto_done_seconds: int(f, 'receiptDone', 'Close the receipt screen after', 0, 600),
+      phone_charge_timeout_seconds: int(f, 'phoneTimeout', 'A charge sent to a phone expires after', 30, 1800),
       auto_close_batch_at: f.autoClose ? f.autoCloseAt : '',
       default_tab: f.defaultTab as TerminalSettings['default_tab'],
       show_history: f.showHistory,
@@ -501,7 +503,9 @@
   ];
   const SCREEN: NumField[] = [
     { key: 'lock', label: 'Lock the terminal after', unit: 'min', help: `Idle this long, the terminal goes back to the PIN pad. Default ${D.auto_lock_minutes} min.` },
-    { key: 'receiptDone', label: 'Close the receipt screen after', unit: 'sec', help: `0 = it stays until Done is pressed. Default ${D.receipt_auto_done_seconds} sec.` }
+    { key: 'receiptDone', label: 'Close the receipt screen after', unit: 'sec', help: `0 = it stays until Done is pressed. Default ${D.receipt_auto_done_seconds} sec.` },
+    { key: 'phoneTimeout', label: 'A charge sent to a phone expires after', unit: 'sec',
+      help: `Send to phone: nobody finished it in Square by then, it expires (a late tap is still recorded). 30–1800. Default ${D.phone_charge_timeout_seconds} sec.` }
   ];
   const ORDERS: NumField[] = [
     { key: 'meal', label: 'Employee meal', unit: '% off', help: `The Employee meal button. A cashier can give it without a manager. Default ${D.employee_meal_pct}%.` },
@@ -696,6 +700,7 @@
                 </select>
                 <p class="help">Default Barlow.</p>
               </div>
+              {@render numField(SCREEN[2])}
             </div>
             <div class="switches">
               <label class="sw-row"><Switch bind:checked={sf.showHistory} label="Show the History tab" />Show the History tab</label>

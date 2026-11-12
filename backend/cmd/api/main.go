@@ -428,6 +428,10 @@ func main() {
 	// The counter terminal's setup test charge ($1, no order) is refunded
 	// through the Pi: RPC square.test_refund (TERMINAL-SETUP-PLAN, owner Q3).
 	requester.RegisterInbound(squarepay.MsgSquareTestRefund, squareService.HandleTestRefund)
+	// Send to phone (agent contract 2.10z): the Square app on a cashier's phone.
+	requester.RegisterInbound(squarepay.MsgPosConfig, squareService.HandlePosConfig)
+	requester.RegisterInbound(squarepay.MsgPosLookup, squareService.HandlePosLookup)
+	requester.RegisterInbound(squarepay.MsgPosFakeCharge, squareService.HandlePosFakeCharge)
 	// Square on the counter terminal (agent contract §2.10r): the reader's
 	// sign-in, a typed card's payment, a refund of either.
 	requester.RegisterInbound(squarepay.MsgSquareSession, squareService.HandleSession)
