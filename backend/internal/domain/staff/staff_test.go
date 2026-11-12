@@ -3,6 +3,7 @@ package staff
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -184,5 +185,35 @@ func TestDrawerStartDefault(t *testing.T) {
 	s.DrawerStartCents = MaxDrawerStartCents + 1
 	if s.Validate() == nil {
 		t.Fatal("too much accepted")
+	}
+}
+
+// The owner's waste reasons (2026-11-12): defaults, normalised, bounded.
+func TestWasteReasons(t *testing.T) {
+	s := DefaultSettings()
+	if strings.Join(s.WasteReasons, "|") != "Never picked up|Made wrong / remade|Customer complaint|Burnt / dropped" {
+		t.Fatalf("defaults: %q", s.WasteReasons)
+	}
+	s.WasteReasons = []string{"  Dropped  on   floor ", "", "dropped on floor", "Cold"}
+	s.Normalize()
+	if strings.Join(s.WasteReasons, "|") != "Dropped on floor|Cold" {
+		t.Fatalf("normalised: %q", s.WasteReasons)
+	}
+	if err := s.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	s.WasteReasons = []string{}
+	if s.Validate() == nil {
+		t.Fatal("no reasons accepted")
+	}
+	s.WasteReasons = []string{strings.Repeat("x", MaxWasteReasonLen+1)}
+	if s.Validate() == nil {
+		t.Fatal("too long accepted")
+	}
+	var nilList Settings = DefaultSettings()
+	nilList.WasteReasons = nil
+	nilList.Normalize()
+	if len(nilList.WasteReasons) != 4 {
+		t.Fatalf("nil = the defaults: %q", nilList.WasteReasons)
 	}
 }

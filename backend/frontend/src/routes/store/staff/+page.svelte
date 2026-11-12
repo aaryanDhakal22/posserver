@@ -304,6 +304,7 @@
     autoClose: boolean; autoCloseAt: string; defaultTab: string; showHistory: boolean; font: string;
     priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean; toppingMax: string;
     cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string; drawerStart: string;
+    wasteReasons: string;
   };
   type TextKey = { [K in keyof SettingsForm]: SettingsForm[K] extends string ? K : never }[keyof SettingsForm];
   let saved = $state<TerminalSettings | null>(null);
@@ -326,7 +327,8 @@
       nameOnPaid: s.name_on_paid_counter, cardTips: s.card_tips, tipPercents: (s.card_tip_percents ?? []).join(', '),
       meal: String(s.employee_meal_pct), payout: centsInput(s.cashier_payout_cents),
       pickupMinutes: String(s.default_pickup_minutes), areaCodes: (s.area_codes ?? []).join(', '),
-      drawerStart: centsInput(s.drawer_start_cents)
+      drawerStart: centsInput(s.drawer_start_cents),
+      wasteReasons: (s.waste_reasons ?? []).join('\n')
     };
   }
   function useSaved(s: TerminalSettings) {
@@ -367,6 +369,13 @@
     const codes = [...new Set(f.areaCodes.split(',').map((x) => x.trim()).filter(Boolean))];
     if (codes.length < 1 || codes.length > 20 || codes.some((c) => !/^[2-9]\d\d$/.test(c)))
       throw new FieldError('areaCodes', 'Area codes: 1 to 20 three-digit codes, separated by commas.');
+    const seenWaste = new Set<string>();
+    const waste = f.wasteReasons
+      .split('\n')
+      .map((x) => x.trim().replace(/\s+/g, ' '))
+      .filter((x) => x && !seenWaste.has(x.toLowerCase()) && seenWaste.add(x.toLowerCase()));
+    if (waste.length < 1 || waste.length > 20 || waste.some((x) => x.length > 40))
+      throw new FieldError('wasteReasons', 'Waste reasons: 1 to 20 reasons, one per line, up to 40 characters each.');
     return {
       cashier_refund_cents: money(f, 'refund', 'Refunds up to', 1_000_000),
       cashier_discount_pct: int(f, 'discount', 'Discounts up to', 0, 100),
@@ -389,7 +398,8 @@
       cashier_payout_cents: money(f, 'payout', 'Pay out of the drawer up to', 100_000),
       drawer_start_cents: money(f, 'drawerStart', 'Cash left in each drawer at opening', 1_000_000),
       default_pickup_minutes: int(f, 'pickupMinutes', 'Pickups are ready in', 0, 240),
-      area_codes: codes
+      area_codes: codes,
+      waste_reasons: waste
     };
   }
 
@@ -701,6 +711,18 @@
                   aria-invalid={sErrField === 'areaCodes' || undefined}
                 />
                 <p class="help">Separated by commas. The terminal uses them to fill in phone numbers. Default {D.area_codes.join(', ')}.</p>
+              </div>
+              <div class="nf wide">
+                <label class="lbl" for="ts-wasteReasons">Waste reasons</label>
+                <textarea
+                  id="ts-wasteReasons"
+                  class="field"
+                  rows="4"
+                  autocomplete="off"
+                  bind:value={sf.wasteReasons}
+                  aria-invalid={sErrField === 'wasteReasons' || undefined}
+                ></textarea>
+                <p class="help">One per line. A cashier picks one to void an order that was already made (it goes on the report; nothing prints). Default: {D.waste_reasons.join(', ')}.</p>
               </div>
             </div>
             <div class="switches">

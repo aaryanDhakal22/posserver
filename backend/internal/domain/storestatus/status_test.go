@@ -246,3 +246,35 @@ func TestPauseTodayAfterMidnight(t *testing.T) {
 		t.Errorf("18:00 Tuesday: %v", u)
 	}
 }
+
+// Lombardi's hours (the owner, 2026-11-12): every day closes after midnight
+// (Sunday at midnight exactly); the overnight part belongs to the day it opened.
+func TestOvernightLombardis(t *testing.T) {
+	wk := []tenancy.HoursRange{{Open: "10:00", Close: "01:00"}}
+	we := []tenancy.HoursRange{{Open: "10:00", Close: "02:00"}}
+	s := Schedule{Loc: ny, Weekly: tenancy.OpeningHours{"mon": wk, "tue": wk, "wed": wk, "thu": wk, "fri": we, "sat": we,
+		"sun": {{Open: "10:30", Close: "00:00"}}}, Exceptions: map[string]Exception{}}
+	// at(0, …) is Monday 2026-11-02; at(6, …) Sunday 2026-11-08.
+	for _, c := range []struct {
+		t    time.Time
+		open bool
+	}{
+		{at(0, 0, 30), false}, // Sunday closed at midnight
+		{at(0, 10, 0), true},
+		{at(1, 0, 59), true}, // Monday's period on Tuesday
+		{at(1, 1, 0), false},
+		{at(5, 1, 59), true}, // Friday's on Saturday
+		{at(5, 2, 0), false},
+		{at(6, 1, 59), true}, // Saturday's on Sunday
+		{at(6, 10, 29), false},
+		{at(6, 23, 59), true},
+		{at(7, 0, 0), false},
+	} {
+		if got := s.OpenAt(c.t); got != c.open {
+			t.Errorf("%s: open=%v, want %v", c.t, got, c.open)
+		}
+	}
+	if c := s.ClosesAt(at(4, 22, 0)); c == nil || !c.Equal(at(5, 2, 0)) {
+		t.Errorf("Friday closes at %v, want Saturday 02:00", c)
+	}
+}

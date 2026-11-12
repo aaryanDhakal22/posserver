@@ -91,7 +91,23 @@ type Settings struct {
 	// at its first payment; the till report's starting cash). Same for every
 	// terminal.
 	DrawerStartCents int64 `json:"drawer_start_cents"`
+
+	// WasteReasons (the owner, 2026-11-12): the reasons a cashier picks for
+	// a "void waste" (made already, never picked up …; nothing prints, the
+	// reason goes on the report). X: edited on Store › Staff.
+	WasteReasons []string `json:"waste_reasons"`
 }
+
+// DefaultWasteReasons are the owner's (2026-11-12).
+func DefaultWasteReasons() []string {
+	return []string{"Never picked up", "Made wrong / remade", "Customer complaint", "Burnt / dropped"}
+}
+
+// Bounds of the waste reasons.
+const (
+	MaxWasteReasons   = 20
+	MaxWasteReasonLen = 40
+)
 
 // DefaultTabs are the tabs a login may land on (the terminal's names;
 // Drawer is a bottom-bar button, not a landing tab).
@@ -156,7 +172,8 @@ func DefaultSettings() Settings {
 		AutoCloseBatchAt: DefaultAutoCloseBatchAt,
 		DefaultTab:       "info", ButtonFont: "barlow", CashierPriceDropPct: 20, OutOfAreaMarginMi: 1,
 		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: DefaultEmployeeMealPct, ToppingMaxCount: 3,
-		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes(), DrawerStartCents: 10000}
+		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes(), DrawerStartCents: 10000,
+		WasteReasons: DefaultWasteReasons()}
 }
 
 // Ranges.
@@ -259,6 +276,13 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: default_pickup_minutes must be 0–%d", ErrBadSettings, MaxPickupMinutes)
 	case len(s.AreaCodes) < 1 || len(s.AreaCodes) > MaxAreaCodes:
 		return fmt.Errorf("%w: area_codes needs 1–%d codes", ErrBadSettings, MaxAreaCodes)
+	case len(s.WasteReasons) < 1 || len(s.WasteReasons) > MaxWasteReasons:
+		return fmt.Errorf("%w: waste_reasons needs 1–%d reasons", ErrBadSettings, MaxWasteReasons)
+	}
+	for _, r := range s.WasteReasons {
+		if r == "" || utf8.RuneCountInString(r) > MaxWasteReasonLen {
+			return fmt.Errorf("%w: a waste reason is 1–%d characters", ErrBadSettings, MaxWasteReasonLen)
+		}
 	}
 	for _, c := range s.AreaCodes {
 		if !ValidAreaCode(c) {
@@ -296,6 +320,22 @@ func (s *Settings) Normalize() {
 		s.AreaCodes = codes
 	}
 	s.OutOfAreaMarginMi = math.Round(s.OutOfAreaMarginMi*10) / 10
+	if s.WasteReasons == nil {
+		s.WasteReasons = DefaultWasteReasons()
+	} else {
+		// Trimmed, blanks and repeats (any case) dropped, order kept.
+		seen := map[string]bool{}
+		out := make([]string, 0, len(s.WasteReasons))
+		for _, r := range s.WasteReasons {
+			r = strings.Join(strings.Fields(r), " ")
+			if r == "" || seen[strings.ToLower(r)] {
+				continue
+			}
+			seen[strings.ToLower(r)] = true
+			out = append(out, r)
+		}
+		s.WasteReasons = out
+	}
 }
 
 // ValidHHMM: "" or a 24-hour "HH:MM".
