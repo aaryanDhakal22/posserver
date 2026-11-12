@@ -52,9 +52,9 @@ def test_import_export_round_trip(mgr) -> None:
     assert exp.status_code == 200
     assert exp.headers["Content-Type"].startswith("text/csv")
     lines = exp.text.splitlines()
-    assert lines[0] == "menu,category,item,price,printer,description"
-    assert "Main,Pizza,Garlic Knots,4.00,Sub," in lines
-    assert "Main,Subs,Philly Cheese Steak,9.50,," in lines
+    assert lines[0] == "menu,category,item,price,printer,description,no_kitchen_ticket,family"
+    assert "Main,Pizza,Garlic Knots,4.00,Sub,,no," in lines
+    assert "Main,Subs,Philly Cheese Steak,9.50,,,no," in lines
 
     # Export → import is a no-op too.
     assert _import(mgr, exp.text).json()["changes"] == []
@@ -69,6 +69,22 @@ def test_import_export_round_trip(mgr) -> None:
     assert items["Cheese Pizza"]["printer_id"] is None
     assert printers[items["Garlic Knots"]["printer_id"]] == "Sub"
     assert items["Pepperoni Pizza"]["price_cents"] == 1200
+
+
+def test_no_kitchen_ticket_column(mgr) -> None:
+    """no_kitchen_ticket yes/no: receipt only (no station ticket); blank keeps;
+    the export writes yes with a blank printer and round-trips."""
+    body = "category,item,price,printer,no_kitchen_ticket\nMisc,Ranch,0.75,Sub,no\nMisc,Coke,2.00,,yes\n"
+    res = _import(mgr, body).json()
+    assert (res["items_no_kitchen"], res["item_no_kitchen_changed"], res["items_no_printer"]) == (1, 1, 0), res
+    lines = mgr.get(f"{STORE_V1}/me/menu/export.csv", timeout=5).text.splitlines()
+    assert "Main,Misc,Coke,2.00,,,yes," in lines and "Main,Misc,Ranch,0.75,Sub,,no," in lines, lines
+    assert _import(mgr, "\n".join(lines) + "\n").json()["changes"] == []
+    # blank keeps it, "no" clears it
+    assert _import(mgr, "category,item,no_kitchen_ticket\nMisc,Coke,\n").json()["changes"] == []
+    res = _import(mgr, "category,item,no_kitchen_ticket\nMisc,Coke,no\n").json()
+    assert res["item_no_kitchen_changed"] == 1 and res["items_no_kitchen"] == 0, res
+    assert _import(mgr, "category,item,no_kitchen_ticket\nMisc,Coke,maybe\n").status_code == 400
 
 
 def test_unknown_printer_is_rejected(mgr) -> None:

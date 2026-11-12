@@ -91,6 +91,15 @@ type Meters struct {
 
 	// SQSReceiveErrors counts failed ReceiveMessage polls (reason; no store labels).
 	SQSReceiveErrors metric.Int64Counter
+
+	// Order placements (DURABILITY-PLAN.md). OrderPlacements: each placement's
+	// outcome (result = placed|refused|expired|voided|pending|key_reused|replayed;
+	// channel = kind). OrderRefusals: refusals by reason (the code, e.g.
+	// kitchen_offline, store_closed, payment_declined). PlacementSweeps: the
+	// sweeper's actions (action = resumed|completed|voided|expired|parked_expired|due_alert|pruned).
+	OrderPlacements metric.Int64Counter
+	OrderRefusals   metric.Int64Counter
+	PlacementSweeps metric.Int64Counter
 }
 
 func NewMeters() (Meters, error) {
@@ -230,6 +239,25 @@ func NewMeters() (Meters, error) {
 		metric.WithDescription("Order line items routed to kitchen printers at ingest (attribute routing: matched|unmatched|unassigned)"),
 	); err != nil {
 		return Meters{}, fmt.Errorf("orders.items.routed: %w", err)
+	}
+
+	if ms.OrderPlacements, err = m.Int64Counter(
+		"orders.placements",
+		metric.WithDescription("Channel order placements by outcome (placed, refused, expired, voided, pending, key_reused, replayed)"),
+	); err != nil {
+		return Meters{}, fmt.Errorf("orders.placements: %w", err)
+	}
+	if ms.OrderRefusals, err = m.Int64Counter(
+		"orders.refusals",
+		metric.WithDescription("Channel orders refused, by reason (the refusal code)"),
+	); err != nil {
+		return Meters{}, fmt.Errorf("orders.refusals: %w", err)
+	}
+	if ms.PlacementSweeps, err = m.Int64Counter(
+		"orders.placements.sweeps",
+		metric.WithDescription("The placement sweeper's actions (resumed, completed, voided, expired, parked_expired, due_alert, pruned)"),
+	); err != nil {
+		return Meters{}, fmt.Errorf("orders.placements.sweeps: %w", err)
 	}
 
 	if ms.FloorEventsReceived, err = m.Int64Counter(

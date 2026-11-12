@@ -47,7 +47,8 @@ type Report struct {
 	Note         string
 	AppVersion   string // tablet.app_version
 	AgentVersion string // pi.version
-	TabletName   string // tablet.name
+	TabletName   string // tablet.name (a terminal's device.name)
+	DeviceKind   string // DeviceTablet | DeviceTerminal (device_kind; absent = tablet)
 	Steps        int
 
 	doc map[string]any
@@ -111,14 +112,48 @@ func ParseReport(raw []byte) (*Report, error) {
 		}
 		doc["log"] = lines
 	}
-	if tab, ok := doc["tablet"].(map[string]any); ok {
+	// A Quibase report names its device `tablet`; a counter terminal's
+	// (Centurion, setup / full_check / guide) may name it `device`.
+	tab, ok := doc["tablet"].(map[string]any)
+	if !ok {
+		tab, ok = doc["device"].(map[string]any)
+	}
+	if ok {
 		r.TabletName = capField(tab, "name", maxTabletName)
 		r.AppVersion = capField(tab, "app_version", maxEnum)
+		if k, _ := tab["kind"].(string); k != "" {
+			r.SetDeviceKind(k)
+		}
+	}
+	if k, _ := doc["device_kind"].(string); k != "" {
+		r.SetDeviceKind(k)
+	}
+	if r.DeviceKind == "" {
+		r.DeviceKind = DeviceTablet
 	}
 	if pi, ok := doc["pi"].(map[string]any); ok {
 		r.AgentVersion = capField(pi, "version", maxEnum)
 	}
 	return r, nil
+}
+
+// The kinds of device a report comes from.
+const (
+	DeviceTablet   = "tablet"   // Quibase
+	DeviceTerminal = "terminal" // Centurion, the counter terminal
+)
+
+// SetDeviceKind records where the report came from (the Pi's relay says so
+// in its diag.report payload; the report may say so itself): "terminal" or
+// "tablet" (anything else reads as a tablet). Kept in the stored report as
+// `device_kind`, so the admin detail shows it without a column.
+func (r *Report) SetDeviceKind(kind string) {
+	k := DeviceTablet
+	if strings.EqualFold(strings.TrimSpace(kind), DeviceTerminal) {
+		k = DeviceTerminal
+	}
+	r.DeviceKind = k
+	r.doc["device_kind"] = k
 }
 
 // MergePi folds what the Pi adds when it relays a report (its version, a

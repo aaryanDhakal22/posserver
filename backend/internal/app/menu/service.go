@@ -38,12 +38,32 @@ type Service struct {
 	listPrinters func(ctx context.Context, locationID uuid.UUID) ([]tenancyDom.Printer, error)
 	// vendor maps vendor item names to bank items (the vendor view, 3.0); nil = none.
 	vendor VendorMapper
+	// families backs the CSV's family column (00045); nil = the column is ignored.
+	families CSVFamilies
 }
+
+// CSVFamilies is what the menu CSV reads and writes of item families
+// (repositories.FamilyRepository).
+type CSVFamilies interface {
+	ItemFamilies(ctx context.Context, locationID uuid.UUID) ([]menuDom.Family, map[uuid.UUID]uuid.UUID, error)
+	Create(ctx context.Context, tenantID, locationID uuid.UUID, f menuDom.Family) (menuDom.Family, error)
+	Assign(ctx context.Context, locationID uuid.UUID, family *uuid.UUID, items, options []uuid.UUID) (int, int, error)
+}
+
+// SetFamilies plugs in the item families for the CSV (set once at startup).
+func (s *Service) SetFamilies(f CSVFamilies) { s.families = f }
 
 // VendorMapper is a location's vendor name → menu item mappings, keyed by the
 // normalized vendor name (menuviewApp.Service.VendorMaps).
 type VendorMapper interface {
 	VendorMaps(ctx context.Context, locationID uuid.UUID) (map[string]uuid.UUID, error)
+}
+
+// CounterOnly lists a location's items that only the counter terminal sells
+// (menuviewApp.Service.CounterOnlyItems); the vendor mapper may also be one.
+// Routing never matches them, by name or by a vendor map (TERMINAL-PLAN 0d).
+type CounterOnly interface {
+	CounterOnlyItems(ctx context.Context, locationID uuid.UUID) (map[uuid.UUID]bool, error)
 }
 
 // SetVendorMapper plugs in the vendor view's mappings (set once at startup;
@@ -158,7 +178,7 @@ func (s *Service) ListCategories(ctx context.Context, tenantID, locationID, menu
 	return s.repo.ListCategoriesByMenu(ctx, menuID)
 }
 
-func (s *Service) CreateCategory(ctx context.Context, tenantID, locationID, menuID uuid.UUID, name, description string, defaultPrinter *uuid.UUID) (*menuDom.Category, error) {
+func (s *Service) CreateCategory(ctx context.Context, tenantID, locationID, menuID uuid.UUID, name, description string, defaultPrinter *uuid.UUID, noKitchen bool) (*menuDom.Category, error) {
 	ctx, span := s.mutateSpan(ctx, "category", "create")
 	defer span.End()
 	if err := s.ownMenu(ctx, tenantID, locationID, menuID); err != nil {
@@ -173,13 +193,14 @@ func (s *Service) CreateCategory(ctx context.Context, tenantID, locationID, menu
 	}
 	cat, err := s.repo.CreateCategory(ctx, menuDom.CreateCategoryParams{
 		TenantID: tenantID, LocationID: locationID, MenuID: menuID, Name: name, Description: description,
-		Available: true, DefaultPrinterID: defaultPrinter,
+		Available: true, DefaultPrinterID: defaultPrinter, NoKitchenTicket: noKitchen,
 	})
 	s.recordMutation(ctx, span, "category", "create", err)
 	return cat, err
 }
 
-func (s *Service) UpdateCategory(ctx context.Context, tenantID, locationID, id uuid.UUID, name, description string, available bool, defaultPrinter *uuid.UUID) (*menuDom.Category, error) {
+// UpdateCategory: noKitchen nil keeps the category's "no kitchen ticket".
+func (s *Service) UpdateCategory(ctx context.Context, tenantID, locationID, id uuid.UUID, name, description string, available bool, defaultPrinter *uuid.UUID, noKitchen *bool) (*menuDom.Category, error) {
 	ctx, span := s.mutateSpan(ctx, "category", "update")
 	defer span.End()
 	if err := s.ownCategory(ctx, tenantID, locationID, id); err != nil {
@@ -192,7 +213,14 @@ func (s *Service) UpdateCategory(ctx context.Context, tenantID, locationID, id u
 	if err := s.validatePrinter(ctx, locationID, defaultPrinter); err != nil {
 		return nil, err
 	}
-	cat, err := s.repo.UpdateCategory(ctx, menuDom.UpdateCategoryParams{ID: id, TenantID: tenantID, Name: name, Description: description, Available: available, DefaultPrinterID: defaultPrinter})
+	nk := false
+	if noKitchen != nil {
+		nk = *noKitchen
+	} else if cur, err := s.repo.GetCategory(ctx, id, tenantID); err == nil {
+		nk = cur.NoKitchenTicket
+	}
+	cat, err := s.repo.UpdateCategory(ctx, menuDom.UpdateCategoryParams{ID: id, TenantID: tenantID, Name: name, Description: description, Available: available,
+		DefaultPrinterID: defaultPrinter, NoKitchenTicket: nk})
 	s.recordMutation(ctx, span, "category", "update", err)
 	return cat, err
 }
@@ -280,14 +308,23 @@ func (s *Service) UpdateItem(ctx context.Context, tenantID, locationID, id uuid.
 	return it, err
 }
 
-func (s *Service) AssignItemPrinter(ctx context.Context, tenantID, locationID, id uuid.UUID, printerID *uuid.UUID) error {
+// AssignItemPrinter sets where an item prints: its printer (nil = its
+// category's default) and, when noKitchen is set, its "no kitchen ticket"
+// flag (receipt only; wins over the printer).
+func (s *Service) AssignItemPrinter(ctx context.Context, tenantID, locationID, id uuid.UUID, printerID *uuid.UUID, noKitchen *bool) error {
 	if err := s.ownItem(ctx, tenantID, locationID, id); err != nil {
 		return err
 	}
 	if err := s.validatePrinter(ctx, locationID, printerID); err != nil {
 		return err
 	}
-	return s.repo.SetItemPrinter(ctx, id, tenantID, printerID)
+	if err := s.repo.SetItemPrinter(ctx, id, tenantID, printerID); err != nil {
+		return err
+	}
+	if noKitchen != nil {
+		return s.repo.SetItemNoKitchen(ctx, id, tenantID, *noKitchen)
+	}
+	return nil
 }
 
 func (s *Service) DeleteItem(ctx context.Context, tenantID, locationID, id uuid.UUID) error {
@@ -503,6 +540,46 @@ func IsNotFound(err error) bool { return errors.Is(err, errNotFound) }
 
 // --- Kitchen routing ----------------------------------------------------------
 
+// ItemPrinter is one bank item's kitchen printer for the Pi's counter menu:
+// PrinterID a printer's id, or "" with NoKitchen for an item with "no
+// kitchen ticket" (00041: no station ticket, not in "Also on this order").
+type ItemPrinter struct {
+	PrinterID string `json:"printer_id"`
+	Name      string `json:"name,omitempty"`
+	NoKitchen bool   `json:"no_kitchen,omitempty"`
+}
+
+// ItemPrinters maps every item of the location that has a kitchen printer (its
+// own, else its category's default) to that printer, and every "no kitchen
+// ticket" item to {printer_id: "", no_kitchen: true}. The Pi routes counter
+// lines with it; an item with neither prints on every station, as online
+// orders without a route do.
+func (s *Service) ItemPrinters(ctx context.Context, locationID uuid.UUID) (map[uuid.UUID]ItemPrinter, error) {
+	entries, err := s.repo.ListRoutingByLocation(ctx, locationID)
+	if err != nil {
+		return nil, err
+	}
+	names := map[uuid.UUID]string{}
+	if printers, perr := s.listPrinters(ctx, locationID); perr == nil {
+		for _, p := range printers {
+			names[p.ID] = p.Name
+		}
+	}
+	out := make(map[uuid.UUID]ItemPrinter, len(entries))
+	for _, e := range entries {
+		if _, seen := out[e.ItemID]; seen {
+			continue
+		}
+		switch {
+		case e.NoKitchen:
+			out[e.ItemID] = ItemPrinter{NoKitchen: true}
+		case e.PrinterID != nil:
+			out[e.ItemID] = ItemPrinter{PrinterID: e.PrinterID.String(), Name: names[*e.PrinterID]}
+		}
+	}
+	return out, nil
+}
+
 // RouteItems maps vendor item names to kitchen printers for one location, in
 // order. A name matches a menu item when they're equal ignoring case and
 // repeated whitespace (size is not part of the name). The effective printer is
@@ -520,6 +597,9 @@ func (s *Service) RouteItems(ctx context.Context, locationID uuid.UUID, names []
 		switch {
 		case !ok:
 			out[i] = order.ItemRoute{Routing: order.RoutingUnmatched}
+		case e.NoKitchen:
+			id := e.ItemID
+			out[i] = order.ItemRoute{MenuItemID: &id, Routing: order.RoutingNoKitchen}
 		case e.PrinterID == nil:
 			id := e.ItemID
 			out[i] = order.ItemRoute{MenuItemID: &id, Routing: order.RoutingUnassigned}
@@ -538,6 +618,23 @@ func (s *Service) routingTable(ctx context.Context, locationID uuid.UUID) (map[s
 	entries, err := s.repo.ListRoutingByLocation(ctx, locationID)
 	if err != nil {
 		return nil, err
+	}
+	if co, ok := s.vendor.(CounterOnly); ok && co != nil {
+		// Never route an online order to a counter-only item: an error here
+		// fails the routing like a database error would (the message is retried).
+		skip, err := co.CounterOnlyItems(ctx, locationID)
+		if err != nil {
+			return nil, fmt.Errorf("counter-only items: %w", err)
+		}
+		if len(skip) > 0 {
+			kept := entries[:0:0]
+			for _, e := range entries {
+				if !skip[e.ItemID] {
+					kept = append(kept, e)
+				}
+			}
+			entries = kept
+		}
 	}
 	byName := make(map[string]menuDom.RouteEntry, len(entries))
 	for _, e := range entries {
@@ -599,8 +696,8 @@ func (s *Service) UnmatchedNames(ctx context.Context, tenantID, locationID uuid.
 		k := normalizeItemName(r.Name)
 		routing := order.RoutingUnmatched
 		if e, ok := byName[k]; ok {
-			if e.PrinterID != nil {
-				continue
+			if e.PrinterID != nil || e.NoKitchen {
+				continue // routed, or receipt only on purpose
 			}
 			routing = order.RoutingUnassigned
 		}
@@ -653,6 +750,9 @@ func (s *Service) RouteBankItems(ctx context.Context, locationID uuid.UUID, ids 
 		switch {
 		case !ok:
 			out[i] = order.ItemRoute{Routing: order.RoutingUnmatched}
+		case e.NoKitchen:
+			item := e.ItemID
+			out[i] = order.ItemRoute{MenuItemID: &item, Routing: order.RoutingNoKitchen}
 		case e.PrinterID == nil:
 			item := e.ItemID
 			out[i] = order.ItemRoute{MenuItemID: &item, Routing: order.RoutingUnassigned}

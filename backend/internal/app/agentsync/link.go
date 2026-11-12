@@ -9,7 +9,6 @@ import (
 
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/observability"
-	"quiccpos/main/internal/shared/ratelimit"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -61,10 +60,10 @@ type Manager struct {
 // restaurant — an old Pi that comes back wipes itself instead of printing
 // twice) and returns the runtime secrets.
 func (s *Service) Link(ctx context.Context, req LinkRequest) (*LinkResult, error) {
-	// Throttled per username (behind Traefik every caller shares the proxy's
-	// address) plus a global ceiling against spraying many usernames.
-	key := "u:" + strings.ToLower(strings.TrimSpace(req.Username))
-	if !s.linkLimit.Allow(key) || !s.linkLimit.AllowN(linkGlobalKey, linkGlobalMax) {
+	// Throttled per username and per caller address, plus the high global
+	// valve (ratelimit.LoginGuard): other callers' failures never stop a
+	// username and address that have none (H2).
+	if ok, _ := s.linkLimit.Check(req.Username, req.RemoteAddr); !ok {
 		return nil, ErrThrottled
 	}
 	s.linkMu.Lock()
@@ -72,13 +71,12 @@ func (s *Service) Link(ctx context.Context, req LinkRequest) (*LinkResult, error
 	tenant, err := s.tenancy.AuthenticateTenant(ctx, req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, tenancyApp.ErrInvalidCredentials) {
-			s.linkLimit.Add(key)
-			s.linkLimit.Add(linkGlobalKey)
+			s.linkLimit.Fail(req.Username, req.RemoteAddr)
 			return nil, ErrBadCredentials
 		}
 		return nil, err
 	}
-	s.linkLimit.Reset(key)
+	s.linkLimit.Success(req.Username)
 	loc, err := s.tenancy.PrimaryLocation(ctx, tenant.ID)
 	if err != nil {
 		return nil, fmt.Errorf("store has no location: %w", err)
@@ -161,8 +159,3 @@ func (s *Service) PushoverSecrets() PushoverSecrets {
 		AdminDevices: s.secrets.PushoverAdminDevices,
 	}
 }
-
-// linkGlobalKey/Max cap failed links across all usernames per window.
-const linkGlobalKey = "*"
-
-var linkGlobalMax = ratelimit.GlobalMax(30)

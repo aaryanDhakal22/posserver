@@ -1,4 +1,4 @@
-"""Pricing (main 3.0, PORTS-PLAN.md step 4). The engine's arithmetic is
+"""Pricing (main 3.0, archive/PORTS-PLAN.md step 4). The engine's arithmetic is
 covered by the shared cases (Go + TS, internal/domain/pricing/testdata);
 this is the HTTP side against a real store.
 
@@ -80,6 +80,8 @@ def _quote(hdr, lines, **cart) -> dict:
 def test_settings(admin, store, mgr) -> None:
     got = _ok(mgr.get(f"{ME}/pricing", timeout=5))
     assert got["store"]["tax_bps"] == 600 and got["store"]["stacking"] == "best" and got["kinds"]["web"]["tips"]["enabled"] is True
+    # A new store delivers for $4: $3 of it the driver's, $1 the store's (the owner, 2026-11-11).
+    assert got["store"]["fees"]["delivery_fee_cents"] == 400 and got["store"]["fees"]["delivery_driver_cents"] == 300
     body = {"store": {"tax_bps": 600, "stacking": "stack", "fees": {"service_fee_cents": 0, "service_fee_bps": 0, "delivery_fee_cents": 299,
                                                                    "free_delivery_over_cents": 3000, "delivery_min_cents": 1000},
                       "tips": {"enabled": False, "presets": [], "default_pct": 0}, "card_fee": {"mode": "none", "bps": 0}},
@@ -94,6 +96,18 @@ def test_settings(admin, store, mgr) -> None:
     counter = check(requests.get(f"{CH_V1}/pricing", headers=_channel(admin, store, "counter"), timeout=5), "getPricing")
     assert counter["settings"]["service_fee_cents"] == 0 and counter["settings"]["free_delivery_over_cents"] == 3000
     assert counter["settings"]["stacking"] == "stack" and counter["timezone"] == "America/New_York" and counter["types"] == {"pickup": True, "delivery": True}
+
+    # The delivery fee split (store share + driver share): unset = $3 of the fee to the driver (capped), the total unchanged.
+    assert web["settings"]["delivery_driver_cents"] == 300 and counter["settings"]["delivery_driver_cents"] == 299
+    split = {**body, "kinds": {"web": {**body["kinds"]["web"], "fees": {**body["kinds"]["web"]["fees"], "delivery_fee_cents": 400,
+                                                                         "delivery_driver_cents": 250}}}}
+    got = _ok(mgr.put(f"{ME}/pricing", json=split, timeout=5))
+    assert got["kinds"]["web"]["fees"]["delivery_driver_cents"] == 250 and "delivery_driver_cents" not in got["store"]["fees"]
+    web = check(requests.get(f"{CH_V1}/pricing", headers=_channel(admin, store, "web"), timeout=5), "getPricing")
+    assert web["settings"]["delivery_fee_cents"] == 400 and web["settings"]["delivery_driver_cents"] == 250
+    over = {**split, "kinds": {"web": {**split["kinds"]["web"], "fees": {**split["kinds"]["web"]["fees"], "delivery_driver_cents": 401}}}}
+    assert mgr.put(f"{ME}/pricing", json=over, timeout=5).status_code == 400
+    _ok(mgr.put(f"{ME}/pricing", json=body, timeout=5))
 
     for bad in ({**body, "store": {**body["store"], "tax_bps": 5000}}, {**body, "store": {**body["store"], "stacking": "all"}},
                 {**body, "kinds": {"kiosk": {}}}, {**body, "kinds": {"web": {"tips": {"enabled": True, "presets": [150], "default_pct": 18}}}},
@@ -179,10 +193,14 @@ def test_channel_quote(admin, store, mgr) -> None:
     _ok(mgr.patch(f"{MENU}/items/{m['soda']['id']}", json={**m["soda"], "in_stock": False}, timeout=5))
     _ok(mgr.put(f"{ME}/ordering", json={"pickup_enabled": True, "delivery_enabled": False, "pickup_eta_minutes": 20,
                                         "delivery_eta_minutes": 45, "schedule_days": 7}, timeout=5))
-    q = _quote(counter, [_line(m["wings"]["id"]), _line("nope"), _line(m["soda"]["id"])], type="delivery")
+    q = _quote(web, [_line(m["wings"]["id"]), _line("nope"), _line(m["soda"]["id"])], type="delivery")
     codes = [e["code"] for e in q["errors"]]
     assert codes == ["option_rules", "unknown_item", "sold_out", "type_off"], q["errors"]
     assert q["errors"][0]["line"] == 0 and q["errors"][3]["line"] is None
+    # The counter: no sauce is a warning (the terminal's screen asked; 2026-11-11), the rest still errors.
+    q = _quote(counter, [_line(m["wings"]["id"]), _line("nope"), _line(m["soda"]["id"])], type="delivery")
+    assert [e["code"] for e in q["errors"]] == ["unknown_item", "sold_out", "type_off"], q["errors"]
+    assert [(w["code"], w["line"]) for w in q["line_warnings"]] == [("option_rules", 0)]
 
     # A vendor feed doesn't price carts; a bad body is a 400.
     vendor = _channel(admin, store, "vendor")
@@ -191,11 +209,6 @@ def test_channel_quote(admin, store, mgr) -> None:
     assert requests.get(f"{CH_V1}/pricing", headers=vendor, timeout=5).status_code == 403
     r = requests.post(f"{CH_V1}/quote", data="{not json", headers={**web, "Content-Type": "application/json"}, timeout=5)
     assert r.status_code == 400 and check(r, "quote")["code"] == "bad_request"
-
-    # The manager's test quote prices as a kind would.
-    mq = _ok(mgr.post(f"{ME}/quote", params={"kind": "web"}, json={"type": "pickup", "lines": lines}, timeout=5))
-    assert mq["discounts"][0]["label"] == "Any 2 pizzas"
-    assert mgr.post(f"{ME}/quote", params={"kind": "kiosk"}, json={"type": "pickup", "lines": lines}, timeout=5).status_code == 400
 
     # The context the TS engine previews with.
     ctx = check(requests.get(f"{CH_V1}/pricing", headers=web, timeout=5), "getPricing")

@@ -39,6 +39,7 @@
   import SizesTab from '$lib/components/menu/SizesTab.svelte';
   import ViewsTab from '$lib/components/menu/ViewsTab.svelte';
   import DealsTab from '$lib/components/menu/DealsTab.svelte';
+  import FamiliesTab from '$lib/components/menu/FamiliesTab.svelte';
   import { loadPiStatus, type PiLink } from '$lib/store/pi';
 
   // Menu editor: items grouped by category (inline price + stock, side panel
@@ -359,6 +360,7 @@
     { id: 'modifiers', label: 'Modifier groups' },
     { id: 'categories', label: 'Categories' },
     { id: 'sizes', label: 'Sizes' },
+    { id: 'families', label: 'Families' },
     { id: 'views', label: 'Views' },
     { id: 'deals', label: 'Deals' }
   ];
@@ -402,6 +404,8 @@
     <ModifiersTab {sizes} />
   {:else if tab === 'sizes'}
     <SizesTab {sizes} onreload={loadBank} />
+  {:else if tab === 'families'}
+    <FamiliesTab onchange={loadBank} />
   {:else if tab === 'deals'}
     <DealsTab {bank} />
   {:else if tab === 'views'}
@@ -646,6 +650,7 @@
       {live}
       {piState}
       inheritedPrinter={editCat?.default_printer_id ? printerName(editCat.default_printer_id) : ''}
+      categoryNoKitchen={!!editCat?.no_kitchen_ticket}
       {sizes}
       bank={bankItems.get(editing.id)}
       onclose={() => (editing = null)}

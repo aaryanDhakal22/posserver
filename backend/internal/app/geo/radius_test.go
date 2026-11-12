@@ -49,29 +49,6 @@ func (f *fakeDB) SetOrderGeoOutsideArea(_ context.Context, a models.SetOrderGeoO
 	return 1, nil
 }
 
-func (f *fakeDB) ListLiveExternalStopsForRadius(_ context.Context, a models.ListLiveExternalStopsForRadiusParams) ([]models.ListLiveExternalStopsForRadiusRow, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	var out []models.ListLiveExternalStopsForRadiusRow
-	for _, s := range f.stops {
-		if f.inScope(s.TenantID, s.LocationID) && s.State == StateLocated && s.Lat.Valid && s.ExpiresAt.Time.After(f.now()) {
-			out = append(out, models.ListLiveExternalStopsForRadiusRow{OrderID: s.OrderID, Lat: s.Lat, Lng: s.Lng, OutsideArea: s.OutsideArea})
-		}
-	}
-	return out, nil
-}
-
-func (f *fakeDB) SetExternalStopOutsideArea(_ context.Context, a models.SetExternalStopOutsideAreaParams) (int64, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	s, ok := f.stops[fromPg(a.OrderID)]
-	if !ok || s.State != StateLocated || s.OutsideArea == a.OutsideArea {
-		return 0, nil
-	}
-	s.OutsideArea, s.PushedAt, s.NextTryAt, s.UpdatedAt = a.OutsideArea, pgtype.Timestamptz{}, ts(f.now()), f.stamp()
-	return 1, nil
-}
-
 // A new radius re-flags the open deliveries, re-pushes only the ones whose
 // flag changed, pushes store_config and answers {radius_m}.
 func TestLocationRadius(t *testing.T) {
@@ -80,13 +57,11 @@ func TestLocationRadius(t *testing.T) {
 	h.svc.OnStoreChanged(func(context.Context, uuid.UUID, uuid.UUID) { storePushes++ })
 	h.knows("1 Near St", cand("1 Near St", "Towson", "21204", 39.4100, -76.5895)) // ~1.3 km north
 	h.knows("2 Far Rd", cand("2 Far Rd", "Towson", "21286", 39.4382, -76.5895))   // ~4.4 km north
-	h.knows("3 Stop Ln", cand("3 Stop Ln", "Towson", "21286", 39.4382, -76.5800)) // ~4.5 km (a POS stop)
-	near, far, stop := uuid.New(), uuid.New(), uuid.New()
+	near, far := uuid.New(), uuid.New()
 	h.db.addOrder(near, order.Address{Line1: "1 Near St", City: "Towson", State: "MD", PostalCode: "21204"})
 	h.db.addOrder(far, order.Address{Line1: "2 Far Rd", City: "Towson", State: "MD", PostalCode: "21286"})
 	h.svc.q.InsertOrderGeo(context.Background(), insertParams(h, near))
 	h.svc.q.InsertOrderGeo(context.Background(), insertParams(h, far))
-	h.rpc(h.svc.HandleLocate, locateBody(stop, "3 Stop Ln", "21286"))
 	h.drain()
 	for _, p := range h.agent.take() {
 		if p.OutsideArea {
@@ -103,8 +78,8 @@ func TestLocationRadius(t *testing.T) {
 	for _, p := range h.agent.take() {
 		pushed[p.OrderID] = p.OutsideArea
 	}
-	if len(pushed) != 2 || !pushed[far.String()] || !pushed[stop.String()] {
-		t.Fatalf("re-pushed %v (want far + stop, outside)", pushed)
+	if len(pushed) != 1 || !pushed[far.String()] {
+		t.Fatalf("re-pushed %v (want far, outside)", pushed)
 	}
 	if _, ok := pushed[near.String()]; ok {
 		t.Fatal("an unchanged flag was pushed again")

@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from gatemark import intentional
 from conftest import (
     SQS_DLQ_URL,
     admin_find_order,
@@ -108,4 +109,5 @@ def test_unroutable_order_lands_in_dlq(sqs, publish) -> None:
                     continue
         return False
 
-    wait_until(in_dlq, timeout=150, interval=2, what="unroutable order in the DLQ")
+    with intentional("DLQ redrive: 3 receives, one visibility timeout apart"):
+        wait_until(in_dlq, timeout=150, interval=2, what="unroutable order in the DLQ")

@@ -45,11 +45,11 @@ func runAlertTest(t *testing.T, h *AlertsHandler, lid uuid.UUID) (int, string) {
 		t.Fatal(err)
 	}
 	issued := httptest.NewRecorder()
-	signer.Issue(issued, nil, uuid.New(), lid)
+	signer.Issue(issued, nil, uuid.New(), lid, 0)
 	req := httptest.NewRequest(http.MethodPost, "/store/v1/me/alerts/test", nil)
 	req.AddCookie(issued.Result().Cookies()[0])
 	rec := httptest.NewRecorder()
-	if err := appMiddleware.StoreSessionAuth(signer)(h.MeTest)(echo.New().NewContext(req, rec)); err != nil {
+	if err := appMiddleware.StoreSessionAuth(signer, nil)(h.MeTest)(echo.New().NewContext(req, rec)); err != nil {
 		t.Fatal(err)
 	}
 	var body map[string]any

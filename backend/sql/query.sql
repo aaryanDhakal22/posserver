@@ -6,36 +6,38 @@
 -- username/password_hash are optional (sqlc.narg → NULL when absent) so admin
 -- can still create credential-less tenants. Full-column RETURNING keeps sqlc
 -- mapping to the models.Tenant table struct (see toDomainTenant).
-INSERT INTO tenants (slug, name, username, password_hash, store_id)
-VALUES ($1, $2, sqlc.narg('username'), sqlc.narg('password_hash'), sqlc.narg('store_id'))
-RETURNING id, slug, name, config, username, password_hash, created_at, store_id;
+INSERT INTO tenants (slug, name, username, password_hash, store_id, test_store)
+VALUES ($1, $2, sqlc.narg('username'), sqlc.narg('password_hash'), sqlc.narg('store_id'), sqlc.arg('test_store'))
+RETURNING id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at;
 
 -- name: GetTenantByID :one
-SELECT id, slug, name, config, username, password_hash, created_at, store_id FROM tenants WHERE id = $1;
+SELECT id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at FROM tenants WHERE id = $1;
 
 -- name: GetTenantAuthByUsername :one
 -- Login lookup: tenant id + stored password hash for a username.
 SELECT id, password_hash FROM tenants WHERE username = $1;
 
 -- name: SetTenantCredentials :exec
--- Set/rotate a tenant's store-manager login (username + already-hashed password).
-UPDATE tenants SET username = $2, password_hash = $3 WHERE id = $1;
+-- Set/rotate a tenant's store-manager login (username + already-hashed
+-- password). Every manager session issued before it ends (session_epoch, M8;
+-- read / rehashed by plain SQL in repositories/tenancy_repo.go).
+UPDATE tenants SET username = $2, password_hash = $3, session_epoch = session_epoch + 1 WHERE id = $1;
 
 -- name: ListTenants :many
-SELECT id, slug, name, config, username, password_hash, created_at, store_id FROM tenants ORDER BY created_at ASC;
+SELECT id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at FROM tenants ORDER BY created_at ASC;
 
 -- name: GetTenantByStoreID :one
 -- Order routing: the external vendor's store_id → tenant (see app/tenancy.ResolveStore).
-SELECT id, slug, name, config, username, password_hash, created_at, store_id FROM tenants WHERE store_id = $1;
+SELECT id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at FROM tenants WHERE store_id = $1 AND retired_at IS NULL;
 
 -- name: SetTenantStoreID :one
 -- Set/clear (NULL) a tenant's vendor store_id. Unique when present.
 UPDATE tenants SET store_id = sqlc.narg('store_id') WHERE id = $1
-RETURNING id, slug, name, config, username, password_hash, created_at, store_id;
+RETURNING id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at;
 
 -- name: UpdateTenantConfig :one
 UPDATE tenants SET config = $2 WHERE id = $1
-RETURNING id, slug, name, config, username, password_hash, created_at, store_id;
+RETURNING id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at;
 
 -- name: DeleteTenantOutboxEvents :exec
 DELETE FROM outbox_events WHERE tenant_id = $1;
@@ -164,22 +166,22 @@ UPDATE devices SET last_used_at = now() WHERE id = $1;
 -- ───────────────────────────────────────────────────────────────────────────
 
 -- name: CreatePrinter :one
-INSERT INTO printers (tenant_id, location_id, name, ip, mac)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac;
+INSERT INTO printers (tenant_id, location_id, name, ip, mac, print_columns)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns;
 
 -- name: GetPrinterByID :one
-SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 FROM printers WHERE id = $1;
 
 -- name: ListPrintersByLocation :many
-SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 FROM printers WHERE location_id = $1 ORDER BY name ASC;
 
 -- name: UpdatePrinter :one
 UPDATE printers SET name = $2, ip = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac;
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns;
 
 -- name: ClearReceiptPrinter :exec
 -- Unflag the location's current receipt printer (one per location).
@@ -189,7 +191,7 @@ WHERE location_id = $1 AND is_receipt;
 -- name: SetPrinterReceipt :one
 UPDATE printers SET is_receipt = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac;
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns;
 
 -- name: MovePrinterIP :one
 -- The Pi followed a printer to a new IP. Applied only while the printer still
@@ -200,7 +202,14 @@ SET ip = sqlc.arg(new_ip),
     mac = CASE WHEN sqlc.arg(mac)::text = '' THEN mac ELSE sqlc.arg(mac)::text END,
     updated_at = now()
 WHERE id = sqlc.arg(id) AND location_id = sqlc.arg(location_id) AND ip = sqlc.arg(old_ip)
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac;
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns;
+
+-- name: SetPrinterColumns :one
+-- The printer's print width in font-A characters (32 | 42 | 48): Store ›
+-- Printers or the Pi's width test (RPC printer.width).
+UPDATE printers SET print_columns = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns;
 
 -- name: SetPrinterMAC :exec
 UPDATE printers SET mac = $2, updated_at = now() WHERE id = $1;
@@ -249,9 +258,9 @@ INSERT INTO orders (
 -- name: CreateLineItem :exec
 INSERT INTO line_items (
     id, order_id, parent_id, position, sku, name, quantity, unit_price_cents, line_total_cents, notes,
-    size, menu_item_id, printer_id, routing
+    size, menu_item_id, printer_id, routing, portion, mode, coupon, coupon_no
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 );
 
 -- name: CreatePayment :exec
@@ -287,7 +296,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE id = $1 AND tenant_id = $2 AND location_id = $3;
 
@@ -301,7 +311,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE id = $1 AND tenant_id = $2 AND location_id = $3
 FOR UPDATE;
@@ -314,7 +325,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2 AND source = $3 AND source_event_id = $4;
 
@@ -326,7 +338,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2
 ORDER BY received_at DESC
@@ -345,7 +358,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE tenant_id = sqlc.arg('tenant_id') AND location_id = sqlc.arg('location_id')
   AND (sqlc.arg('q')::text = '' OR customer_display_name ILIKE '%' || sqlc.arg('q') || '%'
@@ -359,10 +373,14 @@ ORDER BY
 LIMIT sqlc.arg('lim') OFFSET sqlc.arg('off');
 
 -- name: MarkFloorEventSeen :execrows
--- Idempotency gate for agent floor events: 0 rows = already applied.
+-- Idempotency gate for agent floor events: 0 rows = already seen. An event
+-- main refused (invalid / not_found) is looked at again when the Pi sends it
+-- again (it keeps refused payments, counter orders and customers queued), so
+-- a newer main can still apply it.
 INSERT INTO floor_events_seen (event_id, tenant_id, location_id, order_id, type, result)
 VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (event_id) DO NOTHING;
+ON CONFLICT (event_id) DO UPDATE SET result = EXCLUDED.result, order_id = EXCLUDED.order_id, received_at = now()
+WHERE floor_events_seen.result IN ('invalid', 'not_found') AND floor_events_seen.location_id = EXCLUDED.location_id;
 
 -- name: UpdateOrderFloor :exec
 -- Applies an agent floor update (status + mirrored floor fields).
@@ -407,12 +425,12 @@ WHERE tenant_id = $1 AND location_id = $2;
 
 -- name: GetLineItemsByOrderID :many
 SELECT id, order_id, parent_id, position, sku, name, quantity, unit_price_cents, line_total_cents, notes,
-       size, menu_item_id, printer_id, routing
+       size, menu_item_id, printer_id, routing, portion, mode, coupon, coupon_no
 FROM line_items WHERE order_id = $1
 ORDER BY parent_id NULLS FIRST, position;
 
 -- name: GetPaymentsByOrderID :many
-SELECT id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code
+SELECT id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code, tip_cents
 FROM payments WHERE order_id = $1;
 
 -- name: GetStatusEventsByOrderID :many
@@ -515,26 +533,26 @@ UPDATE menus SET position = $3, updated_at = now() WHERE id = $1 AND tenant_id =
 DELETE FROM menus WHERE id = $1 AND tenant_id = $2;
 
 -- name: CreateMenuCategory :one
-INSERT INTO menu_categories (tenant_id, location_id, menu_id, name, description, available, position, default_printer_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at;
+INSERT INTO menu_categories (tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, no_kitchen_ticket)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket;
 
 -- name: GetMenuCategoryByID :one
-SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 FROM menu_categories WHERE id = $1 AND tenant_id = $2;
 
 -- name: ListCategoriesByMenu :many
-SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 FROM menu_categories WHERE menu_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: ListCategoriesByLocation :many
-SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 FROM menu_categories WHERE location_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: UpdateMenuCategory :one
-UPDATE menu_categories SET name = $3, description = $4, available = $5, default_printer_id = $6, updated_at = now()
+UPDATE menu_categories SET name = $3, description = $4, available = $5, default_printer_id = $6, no_kitchen_ticket = $7, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at;
+RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket;
 
 -- name: SetCategoryPosition :exec
 UPDATE menu_categories SET position = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
@@ -545,24 +563,25 @@ DELETE FROM menu_categories WHERE id = $1 AND tenant_id = $2;
 -- name: CreateMenuItem :one
 INSERT INTO menu_items (tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku;
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket;
 
 -- name: GetMenuItemByID :one
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 FROM menu_items WHERE id = $1 AND tenant_id = $2;
 
 -- name: ListItemsByCategory :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 FROM menu_items WHERE category_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: ListItemsByLocation :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 FROM menu_items WHERE location_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: UpdateMenuItem :one
-UPDATE menu_items SET name = $3, description = $4, price_cents = $5, tax_rate_bps = $6, in_stock = $7, out_until = $8, tags = $9, attributes = $10, updated_at = now()
+UPDATE menu_items SET name = $3, description = $4, price_cents = $5, tax_rate_bps = $6, in_stock = $7, out_until = $8, tags = $9, attributes = $10, updated_at = now(),
+    out_hold = CASE WHEN $7 THEN false ELSE out_hold END
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku;
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket;
 
 -- name: ListRecentItemNames :many
 -- Top-level item names ordered at a location since a time, with counts — the
@@ -575,12 +594,15 @@ GROUP BY li.name;
 
 -- name: ListRoutingByLocation :many
 -- Kitchen routing table for one location: every menu item's name with its
--- effective printer (the item's own printer, else its category's default),
--- best candidate first — available menus/categories first, then menu,
+-- effective printer (the item's own printer, else its category's default;
+-- none and no_kitchen when the item, or its category for an item without
+-- its own printer, has "no kitchen ticket", 00041), best candidate first — available menus/categories first, then menu,
 -- category and item position. The router keeps the first row per name.
 SELECT i.id AS item_id,
        i.name AS item_name,
-       COALESCE(i.printer_id, c.default_printer_id)::uuid AS printer_id
+       (CASE WHEN i.no_kitchen_ticket OR (i.printer_id IS NULL AND c.no_kitchen_ticket) THEN NULL
+             ELSE COALESCE(i.printer_id, c.default_printer_id) END)::uuid AS printer_id,
+       (i.no_kitchen_ticket OR (i.printer_id IS NULL AND c.no_kitchen_ticket))::boolean AS no_kitchen
 FROM menu_items i
 JOIN menu_categories c ON c.id = i.category_id
 JOIN menus m ON m.id = c.menu_id
@@ -589,6 +611,18 @@ ORDER BY (m.available AND c.available) DESC, m.position, c.position, i.position,
 
 -- name: SetItemPrinter :exec
 UPDATE menu_items SET printer_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
+
+-- name: SetItemNoKitchen :exec
+-- "No kitchen ticket" on an item (00041).
+UPDATE menu_items SET no_kitchen_ticket = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
+
+-- name: MoveMenuItem :exec
+-- The bank import (bankimport): an item moves to another category of the location.
+UPDATE menu_items SET category_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
+
+-- name: MoveMenuCategory :exec
+-- The bank import: a category moves to another menu of the location.
+UPDATE menu_categories SET menu_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
 
 -- name: SetItemPosition :exec
 UPDATE menu_items SET position = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
@@ -623,20 +657,21 @@ DELETE FROM item_modifier_groups WHERE group_id = $1 AND tenant_id = $2;
 -- name: CreateModifierOption :one
 INSERT INTO modifier_options (tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name;
+RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold;
 
 -- name: ListOptionsByGroup :many
-SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
+SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold
 FROM modifier_options WHERE group_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: ListOptionsByLocation :many
-SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
+SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold
 FROM modifier_options WHERE location_id = $1 ORDER BY position ASC, created_at ASC;
 
 -- name: UpdateModifierOption :one
-UPDATE modifier_options SET name = $3, price_delta_cents = $4, in_stock = $5, updated_at = now()
+UPDATE modifier_options SET name = $3, price_delta_cents = $4, in_stock = $5, updated_at = now(),
+    out_hold = CASE WHEN $5 THEN false ELSE out_hold END
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name;
+RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold;
 
 -- name: SetOptionPosition :exec
 UPDATE modifier_options SET position = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2;
@@ -977,11 +1012,6 @@ SET state        = EXCLUDED.state,
     updated_at   = now()
 WHERE agent_updates.location_id = EXCLUDED.location_id;
 
--- name: GetAgentUpdate :one
-SELECT id, tenant_id, location_id, action, requested_by, force, state, from_version, to_version,
-       error, requested_at, updated_at
-FROM agent_updates WHERE id = $1;
-
 -- name: ListAgentUpdates :many
 SELECT id, tenant_id, location_id, action, requested_by, force, state, from_version, to_version,
        error, requested_at, updated_at
@@ -1008,6 +1038,8 @@ ON CONFLICT (address_key) DO UPDATE SET
 WHERE geo_cache.pinned = false;
 
 -- name: UpsertGeoCachePinned :exec
+-- A pin a store's staff set. The key is the store's own ('pin|<tenant>|<key>',
+-- app/geo PinCacheKey, migration 00007): never the shared address key.
 INSERT INTO geo_cache (address_key, lat, lng, quality, source, pinned, updated_at)
 VALUES ($1, $2, $3, 'pinned', 'pin', true, now())
 ON CONFLICT (address_key) DO UPDATE SET
@@ -1083,6 +1115,17 @@ UPDATE order_geo SET next_try_at = now()
 WHERE tenant_id = @tenant_id AND location_id = @location_id
   AND pushed_at IS NULL AND state <> 'pending';
 
+-- name: RelocateOrderGeo :exec
+-- A delivery's address changed after it was placed (the Pi's order.changed,
+-- or a takeout moved to a delivery): work it again from scratch, as at
+-- intake. created_at restarts so the retry window counts from the change.
+INSERT INTO order_geo (order_id, tenant_id, location_id)
+VALUES (@order_id, @tenant_id, @location_id)
+ON CONFLICT (order_id) DO UPDATE SET state = 'pending', lat = NULL, lng = NULL, quality = '',
+    distance_m = 0, duration_s = 0, polyline = '', outside_area = false, store_to_s = NULL, to_store_s = NULL,
+    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, created_at = now(), updated_at = now(),
+    candidates = NULL, confirmed_address = NULL, confirmed = false, corrected = false, note = '';
+
 -- name: ResetOrderGeoForPin :exec
 UPDATE order_geo SET state = 'pending', attempts = 0, next_try_at = now(),
     last_error = '', pushed_at = NULL, candidates = NULL, confirmed_address = NULL,
@@ -1136,96 +1179,9 @@ SELECT id, tenant_id, location_id, batch_id, driver_id, driver_name, plan_id,
 FROM delivery_runs WHERE tenant_id = $1 AND location_id = $2
 ORDER BY at DESC LIMIT $3;
 
--- ---------------------------------------------------------------------------
--- External stops (2.1.0): POS deliveries the agent asks main to locate (RPC
--- geo.locate). No orders row; a point + push state, and the address text in
--- geo_external_work only while it is needed.
--- ---------------------------------------------------------------------------
-
--- name: UpsertExternalStop :execrows
--- A (re)locate request: back to pending with no point, a fresh 24 h expiry.
-INSERT INTO geo_external_stops (order_id, tenant_id, location_id, expires_at)
-VALUES (@order_id, @tenant_id, @location_id, @expires_at)
-ON CONFLICT (order_id) DO UPDATE SET
-    state = 'pending', lat = NULL, lng = NULL, quality = '', distance_m = 0, duration_s = 0,
-    polyline = '', outside_area = false, store_to_s = NULL, to_store_s = NULL, attempts = 0,
-    next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = false, created_at = now(), updated_at = now(),
-    expires_at = EXCLUDED.expires_at
-WHERE geo_external_stops.tenant_id = EXCLUDED.tenant_id AND geo_external_stops.location_id = EXCLUDED.location_id;
-
--- name: UpsertExternalWork :exec
-INSERT INTO geo_external_work (order_id, address, address_key, discard_at)
-VALUES (@order_id, @address, @address_key, @discard_at)
-ON CONFLICT (order_id) DO UPDATE SET
-    address = EXCLUDED.address, address_key = EXCLUDED.address_key, candidates = NULL,
-    confirmed_address = NULL, created_at = now(), discard_at = EXCLUDED.discard_at;
-
--- name: GetExternalStop :one
-SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
-       polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
-       pushed_at, created_at, updated_at, expires_at, confirmed, corrected, note
-FROM geo_external_stops
-WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id;
-
--- name: GetExternalWork :one
-SELECT order_id, address, address_key, candidates, confirmed_address, created_at, discard_at
-FROM geo_external_work WHERE order_id = $1;
-
 -- name: GetLocationGeo :one
--- The store's position + radius (an external stop has no orders row to join).
+-- The store's position + radius.
 SELECT lat, lng, delivery_radius_m FROM locations WHERE id = @location_id AND tenant_id = @tenant_id;
-
--- name: ListDueExternalStops :many
-SELECT order_id, tenant_id, location_id, state, attempts, created_at, updated_at
-FROM geo_external_stops
-WHERE pushed_at IS NULL AND next_try_at <= @now::timestamptz AND expires_at > @now::timestamptz
-ORDER BY next_try_at ASC
-LIMIT @max_rows;
-
--- name: SaveExternalStopResult :one
--- A final result (located / check / not_found); see SaveExternalStopRetry.
-UPDATE geo_external_stops SET
-    state = @state, lat = sqlc.narg('lat'), lng = sqlc.narg('lng'), quality = @quality,
-    distance_m = @distance_m, duration_s = @duration_s, polyline = @polyline,
-    outside_area = @outside_area, store_to_s = sqlc.narg('store_to_s'), to_store_s = sqlc.narg('to_store_s'),
-    corrected = @corrected, note = '',
-    attempts = attempts + 1, next_try_at = now(), last_error = @last_error,
-    pushed_at = NULL, updated_at = now()
-WHERE order_id = @order_id AND updated_at = @read_at
-RETURNING updated_at;
-
--- name: SaveExternalStopRetry :execrows
--- Both guarded by the updated_at the worker read: a re-locate, pin or
--- choice that arrived meanwhile wins (the row is due again anyway).
-UPDATE geo_external_stops SET attempts = attempts + 1, next_try_at = @next_try_at,
-    last_error = @last_error, updated_at = now()
-WHERE order_id = @order_id AND updated_at = @read_at;
-
--- name: MarkExternalStopPushed :execrows
-UPDATE geo_external_stops SET pushed_at = now(), confirmed = false
-WHERE order_id = @order_id AND updated_at = @updated_at;
-
--- name: DeferExternalStopPush :exec
-UPDATE geo_external_stops SET next_try_at = @next_try_at WHERE order_id = @order_id;
-
--- name: WakeLocationExternalStops :execrows
-UPDATE geo_external_stops SET next_try_at = now()
-WHERE tenant_id = @tenant_id AND location_id = @location_id
-  AND pushed_at IS NULL AND state <> 'pending';
-
--- name: SetExternalStopPoint :execrows
--- A pin or a chosen candidate: re-route from this point and push it again,
--- confirmed (staff's own pick).
-UPDATE geo_external_stops SET state = 'pending', lat = @lat, lng = @lng, quality = @quality,
-    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = true,
-    corrected = false, note = '', updated_at = now()
-WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id;
-
--- name: SetExternalWorkCandidates :execrows
--- Guarded by the created_at the worker read: a geo.locate that replaced the
--- work row meanwhile (new address) is not overwritten.
-UPDATE geo_external_work SET candidates = sqlc.narg('candidates')
-WHERE order_id = @order_id AND created_at = @read_at;
 
 -- name: SaveOrderGeoSearch :execrows
 -- A staff address search (geo.search, 2.2.2) answered: state check with the
@@ -1237,72 +1193,6 @@ UPDATE order_geo SET state = @state, lat = NULL, lng = NULL, quality = '',
     outside_area = false, store_to_s = NULL, to_store_s = NULL,
     next_try_at = now(), last_error = '', pushed_at = NULL, updated_at = now()
 WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id;
-
--- name: SaveExternalStopSearch :execrows
--- geo.search for an external stop; the candidates go on the work row
--- (UpsertExternalWorkSearch, same tx).
-UPDATE geo_external_stops SET state = @state, lat = NULL, lng = NULL, quality = '',
-    confirmed = false, corrected = false, note = @note, distance_m = 0, duration_s = 0,
-    polyline = '', outside_area = false, store_to_s = NULL, to_store_s = NULL,
-    next_try_at = now(), last_error = '', pushed_at = NULL, updated_at = now()
-WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id;
-
--- name: UpsertExternalWorkSearch :exec
--- The search's candidates (NULL: none found) for geo.choose. A stop whose
--- address text is gone gets an empty work row (no address, no cache key),
--- discarded as usual.
-INSERT INTO geo_external_work (order_id, address, address_key, candidates, discard_at)
-VALUES (@order_id, '{}'::jsonb, '', sqlc.narg('candidates'), @discard_at)
-ON CONFLICT (order_id) DO UPDATE SET candidates = EXCLUDED.candidates, confirmed_address = NULL;
-
--- name: SetExternalWorkConfirmed :exec
-UPDATE geo_external_work SET candidates = NULL, confirmed_address = @confirmed_address
-WHERE order_id = @order_id;
-
--- name: DeleteExternalWork :exec
-DELETE FROM geo_external_work WHERE order_id = $1;
-
--- name: DeleteExternalWorkRead :execrows
--- The worker's own located / given-up work row only (created_at as read): a
--- geo.locate that replaced it meanwhile keeps its new address.
-DELETE FROM geo_external_work WHERE order_id = @order_id AND created_at = @read_at;
-
--- name: DeleteExternalWorkIfDone :exec
--- After the agent acked a result that needs no address any more.
-DELETE FROM geo_external_work w USING geo_external_stops s
-WHERE w.order_id = @order_id AND s.order_id = w.order_id
-  AND s.pushed_at IS NOT NULL AND s.state <> 'check' AND s.state <> 'pending';
-
--- name: DeleteExternalStop :execrows
-DELETE FROM geo_external_stops
-WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id;
-
--- name: PruneExternalStops :execrows
-DELETE FROM geo_external_stops WHERE expires_at <= @now::timestamptz;
-
--- name: PruneExternalWork :execrows
-DELETE FROM geo_external_work WHERE discard_at <= @now::timestamptz;
-
--- name: ListLiveExternalStops :many
--- The location's other located external stops, for the drive-time table.
-SELECT order_id, lat, lng FROM geo_external_stops
-WHERE tenant_id = @tenant_id AND location_id = @location_id
-  AND state = 'located' AND lat IS NOT NULL AND lng IS NOT NULL
-  AND order_id <> @exclude_id AND expires_at > now()
-ORDER BY created_at ASC
-LIMIT @max_rows;
-
--- name: ListExternalStopsByIDs :many
-SELECT order_id, state, lat, lng FROM geo_external_stops
-WHERE tenant_id = @tenant_id AND location_id = @location_id AND order_id = ANY(@ids::uuid[])
-  AND expires_at > now();
-
--- name: RequeueLocationExternalStops :execrows
--- The store moved: re-route the located stops from their own point.
-UPDATE geo_external_stops SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL,
-    confirmed = false, updated_at = now()
-WHERE tenant_id = @tenant_id AND location_id = @location_id
-  AND state = 'located' AND lat IS NOT NULL AND expires_at > now();
 
 -- name: SetLocationDeliveryRadius :execrows
 -- 2.2.0 location.radius: the Pi (tablet settings) sets the delivery radius.
@@ -1322,16 +1212,6 @@ WHERE g.tenant_id = @tenant_id AND g.location_id = @location_id
 -- A new radius flipped the flag: re-push the row (the worker sends order.geo).
 UPDATE order_geo SET outside_area = @outside_area, pushed_at = NULL, next_try_at = now(), updated_at = now()
 WHERE order_id = @order_id AND state = 'located' AND outside_area <> @outside_area;
-
--- name: ListLiveExternalStopsForRadius :many
-SELECT order_id, lat, lng, outside_area FROM geo_external_stops
-WHERE tenant_id = @tenant_id AND location_id = @location_id
-  AND state = 'located' AND lat IS NOT NULL AND lng IS NOT NULL AND expires_at > now();
-
--- name: SetExternalStopOutsideArea :execrows
-UPDATE geo_external_stops SET outside_area = @outside_area, pushed_at = NULL, next_try_at = now(), updated_at = now()
-WHERE order_id = @order_id AND tenant_id = @tenant_id AND location_id = @location_id
-  AND state = 'located' AND outside_area <> @outside_area;
 
 -- ─── Channels (main 3.0) ──────────────────────────────────────────────────
 
@@ -1455,6 +1335,13 @@ RETURNING *;
 -- name: DeleteMenuView :execrows
 DELETE FROM menu_views WHERE id = $1;
 
+-- name: GetMenuViewLayout :one
+SELECT layout FROM menu_views WHERE id = $1;
+
+-- name: SetMenuViewLayout :execrows
+UPDATE menu_views SET layout = $2, updated_at = now()
+WHERE id = $1 AND kind = 'counter';
+
 -- name: CreateMenuViewEntry :one
 INSERT INTO menu_view_entries (tenant_id, location_id, view_id, kind, anchor, display_name, description, photo, category,
     position, hidden, price_override_cents, extra)
@@ -1501,7 +1388,7 @@ SELECT * FROM store_ordering WHERE location_id = $1;
 
 -- name: UpdateStoreOrdering :one
 UPDATE store_ordering SET pickup_enabled = $2, delivery_enabled = $3, pickup_eta_minutes = $4,
-       delivery_eta_minutes = $5, schedule_days = $6, updated_at = now()
+       delivery_eta_minutes = $5, schedule_days = $6, tip_max_cents = $7, updated_at = now()
 WHERE location_id = $1
 RETURNING *;
 
@@ -1527,11 +1414,11 @@ UPDATE store_ordering SET restocked_at = $2 WHERE location_id = $1;
 -- The daily restock: every 86'd item of the location without a later
 -- out_until comes back.
 UPDATE menu_items SET in_stock = true, out_until = NULL, updated_at = now()
-WHERE location_id = $1 AND NOT in_stock AND (out_until IS NULL OR out_until <= now());
+WHERE location_id = $1 AND NOT in_stock AND NOT out_hold AND (out_until IS NULL OR out_until <= now());
 
 -- name: RestockOptions :execrows
 UPDATE modifier_options SET in_stock = true, updated_at = now()
-WHERE location_id = $1 AND NOT in_stock;
+WHERE location_id = $1 AND NOT in_stock AND NOT out_hold;
 
 -- name: ExpireOutUntil :execrows
 -- An item 86'd until a time comes back at that time (any location).
@@ -1589,8 +1476,8 @@ DELETE FROM deals WHERE id = $1 AND location_id = $2;
 -- ─── Channel orders (main 3.0 step 5) ───────────────────────────────────────
 
 -- name: InsertChannelOrder :exec
-INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment, track_token, operator_id)
-VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg(track_token), sqlc.narg(operator_id));
+INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment, track_token, operator_id, customer_id)
+VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg(track_token), sqlc.narg(operator_id), sqlc.narg(customer_id));
 
 -- name: GetChannelOrderByClient :one
 SELECT * FROM channel_orders WHERE channel_id = $1 AND client_order_id = $2;
@@ -1652,3 +1539,469 @@ SELECT COALESCE(MAX(id), 0)::bigint FROM channel_events WHERE channel_id = $1;
 
 -- name: RevokeOperatorToken :execrows
 UPDATE operator_tokens SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL;
+
+-- weborder stage 2: storefront platform keys, hosts, site settings.
+
+-- name: CreatePlatformKey :one
+INSERT INTO platform_keys (name, key_hash, key_prefix) VALUES ($1, $2, $3) RETURNING *;
+
+-- name: ListPlatformKeys :many
+SELECT * FROM platform_keys ORDER BY created_at;
+
+-- name: RevokePlatformKey :one
+UPDATE platform_keys SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1 RETURNING *;
+
+-- name: AuthenticatePlatformKey :one
+SELECT * FROM platform_keys WHERE key_hash = $1 AND revoked_at IS NULL;
+
+-- name: TouchPlatformKey :exec
+UPDATE platform_keys SET last_used_at = now() WHERE id = $1;
+
+-- name: InsertSiteDomain :one
+INSERT INTO site_domains (host, tenant_id, location_id, is_primary, verified)
+VALUES ($1, $2, $3, $4, $5) RETURNING *;
+
+-- name: ListSiteDomains :many
+SELECT * FROM site_domains WHERE location_id = $1 ORDER BY is_primary DESC, host;
+
+-- name: GetSiteDomain :one
+SELECT * FROM site_domains WHERE host = $1;
+
+-- name: DeleteSiteDomain :execrows
+DELETE FROM site_domains WHERE host = $1 AND location_id = $2;
+
+-- name: ClearSitePrimary :exec
+UPDATE site_domains SET is_primary = false WHERE location_id = $1 AND is_primary;
+
+-- name: SetSitePrimary :execrows
+UPDATE site_domains SET is_primary = true WHERE host = $1 AND location_id = $2;
+
+-- name: SetSiteDomainVerified :one
+UPDATE site_domains SET verified = $2 WHERE host = $1 RETURNING *;
+
+-- name: GetSiteSettings :one
+SELECT * FROM site_settings WHERE location_id = $1;
+
+-- The Website page (00029).
+
+-- name: SaveSiteDraft :exec
+INSERT INTO site_settings (location_id, tenant_id, draft, draft_at) VALUES ($1, $2, $3, now())
+ON CONFLICT (location_id) DO UPDATE SET draft = EXCLUDED.draft, draft_at = now(), updated_at = now();
+
+-- name: DiscardSiteDraft :exec
+UPDATE site_settings SET draft = '{}'::jsonb, draft_at = NULL, updated_at = now() WHERE location_id = $1;
+
+-- name: PublishSiteDraft :one
+UPDATE site_settings SET published = draft, draft = '{}'::jsonb, draft_at = NULL, version = version + 1,
+    published_at = now(), published_by = $2, updated_at = now()
+WHERE location_id = $1 AND draft_at IS NOT NULL
+RETURNING version, published_at;
+
+-- name: EnsureSitePreviewToken :one
+INSERT INTO site_settings (location_id, tenant_id, preview_token) VALUES ($1, $2, $3)
+ON CONFLICT (location_id) DO UPDATE SET preview_token =
+    CASE WHEN site_settings.preview_token = '' THEN EXCLUDED.preview_token ELSE site_settings.preview_token END
+RETURNING preview_token;
+
+-- name: InsertSiteImage :one
+INSERT INTO site_images (location_id, tenant_id, kind, content_type, bytes) VALUES ($1, $2, $3, $4, $5)
+RETURNING id, created_at;
+
+-- name: GetSiteImage :one
+SELECT id, kind, content_type, bytes, created_at FROM site_images WHERE id = $1 AND location_id = $2;
+
+-- name: DeleteUnusedSiteImages :execrows
+DELETE FROM site_images WHERE location_id = $1 AND created_at < now() - interval '1 day' AND NOT (id = ANY(@keep::uuid[]));
+
+-- weborder stage 2: Square connections + card holds.
+
+-- name: UpsertSquareConnection :one
+INSERT INTO square_connections (location_id, tenant_id, merchant_id, square_location_id, access_token_enc, refresh_token_enc, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (location_id) DO UPDATE SET merchant_id = EXCLUDED.merchant_id, square_location_id = EXCLUDED.square_location_id,
+    access_token_enc = EXCLUDED.access_token_enc, refresh_token_enc = EXCLUDED.refresh_token_enc, expires_at = EXCLUDED.expires_at,
+    refreshed_at = now(), status = 'connected', last_error = '', connected_at = now()
+RETURNING *;
+
+-- name: GetSquareConnection :one
+SELECT * FROM square_connections WHERE location_id = $1;
+
+-- name: SquareConnectionsByMerchant :many
+SELECT * FROM square_connections WHERE merchant_id = $1;
+
+-- name: SetSquareLocation :execrows
+UPDATE square_connections SET square_location_id = $2 WHERE location_id = $1;
+
+-- name: UpdateSquareTokens :exec
+UPDATE square_connections SET access_token_enc = $2, refresh_token_enc = $3, expires_at = $4, refreshed_at = now(),
+    status = 'connected', last_error = '' WHERE location_id = $1;
+
+-- name: SetSquareConnectionStatus :exec
+UPDATE square_connections SET status = $2, last_error = $3 WHERE location_id = $1;
+
+-- name: DeleteSquareConnection :execrows
+DELETE FROM square_connections WHERE location_id = $1;
+
+-- name: SquareConnectionsToRefresh :many
+SELECT * FROM square_connections WHERE status <> 'revoked' AND refreshed_at < $1 ORDER BY refreshed_at LIMIT 50;
+
+-- name: InsertCardHold :exec
+INSERT INTO card_holds (order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, due_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+
+-- name: GetCardHold :one
+SELECT * FROM card_holds WHERE order_id = $1;
+
+-- name: ListCardHolds :many
+SELECT * FROM card_holds WHERE location_id = $1 ORDER BY created_at DESC LIMIT $2;
+
+-- name: ListCardHoldsWithOrders :many
+-- The Payments page: a store's holds with who ordered, newest first (?status=).
+SELECT h.*, o.customer_display_name, o.fulfillment_type, o.placed_at, o.status AS order_status
+FROM card_holds h JOIN orders o ON o.id = h.order_id
+WHERE h.location_id = $1 AND (sqlc.narg(status)::text IS NULL OR h.status = sqlc.narg(status))
+ORDER BY h.created_at DESC LIMIT $2;
+
+-- name: ClaimCardHolds :many
+-- Holds to capture now (asked for, or past their safety time), leased for
+-- two minutes so a slow capture isn't picked up twice.
+UPDATE card_holds SET next_try_at = now() + interval '2 minutes', updated_at = now()
+WHERE order_id IN (
+    SELECT h.order_id FROM card_holds h
+    WHERE h.status = 'held' AND h.next_try_at <= now() AND (h.due_at <= now() OR h.capture_requested_at IS NOT NULL)
+      -- M-3: never capture a hold whose order was cancelled / rejected or
+      -- whose void is owed (the cancel worker releases those).
+      AND h.cancel_requested_at IS NULL
+      AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = h.order_id AND o.status IN ('cancelled', 'rejected'))
+    ORDER BY h.next_try_at LIMIT $1 FOR UPDATE SKIP LOCKED)
+RETURNING *;
+
+-- name: RequestCardHoldCapture :execrows
+UPDATE card_holds SET capture_requested_at = COALESCE(capture_requested_at, now()),
+    capture_reason = CASE WHEN capture_reason = '' THEN $3 ELSE capture_reason END, next_try_at = LEAST(next_try_at, now()), updated_at = now()
+WHERE location_id = $1 AND order_id = ANY($2::uuid[]) AND status = 'held' AND cancel_requested_at IS NULL;
+
+-- name: RequestCardHoldCaptureForBatch :execrows
+UPDATE card_holds h SET capture_requested_at = COALESCE(h.capture_requested_at, now()),
+    capture_reason = CASE WHEN h.capture_reason = '' THEN 'batch_close' ELSE h.capture_reason END,
+    next_try_at = LEAST(h.next_try_at, now()), updated_at = now()
+FROM orders o
+WHERE o.id = h.order_id AND h.location_id = $1 AND h.status = 'held' AND h.cancel_requested_at IS NULL AND o.agent_batch_id = $2;
+
+-- name: RequestCardHoldCaptureForDriver :execrows
+-- A driver clocked out: their deliveries sent between clock-in and clock-out.
+UPDATE card_holds h SET capture_requested_at = COALESCE(h.capture_requested_at, now()),
+    capture_reason = CASE WHEN h.capture_reason = '' THEN 'clock_out' ELSE h.capture_reason END,
+    next_try_at = LEAST(h.next_try_at, now()), updated_at = now()
+WHERE h.location_id = $1 AND h.status = 'held' AND h.cancel_requested_at IS NULL AND h.order_id::text IN (
+    SELECT jsonb_array_elements_text(r.sent_ids) FROM delivery_runs r
+    WHERE r.location_id = $1 AND r.driver_id = $2 AND r.at >= $3 AND r.at <= $4);
+
+-- name: SetCardHoldAddedTip :execrows
+UPDATE card_holds SET added_tip_cents = $3, updated_at = now()
+WHERE location_id = $1 AND order_id = $2 AND status = 'held' AND cancel_requested_at IS NULL;
+
+-- name: CardHoldCaptured :execrows
+-- M-14: only the hold the worker read (still held, the added tip it saw): a
+-- tip set meanwhile makes this 0 rows and the capture is looked at again.
+UPDATE card_holds SET status = 'captured', captured_cents = $2, tip_payment_ref = $3, tip_note = $4, captured_at = now(),
+    last_error = '', updated_at = now() WHERE order_id = $1 AND status = 'held' AND added_tip_cents = $5;
+
+-- name: CardHoldCancelled :exec
+UPDATE card_holds SET status = 'cancelled', cancelled_at = now(), last_error = $2, updated_at = now() WHERE order_id = $1;
+
+-- name: CardHoldRetry :exec
+UPDATE card_holds SET attempts = attempts + 1, next_try_at = $2, last_error = $3, updated_at = now() WHERE order_id = $1;
+
+-- name: CardHoldFailed :exec
+UPDATE card_holds SET status = 'failed', attempts = attempts + 1, last_error = $2, updated_at = now() WHERE order_id = $1;
+
+-- name: SetOrderCardPayment :exec
+-- The hold's own payment row follows it (authorized → captured / voided);
+-- M-4: by the payment's id, never every card row of the order.
+UPDATE payments SET status = $2, amount_cents = $3, tip_cents = $4, captured_at = $5 WHERE id = $1;
+
+-- name: LinkCardHoldPayment :exec
+-- The hold's own payment row (M-4), written in the order's transaction.
+UPDATE card_holds h SET payment_id = (
+    SELECT p.id FROM payments p WHERE p.order_id = h.order_id AND p.processor = 'card' ORDER BY p.id LIMIT 1)
+WHERE h.order_id = $1;
+
+-- name: GetCardHoldByRef :one
+SELECT * FROM card_holds WHERE location_id = $1 AND payment_ref = $2;
+
+-- weborder stage 2: customer accounts + email receipts.
+
+-- name: UpsertCustomerByPhone :one
+-- Website sign-in: a name typed there fills an empty one (with its first +
+-- last split, name_source web); an existing name is kept.
+INSERT INTO customers (tenant_id, location_id, phone, name, first_name, last_name, name_source, source)
+VALUES (sqlc.arg(tenant_id), sqlc.arg(location_id), sqlc.arg(phone), sqlc.arg(name), sqlc.arg(first_name), sqlc.arg(last_name),
+        CASE WHEN sqlc.arg(name)::text = '' THEN '' ELSE 'web' END, 'web')
+ON CONFLICT (location_id, phone) DO UPDATE SET last_seen_at = now(),
+    name        = CASE WHEN customers.name = '' THEN EXCLUDED.name ELSE customers.name END,
+    first_name  = CASE WHEN customers.name = '' THEN EXCLUDED.first_name ELSE customers.first_name END,
+    last_name   = CASE WHEN customers.name = '' THEN EXCLUDED.last_name ELSE customers.last_name END,
+    name_source = CASE WHEN customers.name = '' AND EXCLUDED.name <> '' THEN 'web' ELSE customers.name_source END
+RETURNING *, (xmax = 0) AS created;
+
+-- name: GetCustomer :one
+SELECT * FROM customers WHERE id = $1;
+
+-- name: UpdateCustomerProfile :one
+-- The website's profile: a name it sends is the customer's own (name_source web).
+-- When it didn't change the name, first + last stay as they are.
+UPDATE customers SET name = sqlc.arg(name), email = sqlc.arg(email),
+    first_name  = CASE WHEN sqlc.arg(name_set)::bool THEN sqlc.arg(first_name) ELSE first_name END,
+    last_name   = CASE WHEN sqlc.arg(name_set)::bool THEN sqlc.arg(last_name) ELSE last_name END,
+    name_source = CASE WHEN sqlc.arg(name_set)::bool THEN 'web' ELSE name_source END, updated_at = now()
+WHERE id = sqlc.arg(id) RETURNING *;
+
+-- name: SetCustomerSquareID :exec
+UPDATE customers SET square_customer_id = $2, updated_at = now() WHERE id = $1;
+
+-- name: DeleteCustomer :execrows
+DELETE FROM customers WHERE id = $1;
+
+-- name: InsertCustomerSession :exec
+INSERT INTO customer_sessions (token_hash, customer_id, location_id, expires_at) VALUES ($1, $2, $3, $4);
+
+-- name: CustomerBySession :one
+-- A live session's customer; the session is renewed (90 days from now) as it is read.
+UPDATE customer_sessions s SET last_used_at = now(), expires_at = GREATEST(s.expires_at, $3::timestamptz)
+FROM customers c
+WHERE s.token_hash = $1 AND s.location_id = $2 AND s.expires_at > now() AND c.id = s.customer_id
+RETURNING c.*;
+
+-- name: DeleteCustomerSession :exec
+DELETE FROM customer_sessions WHERE token_hash = $1;
+
+-- name: PruneCustomerSessions :execrows
+DELETE FROM customer_sessions WHERE expires_at < now();
+
+-- name: ListCustomerAddresses :many
+SELECT * FROM customer_addresses WHERE customer_id = $1 ORDER BY is_default DESC, created_at;
+
+-- name: InsertCustomerAddress :one
+INSERT INTO customer_addresses (customer_id, label, line1, line2, city, state, zip, notes, is_default)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *;
+
+-- name: UpdateCustomerAddress :one
+UPDATE customer_addresses SET label = $3, line1 = $4, line2 = $5, city = $6, state = $7, zip = $8, notes = $9, is_default = $10
+WHERE id = $1 AND customer_id = $2 RETURNING *;
+
+-- name: ClearCustomerDefaultAddress :exec
+UPDATE customer_addresses SET is_default = false WHERE customer_id = $1 AND is_default;
+
+-- name: DeleteCustomerAddress :execrows
+DELETE FROM customer_addresses WHERE id = $1 AND customer_id = $2;
+
+-- name: CountCustomerAddresses :one
+SELECT count(*) FROM customer_addresses WHERE customer_id = $1;
+
+-- name: ListCustomerCards :many
+SELECT * FROM customer_cards WHERE customer_id = $1 ORDER BY created_at DESC;
+
+-- name: InsertCustomerCard :one
+INSERT INTO customer_cards (customer_id, gateway, card_ref, brand, last4, exp_month, exp_year)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (customer_id, card_ref) DO UPDATE SET brand = EXCLUDED.brand
+RETURNING *;
+
+-- name: GetCustomerCard :one
+SELECT * FROM customer_cards WHERE id = $1 AND customer_id = $2;
+
+-- name: DeleteCustomerCard :execrows
+DELETE FROM customer_cards WHERE id = $1 AND customer_id = $2;
+
+-- name: JoinGuestOrders :execrows
+-- A verified phone takes over that number's guest web orders at the store.
+UPDATE channel_orders co SET customer_id = $3
+FROM orders o, channels ch
+WHERE co.order_id = o.id AND ch.id = co.channel_id AND co.location_id = $1 AND co.customer_id IS NULL
+  AND ch.kind = 'web' AND o.customer_phone = $2;
+
+-- name: ListCustomerOrders :many
+SELECT * FROM channel_orders WHERE customer_id = $1 AND created_at < $2 ORDER BY created_at DESC LIMIT $3;
+
+-- name: GetChannelOrderForCustomer :one
+SELECT * FROM channel_orders WHERE order_id = $1 AND customer_id = $2;
+
+-- Terminal stage 0c: the bulk import + the Pi's change feed.
+
+-- name: ListCustomersByPhones :many
+SELECT * FROM customers WHERE location_id = $1 AND phone = ANY(sqlc.arg(phones)::text[]);
+
+-- name: ListAddressesOfCustomers :many
+SELECT * FROM customer_addresses WHERE customer_id = ANY(sqlc.arg(ids)::uuid[]) ORDER BY customer_id, is_default DESC, created_at;
+
+-- name: InsertImportedCustomer :one
+-- No row (pgx.ErrNoRows) = the phone is taken: another writer (the Pi's
+-- customer.upsert, a website sign-in) created it after the import read.
+INSERT INTO customers (tenant_id, location_id, phone, name, first_name, last_name, notes, source, name_source, notes_source)
+VALUES (sqlc.arg(tenant_id), sqlc.arg(location_id), sqlc.arg(phone), sqlc.arg(name), sqlc.arg(first_name), sqlc.arg(last_name),
+        sqlc.arg(notes), 'import',
+        CASE WHEN sqlc.arg(name)::text = '' THEN '' ELSE 'import' END,
+        CASE WHEN sqlc.arg(notes)::text = '' THEN '' ELSE 'import' END)
+ON CONFLICT (location_id, phone) DO NOTHING
+RETURNING *;
+
+-- name: UpdateImportedCustomer :exec
+UPDATE customers SET name = $2, first_name = $3, last_name = $4, name_source = $5, notes = $6, notes_source = $7
+WHERE id = $1;
+
+-- name: FillCustomerAddress :exec
+-- The import fills an existing address's blank fields (never overwrites).
+UPDATE customer_addresses SET line2 = $2, city = $3, state = $4, zip = $5, notes = $6, label = $7 WHERE id = $1;
+
+-- name: CustomerChanges :many
+-- The Pi's change feed: customers changed and customers deleted at the store
+-- after the cursor (ts, id), oldest first.
+SELECT * FROM (
+    SELECT c.id, c.updated_at AS at, false AS deleted FROM customers c
+    WHERE c.location_id = sqlc.arg(location_id) AND (c.updated_at, c.id) > (sqlc.arg(after_at)::timestamptz, sqlc.arg(after_id)::uuid)
+    UNION ALL
+    SELECT t.customer_id, t.deleted_at, true FROM customer_tombstones t
+    WHERE t.location_id = sqlc.arg(location_id) AND (t.deleted_at, t.customer_id) > (sqlc.arg(after_at)::timestamptz, sqlc.arg(after_id)::uuid)
+) ch ORDER BY at, id LIMIT sqlc.arg(max_rows);
+
+-- name: ListCustomersByIDs :many
+SELECT * FROM customers WHERE id = ANY(sqlc.arg(ids)::uuid[]);
+
+-- name: PruneCustomerTombstones :execrows
+DELETE FROM customer_tombstones WHERE deleted_at < $1;
+
+-- name: GetSiteReplyEmail :one
+SELECT reply_email FROM site_settings WHERE location_id = $1;
+
+-- name: SetSiteReplyEmail :exec
+INSERT INTO site_settings (location_id, tenant_id, reply_email) VALUES ($1, $2, $3)
+ON CONFLICT (location_id) DO UPDATE SET reply_email = EXCLUDED.reply_email, updated_at = now();
+
+-- name: InsertEmailReceipt :exec
+INSERT INTO email_receipts (order_id, kind, location_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING;
+
+-- name: ClaimEmailReceipts :many
+UPDATE email_receipts SET next_try_at = now() + interval '2 minutes'
+WHERE (order_id, kind) IN (
+    SELECT r.order_id, r.kind FROM email_receipts r WHERE r.status = 'pending' AND r.next_try_at <= now()
+    ORDER BY r.next_try_at LIMIT $1 FOR UPDATE SKIP LOCKED)
+RETURNING *;
+
+-- name: EmailReceiptDone :exec
+UPDATE email_receipts SET status = $3, message_id = $4, last_error = $5, attempts = attempts + 1,
+    sent_at = CASE WHEN $3 = 'sent' THEN now() ELSE sent_at END
+WHERE order_id = $1 AND kind = $2;
+
+-- name: EmailReceiptRetry :exec
+UPDATE email_receipts SET attempts = attempts + 1, next_try_at = $3, last_error = $4 WHERE order_id = $1 AND kind = $2;
+
+-- name: ListEmailReceipts :many
+SELECT * FROM email_receipts WHERE order_id = $1 ORDER BY created_at;
+
+-- name: QueueFinalReceipt :execrows
+-- A final receipt only for an order that got a receipt when it was placed.
+INSERT INTO email_receipts (order_id, kind, location_id)
+SELECT r.order_id, 'final', r.location_id FROM email_receipts r WHERE r.order_id = $1 AND r.kind = 'placed'
+ON CONFLICT DO NOTHING;
+
+
+-- weborder stage 3: sold out from Quibase (through the Pi).
+
+-- name: ListStockItems :many
+SELECT i.id, i.name, c.name AS category, i.in_stock, i.out_until, i.out_hold
+FROM menu_items i JOIN menu_categories c ON c.id = i.category_id
+WHERE i.location_id = $1 ORDER BY c.position, c.name, i.position, i.name;
+
+-- name: ListStockOptions :many
+SELECT g.id AS group_id, g.name AS group_name, o.id, o.name, o.in_stock, o.out_hold
+FROM modifier_groups g JOIN modifier_options o ON o.group_id = g.id
+WHERE g.location_id = $1 ORDER BY g.name, o.position, o.name;
+
+-- name: SetItemStock :one
+UPDATE menu_items SET in_stock = $3, out_hold = (NOT $3::boolean AND $4::boolean), out_until = NULL, updated_at = now()
+WHERE id = $1 AND location_id = $2
+RETURNING id, name, in_stock, out_until, out_hold;
+
+-- name: SetOptionStock :one
+UPDATE modifier_options SET in_stock = $3, out_hold = (NOT $3::boolean AND $4::boolean), updated_at = now()
+WHERE id = $1 AND location_id = $2
+RETURNING id, name, in_stock, out_hold;
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- Order placements (DURABILITY-PLAN.md: a channel order is a placement first)
+-- ───────────────────────────────────────────────────────────────────────────
+
+-- name: InsertPlacement :one
+-- A new placement, or nothing when the key exists (then GetPlacement).
+INSERT INTO order_placements (channel_id, client_order_id, tenant_id, location_id, body_hash, request,
+    card_token, verification_token, customer_id, operator, expires_at, state, result, worker)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+ON CONFLICT (channel_id, client_order_id) DO NOTHING
+RETURNING *;
+
+-- name: GetPlacement :one
+SELECT * FROM order_placements WHERE channel_id = $1 AND client_order_id = $2;
+
+-- name: ClaimPlacement :execrows
+-- Take over a pending placement nobody works on (or a stale worker's), as long
+-- as nobody else took it first (worker + attempts unchanged). New tokens (a
+-- retry after 3-D Secure) replace the stored ones.
+UPDATE order_placements
+SET worker = @worker, attempts = attempts + 1, waiting = '',
+    card_token = CASE WHEN @card_token::text <> '' THEN @card_token::text ELSE card_token END,
+    verification_token = CASE WHEN @verification_token::text <> '' THEN @verification_token::text ELSE verification_token END,
+    updated_at = now()
+WHERE channel_id = @channel_id AND client_order_id = @client_order_id AND state = 'pending'
+  AND worker = @old_worker AND attempts = @old_attempts;
+
+-- name: StartPlacementCharge :exec
+UPDATE order_placements SET charge_started = true, charge_cents = $3, updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2;
+
+-- name: FinishPlacement :execrows
+-- A final state other than placed (refused / expired / voided): the tokens go.
+UPDATE order_placements
+SET state = $3, result = $4, worker = '', waiting = '', card_token = '', verification_token = '', updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2 AND state = 'pending';
+
+-- name: ParkPlacement :exec
+-- Still pending, but nobody works on it until the caller comes back (3-D
+-- Secure, or a temporary failure the caller may retry).
+UPDATE order_placements SET waiting = $3, result = $4, worker = '', updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2 AND state = 'pending';
+
+-- name: MarkPlacementPlaced :execrows
+-- In the order's own transaction: the key and its result together.
+UPDATE order_placements
+SET state = 'placed', order_id = $3, due_alert_at = $4, worker = '', waiting = '', result = NULL,
+    card_token = '', verification_token = '', updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2 AND state = 'pending';
+
+-- name: ListStalePlacements :many
+-- Pending placements whose worker is another main (restarted) or silent too long.
+SELECT * FROM order_placements
+WHERE state = 'pending' AND waiting = '' AND (worker <> @worker OR updated_at < @before)
+ORDER BY updated_at
+LIMIT 20;
+
+-- name: ListParkedExpired :many
+-- Parked placements nobody came back for (their deadline, else 30 minutes).
+SELECT * FROM order_placements
+WHERE state = 'pending' AND waiting <> '' AND COALESCE(expires_at, created_at + interval '30 minutes') < now()
+LIMIT 50;
+
+-- name: ListPlacementDueAlerts :many
+SELECT * FROM order_placements
+WHERE state = 'placed' AND NOT due_alerted AND due_alert_at <= now()
+LIMIT 50;
+
+-- name: SetPlacementDueAlerted :exec
+UPDATE order_placements SET due_alerted = true WHERE channel_id = $1 AND client_order_id = $2;
+
+-- name: PrunePlacements :execrows
+DELETE FROM order_placements WHERE state <> 'pending' AND created_at < $1;
+
+-- name: CountActiveAgents :one
+-- The store has a Pi (an agent key not revoked): only then is "kitchen offline" checked.
+SELECT count(*)::bigint FROM devices WHERE location_id = $1 AND kind = 'agent' AND revoked_at IS NULL;

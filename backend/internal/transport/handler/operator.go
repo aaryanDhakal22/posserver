@@ -43,7 +43,7 @@ func (h *OperatorHandler) Login(c *echo.Context) error {
 	op, err := h.svc.Authenticate(ctx, req.Username, req.Password)
 	if err != nil {
 		if operatorApp.IsInvalidCredentials(err) {
-			h.logins.failed(req.Username)
+			h.logins.failedFrom(c, req.Username)
 			return c.JSON(http.StatusUnauthorized, errResp("invalid username or password"))
 		}
 		return c.JSON(http.StatusInternalServerError, errResp("login failed"))
@@ -235,7 +235,7 @@ func (h *OperatorHandler) ChannelLogin(c *echo.Context) error {
 	op, err := h.svc.Authenticate(ctx, req.Username, req.Password)
 	if err != nil {
 		if operatorApp.IsInvalidCredentials(err) {
-			h.logins.failed(req.Username)
+			h.logins.failedFrom(c, req.Username)
 			return c.JSON(http.StatusUnauthorized, errCode("invalid username or password", "invalid_credentials"))
 		}
 		return c.JSON(http.StatusInternalServerError, errCode("sign-in failed", "internal"))

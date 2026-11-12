@@ -118,3 +118,47 @@ func (s *Service) HandlePrinterAdd(ctx context.Context, scope sseBroker.Scope, p
 }
 
 func printerAddFail(code string) map[string]any { return map[string]any{"ok": false, "code": code} }
+
+// HandlePrinterWidth is the rpc.InboundHandler for printer.width
+// {printer_id, print_columns}: the Pi's width test (its Printers page: a
+// letter ruler, "which letter is LAST on the first line?") saved a printer's
+// print width, 48 | 42 | 32 font-A characters. Only a printer of the Pi's
+// own location. The reply is always a payload (HTTP 200): {ok, id, name,
+// print_columns} or {ok:false, code: bad_request | not_found}. A change
+// republishes store_config, so every slip after it is laid out for the width.
+func (s *Service) HandlePrinterWidth(ctx context.Context, scope sseBroker.Scope, payload json.RawMessage) (any, error) {
+	var b struct {
+		PrinterID    string `json:"printer_id"`
+		PrintColumns int    `json:"print_columns"`
+	}
+	if err := json.Unmarshal(payload, &b); err != nil || !tenancy.ValidPrintColumns(b.PrintColumns) {
+		return printerAddFail("bad_request"), nil
+	}
+	id, err := uuid.Parse(strings.TrimSpace(b.PrinterID))
+	if err != nil {
+		return printerAddFail("bad_request"), nil
+	}
+	before, err := s.tenancy.ListPrintersByLocation(ctx, scope.LocationID)
+	if err != nil {
+		return nil, err
+	}
+	was := 0
+	for _, p := range before {
+		if p.ID == id {
+			was = p.PrintColumns
+		}
+	}
+	p, err := s.tenancy.SetPrinterColumns(ctx, scope.LocationID, id, b.PrintColumns)
+	if errors.Is(err, tenancyApp.ErrPrinterNotHere) {
+		return printerAddFail("not_found"), nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if was != p.PrintColumns {
+		s.logger.Info().Ctx(ctx).Str("location_id", scope.LocationID.String()).Str("printer", p.Name).
+			Int("was", was).Int("print_columns", p.PrintColumns).Msg("printer width set from the Pi's width test")
+		s.publishPrinters(ctx, scope)
+	}
+	return map[string]any{"ok": true, "id": p.ID.String(), "name": p.Name, "print_columns": p.PrintColumns}, nil
+}

@@ -43,3 +43,29 @@ func TestDisconnectDeviceAndBuffer(t *testing.T) {
 		t.Fatal("nil device must not disconnect anything")
 	}
 }
+
+func TestFullSubscriberIsClosedNotDropped(t *testing.T) {
+	meters, _ := observability.NewMeters()
+	b := New(zerolog.Nop(), meters)
+	ctx := context.Background()
+	scope := Scope{TenantID: uuid.New(), LocationID: uuid.New()}
+	slow, unsubSlow := b.SubscribeAs(ctx, scope, uuid.New())
+	defer unsubSlow()
+
+	for i := 0; i < subscriberBuffer+1; i++ { // never drained: frame 257 overflows
+		b.Publish(ctx, scope, Frame{Event: EventCommand, Data: []byte("x")})
+	}
+	if n := b.SubscribersFor(scope); n != 0 {
+		t.Fatalf("subscribers = %d, want 0 (the stalled stream is cut)", n)
+	}
+	got := 0
+	for range slow { // the channel must be closed after the queued frames
+		got++
+	}
+	if got != subscriberBuffer {
+		t.Fatalf("queued frames = %d, want %d", got, subscriberBuffer)
+	}
+	if n := b.Publish(ctx, scope, Frame{Event: EventCommand, Data: []byte("y")}); n != 0 {
+		t.Fatalf("delivered %d after the cut", n)
+	}
+}

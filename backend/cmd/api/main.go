@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"quiccpos/main/internal/app/agentsync"
+	daycloseApp "quiccpos/main/internal/app/dayclose"
 	diagApp "quiccpos/main/internal/app/diag"
 	floorApp "quiccpos/main/internal/app/floor"
 	geoApp "quiccpos/main/internal/app/geo"
@@ -15,34 +16,52 @@ import (
 	"quiccpos/main/internal/dispatch"
 	"quiccpos/main/internal/dispatch/handlers"
 	"quiccpos/main/internal/domain/order"
+	"quiccpos/main/internal/infra/database/auditconn"
 	"quiccpos/main/internal/infra/database/repositories"
 	"quiccpos/main/internal/infra/pushover"
 	"quiccpos/main/internal/migrate"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
 	"quiccpos/main/internal/shared/config"
+	"quiccpos/main/internal/shared/dbpool"
 	"quiccpos/main/internal/shared/logger"
+	"quiccpos/main/internal/shared/safego"
 	"quiccpos/main/internal/transport"
+	"quiccpos/main/internal/transport/clientip"
 	"quiccpos/main/internal/transport/handler"
+	appMiddleware "quiccpos/main/internal/transport/middleware"
 	"quiccpos/main/internal/transport/session"
 	"strings"
 	"syscall"
 	"time"
 
 	authAppSvc "quiccpos/main/internal/app/auth"
+	"quiccpos/main/internal/app/bankimport"
+	callcenterApp "quiccpos/main/internal/app/callcenter"
+	cardholdApp "quiccpos/main/internal/app/cardhold"
 	channelApp "quiccpos/main/internal/app/channel"
+	"quiccpos/main/internal/app/customers"
+	familiesApp "quiccpos/main/internal/app/families"
+	"quiccpos/main/internal/app/kitchen"
 	menuApp "quiccpos/main/internal/app/menu"
 	menuviewApp "quiccpos/main/internal/app/menuview"
+	"quiccpos/main/internal/app/onlinectl"
 	operatorApp "quiccpos/main/internal/app/operator"
+	"quiccpos/main/internal/app/optionflags"
 	orderSvc "quiccpos/main/internal/app/order"
 	"quiccpos/main/internal/app/orderport"
 	pricingApp "quiccpos/main/internal/app/pricing"
+	"quiccpos/main/internal/app/receipts"
+	siteApp "quiccpos/main/internal/app/site"
+	"quiccpos/main/internal/app/squarepay"
+	staffApp "quiccpos/main/internal/app/staff"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/app/tracking"
 	"quiccpos/main/internal/domain/notify"
 	"quiccpos/main/internal/domain/payment"
 	tenancyDomain "quiccpos/main/internal/domain/tenancy"
+	"quiccpos/main/internal/infra/square"
 
 	sqsconsumer "quiccpos/main/internal/infra/sqs"
 	sseBroker "quiccpos/main/internal/infra/sse"
@@ -76,6 +95,11 @@ func (r storeResolver) ResolveStore(ctx context.Context, storeID int64, storeNam
 }
 
 func main() {
+	// `app migrate [status]`: the deploy's one-off migration container
+	// (internal/migrate/command.go, deploy/main-deploy.sh); nothing else starts.
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		os.Exit(migrate.Command(os.Args[2:]))
+	}
 	tmpLogger := logger.TempLogger()
 	tmpLogger.Info().Msg("\n\n ==== Starting API ==== \n\n")
 
@@ -113,6 +137,15 @@ func main() {
 
 	lgr := logger.NewLogger(cfg.LogConfig.Level, cfg.LogConfig.Output, cfg.LogConfig.Style, cfg.OTELConfig.ServiceName)
 	mainLogger := lgr.With().Str("module", "main").Logger()
+	// Every goroutine below runs through safego: a panic is logged with its
+	// stack and counted (main.panics), and a loop starts again (F-2).
+	safego.SetLogger(lgr)
+
+	// PPROF_ADDR (off by default): net/http/pprof on its own loopback-only
+	// server, reached over SSH (R-1). A non-loopback address is refused.
+	if _, err := observability.StartPprof(ctx, os.Getenv("PPROF_ADDR"), mainLogger); err != nil {
+		mainLogger.Error().Err(err).Msg("pprof not started")
+	}
 
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
@@ -134,6 +167,14 @@ func main() {
 		mainLogger.Fatal().Err(err).Msg("Failed to parse DB config")
 	}
 	poolConfig.ConnConfig.Tracer = otelpgx.NewTracer()
+	// R-4: pool cap + statement / idle-in-transaction timeouts (DB_MAX_CONNS,
+	// DB_STATEMENT_TIMEOUT, DB_IDLE_TX_TIMEOUT).
+	if err := dbpool.Apply(poolConfig, os.Getenv); err != nil {
+		mainLogger.Fatal().Err(err).Msg("Bad database pool setting")
+	}
+	// The audit triggers record who acted: each connection handed to a
+	// request carries its actor + trace id (baseline 2026-11-12).
+	auditconn.Install(poolConfig, appMiddleware.AuditActor)
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
@@ -206,7 +247,7 @@ func main() {
 	}
 	dispatcher := dispatch.New(outboxRepo, allHandlers, lgr, dispatch.WithHooks(hooks))
 	broker.SetWaker(dispatcher)
-	go dispatcher.Run(ctx)
+	safego.Loop(ctx, "outbox.dispatcher", dispatcher.Run)
 
 	if err := observability.RegisterPendingDispatch(meters, outboxRepo, handlerNames); err != nil {
 		mainLogger.Warn().Err(err).Msg("Failed to register outbox.events.pending gauge")
@@ -231,8 +272,11 @@ func main() {
 	menuRepo := repositories.NewMenuRepository(pool, lgr)
 	menuService := menuApp.NewService(menuRepo, tenancyService, meters, lgr)
 	// The menu bank's views (3.0); the vendor view's name mappings feed kitchen routing.
-	menuViewService := menuviewApp.NewService(repositories.NewMenuBankRepository(pool), menuService, lgr)
+	menuBankRepo := repositories.NewMenuBankRepository(pool)
+	menuViewService := menuviewApp.NewService(menuBankRepo, menuService, lgr)
+	bankImportService := bankimport.NewService(repositories.NewBankImportRepository(pool), lgr)
 	menuService.SetVendorMapper(menuViewService)
+	menuService.SetFamilies(repositories.NewFamilyRepository(pool))
 
 	// Agent reliability + headless recovery: order acks + re-sends, the
 	// agent's state/health reports, link with the manager login, restore,
@@ -254,6 +298,7 @@ func main() {
 	pager.SetEndpoint(pushoverURL)
 	// The admin's phones only (drivers + the store owner share the account).
 	adminDevices := tenancyDomain.SplitDevices(agentSecrets.PushoverAdminDevices)
+	tenancyService.SetReservedDevices(adminDevices) // no store's manager may save one of ours as an owner phone
 	pager.SetDevices(adminDevices)
 	agentSync := agentsync.New(pool, repo, repo, broker, tenancyService, agentSecrets, pager, lgr)
 	if v, err := time.ParseDuration(os.Getenv("ORDER_REDELIVER_AFTER")); err == nil && v > 0 {
@@ -269,10 +314,11 @@ func main() {
 	requester.RegisterInbound(rpc.MsgAgentUpdateStatus, agentSync.HandleUpdateStatus)
 	requester.RegisterInbound(rpc.MsgPrinterMoved, agentSync.HandlePrinterMoved)
 	requester.RegisterInbound(rpc.MsgPrinterAdd, agentSync.HandlePrinterAdd)
+	requester.RegisterInbound(rpc.MsgPrinterWidth, agentSync.HandlePrinterWidth)
 	storeConfigPub := handler.NewStoreConfigPublisher(broker, tenancyService, lgr)
 	agentSync.OnPrintersChanged(storeConfigPub.Publish)
-	go agentSync.RunRedeliver(ctx)
-	go agentSync.RunOfflinePager(ctx)
+	safego.Loop(ctx, "agentsync.redeliver", agentSync.RunRedeliver)
+	safego.Loop(ctx, "agentsync.offline_pager", agentSync.RunOfflinePager)
 
 	// Tablet diagnostics: reports arrive via the Pi (RPC diag.report) or
 	// straight from the tablet (report key). Pages go to the OWNER only — a
@@ -285,17 +331,50 @@ func main() {
 
 	// The notification port (3.0): problems with channel orders → the log and
 	// the store owner's phones (+ the admin's).
-	notifier := notify.Fanout{notify.Log{Logger: lgr}, notify.Pushover{Pager: ownerPager, Devices: func(ctx context.Context, locationID uuid.UUID) ([]string, error) {
+	var devNotices *notify.Recorder // dev: tests read the owner notices
+	if cfg.AppConfig.AppEnv == "dev" {
+		devNotices = &notify.Recorder{}
+	}
+	// Test stores (the flows' and pytest's throwaway stores) never page the
+	// owner's phones unless NOTIFY_TEST_STORES says so: log (default) |
+	// pushover | device:<name> (that one device of the owner's account).
+	testMode, ok := notify.ParseTestStoresMode(os.Getenv("NOTIFY_TEST_STORES"))
+	if !ok {
+		lgr.Warn().Str("var", "NOTIFY_TEST_STORES").Msg("unknown mode: test stores' notices are logged only")
+	}
+	var testDevice notify.Pager
+	if d := notify.DeviceOf(testMode); d != "" {
+		p := pushover.New(agentSecrets.PushoverAppToken, agentSecrets.PushoverUserKey, "")
+		p.SetEndpoint(pushoverURL)
+		p.SetDevices([]string{d})
+		testDevice = p
+	}
+	ownerNotices := notify.Pushover{Pager: ownerPager, Devices: func(ctx context.Context, locationID uuid.UUID) ([]string, error) {
 		l, err := tenancyService.GetLocation(ctx, locationID)
 		if err != nil {
 			return nil, err
 		}
 		return tenancyDomain.OwnerDevices(l.Config), nil
-	}}}
+	}}
+	notifier := notify.Fanout{notify.Log{Logger: lgr}, notify.TestStores{Inner: ownerNotices, Mode: testMode, Device: testDevice,
+		IsTest: func(ctx context.Context, locationID uuid.UUID) (bool, error) {
+			l, err := tenancyService.GetLocation(ctx, locationID)
+			if err != nil {
+				return false, err
+			}
+			t, err := tenancyService.GetTenant(ctx, l.TenantID)
+			if err != nil {
+				return false, err
+			}
+			return t.TestStore, nil
+		}}}
+	if devNotices != nil {
+		notifier = append(notifier, devNotices)
+	}
 	trackingService.Wire(svc, tenancyService, notifier)
-	go trackingService.RunMaintenance(ctx)
+	safego.Loop(ctx, "tracking.maintenance", trackingService.RunMaintenance)
 	requester.RegisterInbound(diagApp.MsgDiagReport, diagService.HandleRPC)
-	go diagService.RunPrune(ctx)
+	safego.Loop(ctx, "diag.prune", diagService.RunPrune)
 
 	// Delivery maps (2.0.9): delivery orders are geocoded + routed in the
 	// background after ingest and pushed to the agent as RPC order.geo; a
@@ -308,39 +387,138 @@ func main() {
 	broker.OnSubscribe(geoService.WakeLocation)
 	requester.RegisterInbound(rpc.MsgGeoPin, geoService.HandlePin)
 	requester.RegisterInbound(rpc.MsgGeoTrip, geoService.HandleTrip)
-	// 2.1.0: POS deliveries (external stops — no orders row) + address
-	// candidates (geo.choose, for online orders and stops alike).
-	requester.RegisterInbound(rpc.MsgGeoLocate, geoService.HandleLocate)
-	requester.RegisterInbound(rpc.MsgGeoForget, geoService.HandleForget)
+	// 2.1.0: address candidates (geo.choose). geo.locate / geo.forget (the
+	// SoftTouch POS stops) are retired: unknown type, 202 no-op.
 	requester.RegisterInbound(rpc.MsgGeoChoose, geoService.HandleChoose)
 	requester.RegisterInbound(rpc.MsgGeoSearch, geoService.HandleSearch)
 	// 2.2.0: the tablet sets the delivery radius through the Pi.
 	requester.RegisterInbound(rpc.MsgLocationRadius, geoService.HandleRadius)
 	floorService.OnDeliveryRun(repositories.NewDeliveryRunStore(pool))
 	mainLogger.Info().Str("geo_providers", geoService.Providers().Name()).Msg("geo worker configured")
-	go geoService.Run(ctx)
+	safego.Loop(ctx, "geo.worker", geoService.Run)
 
 	// Store status (3.0): ordering settings, pause, hours exceptions, the
 	// delivery check, and 86'd items back at each location's reset hour.
 	storeStatusService := storestatusApp.NewService(repositories.NewStoreStatusRepository(pool), tenancyService, geoService, lgr)
-	go storeStatusService.RunRestock(ctx)
+	safego.Loop(ctx, "storestatus.restock", storeStatusService.RunRestock)
+	// The counter terminal (TERMINAL-PLAN 0d): staff + terminal settings, the
+	// Pi's counter orders / payments / voids / journal, menu.changed pushes.
+	staffService := staffApp.NewService(repositories.NewStaffRepository(pool), broker, lgr)
+	floorService.OnCounter(repo, staffService)
+	floorService.OnStaffLimits(staffService) // M-7: refunds over a person's limit are flagged
+	floorService.SetNotifier(notifier)       // flagged money pages the owner (≤ 1/h per store)
+	// Drawers per cashier shift + the Z report (terminal Stage 2): drawer.* / z.report from the Pi.
+	dayCloseService := daycloseApp.NewService(repositories.NewDayCloseRepository(pool), repositories.NoRows, lgr)
+	dayCloseService.SetMeters(&meters) // CM-14: drawers' over / short, Z differences
+	floorService.OnDayClose(dayCloseService)
+	floorService.OnCounterPlaced(geoService.OnOrderCreated)
+	floorService.OnCounterMoved(geoService.OnOrderMoved) // a delivery's new address is located again
+	safego.Loop(ctx, "staff.watch_menus", func(ctx context.Context) { staffService.WatchMenus(ctx, menuBankRepo, broker) })
+	// Quibase's online-ordering controls through the Pi (weborder stage 3): pause + sold out.
+	onlineCtl := onlinectl.NewService(storeStatusService, repositories.NewStockRepository(pool), lgr)
+	requester.RegisterInbound(onlinectl.MsgOnlineStatus, onlineCtl.HandleStatus)
+	requester.RegisterInbound(onlinectl.MsgOnlinePause, onlineCtl.HandlePause)
+	requester.RegisterInbound(onlinectl.MsgOnlineResume, onlineCtl.HandleResume)
+	requester.RegisterInbound(onlinectl.MsgMenuStock, onlineCtl.HandleStock)
+	requester.RegisterInbound(onlinectl.MsgMenuStockSet, onlineCtl.HandleStockSet)
 	pricingService := pricingApp.NewService(repositories.NewPricingRepository(pool), menuViewService, storeStatusService, tenancyService, lgr)
 	// The payment port: cash everywhere; the test card on dev and staging
 	// only — no card charging in prod until Square (the owner, 2026-11-02).
 	gateways := map[string]payment.Gateway{payment.MethodCash: payment.Cash{}}
+	var testCard payment.Gateway
 	if env := cfg.AppConfig.AppEnv; env == "dev" || env == "staging" {
-		gateways[payment.MethodCard] = payment.NewTestCard()
+		testCard = payment.NewTestCard()
+		gateways[payment.MethodCard] = testCard
 	}
+	// Square (weborder stage 2): a store with Square connected takes card
+	// orders as holds, captured at clock-out / Close batch / after 24 h.
+	sqCfg, sqFake := squarepay.FromEnv(cfg.AppConfig.AppEnv, lgr)
+	squareRepo := repositories.NewSquareRepository(pool)
+	squareService, err := squarepay.NewService(sqCfg, square.New(sqCfg.BaseURL, sqCfg.AppID, sqCfg.AppSecret, nil), squareRepo, tenancyService, lgr)
+	if err != nil {
+		lgr.Fatal().Err(err).Msg("square setup")
+	}
+	squareService.SetNotifier(notifier)
+	// The counter terminal's setup test charge ($1, no order) is refunded
+	// through the Pi: RPC square.test_refund (TERMINAL-SETUP-PLAN, owner Q3).
+	requester.RegisterInbound(squarepay.MsgSquareTestRefund, squareService.HandleTestRefund)
+	// Send to phone (agent contract 2.10z): the Square app on a cashier's phone.
+	requester.RegisterInbound(squarepay.MsgPosConfig, squareService.HandlePosConfig)
+	requester.RegisterInbound(squarepay.MsgPosLookup, squareService.HandlePosLookup)
+	// The call center's remote terminal (CALLCENTER-PLAN.md): device tokens, PIN
+	// sessions for role callcenter, the relay to the store's Pi (terminal.relay)
+	// and the Pi's terminal events back (terminal.events).
+	callcenterService := callcenterApp.NewService(repositories.NewCallcenterRepository(pool), staffService, storeStatusService,
+		broker, requester, broker, squareService, tenancyService.GetLocation, lgr)
+	broker.OnGone(callcenterService.PiGone) // a relayed call in flight when the Pi's stream drops fails at once
+	requester.RegisterInbound(squarepay.MsgPosFakeCharge, squareService.HandlePosFakeCharge)
+	// Square on the counter terminal (agent contract §2.10r): the reader's
+	// sign-in, a typed card's payment, a refund of either.
+	requester.RegisterInbound(squarepay.MsgSquareSession, squareService.HandleSession)
+	requester.RegisterInbound(squarepay.MsgSquareKeyedPayment, squareService.HandleKeyedPayment)
+	requester.RegisterInbound(squarepay.MsgSquareRefund, squareService.HandleRefund)
+	if squareService.Enabled() {
+		gateways[payment.MethodCard] = squareService.CardRouter(testCard)
+		safego.Loop(ctx, "square.refresh", squareService.RunRefresh)
+	}
+	cardHolds := cardholdApp.NewService(squareRepo, map[string]payment.Holder{squarepay.GatewayName: squareService.Gateway()}, repo, lgr)
+	cardHolds.SetNotifier(notifier)
+	cardHolds.SetMeters(&meters) // L-3: captures, voids, refunds, failures
+	safego.Loop(ctx, "cardhold.worker", cardHolds.Run)
+	floorService.OnCardHolds(cardHolds)
+	// Website customer accounts (weborder stage 2): phone + code sign-in.
+	signinCodes, fakeCodes := customers.CodesFromEnv(cfg.AppConfig.AppEnv, lgr)
+	customerService := customers.NewService(repositories.NewCustomerRepository(pool), signinCodes, lgr)
+	customerService.SetCardRemover(squareService)
+	safego.Loop(ctx, "customers.prune", customerService.RunPrune)
+	// The counter's customers (terminal 1d): customer.upsert from the Pi, and
+	// customers.changed to a store's Pi when its customers change.
+	customerRepo := repositories.NewCustomerRepository(pool)
+	floorService.OnCustomers(customerService)
+	safego.Loop(ctx, "customers.watch_changes", func(ctx context.Context) { customerService.WatchChanges(ctx, customerRepo, broker, broker) })
 	orderPortService := orderport.NewService(pricingService, storeStatusService, menuViewService, menuService, svc,
 		repositories.NewChannelOrderRepository(pool), gateways, lgr)
 	orderPortService.SetNotifier(notifier) // a failed refund pages the owner
-	go geoService.BackfillStores(ctx)
+	orderPortService.SetAccounts(customerService)
+	safego.Go(ctx, "geo.backfill_stores", geoService.BackfillStores)
 
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
 	operatorService := operatorApp.NewService(operatorRepo, tenancyService, lgr)
 	channelService := channelApp.NewService(repositories.NewChannelRepository(pool), tenancyService, lgr)
 	channelService.SetOperators(operatorService) // an operator's sign-in opens /channel/v1 as the store's Call center
 	channelService.SetViews(menuViewService)
+	// Store websites (weborder stage 2): the storefront's platform key + host → the store's web channel.
+	siteService := siteApp.NewService(repositories.NewSiteRepository(pool), tenancyService, os.Getenv("SITE_BASE_DOMAIN"), lgr)
+	// The Website page's preview opens on the storefront: https://{host}, or
+	// SITE_PREVIEW_ORIGIN (dev: the storefront's dev server, http://{host}:5173).
+	if o := os.Getenv("SITE_PREVIEW_ORIGIN"); o != "" {
+		siteService.SetPreviewOrigin(o)
+	} else if cfg.AppConfig.AppEnv == "dev" {
+		siteService.SetPreviewOrigin("http://{host}:5173")
+	}
+	siteService.SetWebChannels(channelService)
+	channelService.SetSites(siteService)
+	// Email receipts for web orders (weborder stage 2).
+	mailSender, fakeMail, mailFrom := receipts.SenderFromEnv(ctx, cfg.AppConfig.AppEnv, lgr)
+	receiptService := receipts.NewService(repositories.NewReceiptRepository(pool), repo, tenancyService,
+		repositories.NewChannelOrderRepository(pool), receipts.StoreFuncs{Host: siteService.PrimaryHost, Reply: customerService.ReplyEmail},
+		squareRepo, mailSender, mailFrom, lgr)
+	safego.Loop(ctx, "receipts.worker", receiptService.Run)
+	// Placements (DURABILITY-PLAN.md): the key before any money moves, the
+	// work detached from the request, the sweeper, kitchen_offline.
+	// The card nonce a placement keeps while in flight is sealed with
+	// SQUARE_TOKEN_KEY, like the stores' OAuth tokens (plaintext when unset).
+	placementRepo := repositories.NewPlacementRepository(pool)
+	placementRepo.SetTokenBox(squareService)
+	orderPortService.SetPlacements(placementRepo, uuid.NewString())
+	kitchenLiveness := kitchen.New(broker, printerCache, repositories.NewPlacementRepository(pool))
+	orderPortService.SetKitchen(kitchenLiveness)
+	orderPortService.SetSweeper(channelService, customerService)
+	orderPortService.SetMailer(receiptService)
+	orderPortService.SetMeters(&meters)
+	safego.Loop(ctx, "orderport.sweeper", orderPortService.Run)
+	cardHolds.OnAmountChanged(receiptService.QueueFinal)
+	floorService.OnCancelled(receiptService.QueueFinal)
 
 	sqsClient, err := sqsconsumer.NewSQSClient(ctx, cfg, lgr)
 	if err != nil {
@@ -359,7 +537,7 @@ func main() {
 	}
 
 	sqsConsumer := sqsconsumer.NewConsumer(sqsClient, cfg.SQSConfig.QueueURL, casters, svc, lgr, meters)
-	go sqsConsumer.Start(ctx)
+	safego.Loop(ctx, "sqs.consumer", sqsConsumer.Start)
 
 	// Store-manager session signer. Secret is stable (Doppler-managed) so
 	// sessions survive a blue-green swap; Secure cookies only outside dev.
@@ -369,39 +547,66 @@ func main() {
 	}
 
 	e := echo.New()
+	// Whose address a request comes from (M3): main is behind Traefik, so the
+	// peer is the proxy; forwarding headers are believed from trusted proxies only.
+	ipExtractor, err := clientip.FromEnv(cfg.AppConfig.TrustedProxyCIDRs, cfg.AppConfig.CloudflareCIDRs)
+	if err != nil {
+		lgr.Fatal().Err(err).Msg("bad trusted proxy configuration")
+	}
+	e.IPExtractor = ipExtractor
 	tLogger := lgr.With().Str("module", "transport").Logger()
 	transport.AddDefaultMiddlewares(e, cfg.OTELConfig.ServiceName, &tLogger)
+	transport.AddSecurityMiddlewares(e, cfg.AppConfig.AppEnv, cfg.AppConfig.HSTSMaxAge)
 	transport.AddRoutes(e, transport.RouterDeps{
-		Service:         svc,
-		AuthService:     authService,
-		TenancyService:  tenancyService,
-		Broker:          broker,
-		Publisher:       broker,
-		AdminAPIKey:     cfg.AppConfig.AdminAPIKey,
-		Version:         version,
-		Commit:          commit,
-		Pool:            pool,
-		SQS:             sqsClient,
-		QueueURL:        cfg.SQSConfig.QueueURL,
-		Meters:          meters,
-		Logger:          tLogger,
-		SessionSigner:   sessionSigner,
-		Requester:       requester,
-		PrinterCache:    printerCache,
-		MenuService:     menuService,
-		FloorService:    floorService,
-		OperatorService: operatorService,
-		ChannelService:  channelService,
-		MenuViewService: menuViewService,
-		StoreStatus:     storeStatusService,
-		Pricing:         pricingService,
-		OrderPort:       orderPortService,
-		Tracking:        trackingService,
-		AgentSync:       agentSync,
-		Diag:            diagService,
-		Geo:             geoService,
-		AlertSender:     ownerPager,
-		AppEnv:          cfg.AppConfig.AppEnv,
+		Service:           svc,
+		AuthService:       authService,
+		TenancyService:    tenancyService,
+		Broker:            broker,
+		Publisher:         broker,
+		AdminAPIKey:       cfg.AppConfig.AdminAPIKey,
+		Version:           version,
+		Commit:            commit,
+		Pool:              pool,
+		SQS:               sqsClient,
+		QueueURL:          cfg.SQSConfig.QueueURL,
+		Meters:            meters,
+		Logger:            tLogger,
+		SessionSigner:     sessionSigner,
+		Requester:         requester,
+		PrinterCache:      printerCache,
+		MenuService:       menuService,
+		FloorService:      floorService,
+		OperatorService:   operatorService,
+		ChannelService:    channelService,
+		Site:              siteService,
+		Square:            squareService,
+		CardHolds:         cardHolds,
+		SquareFake:        sqFake,
+		Customers:         customerService,
+		Receipts:          receiptService,
+		FakeCodes:         fakeCodes,
+		FakeMail:          fakeMail,
+		MenuViewService:   menuViewService,
+		BankImport:        bankImportService,
+		Families:          familiesApp.NewService(repositories.NewFamilyRepository(pool)),
+		OptionFlags:       optionflags.NewService(repositories.NewOptionFlagsRepository(pool)),
+		StoreStatus:       storeStatusService,
+		Kitchen:           kitchenLiveness,
+		Pricing:           pricingService,
+		OrderPort:         orderPortService,
+		Tracking:          trackingService,
+		TrackPublicPerMin: handler.TrackPublicPerMin(),
+		AgentSync:         agentSync,
+		Diag:              diagService,
+		Geo:               geoService,
+		AlertSender:       ownerPager,
+		AppEnv:            cfg.AppConfig.AppEnv,
+		ReadyCache:        time.Duration(cfg.AppConfig.ReadyCacheSeconds) * time.Second,
+		DevNotices:        devNotices,
+		Staff:             staffService,
+		Callcenter:        callcenterService,
+		DayClose:          dayCloseService,
+		Audit:             repositories.NewAuditRepository(pool),
 	})
 
 	serverLogger := lgr.With().Str("module", "server").Logger()

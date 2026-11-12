@@ -33,12 +33,16 @@ func NewMenuBankRepository(pool *pgxpool.Pool) *MenuBankRepository {
 // sizes and attached groups, every group with its options and their per-size
 // prices, the store sizes and the menu version.
 func (r *MenuBankRepository) LoadBank(ctx context.Context, locationID uuid.UUID) (*menu.Bank, error) {
-	q := models.New(r.pool)
+	return loadBank(ctx, models.New(r.pool), locationID)
+}
+
+// loadBank reads a bank through q (the pool, or the bank import's tx).
+func loadBank(ctx context.Context, q *models.Queries, locationID uuid.UUID) (*menu.Bank, error) {
 	lid := pgID(locationID)
 	// The version first: a write landing while the rows below are read makes
 	// the bank newer than its version (the next read rebuilds), never older
 	// (a stale build cached under the new version).
-	ver, err := r.Version(ctx, locationID)
+	ver, err := versionOf(ctx, q, locationID)
 	if err != nil {
 		return nil, err
 	}
@@ -78,8 +82,28 @@ func (r *MenuBankRepository) LoadBank(ctx context.Context, locationID uuid.UUID)
 	if err != nil {
 		return nil, fmt.Errorf("option prices: %w", err)
 	}
+	fams, itemFam, optFam, err := loadFamilies(ctx, q.Raw(), locationID)
+	if err != nil {
+		return nil, err
+	}
+	driverTicket, err := optionsOnDriverTicket(ctx, q.Raw(), locationID)
+	if err != nil {
+		return nil, err
+	}
+	regular := map[uuid.UUID]bool{}
+	for _, f := range fams {
+		if f.Kind == menu.FamilyMod && f.Class == menu.ClassRegular {
+			regular[f.ID] = true
+		}
+	}
 	b := &menu.Bank{LocationID: locationID, Version: ver.Version, Sizes: []menu.Size{}, Menus: []menu.BankMenu{},
-		Groups: map[uuid.UUID]menu.BankGroup{}}
+		Groups: map[uuid.UUID]menu.BankGroup{}, Families: fams}
+	famOf := func(m map[uuid.UUID]uuid.UUID, id uuid.UUID) *uuid.UUID {
+		if f, ok := m[id]; ok {
+			return &f
+		}
+		return nil
+	}
 	for _, s := range sizes {
 		b.Sizes = append(b.Sizes, sizeOf(s))
 	}
@@ -94,8 +118,10 @@ func (r *MenuBankRepository) LoadBank(ctx context.Context, locationID uuid.UUID)
 		if prices == nil {
 			prices = []menu.OptionPrice{}
 		}
+		fam := famOf(optFam, idOf(o.ID))
 		optsByGroup[g] = append(optsByGroup[g], menu.BankOption{ModifierOption: toDomainOption(o), IsDefault: o.IsDefault,
-			KitchenName: o.KitchenName, Prices: prices})
+			KitchenName: o.KitchenName, Prices: prices, FamilyID: fam, ShowOnDriverTicket: driverTicket[idOf(o.ID)],
+			CountsForCoupons: fam != nil && regular[*fam]})
 	}
 	for _, g := range groups {
 		o := optsByGroup[idOf(g.ID)]
@@ -116,7 +142,7 @@ func (r *MenuBankRepository) LoadBank(ctx context.Context, locationID uuid.UUID)
 	itemsByCat := map[uuid.UUID][]menu.BankItem{}
 	for _, it := range items {
 		bi := menu.BankItem{Item: toDomainItem(it), KitchenName: it.KitchenName, SKU: it.Sku,
-			Sizes: sizesByItem[idOf(it.ID)], GroupIDs: groupIDs[idOf(it.ID)]}
+			Sizes: sizesByItem[idOf(it.ID)], GroupIDs: groupIDs[idOf(it.ID)], FamilyID: famOf(itemFam, idOf(it.ID))}
 		if bi.Sizes == nil {
 			bi.Sizes = []menu.ItemSize{}
 		}
@@ -147,7 +173,11 @@ func (r *MenuBankRepository) LoadBank(ctx context.Context, locationID uuid.UUID)
 
 // Version is a location's menu version (1 before anything ever changed).
 func (r *MenuBankRepository) Version(ctx context.Context, locationID uuid.UUID) (menu.Version, error) {
-	row, err := models.New(r.pool).GetMenuVersion(ctx, pgID(locationID))
+	return versionOf(ctx, models.New(r.pool), locationID)
+}
+
+func versionOf(ctx context.Context, q *models.Queries, locationID uuid.UUID) (menu.Version, error) {
+	row, err := q.GetMenuVersion(ctx, pgID(locationID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return menu.Version{Version: 1}, nil
 	}
@@ -285,7 +315,7 @@ func (r *MenuBankRepository) SetGroupBank(ctx context.Context, tenantID, locatio
 
 func viewOf(row models.MenuView) (*menuview.View, error) {
 	v := &menuview.View{ID: idOf(row.ID), TenantID: idOf(row.TenantID), LocationID: idOf(row.LocationID),
-		Kind: menuview.Kind(row.Kind), Name: row.Name, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time}
+		Kind: menuview.Kind(row.Kind), Name: row.Name, HasLayout: row.Layout != nil, CreatedAt: row.CreatedAt.Time, UpdatedAt: row.UpdatedAt.Time}
 	if err := json.Unmarshal(row.Rules, &v.Rules); err != nil {
 		return nil, fmt.Errorf("view %s rules: %w", v.ID, err)
 	}

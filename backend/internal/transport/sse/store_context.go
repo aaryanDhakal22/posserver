@@ -69,6 +69,11 @@ type PrinterContext struct {
 	IsReceipt bool `json:"is_receipt"`
 	// MAC is the printer's hardware address as the Pi learned it (omitted
 	// when not known yet).
-	MAC       string    `json:"mac,omitempty"`
-	UpdatedAt time.Time `json:"updated_at"`
+	MAC string `json:"mac,omitempty"`
+	// PrintColumns is how many font-A characters fit on the printer's line:
+	// 42 (512 dots) or 32 (384 dots); omitted for the default 48 (576 dots,
+	// 80 mm), so the frame stays byte-identical for every older agent (golden).
+	// The Pi lays every slip out for the printer it lands on.
+	PrintColumns int       `json:"print_columns,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }

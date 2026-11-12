@@ -2,6 +2,8 @@
   import { printerLabel, storeApi, type Category, type Item, type Menu, type Printer } from '$lib/api';
   import { confirmDialog } from '$lib/confirm.svelte';
   import { toast } from '$lib/toast.svelte';
+  // The default-printer select's "No kitchen ticket" choice (not a printer id).
+  const NO_KITCHEN = '__no_kitchen__';
   import Card from '$lib/ui/Card.svelte';
   import Button from '$lib/ui/Button.svelte';
   import Switch from '$lib/ui/Switch.svelte';
@@ -102,6 +104,7 @@
           description: c.description,
           available: c.available,
           default_printer_id: c.default_printer_id,
+          no_kitchen_ticket: !!c.no_kitchen_ticket,
           ...patch
         })
       });
@@ -172,7 +175,11 @@
   </Card>
 
   {#if active}
-    <Card title="Categories in {active.name}" subtitle="Items without their own printer use the category's default printer" padded={false}>
+    <Card
+      title="Categories in {active.name}"
+      subtitle="Items without their own printer use the category's default printer. No kitchen ticket = prints on the receipt only: no station ticket, not in 'Also on this order'."
+      padded={false}
+    >
       <div role="table" aria-label="Categories in {active.name}">
         <div class="crow head" role="row">
           <span role="columnheader">Category</span><span role="columnheader">Items</span><span role="columnheader">Default printer</span>
@@ -189,10 +196,15 @@
               <select
                 class="field"
                 aria-label="Default printer for {c.name}"
-                value={c.default_printer_id ?? ''}
-                onchange={(e) => saveCategory(c, { default_printer_id: e.currentTarget.value || null }, 'Default printer saved')}
+                value={c.no_kitchen_ticket ? NO_KITCHEN : (c.default_printer_id ?? '')}
+                onchange={(e) => {
+                  const v = e.currentTarget.value;
+                  if (v === NO_KITCHEN) saveCategory(c, { default_printer_id: null, no_kitchen_ticket: true }, 'No kitchen ticket: receipt only');
+                  else saveCategory(c, { default_printer_id: v || null, no_kitchen_ticket: false }, 'Default printer saved');
+                }}
               >
                 <option value="">No default printer</option>
+                <option value={NO_KITCHEN}>No kitchen ticket (receipt only)</option>
                 {#each printers as p (p.id)}<option value={p.id}>{printerLabel(p, printers)}</option>{/each}
               </select>
             </span>

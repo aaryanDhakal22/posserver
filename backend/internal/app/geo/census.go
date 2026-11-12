@@ -3,6 +3,7 @@ package geo
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -125,7 +126,7 @@ func getJSONAny(ctx context.Context, client *http.Client, u string, hdr http.Hea
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("bad request URL %s", scrubURL(u))
 	}
 	for k, v := range hdr {
 		req.Header[k] = v
@@ -133,7 +134,7 @@ func getJSONAny(ctx context.Context, client *http.Client, u string, hdr http.Hea
 	req.Header.Set("Accept", "application/json")
 	resp, err := client.Do(req)
 	if err != nil {
-		return 0, err
+		return 0, scrubErr(err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
@@ -147,6 +148,35 @@ func getJSONAny(ctx context.Context, client *http.Client, u string, hdr http.Hea
 		return resp.StatusCode, fmt.Errorf("decode: %w", err)
 	}
 	return resp.StatusCode, nil
+}
+
+// scrubURL drops what a provider URL carries about the customer or our keys
+// (HARDENING-PLAN L-4): the query (address=, q=, key=, …), any user info, and
+// path segments with coordinates (OSRM's /route/v1/driving/lng,lat;lng,lat → _).
+func scrubURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "(unparseable url)"
+	}
+	segs := strings.Split(u.Path, "/")
+	for i, s := range segs {
+		if strings.ContainsAny(s, ",;") {
+			segs[i] = "_"
+		}
+	}
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: strings.Join(segs, "/")}).String()
+}
+
+// scrubErr rewrites the URL inside a *url.Error (what http.Client.Do
+// returns: "Get \"https://…?address=…&key=…\": context deadline exceeded") so
+// the logged error and order_geo.last_error carry neither the customer's
+// address nor an API key.
+func scrubErr(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return &url.Error{Op: ue.Op, URL: scrubURL(ue.URL), Err: ue.Err}
+	}
+	return err
 }
 
 func trimSlash(u string) string { return strings.TrimRight(u, "/") }

@@ -60,11 +60,28 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	q := models.New(tx)
+	if err := r.createInTx(ctx, models.New(tx), o); err != nil {
+		if errors.Is(err, order.ErrDuplicate) {
+			log.Info().Msg("duplicate order; skipping")
+		}
+		return err
+	}
 
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	log.Info().
+		Str("source", string(o.Source())).
+		Str("source_event_id", o.SourceEventID()).
+		Msg("order persisted")
+	return nil
+}
+
+// createInTx writes the order, its lines, payments, status history, channel
+// link and outbox events with q (inside the caller's transaction).
+func (r *OrderRepository) createInTx(ctx context.Context, q *models.Queries, o *order.Order) error {
 	if err := q.CreateOrder(ctx, toOrderRow(o)); err != nil {
 		if isUniqueViolation(err) {
-			log.Info().Msg("duplicate order; skipping")
 			return order.ErrDuplicate
 		}
 		return fmt.Errorf("create order: %w", err)
@@ -98,13 +115,40 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 			TenantID: toPgUUID(uuid.UUID(o.TenantID())), LocationID: toPgUUID(uuid.UUID(o.LocationID())),
 			ClientOrderID: ch.ClientOrderID, Payment: pay,
 			TrackToken: pgtype.Text{String: ch.TrackToken, Valid: ch.TrackToken != ""},
-			OperatorID: pgIDPtr(ch.OperatorID),
+			OperatorID: pgIDPtr(ch.OperatorID), CustomerID: pgIDPtr(ch.CustomerID),
 		}); err != nil {
 			if isUniqueViolation(err) {
-				log.Info().Msg("duplicate channel order; skipping")
 				return order.ErrDuplicate
 			}
 			return fmt.Errorf("create channel order: %w", err)
+		}
+		if ch.Placement {
+			n, err := q.MarkPlacementPlaced(ctx, models.MarkPlacementPlacedParams{ChannelID: toPgUUID(ch.ID), ClientOrderID: ch.ClientOrderID,
+				OrderID: toPgUUID(uuid.UUID(o.ID())), DueAlertAt: pgTS(ch.PlacementDueCheck)})
+			if err != nil {
+				return fmt.Errorf("mark placement placed: %w", err)
+			}
+			if n != 1 {
+				return order.ErrPlacementGone
+			}
+		}
+		if h := ch.Hold; h != nil {
+			if err := q.InsertCardHold(ctx, models.InsertCardHoldParams{
+				OrderID: toPgUUID(uuid.UUID(o.ID())), TenantID: toPgUUID(uuid.UUID(o.TenantID())),
+				LocationID: toPgUUID(uuid.UUID(o.LocationID())), Gateway: h.Gateway, PaymentRef: h.Ref,
+				AmountCents: h.AmountCents, TipCents: h.TipCents, DueAt: pgtype.Timestamptz{Time: h.DueAt, Valid: true},
+			}); err != nil {
+				return fmt.Errorf("create card hold: %w", err)
+			}
+			if err := q.LinkCardHoldPayment(ctx, toPgUUID(uuid.UUID(o.ID()))); err != nil {
+				return fmt.Errorf("link card hold payment: %w", err)
+			}
+		}
+		if ch.Receipt {
+			if err := q.InsertEmailReceipt(ctx, models.InsertEmailReceiptParams{OrderID: toPgUUID(uuid.UUID(o.ID())),
+				Kind: "placed", LocationID: toPgUUID(uuid.UUID(o.LocationID()))}); err != nil {
+				return fmt.Errorf("queue email receipt: %w", err)
+			}
 		}
 	}
 
@@ -113,14 +157,6 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 			return fmt.Errorf("emit domain event %s: %w", ev.Type, err)
 		}
 	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("commit tx: %w", err)
-	}
-	log.Info().
-		Str("source", string(o.Source())).
-		Str("source_event_id", o.SourceEventID()).
-		Msg("order persisted")
 	return nil
 }
 
@@ -251,6 +287,13 @@ func (r *OrderRepository) DeleteByID(ctx context.Context, id order.ID) error {
 	if err := q.DeleteOrderOutbox(ctx, pid); err != nil {
 		return fmt.Errorf("delete order outbox: %w", err)
 	}
+	// The money rows are RESTRICT (00043): the admin handler allowed this
+	// delete (dev, a test store, or no money), so they go on purpose.
+	for _, sql := range orderMoneyDeletes {
+		if _, err := tx.Exec(ctx, sql+` = $1`, uuid.UUID(id)); err != nil {
+			return fmt.Errorf("delete order money: %w", err)
+		}
+	}
 	if err := q.DeleteOrderByID(ctx, pid); err != nil {
 		return fmt.Errorf("delete order: %w", err)
 	}
@@ -265,7 +308,8 @@ func (r *OrderRepository) DeleteByID(ctx context.Context, id order.ID) error {
 // registration for the raw query. Admin-only — no scope filter.
 func (r *OrderRepository) ListSummaries(ctx context.Context, f order.ListFilter) ([]order.Summary, error) {
 	sql := `SELECT id::text, tenant_id::text, location_id::text, source, source_event_id,
-	               status, customer_display_name, total_cents, received_at
+	               status, customer_display_name, total_cents, received_at,
+	               (SELECT COALESCE(sum(p.tip_cents), 0)::bigint FROM payments p WHERE p.order_id = orders.id)
 	        FROM orders WHERE 1=1`
 	args := []any{}
 	if f.TenantID != "" {
@@ -293,12 +337,40 @@ func (r *OrderRepository) ListSummaries(ctx context.Context, f order.ListFilter)
 	for rows.Next() {
 		var s order.Summary
 		if err := rows.Scan(&s.ID, &s.TenantID, &s.LocationID, &s.Source, &s.SourceEventID,
-			&s.Status, &s.CustomerName, &s.TotalCents, &s.ReceivedAt); err != nil {
+			&s.Status, &s.CustomerName, &s.TotalCents, &s.ReceivedAt, &s.TipCents); err != nil {
 			return nil, fmt.Errorf("scan order summary: %w", err)
 		}
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+// orderMoneyDeletes clear an order's RESTRICT children (each followed by
+// "= $1", the order id).
+var orderMoneyDeletes = []string{
+	`DELETE FROM card_holds WHERE order_id`,
+	`DELETE FROM payments WHERE order_id`,
+	`DELETE FROM channel_orders WHERE order_id`,
+	`DELETE FROM order_money_changes WHERE order_id`,
+}
+
+// OrderMoney reports an order's tenant and whether it holds money records
+// (payments, card holds): pgx.ErrNoRows = no such order.
+func (r *OrderRepository) OrderMoney(ctx context.Context, id uuid.UUID) (uuid.UUID, bool, error) {
+	var tenant uuid.UUID
+	var money bool
+	err := r.pool.QueryRow(ctx, `SELECT o.tenant_id, EXISTS (SELECT 1 FROM payments WHERE order_id = o.id AND status IN ('captured', 'refunded', 'authorized'))
+		OR EXISTS (SELECT 1 FROM card_holds WHERE order_id = o.id) FROM orders o WHERE o.id = $1`, id).Scan(&tenant, &money)
+	return tenant, money, err
+}
+
+// TenantOrderMoney reports whether any of a tenant's orders holds money.
+func (r *OrderRepository) TenantOrderMoney(ctx context.Context, tenantID uuid.UUID) (bool, error) {
+	var money bool
+	err := r.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM payments p JOIN orders o ON o.id = p.order_id
+			WHERE o.tenant_id = $1 AND p.status IN ('captured', 'refunded', 'authorized'))
+		OR EXISTS (SELECT 1 FROM card_holds WHERE tenant_id = $1)`, tenantID).Scan(&money)
+	return money, err
 }
 
 // DeleteAll bulk-deletes orders + their outbox rows in one transaction. Empty
@@ -317,12 +389,22 @@ func (r *OrderRepository) DeleteAll(ctx context.Context, tenantID string) (int64
 		if _, err := tx.Exec(ctx, `DELETE FROM outbox_events WHERE tenant_id = $1::uuid`, tenantID); err != nil {
 			return 0, fmt.Errorf("delete outbox by tenant: %w", err)
 		}
+		for _, sql := range orderMoneyDeletes {
+			if _, err := tx.Exec(ctx, sql+` IN (SELECT id FROM orders WHERE tenant_id = $1::uuid)`, tenantID); err != nil {
+				return 0, fmt.Errorf("delete order money by tenant: %w", err)
+			}
+		}
 		if tag, err = tx.Exec(ctx, `DELETE FROM orders WHERE tenant_id = $1::uuid`, tenantID); err != nil {
 			return 0, fmt.Errorf("delete orders by tenant: %w", err)
 		}
 	} else {
 		if _, err := tx.Exec(ctx, `DELETE FROM outbox_events`); err != nil {
 			return 0, fmt.Errorf("delete all outbox: %w", err)
+		}
+		for _, sql := range orderMoneyDeletes {
+			if _, err := tx.Exec(ctx, sql+` IN (SELECT id FROM orders)`); err != nil {
+				return 0, fmt.Errorf("delete all order money: %w", err)
+			}
 		}
 		if tag, err = tx.Exec(ctx, `DELETE FROM orders`); err != nil {
 			return 0, fmt.Errorf("delete all orders: %w", err)
@@ -358,6 +440,10 @@ func insertLineItemTree(ctx context.Context, q *models.Queries, orderID order.ID
 		MenuItemID:     optPgUUID(item.MenuItemID),
 		PrinterID:      optPgUUID(item.PrinterID),
 		Routing:        string(item.Routing),
+		Portion:        item.Portion,
+		Mode:           item.Mode,
+		Coupon:         item.Coupon,
+		CouponNo:       int32(item.CouponNo),
 	}); err != nil {
 		return err
 	}
@@ -482,6 +568,7 @@ func (r *OrderRepository) assemble(ctx context.Context, q *models.Queries, row m
 			Last4:      p.Last4,
 			AuthCode:   p.AuthCode,
 			CapturedAt: captured,
+			Tip:        order.Money(p.TipCents),
 		})
 	}
 
@@ -613,6 +700,10 @@ func buildItemTree(rows []models.LineItem) []order.LineItem {
 			Notes:     row.Notes,
 			Size:      row.Size,
 			Routing:   order.Routing(row.Routing),
+			Portion:   row.Portion,
+			Mode:      row.Mode,
+			Coupon:    row.Coupon,
+			CouponNo:  int(row.CouponNo),
 		}
 		if row.MenuItemID.Valid {
 			id := uuid.UUID(row.MenuItemID.Bytes)

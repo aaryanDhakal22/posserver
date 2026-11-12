@@ -12,10 +12,16 @@ import (
 	"fmt"
 	"time"
 
+	"quiccpos/main/internal/app/cardhold"
+	"quiccpos/main/internal/app/dayclose"
+	"quiccpos/main/internal/domain/notify"
 	"quiccpos/main/internal/domain/order"
+	"quiccpos/main/internal/domain/staff"
 	sseBroker "quiccpos/main/internal/infra/sse"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
+	"quiccpos/main/internal/shared/ratelimit"
+	"quiccpos/main/internal/shared/safego"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -53,12 +59,44 @@ type event struct {
 	ClockOut *time.Time `json:"clock_out"`
 	// order.not_delivered (2.2.1): retry | cancel
 	Action string `json:"action"`
+	// order.tip (weborder stage 2): the whole tip added after the order, in cents
+	TipCents *int64 `json:"tip_cents"`
+	// order.status cancelled by hand (weborder stage 3): customer_asked | couldnt_deliver | other
+	Reason string `json:"reason"`
+	// order.void: "void" (default) or "waste" (made already; the owner, 2026-11-12);
+	// order.tip: "door" = a retired door cash tip (acked stale, never kept)
+	Kind string `json:"kind"`
+	// order.void kind waste: the store's waste reason the cashier picked
+	WasteReason string `json:"waste_reason"`
+	// order.void: the manager who allowed it (a void of a sent order is a
+	// manager's, the owner 2026-11-12 evening); "" = nobody
+	ApprovedBy string `json:"approved_by"`
 	// delivery.run (2.0.9)
 	PlanID       string          `json:"plan_id"`
 	SuggestedIDs []string        `json:"suggested_ids"`
 	SentIDs      []string        `json:"sent_ids"`
 	Stops        json.RawMessage `json:"stops"`
-	Drivers      []struct {
+	// Counter orders (TERMINAL-PLAN 0d): order.placed's snapshot,
+	// order.payment's payment, order.void's staff, journal.entries' entries.
+	Snapshot json.RawMessage `json:"snapshot"`
+	Payment  json.RawMessage `json:"payment"`
+	// order.changed of an online / website order (agent 2.10aa): what it
+	// owes its customer back now, and this change's part (null = none).
+	RefundOwedCents *int64          `json:"refund_owed_cents"`
+	RefundDue       json.RawMessage `json:"refund_due"`
+	// order.payment: a refund on an earlier day's order (agent 2.10aa).
+	EarlierDay bool            `json:"earlier_day"`
+	StaffID    string          `json:"staff_id"`
+	Entries    json.RawMessage `json:"entries"`
+	// customer.upsert (terminal 1d): the customer + which fields it sets.
+	Customer json.RawMessage `json:"customer"`
+	Set      []string        `json:"set"`
+	// Drawers + the Z report (terminal Stage 2): drawer.opened / .closed's
+	// drawer, drawer.movement's movement, z.report's report.
+	Drawer   json.RawMessage `json:"drawer"`
+	Movement json.RawMessage `json:"movement"`
+	Report   json.RawMessage `json:"report"`
+	Drivers  []struct {
 		ID       string `json:"id"`
 		Name     string `json:"name"`
 		Position int    `json:"position"`
@@ -78,20 +116,129 @@ type DeliveryRunStore interface {
 	ListDeliveryRuns(ctx context.Context, sc order.Scope, limit int) ([]order.DeliveryRun, error)
 }
 
-type Service struct {
-	orders OrderLoader
-	repo   order.FloorRepository
-	runs   DeliveryRunStore
-	logger zerolog.Logger
-	meters observability.Meters
+// CounterOrders stores the Pi's counter orders and their payments
+// (repositories.OrderRepository).
+type CounterOrders interface {
+	CreateCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, co *order.CounterOrder, agentStatus []byte, batchID *int64) (string, []order.MoneyFlag, error)
+	AddCounterPayment(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, p order.CheckedPayment) (string, []order.MoneyFlag, error)
+	// FlagMoneyEvent stores flags for an event applied outside the
+	// counter-order writes (an order.void).
+	FlagMoneyEvent(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ, subject string, flags []order.MoneyFlag) error
+	ChangeCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, o *order.Order, at time.Time, flags []order.MoneyFlag, extra order.ChangeExtra) (string, []order.MoneyFlag, error)
 }
+
+// StaffLimits tells who the store's people are for the money rules (the
+// staff service): each person's role and effective refund limit.
+type StaffLimits interface {
+	Refunders(ctx context.Context, locationID uuid.UUID) (map[uuid.UUID]order.Refunder, error)
+}
+
+// Customers applies the counter's customer.upsert (the customers service):
+// an error wrapping customers.ErrBadCounterCustomer is answered invalid.
+type Customers interface {
+	ApplyCounterEvent(ctx context.Context, tenantID, locationID, eventID uuid.UUID, typ string, raw json.RawMessage, set []string) (string, error)
+}
+
+// Journal keeps the terminal's staff journal (the staff service).
+type Journal interface {
+	AddJournal(ctx context.Context, tenantID, locationID uuid.UUID, entries []staff.JournalEntry) (int, error)
+}
+
+// DayClose stores the Pi's drawer sessions and Z reports (the dayclose
+// service): a *dayclose.Refused error is answered invalid.
+type DayClose interface {
+	Apply(ctx context.Context, sc order.Scope, eventID uuid.UUID, ev dayclose.Event) (string, []order.MoneyFlag, error)
+}
+
+type Service struct {
+	staff     StaffLimits
+	notifier  notify.Notifier
+	flagPages *ratelimit.Window
+	dayClose  DayClose
+	counter   CounterOrders
+	journal   Journal
+	customers Customers
+	onPlaced  func(ctx context.Context, o *order.Order)
+	onMoved   func(ctx context.Context, before, after *order.Order)
+	orders    OrderLoader
+	repo      order.FloorRepository
+	runs      DeliveryRunStore
+	holds     CardHolds
+	onCancel  func(ctx context.Context, orderID uuid.UUID)
+	logger    zerolog.Logger
+	meters    observability.Meters
+}
+
+// CardHolds captures / voids online card holds as the floor moves (the
+// cardhold service, weborder stage 2).
+type CardHolds interface {
+	DriverClockedOut(ctx context.Context, locationID uuid.UUID, driverID string, clockIn, clockOut time.Time)
+	BatchClosed(ctx context.Context, locationID uuid.UUID, batchID int64)
+	// SetTip sets the tip added after the order (false = no open card hold).
+	SetTip(ctx context.Context, locationID, orderID uuid.UUID, cents int64) (bool, error)
+	OrderCancelled(ctx context.Context, locationID, orderID uuid.UUID)
+}
+
+// OnCardHolds plugs in the card holds (nil = order.tip / batch.closed are
+// answered invalid).
+func (s *Service) OnCardHolds(h CardHolds) { s.holds = h }
+
+// OnCancelled is told after a cancelled order's card hold was dealt with
+// (the customer's final receipt).
+func (s *Service) OnCancelled(f func(ctx context.Context, orderID uuid.UUID)) { s.onCancel = f }
+
+// OnCounter plugs in counter orders + the staff journal (nil = the 0d event
+// types are answered invalid, as by an older main).
+func (s *Service) OnCounter(c CounterOrders, j Journal) { s.counter, s.journal = c, j }
+
+// OnStaffLimits plugs in the refunders' limits (M-7: a refund over the
+// person's limit nobody approved is flagged).
+func (s *Service) OnStaffLimits(l StaffLimits) { s.staff = l }
+
+// SetNotifier pages the owner when main flags money (at most one page per
+// store per FlagPageEvery; every flag is logged and counted).
+func (s *Service) SetNotifier(n notify.Notifier) { s.notifier = n }
+
+// OnCustomers plugs in the counter's customers (nil = customer.upsert is
+// answered invalid, as by an older main).
+func (s *Service) OnCustomers(c Customers) { s.customers = c }
+
+// OnDayClose plugs in drawers + Z reports (nil = drawer.* / z.report are
+// answered invalid, as by an older main).
+func (s *Service) OnDayClose(d DayClose) { s.dayClose = d }
+
+// OnCounterPlaced is told after a counter order was stored (the geo worker
+// locates a counter delivery).
+func (s *Service) OnCounterPlaced(f func(ctx context.Context, o *order.Order)) { s.onPlaced = f }
+
+// OnCounterMoved is told after an order.changed was applied to a delivery
+// (the geo worker locates a new address again): before = the order as main
+// had it (nil when it couldn't be read), after = the changed order.
+func (s *Service) OnCounterMoved(f func(ctx context.Context, before, after *order.Order)) {
+	s.onMoved = f
+}
+
+// FlagPageEvery: at most one "money flagged" page per store in this window
+// (every flag is still logged, counted and kept in money_flags).
+const FlagPageEvery = time.Hour
+
+// TipKindDoor is order.tip's kind for a driver's cash tip at the door, sent
+// by Pis built between 2026-11-12 12:18 and the owner's correction the same
+// day ("keep cash tips out the entire system"): acked stale, never kept.
+const TipKindDoor = "door"
+
+// MaxTipCents bounds an added tip absolutely ($1,000); the store's own cap
+// (the ordering setting tip_max_cents, default $50, M-20) is the card
+// holds' to check.
+const MaxTipCents = 100000
 
 // OnDeliveryRun sets where delivery.run events are stored (nil = answered
 // invalid, as before 2.0.9).
 func (s *Service) OnDeliveryRun(st DeliveryRunStore) { s.runs = st }
 
 func NewService(orders OrderLoader, repo order.FloorRepository, logger zerolog.Logger, meters observability.Meters) *Service {
-	return &Service{orders: orders, repo: repo, logger: logger.With().Str("module", "floor").Logger(), meters: meters}
+	return &Service{orders: orders, repo: repo, logger: logger.With().Str("module", "floor").Logger(), meters: meters,
+		flagPages: ratelimit.New(1, FlagPageEvery)}
 }
 
 // Handle is the rpc.InboundHandler for floor.events. An infrastructure error
@@ -162,11 +309,45 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 		if err1 != nil || err2 != nil || ev.ClockIn.IsZero() {
 			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 		}
-		return s.repo.SaveDriverShift(ctx, sc, eid, order.DriverShift{ID: sid, DriverID: did, DriverName: ev.DriverName,
+		res, err := s.repo.SaveDriverShift(ctx, sc, eid, order.DriverShift{ID: sid, DriverID: did, DriverName: ev.DriverName,
 			ClockIn: ev.ClockIn, ClockOut: ev.ClockOut, AutoOut: ev.Auto})
+		if err == nil && res == order.FloorApplied && ev.ClockOut != nil && s.holds != nil {
+			// The driver's card deliveries of this shift are captured now.
+			s.holds.DriverClockedOut(ctx, uuid.UUID(sc.LocationID), did.String(), ev.ClockIn, *ev.ClockOut)
+		}
+		return res, err
+	case "order.tip":
+		oid, err := uuid.Parse(ev.OrderID)
+		if ev.Kind == TipKindDoor { // cash tips stay out of main (the owner, 2026-11-12)
+			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorStale)
+		}
+		if s.holds == nil || err != nil || ev.TipCents == nil || *ev.TipCents < 0 || *ev.TipCents > MaxTipCents {
+			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
+		}
+		// Absolute (the whole added tip), so a replay is harmless: set it, then mark the event seen.
+		ok, err := s.holds.SetTip(ctx, uuid.UUID(sc.LocationID), oid, *ev.TipCents)
+		if errors.Is(err, cardhold.ErrTipTooBig) {
+			return s.seen(ctx, sc, eid, &oid, ev.Type, order.FloorInvalid)
+		}
+		if err != nil {
+			return "", err
+		}
+		if !ok {
+			return s.seen(ctx, sc, eid, &oid, ev.Type, order.FloorStale) // captured already / not a card order
+		}
+		return s.seen(ctx, sc, eid, &oid, ev.Type, order.FloorApplied)
+	case "batch.closed":
+		if s.holds == nil || ev.BatchID == nil {
+			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
+		}
+		res, err := s.seen(ctx, sc, eid, nil, ev.Type, order.FloorApplied)
+		if err == nil && res == order.FloorApplied {
+			s.holds.BatchClosed(ctx, uuid.UUID(sc.LocationID), *ev.BatchID)
+		}
+		return res, err
 	case "delivery.run":
-		// POS stops (2.1.0) are anonymous ({opaque_id, source:"pos", …}) and
-		// stored as sent — no order lookup. A POS-only run has no sent_ids.
+		// Stops are stored as sent — no order lookup. Every stop needs an
+		// order_id (SoftTouch's opaque POS stops are refused since H3).
 		okStops, nStops := order.ValidRunStops(ev.Stops)
 		if s.runs == nil || ev.At.IsZero() || !okStops || (len(ev.SentIDs) == 0 && nStops == 0) {
 			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
@@ -179,6 +360,22 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 			BatchID: ev.BatchID, DriverID: ev.DriverID, DriverName: ev.DriverName, PlanID: ev.PlanID,
 			SuggestedIDs: ev.SuggestedIDs, SentIDs: ev.SentIDs, Stops: stops, At: ev.At,
 		})
+	case "order.placed":
+		return s.applyPlaced(ctx, sc, eid, ev)
+	case "order.payment":
+		return s.applyPayment(ctx, sc, eid, ev)
+	case EventGeneralRefund:
+		return s.applyGeneralRefund(ctx, sc, eid, ev)
+	case "order.void":
+		return s.applyVoid(ctx, sc, eid, ev)
+	case "order.changed":
+		return s.applyChanged(ctx, sc, eid, ev)
+	case "journal.entries":
+		return s.applyJournal(ctx, sc, eid, ev)
+	case "customer.upsert":
+		return s.applyCustomer(ctx, sc, eid, ev)
+	case dayclose.EventDrawerOpened, dayclose.EventDrawerMovement, dayclose.EventDrawerClosed, dayclose.EventZReport:
+		return s.applyDayClose(ctx, sc, eid, ev)
 	default:
 		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 	}
@@ -194,7 +391,7 @@ func (s *Service) applyStatus(ctx context.Context, sc order.Scope, eid uuid.UUID
 	out, err := s.repo.ApplyFloorUpdate(ctx, sc, order.ID(oid), eid, ev.Type, func(o *order.Order) string {
 		res := o.ApplyFloorUpdate(order.FloorUpdate{
 			Status: status, KitchenNumber: ev.KitchenNumber, EstimatedReadyAt: ev.EstimatedReadyAt,
-			DriverName: ev.DriverName, At: ev.At, Auto: ev.Auto,
+			DriverName: ev.DriverName, At: ev.At, Auto: ev.Auto, Reason: ev.Reason,
 		})
 		newStatus = o.Status()
 		return res
@@ -208,6 +405,7 @@ func (s *Service) applyStatus(ctx context.Context, sc order.Scope, eid uuid.UUID
 	}
 	if out == order.FloorApplied {
 		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Str("status", string(newStatus)).Msg("floor update applied")
+		s.cancelled(ctx, sc, oid, newStatus)
 	}
 	return out, s.keepAgentStatus(ctx, sc, oid, ev)
 }
@@ -245,6 +443,7 @@ func (s *Service) applyNotDelivered(ctx context.Context, sc order.Scope, eid uui
 	if out == order.FloorApplied {
 		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Str("action", ev.Action).Str("status", string(newStatus)).
 			Msg("not delivered applied")
+		s.cancelled(ctx, sc, oid, newStatus)
 	}
 	return out, s.keepAgentStatus(ctx, sc, oid, ev)
 }
@@ -281,4 +480,22 @@ func (s *Service) DeliveryRuns(ctx context.Context, sc order.Scope, limit int) (
 		return []order.DeliveryRun{}, nil
 	}
 	return s.runs.ListDeliveryRuns(ctx, sc, limit)
+}
+
+// cancelled releases a cancelled order's card hold (in the background: it
+// talks to the processor and must not hold up the agent's sync).
+func (s *Service) cancelled(ctx context.Context, sc order.Scope, oid uuid.UUID, st order.Status) {
+	if st != order.StatusCancelled || (s.holds == nil && s.onCancel == nil) {
+		return
+	}
+	// The hold's release was already asked for in the order's transaction
+	// (M-3: the card_holds_on_order_cancel trigger); this only does it now.
+	safego.Go(context.WithoutCancel(ctx), "floor.order_cancelled", func(ctx context.Context) {
+		if s.holds != nil {
+			s.holds.OrderCancelled(ctx, uuid.UUID(sc.LocationID), oid)
+		}
+		if s.onCancel != nil {
+			s.onCancel(ctx, oid)
+		}
+	})
 }

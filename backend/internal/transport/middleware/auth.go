@@ -10,7 +10,6 @@ import (
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/observability"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/labstack/echo/v5"
 	"github.com/rs/zerolog"
@@ -32,6 +31,10 @@ const (
 	// authenticates one (tenant, location) device pair, and a store has many
 	// devices.
 	StoreAPIKeyHeader = "X-STORE-API-KEY"
+
+	// AuthCodesHeader: a caller that sends it (any value) gets a code on the
+	// 401 for a key main doesn't accept (F-4): device_revoked | unknown_key.
+	AuthCodesHeader = "X-Quicc-Auth-Codes"
 )
 
 // APIKeyAuth hashes the X-STORE-API-KEY header, looks up the active device,
@@ -56,7 +59,16 @@ func APIKeyAuth(svc *authSvc.Service, meters observability.Meters) echo.Middlewa
 				if errors.Is(err, pgx.ErrNoRows) {
 					meters.AuthStoreDenied.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "invalid_key")))
 					log.Warn().Str("path", c.Request().URL.Path).Msg("auth: unknown or revoked key")
-					return c.JSON(http.StatusUnauthorized, map[string]string{"error": "invalid API key"})
+					body := map[string]string{"error": "invalid API key"}
+					// F-4: a caller that asks (X-Quicc-Auth-Codes: 1) hears why:
+					// device_revoked (revoked / deleted) or unknown_key. Without
+					// it the legacy body stays byte-identical (golden).
+					if c.Request().Header.Get(AuthCodesHeader) != "" {
+						if state, _, serr := svc.KeyState(ctx, apiKey); serr == nil {
+							body["code"] = state
+						}
+					}
+					return c.JSON(http.StatusUnauthorized, body)
 				}
 				meters.AuthStoreDenied.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "lookup_error")))
 				log.Error().Err(err).Msg("auth: lookup failed")
@@ -125,8 +137,3 @@ func ScopeFromContext(ctx context.Context) order.Scope {
 		LocationID: order.LocationID(d.LocationID),
 	}
 }
-
-// IsZeroUUID is a small predicate shared by handlers that need to distinguish
-// "auth middleware did not run" from "device legitimately resolves to the
-// nil UUID" (which never happens, but explicit is better than implicit).
-func IsZeroUUID(u uuid.UUID) bool { return u == uuid.Nil }

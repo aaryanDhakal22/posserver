@@ -165,3 +165,66 @@ def test_duplicate_username_on_credentials_is_409(admin, make_store) -> None:
                     json={"username": f"mgr{a.tag}", "password": "pw-123456"}, timeout=5)
     assert r.status_code == 409, r.text
     assert r.json() == {"error": "username already taken"}
+
+
+# --- Security review M8: what ends a manager session --------------------------
+
+
+def _login(username: str, password: str) -> requests.Response:
+    return requests.post(f"{STORE_V1}/session", json={"username": username, "password": password}, timeout=5)
+
+
+def test_password_rotation_ends_manager_sessions(admin, store) -> None:
+    """A new password ends every session issued before it (the cookie carries the store's session
+    epoch); the same password again, or a rename, does not."""
+    user = f"rot{secrets.token_hex(4)}"
+    creds = f"{ADMIN_V1}/tenants/{store.tenant_id}/credentials"
+    assert admin.patch(creds, json={"username": user, "password": "first-pw-1"}, timeout=5).status_code == 204
+    a, b = requests.Session(), requests.Session()
+    for s in (a, b):
+        assert s.post(f"{STORE_V1}/session", json={"username": user, "password": "first-pw-1"}, timeout=5).status_code == 200
+        assert s.get(f"{STORE_V1}/session", timeout=5).status_code == 200
+    opened = requests.Session()
+    assert opened.post(f"{ADMIN_V1}/tenants/{store.tenant_id}/store-session",
+                       headers={"Authorization": f"Bearer {ADMIN_API_KEY}"}, timeout=5).status_code == 200
+
+    # The same login again (a tool re-applying it) and a rename: nobody is logged out.
+    assert admin.patch(creds, json={"username": user, "password": "first-pw-1"}, timeout=5).status_code == 204
+    assert admin.patch(creds, json={"username": user + "x", "password": "first-pw-1"}, timeout=5).status_code == 204
+    assert a.get(f"{STORE_V1}/session", timeout=5).status_code == 200
+    assert a.get(f"{STORE_V1}/me/location", timeout=5).status_code == 200
+
+    # A new password: both browsers and the admin's open-as-store session are out, on reads and writes.
+    assert admin.patch(creds, json={"username": user, "password": "second-pw-2"}, timeout=5).status_code == 204
+    for s in (a, b, opened):
+        r = s.get(f"{STORE_V1}/session", timeout=5)
+        assert r.status_code == 401, r.text
+        assert s.get(f"{STORE_V1}/me/location", timeout=5).status_code == 401
+        assert s.post(f"{STORE_V1}/me/printers", json={"name": "Nope", "ip": "10.0.0.9"}, timeout=5).status_code == 401
+    assert _login(user, "first-pw-1").status_code == 401
+    fresh = requests.Session()
+    assert fresh.post(f"{STORE_V1}/session", json={"username": user, "password": "second-pw-2"}, timeout=5).status_code == 200
+    assert fresh.get(f"{STORE_V1}/session", timeout=5).status_code == 200
+
+
+def test_retired_store_cannot_log_in(admin, make_store) -> None:
+    """A retired store keeps its records, but its manager login is refused (like a wrong password),
+    a session from before is ended and a Pi can't link with the login; the admin can still open it."""
+    s = make_store()
+    mgr = s.manager_session()
+    user, pw = s._login  # type: ignore[misc]
+    assert mgr.get(f"{STORE_V1}/session", timeout=5).status_code == 200
+    r = admin.post(f"{ADMIN_V1}/tenants/{s.tenant_id}/retire", timeout=10)
+    assert r.status_code == 200, r.text
+
+    r = _login(user, pw)
+    assert r.status_code == 401 and r.json() == {"error": "invalid username or password"}, r.text
+    assert mgr.get(f"{STORE_V1}/session", timeout=5).status_code == 401
+    assert mgr.get(f"{STORE_V1}/me/location", timeout=5).status_code == 401
+    link = requests.post(f"{STORE_V1}/agent/link", json={"username": user, "password": pw, "agent_name": "pi"}, timeout=5)
+    assert link.status_code == 401, link.text
+
+    opened = requests.Session()
+    assert opened.post(f"{ADMIN_V1}/tenants/{s.tenant_id}/store-session",
+                       headers={"Authorization": f"Bearer {ADMIN_API_KEY}"}, timeout=5).status_code == 200
+    assert opened.get(f"{STORE_V1}/session", timeout=5).status_code == 200

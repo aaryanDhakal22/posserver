@@ -27,9 +27,17 @@ func AdminAuth(expected string) echo.MiddlewareFunc {
 				zerolog.Ctx(c.Request().Context()).Warn().Str("path", c.Request().URL.Path).Msg("admin: invalid key")
 				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "invalid admin key"})
 			}
+			c.SetRequest(c.Request().WithContext(withAdmin(c.Request().Context()))) // the audit log's actor
 			return next(c)
 		}
 	}
+}
+
+// IsAdminRequest reports whether r carries the admin key (either header
+// form), for routes that are open on dev and admin-only elsewhere.
+func IsAdminRequest(r *http.Request, expected string) bool {
+	got := bearerOrHeader(r.Header.Get("Authorization"), r.Header.Get("X-Admin-Key"))
+	return expected != "" && got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
 }
 
 func bearerOrHeader(authz, xAdmin string) string {

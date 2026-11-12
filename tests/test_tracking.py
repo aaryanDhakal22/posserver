@@ -1,4 +1,4 @@
-"""Tracking (main 3.0, PORTS-PLAN.md step 6).
+"""Tracking (main 3.0, archive/PORTS-PLAN.md step 6).
 
   * a channel's live stream (/channel/v1/events) follows its order through
     the floor the Pi reports: received → accepted (kitchen #, ready-by) →
@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import requests
 
+from gatemark import intentional
 from conftest import ADMIN_V1, MAIN_BASE_URL, STORE_V1, store_key
 from openapi import check
 
@@ -201,7 +202,7 @@ def test_who_may_follow(admin, store, mgr) -> None:
     s = ChannelStream(other)
     try:
         _place(key, item)
-        with pytest.raises(AssertionError):
+        with pytest.raises(AssertionError), intentional("absence: another channel's stream stays quiet"):
             s.status(timeout=3)  # waits on purpose: nothing may arrive
     finally:
         s.close()

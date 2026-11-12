@@ -10,8 +10,7 @@ import (
 
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/observability"
-
-	orderSvc "quiccpos/main/internal/app/order"
+	"quiccpos/main/internal/shared/safego"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
@@ -27,10 +26,13 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const (
+// Retry backoff for the probe and failed polls (vars: tests shorten them).
+var (
 	maxBackoff     = 60 * time.Second
 	initialBackoff = 2 * time.Second
+)
 
+const (
 	tracerName = "quiccpos/main/sqs"
 
 	// MessageAttribute keys main/ reads on every inbound message. The
@@ -51,11 +53,23 @@ type Caster interface {
 	Cast(ctx context.Context, in order.CastInput) (*order.Order, error)
 }
 
+// sqsAPI is the slice of *sqs.Client the consumer uses (tests fake it).
+type sqsAPI interface {
+	ReceiveMessage(ctx context.Context, in *sqs.ReceiveMessageInput, opts ...func(*sqs.Options)) (*sqs.ReceiveMessageOutput, error)
+	DeleteMessage(ctx context.Context, in *sqs.DeleteMessageInput, opts ...func(*sqs.Options)) (*sqs.DeleteMessageOutput, error)
+	GetQueueAttributes(ctx context.Context, in *sqs.GetQueueAttributesInput, opts ...func(*sqs.Options)) (*sqs.GetQueueAttributesOutput, error)
+}
+
+// orderCreator is the order service's Create (tests fake it).
+type orderCreator interface {
+	Create(ctx context.Context, o *order.Order) error
+}
+
 type Consumer struct {
-	client       *sqs.Client
+	client       sqsAPI
 	queueURL     string
 	casters      map[order.Source]Caster
-	orderService *orderSvc.Service
+	orderService orderCreator
 	logger       zerolog.Logger
 	tracer       trace.Tracer
 	meters       observability.Meters
@@ -64,7 +78,7 @@ type Consumer struct {
 // NewConsumer takes the per-source caster registry. Today only `online` is
 // registered; adding `mobile` / `pos` / `kiosk` is one more entry plus a
 // new caster package — no other plumbing.
-func NewConsumer(client *sqs.Client, queueURL string, casters map[order.Source]Caster, orderService *orderSvc.Service, logger zerolog.Logger, meters observability.Meters) *Consumer {
+func NewConsumer(client *sqs.Client, queueURL string, casters map[order.Source]Caster, orderService orderCreator, logger zerolog.Logger, meters observability.Meters) *Consumer {
 	return &Consumer{
 		client:       client,
 		queueURL:     queueURL,
@@ -77,16 +91,40 @@ func NewConsumer(client *sqs.Client, queueURL string, casters map[order.Source]C
 }
 
 // Start begins the long-poll loop. Blocks until ctx is cancelled.
+//
+// SQS being unreachable never stops main (HARDENING-PLAN F-3): after a home
+// power cut the internet may come back long after main, and main's LAN paths
+// (the Pi's sync, terminal config, the storefront over Tailscale) must keep
+// working meanwhile. The probe and every poll are retried with backoff
+// (2 s doubling to 60 s), and the sqs.up gauge says whether the queue is
+// reachable.
 func (c *Consumer) Start(ctx context.Context) {
 	c.logger.Info().Str("queue", c.queueURL).Msg("Starting SQS consumer")
 
-	if err := c.probe(ctx); err != nil {
-		c.logger.Fatal().Err(err).Msg("SQS connectivity probe failed — consumer will not start")
-		return
+	backoff := initialBackoff
+	for {
+		err := c.probe(ctx)
+		if err == nil {
+			break
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		observability.SetSQSUp(false)
+		c.logger.Error().Err(err).Dur("retry_in", backoff).Msg("SQS connectivity probe failed — retrying (main keeps serving)")
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return
+		}
+		if backoff < maxBackoff {
+			backoff *= 2
+		}
 	}
+	observability.SetSQSUp(true)
 	c.logger.Info().Msg("SQS connectivity probe passed")
 
-	backoff := initialBackoff
+	backoff = initialBackoff
 
 	for {
 		select {
@@ -110,6 +148,7 @@ func (c *Consumer) Start(ctx context.Context) {
 			if ctx.Err() != nil {
 				return
 			}
+			observability.SetSQSUp(false)
 			c.meters.SQSReceiveErrors.Add(ctx, 1, metric.WithAttributes(
 				attribute.String("reason", receiveErrorReason(err)),
 			))
@@ -127,6 +166,7 @@ func (c *Consumer) Start(ctx context.Context) {
 		}
 
 		backoff = initialBackoff
+		observability.SetSQSUp(true)
 
 		c.logger.Debug().Int("count", len(output.Messages)).Msg("Poll returned messages")
 
@@ -136,9 +176,27 @@ func (c *Consumer) Start(ctx context.Context) {
 			observability.RecordLatency(ctx, c.meters.SQSMessageAge, sentTimestamp(msg), receivedAt)
 		}
 		for _, msg := range output.Messages {
-			c.processMessage(ctx, msg)
+			c.safeProcess(ctx, msg)
 		}
 	}
+}
+
+// safeProcess handles one message, recovering a panic (a vendor body that
+// crashes the caster must not take main down on every receive): the message
+// id and source are logged (never the body), the message stays on the queue
+// for redrive → the DLQ, and sqs.messages.panicked counts it.
+func (c *Consumer) safeProcess(ctx context.Context, msg sqstypes.Message) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			safego.Recovered(ctx, "sqs.message", rec)
+			observability.SQSMessagePanicked(ctx)
+			c.logger.Error().Ctx(ctx).
+				Str("message_id", aws.ToString(msg.MessageId)).
+				Str("source", string(readSourceAttribute(msg.MessageAttributes))).
+				Msg("SQS message handling panicked; left on the queue for redrive/DLQ")
+		}
+	}()
+	c.processMessage(ctx, msg)
 }
 
 // probe performs a quick GetQueueAttributes call (no long-poll) to verify

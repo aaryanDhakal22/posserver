@@ -5,6 +5,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -20,6 +22,18 @@ type AppConfig struct {
 	// stg/prd; a fixed insecure default is used in dev so local runs don't need
 	// it set until it's added to the dev Doppler config.
 	SessionSecret string
+	// TrustedProxyCIDRs / CloudflareCIDRs decide whose forwarding headers
+	// name the client (transport/clientip): empty = that package's default
+	// (loopback + private ranges; Cloudflare's published ranges), "none" = nothing.
+	TrustedProxyCIDRs string
+	CloudflareCIDRs   string
+	// HSTSMaxAge (HSTS_MAX_AGE, seconds; default one year, 0 = off) is the
+	// Strict-Transport-Security max-age main sends on requests that arrived
+	// over TLS.
+	HSTSMaxAge int
+	// ReadyCacheSeconds (READY_CACHE_SECONDS, default 5, 0 = off): how long
+	// /api/v1/ready reuses its last answer instead of asking Postgres and SQS.
+	ReadyCacheSeconds int
 }
 
 // devSessionSecret is the dev-only fallback for SESSION_SECRET (never used when
@@ -79,7 +93,11 @@ func NewConfig(logger *zerolog.Logger) *Config {
 		Domain:      cfg.GetEnv("DOMAIN", false, "localhost"),
 		AdminAPIKey: cfg.GetEnv("ADMIN_API_KEY", true, ""),
 		// Required outside dev (fail-fast); dev falls back to a fixed insecure secret.
-		SessionSecret: cfg.GetEnv("SESSION_SECRET", appEnv != "dev", devSessionSecret),
+		SessionSecret:     cfg.GetEnv("SESSION_SECRET", appEnv != "dev", devSessionSecret),
+		TrustedProxyCIDRs: cfg.GetEnv("TRUSTED_PROXY_CIDRS", false, ""),
+		CloudflareCIDRs:   cfg.GetEnv("CLOUDFLARE_CIDRS", false, ""),
+		HSTSMaxAge:        envInt(cfg.GetEnv("HSTS_MAX_AGE", false, ""), 31536000),
+		ReadyCacheSeconds: envInt(cfg.GetEnv("READY_CACHE_SECONDS", false, ""), 5),
 	}
 	serverConfig := ServerConfig{
 		Port: cfg.GetEnv("SERVER_PORT", false, "1323"),
@@ -115,6 +133,14 @@ func NewConfig(logger *zerolog.Logger) *Config {
 	cfg.OTELConfig = otelConfig
 
 	return &cfg
+}
+
+// envInt is v as a non-negative integer, or def when v is empty or not one.
+func envInt(v string, def int) int {
+	if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n >= 0 {
+		return n
+	}
+	return def
 }
 
 // GetEnv reads one env var. It logs only the name and whether it was set —

@@ -9,6 +9,8 @@ import (
 	channelApp "quiccpos/main/internal/app/channel"
 	operatorApp "quiccpos/main/internal/app/operator"
 	channelDom "quiccpos/main/internal/domain/channel"
+	"quiccpos/main/internal/domain/customer"
+	siteDom "quiccpos/main/internal/domain/site"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
@@ -25,7 +27,9 @@ const (
 	channelOperatorKey
 )
 
-// ChannelAuth gates /channel/v1 with the channel's bearer key (qch_…). No
+// ChannelAuth gates /channel/v1 with the channel's bearer key (qch_…), an
+// operator's sign-in (qops_… + X-Location-ID) or the storefront's platform
+// key (qpk_… + X-Site-Host → the store's built-in web channel). No
 // caching: a revoke or a new key takes effect on the next request. Errors are
 // {error, code} like every /channel/v1 answer.
 func ChannelAuth(svc *channelApp.Service) echo.MiddlewareFunc {
@@ -48,6 +52,16 @@ func ChannelAuth(svc *channelApp.Service) echo.MiddlewareFunc {
 				ch, op, err = svc.AuthenticateOperator(c.Request().Context(), key, loc)
 				if errors.Is(err, channelApp.ErrLocationNotAllowed) {
 					return c.JSON(http.StatusForbidden, map[string]string{"error": err.Error(), "code": "location_not_allowed"})
+				}
+			} else if strings.HasPrefix(key, siteDom.KeyPrefix) {
+				// The storefront's platform key + the host it serves →
+				// that store's built-in web channel (weborder stage 2).
+				ch, err = svc.AuthenticateSite(c.Request().Context(), key, c.Request().Header.Get("X-Site-Host"))
+				switch {
+				case errors.Is(err, channelApp.ErrHostRequired):
+					return c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error(), "code": "host_required"})
+				case errors.Is(err, channelApp.ErrUnknownSite):
+					return c.JSON(http.StatusNotFound, map[string]string{"error": err.Error(), "code": "unknown_site"})
 				}
 			} else {
 				ch, err = svc.Authenticate(c.Request().Context(), key)
@@ -87,4 +101,49 @@ func ChannelFromContext(ctx context.Context) (channelDom.Channel, bool) {
 func ChannelOperatorFromContext(ctx context.Context) (channelDom.Operator, bool) {
 	op, ok := ctx.Value(channelOperatorKey).(channelDom.Operator)
 	return op, ok
+}
+
+// --- customer sessions (weborder stage 2) ---------------------------------------------
+
+type customerCtxKey struct{}
+
+// CustomerAuth reads a store's customer session from X-Customer-Session on
+// a web channel request (after ChannelAuth). Without the header the request
+// is a guest's; required = the route needs a signed-in customer (401
+// sign_in). A bad / expired session is 401 session_invalid.
+func CustomerAuth(auth func(ctx context.Context, locationID uuid.UUID, raw string) (customer.Customer, error), required bool) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c *echo.Context) error {
+			ch, ok := ChannelFromContext(c.Request().Context())
+			if !ok {
+				return c.JSON(http.StatusUnauthorized, map[string]string{"error": "missing channel key", "code": "unauthorized"})
+			}
+			raw := strings.TrimSpace(c.Request().Header.Get("X-Customer-Session"))
+			if raw == "" {
+				if required {
+					return c.JSON(http.StatusUnauthorized, map[string]string{"error": "sign in first", "code": "sign_in"})
+				}
+				return next(c)
+			}
+			if ch.Kind != channelDom.KindWeb {
+				return c.JSON(http.StatusForbidden, map[string]string{"error": "customer accounts are for the store's website", "code": "forbidden"})
+			}
+			cu, err := auth(c.Request().Context(), ch.LocationID, raw)
+			if errors.Is(err, customer.ErrBadSession) {
+				return c.JSON(http.StatusUnauthorized, map[string]string{"error": err.Error(), "code": "session_invalid"})
+			}
+			if err != nil {
+				return c.JSON(http.StatusServiceUnavailable, map[string]string{"error": "sign-in lookup is unavailable, try again", "code": "try_again"})
+			}
+			trace.SpanFromContext(c.Request().Context()).SetAttributes(attribute.String("customer.id", cu.ID.String()))
+			c.SetRequest(c.Request().WithContext(context.WithValue(c.Request().Context(), customerCtxKey{}, cu)))
+			return next(c)
+		}
+	}
+}
+
+// CustomerFromContext is the signed-in customer (none for a guest).
+func CustomerFromContext(ctx context.Context) (customer.Customer, bool) {
+	cu, ok := ctx.Value(customerCtxKey{}).(customer.Customer)
+	return cu, ok
 }

@@ -49,6 +49,7 @@ func (r *TenancyRepository) CreateTenant(ctx context.Context, p tenancy.CreateTe
 		Username:     pgtype.Text{String: p.Username, Valid: p.Username != ""},
 		PasswordHash: pgtype.Text{String: p.PasswordHash, Valid: p.PasswordHash != ""},
 		StoreID:      toPgInt8(p.StoreID),
+		TestStore:    p.TestStore,
 	})
 	if err != nil {
 		if isStoreIDViolation(err) {
@@ -138,6 +139,44 @@ func (r *TenancyRepository) SetTenantCredentials(ctx context.Context, id uuid.UU
 	return nil
 }
 
+// TenantLogin is a tenant's saved login ("", "" when none is set).
+func (r *TenancyRepository) TenantLogin(ctx context.Context, id uuid.UUID) (username, passwordHash string, err error) {
+	err = r.pool.QueryRow(ctx, `SELECT COALESCE(username, ''), COALESCE(password_hash, '') FROM tenants WHERE id = $1`, id).Scan(&username, &passwordHash)
+	return username, passwordHash, err
+}
+
+// SetTenantUsername renames the login; the password and the store's session
+// epoch stay (nobody is logged out).
+func (r *TenancyRepository) SetTenantUsername(ctx context.Context, id uuid.UUID, username string) error {
+	if _, err := r.pool.Exec(ctx, `UPDATE tenants SET username = $2 WHERE id = $1`, id, username); err != nil {
+		if isUsernameViolation(err) {
+			return tenancy.ErrUsernameTaken
+		}
+		return fmt.Errorf("set tenant username: %w", err)
+	}
+	return nil
+}
+
+// RehashTenantPassword stores the same password under a stronger hash (the
+// legacy SHA-256 -> bcrypt upgrade at login): not a rotation, so the store's
+// session epoch stays and nobody is logged out. Plain SQL: the models package
+// is hand-kept (a full sqlc generate drifts other files).
+func (r *TenancyRepository) RehashTenantPassword(ctx context.Context, id uuid.UUID, passwordHash string) error {
+	if _, err := r.pool.Exec(ctx, `UPDATE tenants SET password_hash = $2 WHERE id = $1`, id, passwordHash); err != nil {
+		return fmt.Errorf("rehash tenant password: %w", err)
+	}
+	return nil
+}
+
+// TenantSession is what a manager session cookie is checked against: the
+// store's session epoch (SetTenantCredentials adds one) and whether the
+// store is retired. pgx.ErrNoRows when the tenant is gone.
+func (r *TenancyRepository) TenantSession(ctx context.Context, id uuid.UUID) (tenancy.SessionState, error) {
+	var st tenancy.SessionState
+	err := r.pool.QueryRow(ctx, `SELECT session_epoch, retired_at IS NOT NULL FROM tenants WHERE id = $1`, id).Scan(&st.Epoch, &st.Retired)
+	return st, err
+}
+
 func (r *TenancyRepository) GetTenantAuthByUsername(ctx context.Context, username string) (*tenancy.TenantAuth, error) {
 	q := models.New(r.pool)
 	row, err := q.GetTenantAuthByUsername(ctx, pgtype.Text{String: username, Valid: true})
@@ -188,11 +227,11 @@ func (r *TenancyRepository) UpdateTenantConfig(ctx context.Context, id uuid.UUID
 	return toDomainTenant(row), nil
 }
 
-// DeleteTenantCascade hard-deletes the tenant and every dependent row.
-// Done as an explicit chain inside one tx rather than via DB-side CASCADE
-// because the composite FKs (devices/printers/orders → locations) are
-// declared RESTRICT — that's intentional safety for normal operation.
-// Only this method (and the admin/test path that calls it) bypasses it.
+// DeleteTenantCascade hard-deletes the tenant and every dependent row, money
+// records included (the service allows it for test stores and on dev only,
+// S-1). An explicit chain inside one tx rather than DB-side CASCADE: the
+// money tables are RESTRICT on purpose (00043), so nothing else can take
+// them. Deleted devices leave a tombstone (F-4: the Pi hears device_revoked).
 func (r *TenancyRepository) DeleteTenantCascade(ctx context.Context, id uuid.UUID) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -202,18 +241,33 @@ func (r *TenancyRepository) DeleteTenantCascade(ctx context.Context, id uuid.UUI
 
 	q := models.New(tx)
 	pid := pgtype.UUID{Bytes: id, Valid: true}
+	exec := func(sql string) func() error {
+		return func() error { _, err := tx.Exec(ctx, sql, id); return err }
+	}
 
 	// Order matters: children before parents, then the tenant itself.
-	// `outbox_events` doesn't FK to anything tenant-side but rows reference
-	// `tenant_id` for routing; drop them first to keep the dispatcher's
-	// scan clean.
 	for _, step := range []struct {
 		name string
 		fn   func() error
 	}{
 		{"outbox_events", func() error { return q.DeleteTenantOutboxEvents(ctx, pid) }},
+		{"money_flags", exec(`DELETE FROM money_flags WHERE tenant_id = $1`)},
+		{"card_holds", exec(`DELETE FROM card_holds WHERE tenant_id = $1`)},
+		{"payments", exec(`DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE tenant_id = $1)
+			OR (order_id IS NULL AND location_id IN (SELECT id FROM locations WHERE tenant_id = $1))`)}, // 00047: general refunds
+		{"channel_orders", exec(`DELETE FROM channel_orders WHERE tenant_id = $1`)},
+		{"order_placements", exec(`DELETE FROM order_placements WHERE tenant_id = $1`)},
+		{"order_money_changes", exec(`DELETE FROM order_money_changes WHERE tenant_id = $1`)},
 		{"orders", func() error { return q.DeleteTenantOrders(ctx, pid) }},
+		{"z_report_versions", exec(`DELETE FROM z_report_versions WHERE tenant_id = $1`)},
+		{"z_reports", exec(`DELETE FROM z_reports WHERE tenant_id = $1`)},
+		{"drawer_session_revisions", exec(`DELETE FROM drawer_session_revisions WHERE tenant_id = $1`)},
+		{"drawer_movements", exec(`DELETE FROM drawer_movements WHERE tenant_id = $1`)},
+		{"drawer_sessions", exec(`DELETE FROM drawer_sessions WHERE tenant_id = $1`)},
+		{"staff_journal", exec(`DELETE FROM staff_journal WHERE tenant_id = $1`)},
 		{"printers", func() error { return q.DeleteTenantPrinters(ctx, pid) }},
+		{"device_tombstones", exec(`INSERT INTO device_tombstones (key_hash, device_id, tenant_id, location_id, kind)
+			SELECT key_hash, id, tenant_id, location_id, kind FROM devices WHERE tenant_id = $1 ON CONFLICT (key_hash) DO NOTHING`)},
 		{"devices", func() error { return q.DeleteTenantDevices(ctx, pid) }},
 		{"locations", func() error { return q.DeleteTenantLocations(ctx, pid) }},
 		{"tenants", func() error { return q.DeleteTenant(ctx, pid) }},
@@ -230,13 +284,76 @@ func (r *TenancyRepository) DeleteTenantCascade(ctx context.Context, id uuid.UUI
 	return nil
 }
 
+// TenantMoneyRecords counts the store's money records (S-1).
+func (r *TenancyRepository) TenantMoneyRecords(ctx context.Context, id uuid.UUID) (tenancy.MoneyRecords, error) {
+	var m tenancy.MoneyRecords
+	err := r.pool.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM payments p JOIN orders o ON o.id = p.order_id WHERE o.tenant_id = $1
+			AND p.status IN ('captured', 'refunded', 'authorized'))
+		+ (SELECT count(*) FROM payments WHERE order_id IS NULL AND location_id IN (SELECT id FROM locations WHERE tenant_id = $1)),
+		(SELECT count(*) FROM card_holds WHERE tenant_id = $1),
+		(SELECT count(*) FROM drawer_sessions WHERE tenant_id = $1),
+		(SELECT count(*) FROM z_reports WHERE tenant_id = $1),
+		(SELECT count(*) FROM staff_journal WHERE tenant_id = $1)`, id).
+		Scan(&m.Payments, &m.CardHolds, &m.Drawers, &m.ZReports, &m.Journal)
+	return m, err
+}
+
+// RetireTenant marks the store retired (kept with all its records) and
+// revokes its devices; it returns their ids.
+func (r *TenancyRepository) RetireTenant(ctx context.Context, id uuid.UUID) ([]uuid.UUID, bool, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, false, err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	tag, err := tx.Exec(ctx, `UPDATE tenants SET retired_at = COALESCE(retired_at, now()) WHERE id = $1`, id)
+	if err != nil {
+		return nil, false, fmt.Errorf("retire tenant: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return nil, false, nil
+	}
+	rows, err := tx.Query(ctx, `UPDATE devices SET revoked_at = now() WHERE tenant_id = $1 AND revoked_at IS NULL RETURNING id`, id)
+	if err != nil {
+		return nil, false, fmt.Errorf("revoke devices: %w", err)
+	}
+	var ids []uuid.UUID
+	for rows.Next() {
+		var d uuid.UUID
+		if err := rows.Scan(&d); err != nil {
+			rows.Close()
+			return nil, false, err
+		}
+		ids = append(ids, d)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	r.logger.Warn().Ctx(ctx).Str("tenant_id", id.String()).Int("devices_revoked", len(ids)).Msg("tenant retired")
+	return ids, true, nil
+}
+
 // DeleteDevice hard-deletes a single device row (vs RevokeDevice's tombstone).
 func (r *TenancyRepository) DeleteDevice(ctx context.Context, id uuid.UUID) error {
-	q := models.New(r.pool)
-	if err := q.DeleteDevice(ctx, pgtype.UUID{Bytes: id, Valid: true}); err != nil {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+	// F-4: the key's tombstone, so its holder hears device_revoked.
+	if _, err := tx.Exec(ctx, `INSERT INTO device_tombstones (key_hash, device_id, tenant_id, location_id, kind)
+		SELECT key_hash, id, tenant_id, location_id, kind FROM devices WHERE id = $1 ON CONFLICT (key_hash) DO NOTHING`, id); err != nil {
+		return fmt.Errorf("device tombstone: %w", err)
+	}
+	if err := models.New(tx).DeleteDevice(ctx, pgtype.UUID{Bytes: id, Valid: true}); err != nil {
 		return fmt.Errorf("delete device: %w", err)
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 // --- Locations -------------------------------------------------------------
@@ -402,11 +519,12 @@ func (r *TenancyRepository) RevokeDevice(ctx context.Context, id uuid.UUID) erro
 func (r *TenancyRepository) CreatePrinter(ctx context.Context, tenantID, locationID uuid.UUID, name, ip, mac string) (*tenancy.Printer, error) {
 	q := models.New(r.pool)
 	row, err := q.CreatePrinter(ctx, models.CreatePrinterParams{
-		TenantID:   pgtype.UUID{Bytes: tenantID, Valid: true},
-		LocationID: pgtype.UUID{Bytes: locationID, Valid: true},
-		Name:       name,
-		IP:         ip,
-		MAC:        mac,
+		TenantID:     pgtype.UUID{Bytes: tenantID, Valid: true},
+		LocationID:   pgtype.UUID{Bytes: locationID, Valid: true},
+		Name:         name,
+		IP:           ip,
+		MAC:          mac,
+		PrintColumns: tenancy.PrintColumns80,
 	})
 	if err != nil {
 		if isUniqueViolationOn(err, printerNameKey) {
@@ -533,6 +651,18 @@ func (r *TenancyRepository) MovePrinterIP(ctx context.Context, locationID, print
 	return toDomainPrinter(row), nil
 }
 
+// SetPrinterColumns sets a printer's print width (the CHECK keeps it to 48 | 42 | 32).
+func (r *TenancyRepository) SetPrinterColumns(ctx context.Context, id uuid.UUID, cols int) (*tenancy.Printer, error) {
+	row, err := models.New(r.pool).SetPrinterColumns(ctx, models.SetPrinterColumnsParams{
+		ID:           pgtype.UUID{Bytes: id, Valid: true},
+		PrintColumns: int16(cols),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("set printer columns: %w", err)
+	}
+	return toDomainPrinter(row), nil
+}
+
 func (r *TenancyRepository) SetPrinterMAC(ctx context.Context, printerID uuid.UUID, mac string) error {
 	if err := models.New(r.pool).SetPrinterMAC(ctx, models.SetPrinterMACParams{
 		ID: pgtype.UUID{Bytes: printerID, Valid: true}, MAC: mac,
@@ -611,6 +741,11 @@ func toDomainTenant(row models.Tenant) *tenancy.Tenant {
 	if row.CreatedAt.Valid {
 		t.CreatedAt = row.CreatedAt.Time
 	}
+	t.TestStore = row.TestStore
+	if row.RetiredAt.Valid {
+		at := row.RetiredAt.Time
+		t.RetiredAt = &at
+	}
 	return t
 }
 
@@ -676,6 +811,8 @@ func toDomainPrinter(row models.Printer) *tenancy.Printer {
 		IP:         row.IP,
 		IsReceipt:  row.IsReceipt,
 		MAC:        row.MAC,
+
+		PrintColumns: int(row.PrintColumns),
 	}
 	if row.CreatedAt.Valid {
 		p.CreatedAt = row.CreatedAt.Time

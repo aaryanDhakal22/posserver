@@ -10,12 +10,20 @@ services:
     container_name: quicc-prod-postgres
     environment:
       POSTGRES_DB: ${DB_NAME}
-      POSTGRES_USER: ${DB_USER}
-      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      # The Postgres superuser is its own login (PG_SUPERUSER / PG_SUPERPASSWORD), not the
+      # api's: DB_USER is the restricted app login (member of quicc_app) and
+      # DB_MIGRATOR_USER owns the schema. Unset = DB_USER / DB_PASSWORD, the layout before
+      # 2026-11-12 where the api logged in as the superuser. These two only take effect when
+      # an EMPTY data directory is initialised; on an existing volume the superuser is whoever
+      # initialised it, and PG_SUPERUSER must name that role (deploy/main-deploy.sh reads it
+      # from the running server and pins it in the env file) so that tools reading this
+      # container's POSTGRES_USER (backups, the deploy) keep finding the superuser.
+      POSTGRES_USER: ${PG_SUPERUSER:-${DB_USER}}
+      POSTGRES_PASSWORD: ${PG_SUPERPASSWORD:-${DB_PASSWORD}}
     volumes:
       - quicc_prod_postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      test: ["CMD-SHELL", "pg_isready -U ${PG_SUPERUSER:-${DB_USER}} -d ${DB_NAME}"]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -51,6 +59,20 @@ services:
       ADMIN_API_KEY: ${ADMIN_API_KEY}
       # Must be identical across blue + green so manager sessions survive a swap.
       SESSION_SECRET: ${SESSION_SECRET}
+      # Security (2026-11-12). Whose address a request comes from: forwarding
+      # headers (X-Forwarded-For, Cloudflare's CF-Connecting-IP) are believed
+      # only from these proxies; unset = loopback + the private ranges (Traefik
+      # on this box / Docker network) and Cloudflare's published ranges.
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      CLOUDFLARE_CIDRS: ${CLOUDFLARE_CIDRS:-}
+      # Failed logins per 10 min: per client address (default 20) and the
+      # global safety valve (default 600). Unset = the defaults.
+      LOGIN_IP_MAX: ${LOGIN_IP_MAX:-}
+      LOGIN_GLOBAL_MAX: ${LOGIN_GLOBAL_MAX:-}
+      # Strict-Transport-Security max-age in seconds on https answers (default
+      # one year, 0 = off); how long /api/v1/ready reuses its answer (default 5 s).
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-}
+      READY_CACHE_SECONDS: ${READY_CACHE_SECONDS:-}
       # Handed to a freshly linked agent (Pi set up / replaced) + main's own pages.
       AGENT_SECRET_PUSHOVER_APP_TOKEN: ${AGENT_SECRET_PUSHOVER_APP_TOKEN:-}
       AGENT_SECRET_PUSHOVER_USER_KEY: ${AGENT_SECRET_PUSHOVER_USER_KEY:-}
@@ -68,6 +90,33 @@ services:
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
       GEO_CENSUS_URL: ${GEO_CENSUS_URL:-}
       GEO_NOMINATIM_URL: ${GEO_NOMINATIM_URL:-}
+      # The app-release upload cap in MB (default 256; the terminal APK carries
+      # Square's SDK whole). Unset = the default.
+      APP_RELEASE_MAX_MB: ${APP_RELEASE_MAX_MB:-}
+      # Store websites, Square (online holds, the counter terminal, Send to phone),
+      # customer sign-in and email receipts: every one empty = off. Same keys as
+      # the staging compose (Doppler main/prd holds the values; added 2026-11-12
+      # for the Centurion go-live, deploy/main-deploy.sh warns when the box's
+      # compose differs from this file).
+      SITE_BASE_DOMAIN: ${SITE_BASE_DOMAIN:-}
+      SQUARE_ENV: ${SQUARE_ENV:-}
+      SQUARE_APP_ID: ${SQUARE_APP_ID:-}
+      SQUARE_APP_SECRET: ${SQUARE_APP_SECRET:-}
+      SQUARE_TOKEN_KEY: ${SQUARE_TOKEN_KEY:-}
+      SQUARE_REDIRECT_URL: ${SQUARE_REDIRECT_URL:-}
+      SQUARE_APP_URL: ${SQUARE_APP_URL:-}
+      SQUARE_WEBHOOK_SIGNATURE_KEY: ${SQUARE_WEBHOOK_SIGNATURE_KEY:-}
+      SQUARE_WEBHOOK_URL: ${SQUARE_WEBHOOK_URL:-}
+      SQUARE_BASE_URL: ${SQUARE_BASE_URL:-}
+      SQUARE_POS_CALLBACK_URL: ${SQUARE_POS_CALLBACK_URL:-}
+      SIGNIN_CODES: ${SIGNIN_CODES:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_VERIFY_SERVICE_SID: ${TWILIO_VERIFY_SERVICE_SID:-}
+      MAIL_ENV: ${MAIL_ENV:-}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-}
+      SES_REGION: ${SES_REGION:-}
+      NOTIFY_TEST_STORES: ${NOTIFY_TEST_STORES:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
       OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME}
@@ -115,6 +164,20 @@ services:
       ADMIN_API_KEY: ${ADMIN_API_KEY}
       # Must be identical across blue + green so manager sessions survive a swap.
       SESSION_SECRET: ${SESSION_SECRET}
+      # Security (2026-11-12). Whose address a request comes from: forwarding
+      # headers (X-Forwarded-For, Cloudflare's CF-Connecting-IP) are believed
+      # only from these proxies; unset = loopback + the private ranges (Traefik
+      # on this box / Docker network) and Cloudflare's published ranges.
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      CLOUDFLARE_CIDRS: ${CLOUDFLARE_CIDRS:-}
+      # Failed logins per 10 min: per client address (default 20) and the
+      # global safety valve (default 600). Unset = the defaults.
+      LOGIN_IP_MAX: ${LOGIN_IP_MAX:-}
+      LOGIN_GLOBAL_MAX: ${LOGIN_GLOBAL_MAX:-}
+      # Strict-Transport-Security max-age in seconds on https answers (default
+      # one year, 0 = off); how long /api/v1/ready reuses its answer (default 5 s).
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-}
+      READY_CACHE_SECONDS: ${READY_CACHE_SECONDS:-}
       # Handed to a freshly linked agent (Pi set up / replaced) + main's own pages.
       AGENT_SECRET_PUSHOVER_APP_TOKEN: ${AGENT_SECRET_PUSHOVER_APP_TOKEN:-}
       AGENT_SECRET_PUSHOVER_USER_KEY: ${AGENT_SECRET_PUSHOVER_USER_KEY:-}
@@ -132,6 +195,33 @@ services:
       GOOGLE_MAPS_API_KEY: ${GOOGLE_MAPS_API_KEY:-}
       GEO_CENSUS_URL: ${GEO_CENSUS_URL:-}
       GEO_NOMINATIM_URL: ${GEO_NOMINATIM_URL:-}
+      # The app-release upload cap in MB (default 256; the terminal APK carries
+      # Square's SDK whole). Unset = the default.
+      APP_RELEASE_MAX_MB: ${APP_RELEASE_MAX_MB:-}
+      # Store websites, Square (online holds, the counter terminal, Send to phone),
+      # customer sign-in and email receipts: every one empty = off. Same keys as
+      # the staging compose (Doppler main/prd holds the values; added 2026-11-12
+      # for the Centurion go-live, deploy/main-deploy.sh warns when the box's
+      # compose differs from this file).
+      SITE_BASE_DOMAIN: ${SITE_BASE_DOMAIN:-}
+      SQUARE_ENV: ${SQUARE_ENV:-}
+      SQUARE_APP_ID: ${SQUARE_APP_ID:-}
+      SQUARE_APP_SECRET: ${SQUARE_APP_SECRET:-}
+      SQUARE_TOKEN_KEY: ${SQUARE_TOKEN_KEY:-}
+      SQUARE_REDIRECT_URL: ${SQUARE_REDIRECT_URL:-}
+      SQUARE_APP_URL: ${SQUARE_APP_URL:-}
+      SQUARE_WEBHOOK_SIGNATURE_KEY: ${SQUARE_WEBHOOK_SIGNATURE_KEY:-}
+      SQUARE_WEBHOOK_URL: ${SQUARE_WEBHOOK_URL:-}
+      SQUARE_BASE_URL: ${SQUARE_BASE_URL:-}
+      SQUARE_POS_CALLBACK_URL: ${SQUARE_POS_CALLBACK_URL:-}
+      SIGNIN_CODES: ${SIGNIN_CODES:-}
+      TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID:-}
+      TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN:-}
+      TWILIO_VERIFY_SERVICE_SID: ${TWILIO_VERIFY_SERVICE_SID:-}
+      MAIL_ENV: ${MAIL_ENV:-}
+      MAIL_FROM_ADDRESS: ${MAIL_FROM_ADDRESS:-}
+      SES_REGION: ${SES_REGION:-}
+      NOTIFY_TEST_STORES: ${NOTIFY_TEST_STORES:-}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
       OTEL_EXPORTER_OTLP_HEADERS: ${OTEL_EXPORTER_OTLP_HEADERS}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME}

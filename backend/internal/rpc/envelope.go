@@ -36,6 +36,8 @@ const (
 	// Printer auto-follow + found printers (2.0.6), agent → main requests.
 	MsgPrinterMoved = "printer.moved" // {printer_id, old_ip, new_ip, mac} → {applied, reason}
 	MsgPrinterAdd   = "printer.add"   // {name, ip, mac} → {ok, id, name, ip} | {ok:false, code}
+	// MsgPrinterWidth: the Pi's width test saved a printer's print width.
+	MsgPrinterWidth = "printer.width" // {printer_id, print_columns} → {ok, id, name, print_columns} | {ok:false, code}
 
 	// Delivery maps (2.0.9). order.geo: main → agent, an order's location +
 	// route + drive times ({ok} | {ok:false, code:not_found}). geo.pin /
@@ -44,12 +46,10 @@ const (
 	MsgGeoPin   = "geo.pin"
 	MsgGeoTrip  = "geo.trip"
 
-	// POS deliveries + address candidates (2.1.0), agent → main requests.
-	// geo.locate: locate a delivery main has no order for (an external stop,
-	// answered later by order.geo with the agent's id); geo.forget: drop it;
-	// geo.choose: staff picked candidate #index of a check result.
-	MsgGeoLocate = "geo.locate"
-	MsgGeoForget = "geo.forget"
+	// Address candidates (2.1.0), agent → main request: staff picked
+	// candidate #index of a check result. (2.1.0's geo.locate / geo.forget,
+	// the SoftTouch POS deliveries, were retired with SoftTouch in H3: main
+	// answers them as an unknown type, 202 and nothing done.)
 	MsgGeoChoose = "geo.choose"
 	// geo.search (2.2.2): staff typed an address for an order; main searches
 	// near the store and answers later with order.geo (check / not_found).

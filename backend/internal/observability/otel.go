@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	otelruntime "go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlplog/otlploghttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
@@ -86,6 +87,10 @@ func Setup(ctx context.Context, cfg Config) (Shutdown, error) {
 		sdkmetric.WithResource(res),
 	)
 	otel.SetMeterProvider(mp)
+	// Go runtime metrics (R-1): go.goroutine.count, go.memory.used, GC, …
+	if err := otelruntime.Start(otelruntime.WithMeterProvider(mp)); err != nil {
+		return nil, fmt.Errorf("runtime metrics: %w", err)
+	}
 
 	logExp, err := otlploghttp.New(ctx, otlploghttp.WithEndpointURL(url+"/v1/logs"), otlploghttp.WithTimeout(exportTimeout))
 	if err != nil {

@@ -94,8 +94,8 @@ func toDomainCategory(r models.MenuCategory) menu.Category {
 	return menu.Category{
 		ID: idOf(r.ID), TenantID: idOf(r.TenantID), LocationID: idOf(r.LocationID), MenuID: idOf(r.MenuID),
 		Name: r.Name, Description: r.Description, Available: r.Available, Position: int(r.Position),
-		DefaultPrinterID: idPtrOf(r.DefaultPrinterID),
-		CreatedAt:        r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time,
+		DefaultPrinterID: idPtrOf(r.DefaultPrinterID), NoKitchenTicket: r.NoKitchenTicket,
+		CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time,
 	}
 }
 
@@ -103,7 +103,7 @@ func toDomainItem(r models.MenuItem) menu.Item {
 	it := menu.Item{
 		ID: idOf(r.ID), TenantID: idOf(r.TenantID), LocationID: idOf(r.LocationID), CategoryID: idOf(r.CategoryID),
 		Name: r.Name, Description: r.Description, PriceCents: r.PriceCents, TaxRateBps: int(r.TaxRateBps),
-		InStock: r.InStock, Tags: tagsFromJSON(r.Tags), PrinterID: idPtrOf(r.PrinterID),
+		InStock: r.InStock, Tags: tagsFromJSON(r.Tags), PrinterID: idPtrOf(r.PrinterID), NoKitchenTicket: r.NoKitchenTicket,
 		Position: int(r.Position), Attributes: attrsFromJSON(r.Attributes),
 		CreatedAt: r.CreatedAt.Time, UpdatedAt: r.UpdatedAt.Time,
 	}
@@ -192,7 +192,7 @@ func (r *MenuRepository) CreateCategory(ctx context.Context, p menu.CreateCatego
 	row, err := models.New(r.pool).CreateMenuCategory(ctx, models.CreateMenuCategoryParams{
 		TenantID: pgID(p.TenantID), LocationID: pgID(p.LocationID), MenuID: pgID(p.MenuID),
 		Name: p.Name, Description: p.Description, Available: p.Available, Position: i32(p.Position),
-		DefaultPrinterID: pgIDPtr(p.DefaultPrinterID),
+		DefaultPrinterID: pgIDPtr(p.DefaultPrinterID), NoKitchenTicket: p.NoKitchenTicket,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create category: %w", err)
@@ -225,7 +225,7 @@ func (r *MenuRepository) ListCategoriesByMenu(ctx context.Context, menuID uuid.U
 func (r *MenuRepository) UpdateCategory(ctx context.Context, p menu.UpdateCategoryParams) (*menu.Category, error) {
 	row, err := models.New(r.pool).UpdateMenuCategory(ctx, models.UpdateMenuCategoryParams{
 		ID: pgID(p.ID), TenantID: pgID(p.TenantID), Name: p.Name, Description: p.Description,
-		Available: p.Available, DefaultPrinterID: pgIDPtr(p.DefaultPrinterID),
+		Available: p.Available, DefaultPrinterID: pgIDPtr(p.DefaultPrinterID), NoKitchenTicket: p.NoKitchenTicket,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("update category: %w", err)
@@ -300,6 +300,11 @@ func (r *MenuRepository) UpdateItem(ctx context.Context, p menu.UpdateItemParams
 
 func (r *MenuRepository) SetItemPrinter(ctx context.Context, id, tenantID uuid.UUID, printerID *uuid.UUID) error {
 	return models.New(r.pool).SetItemPrinter(ctx, models.SetItemPrinterParams{ID: pgID(id), TenantID: pgID(tenantID), PrinterID: pgIDPtr(printerID)})
+}
+
+// SetItemNoKitchen sets an item's "no kitchen ticket" flag (00041).
+func (r *MenuRepository) SetItemNoKitchen(ctx context.Context, id, tenantID uuid.UUID, on bool) error {
+	return models.New(r.pool).SetItemNoKitchen(ctx, models.SetItemNoKitchenParams{ID: pgID(id), TenantID: pgID(tenantID), NoKitchenTicket: on})
 }
 
 func (r *MenuRepository) ReorderItems(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) error {
@@ -575,7 +580,7 @@ func (r *MenuRepository) ListRoutingByLocation(ctx context.Context, locationID u
 	}
 	out := make([]menu.RouteEntry, 0, len(rows))
 	for _, row := range rows {
-		e := menu.RouteEntry{ItemID: uuid.UUID(row.ItemID.Bytes), Name: row.ItemName}
+		e := menu.RouteEntry{ItemID: uuid.UUID(row.ItemID.Bytes), Name: row.ItemName, NoKitchen: row.NoKitchen}
 		if row.PrinterID.Valid {
 			pid := uuid.UUID(row.PrinterID.Bytes)
 			e.PrinterID = &pid

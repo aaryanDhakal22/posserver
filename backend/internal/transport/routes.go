@@ -15,6 +15,7 @@
 package transport
 
 import (
+	"context"
 	"io"
 	"io/fs"
 	"mime"
@@ -22,21 +23,37 @@ import (
 	"path"
 	floorApp "quiccpos/main/internal/app/floor"
 	"strings"
+	"time"
 
 	"quiccpos/main/internal/app/agentsync"
+	"quiccpos/main/internal/app/bankimport"
+	callcenterApp "quiccpos/main/internal/app/callcenter"
+	cardholdApp "quiccpos/main/internal/app/cardhold"
 	channelApp "quiccpos/main/internal/app/channel"
+	"quiccpos/main/internal/app/customers"
+	daycloseApp "quiccpos/main/internal/app/dayclose"
 	diagApp "quiccpos/main/internal/app/diag"
+	familiesApp "quiccpos/main/internal/app/families"
 	geoApp "quiccpos/main/internal/app/geo"
 	menuApp "quiccpos/main/internal/app/menu"
 	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
+	"quiccpos/main/internal/app/optionflags"
 	orderSvc "quiccpos/main/internal/app/order"
 	"quiccpos/main/internal/app/orderport"
 	pricingApp "quiccpos/main/internal/app/pricing"
 	"quiccpos/main/internal/app/printerstatus"
+	"quiccpos/main/internal/app/receipts"
+	siteApp "quiccpos/main/internal/app/site"
+	"quiccpos/main/internal/app/squarepay"
+	staffApp "quiccpos/main/internal/app/staff"
 	storestatusApp "quiccpos/main/internal/app/storestatus"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/app/tracking"
+	"quiccpos/main/internal/domain/notify"
+	siteDom "quiccpos/main/internal/domain/site"
+	"quiccpos/main/internal/infra/database/repositories"
+	"quiccpos/main/internal/infra/mail"
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
 	"quiccpos/main/internal/transport/handler"
@@ -48,6 +65,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/labstack/echo/v5"
 	echomw "github.com/labstack/echo/v5/middleware"
 	"github.com/rs/zerolog"
@@ -61,6 +79,8 @@ const (
 	storeUIPath = "/store"
 	// channelPrefix is main 3.0's channel API (the ports).
 	channelPrefix = "/channel/v1"
+	// callcenterPrefix is the call center's remote terminal (CALLCENTER-PLAN.md).
+	callcenterPrefix = "/callcenter/v1"
 )
 
 type RouterDeps struct {
@@ -99,16 +119,35 @@ type RouterDeps struct {
 	OperatorService *operatorApp.Service
 	// Tracking follows channel orders (main 3.0).
 	Tracking *tracking.Service
+	// TrackPublicPerMin: /track/v1 lookups per IP and minute (0 = the default, 120).
+	TrackPublicPerMin int
 	// OrderPort places channel orders (main 3.0).
 	OrderPort *orderport.Service
 	// Pricing backs pricing settings, deals and quotes (main 3.0).
 	Pricing *pricingApp.Service
 	// StoreStatus backs a store's ordering status (main 3.0).
 	StoreStatus *storestatusApp.Service
+	// Kitchen answers whether a store's Pi can get an order now (kitchen_offline
+	// on /channel/v1/store, DURABILITY-PLAN.md).
+	Kitchen handler.KitchenCheck
 	// MenuViewService backs the menu bank + views (main 3.0).
 	MenuViewService *menuviewApp.Service
+	// BankImport applies / exports a store's bank document (weborder converter).
+	BankImport *bankimport.Service
 	// ChannelService backs sales channels and the /channel/v1 key (main 3.0).
 	ChannelService *channelApp.Service
+	// Site backs store websites: platform keys, hosts, /channel/v1/site.
+	Site *siteApp.Service
+	// Square connects stores to Square; CardHolds captures online card holds.
+	Square    *squarepay.Service
+	CardHolds *cardholdApp.Service
+	// Customers backs website accounts; Receipts emails web order receipts.
+	Customers *customers.Service
+	Receipts  *receipts.Service
+	FakeCodes *customers.FakeCodes // dev / staging fake sign-in codes (nil otherwise)
+	FakeMail  *mail.Fake           // dev / staging fake mail (nil otherwise)
+	// SquareFake is the in-process fake Square (dev / staging with SQUARE_ENV=fake; nil otherwise).
+	SquareFake http.Handler
 	// AgentSync backs agent link / restore / backups / fleet health.
 	AgentSync *agentsync.Service
 	// Diag backs tablet diagnostics (report tokens, reports, admin view).
@@ -117,8 +156,28 @@ type RouterDeps struct {
 	Geo *geoApp.Service
 	// AlertSender sends the store owner's test alert (main's owner pager).
 	AlertSender handler.AlertSender
-	// AppEnv gates dev-only routes (the geo test-provider override).
+	// AppEnv gates dev-only routes (the geo test-provider override, the open
+	// route list).
 	AppEnv string
+	// ReadyCache: how long /api/v1/ready reuses its last answer (0 = never).
+	ReadyCache time.Duration
+	// DevNotices records owner notices on dev (GET /admin/v1/dev/notices).
+	DevNotices *notify.Recorder
+	// Staff backs the counter terminal's staff + terminal settings (TERMINAL-PLAN 0d).
+	Staff *staffApp.Service
+	// Families backs Store › Menu › Families (00045).
+	Families *familiesApp.Service
+	// OptionFlags backs the options' "Show on driver ticket" / "Counts for
+	// coupons" switches (00046).
+	OptionFlags *optionflags.Service
+	// DayClose backs the Pi's drawer sessions + Z reports (terminal Stage 2).
+	DayClose *daycloseApp.Service
+	// Callcenter backs the call center's remote terminal (/callcenter/v1,
+	// CALLCENTER-PLAN.md): device tokens, PIN sessions, the relay to the Pi.
+	Callcenter *callcenterApp.Service
+	// Audit writes main's row per admin / manager write and reads the audit
+	// log (baseline 2026-11-12); nil = no app rows, no audit routes' data.
+	Audit *repositories.AuditRepository
 }
 
 // RouteInfo is the JSON shape served at GET /__routes (shared across all
@@ -150,17 +209,31 @@ func AddRoutes(e *echo.Echo, d RouterDeps) {
 	for _, r := range defs {
 		e.Add(r.Method, r.Path, r.Handler, r.MW...)
 	}
+	if d.SquareFake != nil {
+		// The in-process fake Square (never in prod; not in /__routes).
+		e.Any("/__fake/square/*", echo.WrapHandler(d.SquareFake))
+	}
 
 	infos := make([]RouteInfo, 0, len(defs)+1)
 	for _, r := range defs {
 		infos = append(infos, r.RouteInfo)
 	}
-	infos = append(infos, RouteInfo{"GET", "/__routes", "none", "This route list (method/path/auth/description)"})
-	e.GET("/__routes", func(c *echo.Context) error {
+	// The route list is a map of the whole surface: open on dev only.
+	// Elsewhere it answers like a path that doesn't exist unless the admin
+	// key comes with it (the console's routes screen sends it).
+	infos = append(infos, RouteInfo{"GET", "/__routes", "none", "This route list (method/path/auth/description); open on dev, 404 elsewhere without the admin key"})
+	e.GET("/__routes", routeListHandler(d.AppEnv, d.AdminAPIKey, d.Version, infos))
+}
+
+func routeListHandler(appEnv, adminKey, version string, infos []RouteInfo) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		if appEnv != "dev" && !appMiddleware.IsAdminRequest(c.Request(), adminKey) {
+			return echo.ErrNotFound
+		}
 		return c.JSON(http.StatusOK, map[string]any{
-			"module": "main", "version": d.Version, "routes": infos,
+			"module": "main", "version": version, "routes": infos,
 		})
-	})
+	}
 }
 
 // routeTable is the single source of truth. Add / rename / re-gate a route HERE.
@@ -168,9 +241,27 @@ func routeTable(d RouterDeps) []routeDef {
 	device := appMiddleware.APIKeyAuth(d.AuthService, d.Meters)
 	agentOnly := appMiddleware.RequireDeviceKind(tenancyApp.DeviceKindAgent)
 	admin := appMiddleware.AdminAuth(d.AdminAPIKey)
-	storeSession := appMiddleware.StoreSessionAuth(d.SessionSigner)
+	// The store's session epoch + retired flag are read on every manager
+	// request (M8); nil only in tests that build routes without tenancy.
+	var sessionState appMiddleware.StoreSessionState
+	if d.TenancyService != nil {
+		sessionState = d.TenancyService.SessionState
+	}
+	storeSession := appMiddleware.StoreSessionAuth(d.SessionSigner, sessionState)
+	if d.Audit != nil {
+		// every admin / manager write leaves main's audit row (the database's
+		// triggers add the rows it changed)
+		admin = appMiddleware.Chain(admin, appMiddleware.AuditWrites(d.Audit))
+		storeSession = appMiddleware.Chain(storeSession, appMiddleware.AuditWrites(d.Audit))
+	}
 	operatorAuth := appMiddleware.OperatorAuth(d.OperatorService, d.Meters)
 	channelAuth := appMiddleware.ChannelAuth(d.ChannelService)
+	// The storefront as itself (no store host): only the Square OAuth relay.
+	var platformKeyAuth func(context.Context, string) (siteDom.PlatformKey, error)
+	if d.Site != nil {
+		platformKeyAuth = d.Site.Authenticate
+	}
+	platformAuth := appMiddleware.PlatformAuth(platformKeyAuth)
 	// The channel API alone is gzipped (a menu is large); legacy routes are
 	// left byte-for-byte as deployed clients know them.
 	channelGzip := echomw.GzipWithConfig(echomw.GzipConfig{MinLength: 1024})
@@ -182,21 +273,50 @@ func routeTable(d RouterDeps) []routeDef {
 	sseH := handler.NewSSEHandler(d.Broker, d.TenancyService, d.Logger, d.Meters)
 	cfgPub := handler.NewStoreConfigPublisher(d.Publisher, d.TenancyService, d.Logger)
 	adminH := handler.NewAdminHandler(d.TenancyService, d.Service, cfgPub, d.SessionSigner, d.Logger)
+	whoamiH := handler.NewWhoamiHandler(d.AuthService, d.TenancyService, d.Logger)
 	storeH := handler.NewStoreHandler(d.TenancyService, d.SessionSigner, cfgPub, d.Logger)
 	agentRPCH := handler.NewAgentRPCHandler(d.Requester, d.Logger)
 	printerStatusH := handler.NewPrinterStatusHandler(d.PrinterCache, d.Requester, d.Meters, d.Logger)
 	menuH := handler.NewMenuHandler(d.MenuService, d.Logger)
+	if d.OptionFlags != nil {
+		menuH.SetOptionFlags(d.OptionFlags)
+	}
 	floorH := handler.NewFloorHandler(d.Service, d.FloorService, d.Logger)
 	operatorH := handler.NewOperatorHandler(d.OperatorService, d.MenuService, d.Meters, d.Logger)
 	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
+	siteH := handler.NewSiteHandler(d.Site, d.Logger)
+	squareH := handler.NewSquareHandler(d.Square, d.CardHolds, d.AppEnv, d.Logger)
+	customersH := handler.NewCustomersHandler(d.Customers, d.TenancyService.GetLocation, d.Logger)
+	accountH := handler.NewAccountHandler(d.Customers, d.OrderPort, d.Receipts, d.FakeCodes, d.FakeMail, d.AppEnv, d.Logger)
+	guest := appMiddleware.CustomerAuth(d.Customers.Authenticate, false)
+	member := appMiddleware.CustomerAuth(d.Customers.Authenticate, true)
 	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
+	bankDocH := handler.NewBankImportHandler(d.BankImport, d.Logger)
+	famH := handler.NewFamiliesHandler(d.Families, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
+	auditH := handler.NewAuditHandler(d.Audit, d.Logger)
+	staffH := handler.NewStaffHandler(d.Staff, d.MenuViewService, d.Pricing, d.MenuService, d.Logger)
+	dayCloseH := handler.NewDayCloseHandler(d.DayClose, d.Logger)
+	var ccAudit appMiddleware.AuditWriter
+	if d.Audit != nil {
+		ccAudit = d.Audit
+	}
+	ccH := handler.NewCallcenterHandler(d.Callcenter, d.TenancyService, ccAudit, d.Logger)
+	if d.Kitchen != nil {
+		statusH.SetKitchen(d.Kitchen)
+	}
 	pricingH := handler.NewPricingHandler(d.Pricing, d.Logger)
 	orderPortH := handler.NewOrderPortHandler(d.OrderPort, d.Logger)
-	trackingH := handler.NewTrackingHandler(d.Tracking, d.Logger)
-	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
+	orderPortH.SetDev(d.AppEnv, d.DevNotices)
+	trackingH := handler.NewTrackingHandler(d.Tracking, d.TrackPublicPerMin, d.Logger)
+	if d.ChannelService != nil {
+		trackingH.SetSiteAuth(d.ChannelService.AuthenticateSite)
+	}
+	trackingH.SetDev(d.AppEnv)
+	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.ReadyCache, d.Logger)
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
+	kitchenH := handler.NewKitchenStatusHandler(d.TenancyService.ListLocations, d.Kitchen, d.Logger)
 	diagH := handler.NewDiagHandler(d.Diag, d.Logger)
 	agentUpdateH := handler.NewAgentUpdateHandler(d.AgentSync, d.Requester, d.Logger)
 	alertsH := handler.NewAlertsHandler(d.TenancyService, d.AlertSender, d.Logger)
@@ -233,6 +353,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", adminPrefix+"/app-releases/:code", "admin", "Delete a tablet-app release (?app=quibase)", appRelH.Delete, admin),
 		def("GET", adminPrefix+"/app-releases", "admin", "List tablet-app releases (?app=quibase), newest first", appRelH.List, admin),
 		def("GET", adminPrefix+"/agents/health", "admin", "Every location's agent health + connected state (fleet view)", agentLinkH.Fleet, admin),
+		def("GET", adminPrefix+"/kitchen", "admin", "Every location's kitchen_offline (the Pi liveness check behind 409 kitchen_offline) + away_since", kitchenH.AdminList, admin),
 		def("GET", adminPrefix+"/agent-backups", "admin", "Stored agent DB backups (?location_id)", agentLinkH.ListBackups, admin),
 		def("GET", adminPrefix+"/agent-backups/:id", "admin", "Download one agent DB backup", agentLinkH.GetBackup, admin),
 		def("GET", adminPrefix+"/overview", "admin", "Flat dump of tenants/locations/devices", adminH.Overview, admin),
@@ -242,7 +363,9 @@ func routeTable(d RouterDeps) []routeDef {
 		def("PATCH", adminPrefix+"/tenants/:id/credentials", "admin", "Set/rotate a tenant's store-manager login", adminH.SetTenantCredentials, admin),
 		def("PATCH", adminPrefix+"/tenants/:id/store-id", "admin", "Set/clear a tenant's external vendor store_id (online order routing key)", adminH.SetTenantStoreID, admin),
 		def("POST", adminPrefix+"/tenants/:id/store-session", "admin", "Open this tenant's store as its manager (sets a 2h store session cookie; audited)", adminH.OpenStoreSession, admin),
-		def("DELETE", adminPrefix+"/tenants/:id", "admin", "Cascade-delete a tenant + its locations/orders/devices", adminH.DeleteTenant, admin),
+		def("DELETE", adminPrefix+"/tenants/:id", "admin", "Cascade-delete a tenant + its locations/orders/devices (409 has_money_records for a store with money that isn't a test store: retire it)", adminH.DeleteTenant, admin),
+		def("POST", adminPrefix+"/tenants/:id/retire", "admin", "Retire a store: kept with its records, devices revoked, no orders routed (S-1)", adminH.RetireTenant, admin),
+		def("GET", adminPrefix+"/audit", "admin", "Every store's audit log, newest first (?location_id narrows; ?before / limit / entity / entity_id as /store/v1/me/reports/audit)", auditH.AdminAudit, admin),
 		def("GET", adminPrefix+"/orders", "admin", "Cross-tenant order list (?source_event_id/tenant_id/limit)", adminH.ListOrders, admin),
 		def("DELETE", adminPrefix+"/orders", "admin", "Bulk-delete orders (?tenant_id, absent=all)", adminH.DeleteOrders, admin),
 		def("DELETE", adminPrefix+"/orders/:id", "admin", "Delete a single order + children (cleanup)", adminH.DeleteOrder, admin),
@@ -288,6 +411,36 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", adminPrefix+"/channels/:id/revoke", "admin", "Revoke the channel's key", channelH.AdminRevoke, admin),
 		def("DELETE", adminPrefix+"/channels/:id", "admin", "Delete a channel", channelH.AdminDelete, admin),
 
+		// Store websites (weborder stage 2): the storefront's platform keys + each store's hosts.
+		def("GET", adminPrefix+"/platform-keys", "admin", "List the storefront's platform keys", siteH.AdminListKeys, admin),
+		def("POST", adminPrefix+"/platform-keys", "admin", "Issue a platform key {name} → key once", siteH.AdminCreateKey, admin),
+		def("POST", adminPrefix+"/platform-keys/:id/revoke", "admin", "Revoke a platform key", siteH.AdminRevokeKey, admin),
+		def("GET", adminPrefix+"/locations/:id/site-domains", "admin", "A store's website hosts", siteH.AdminDomains, admin),
+		def("POST", adminPrefix+"/locations/:id/site-domains", "admin", "Add a host {host, primary} (platform subdomains verified at once)", siteH.AdminAddDomain, admin),
+		def("PATCH", adminPrefix+"/site-domains/:host", "admin", "Mark a host verified {verified}", siteH.AdminVerifyDomain, admin),
+
+		// Customers (terminal stage 0c): the bulk import (SoftTouch converter, admin only).
+		def("POST", adminPrefix+"/locations/:id/customers/import", "admin", "Upsert ≤ 5,000 customers by phone (NDJSON or JSON; ?dry_run=1) → counts", customersH.Import, admin),
+
+		// Online card holds (weborder stage 2).
+		def("GET", adminPrefix+"/card-holds/:order_id", "admin", "An order's card hold", squareH.AdminHold, admin),
+		def("POST", adminPrefix+"/card-holds/:order_id/capture", "admin", "Capture an order's card hold now", squareH.AdminCapture, admin),
+		def("POST", adminPrefix+"/card-holds/:order_id/due", "admin", "Dev only: make the hold's safety capture due and run the worker", squareH.AdminDue, admin),
+		def("POST", adminPrefix+"/card-holds/tick", "admin", "Dev only: run the capture worker once", squareH.AdminTick, admin),
+		def("GET", adminPrefix+"/orders/:id/receipts", "admin", "An order's email receipts", accountH.AdminReceipts, admin),
+		def("GET", adminPrefix+"/dev/signin-code", "admin", "Dev only: the fake sign-in code for ?phone=", accountH.DevCode, admin),
+		def("GET", adminPrefix+"/dev/mail", "admin", "Dev only: fake mail sent ?to=", accountH.DevMail, admin),
+		def("POST", adminPrefix+"/dev/receipts/tick", "admin", "Dev only: send queued receipts now", accountH.DevReceiptsTick, admin),
+		def("POST", adminPrefix+"/dev/track-limit", "admin", "Dev only: a storefront's own per-customer /track/v1 limit ({key, per_min}; 0 = shared again)", trackingH.DevTrackLimit, admin),
+		def("POST", adminPrefix+"/dev/placements/sweep", "admin", "Dev only: run the placement sweeper once (nothing waits to go stale)", orderPortH.DevSweep, admin),
+		def("POST", adminPrefix+"/dev/placements/orphan", "admin", "Dev only: leave a pending placement as a main that died mid-work would", orderPortH.DevOrphan, admin),
+		def("GET", adminPrefix+"/dev/notices", "admin", "Dev only: the owner notices main sent ?location_id=", orderPortH.DevNotices, admin),
+
+		// Square → main (weborder stage 2): the owner comes back from Square; Square's events.
+		def("GET", "/square/oauth/callback", "none", "Square OAuth callback (state-checked) → the SPA", squareH.OAuthCallback),
+		def("POST", "/square/oauth/forward", "platform", "The storefront relays Square's OAuth redirect {code, state, error} (platform key + the signed state) → {result, redirect}", squareH.OAuthForward, platformAuth),
+		def("POST", "/square/webhook", "none", "Square webhooks (HMAC-signed)", squareH.Webhook),
+
 		// Web app (compiled SvelteKit SPA) — served under /app; /admin + /store
 		// redirect in for back-compat. Assets live under /app/_app/*.
 		def("GET", "/app", "none", "SvelteKit app shell", serveAppH),
@@ -301,6 +454,7 @@ func routeTable(d RouterDeps) []routeDef {
 		// password mint login is gone.
 		def("GET", storePrefix+"/store-config", "device", "This store's config (scope from the key) — agent keys only", storeH.GetStoreConfig, device, agentOnly),
 		def("POST", storePrefix+"/agent/link", "none", "Link a blank agent with the store manager login → agent key + secrets (revokes the old agent; throttled)", agentLinkH.Link),
+		def("GET", storePrefix+"/agent/whoami", "device-key", "Is this key still good? (F-4) 200 {device_id, agent_id, kind, tenant_id, location_id, tenant, location, revoked:false} · 401 {code: device_revoked|unknown_key|missing_key, revoked}", whoamiH.Whoami),
 		def("GET", storePrefix+"/agent/restore", "device", "Open batch for a replacement agent (state + orders + drivers) — agent keys only", agentLinkH.Restore, device, agentOnly),
 		def("GET", storePrefix+"/agent/credential", "device", "Manager login hash for offline web-UI unlock — agent keys only", agentLinkH.Credential, device, agentOnly),
 		def("GET", storePrefix+"/agent/secrets", "device", "Current Pushover secrets {pushover_app_token, pushover_user_key, pushover_boss_key, pushover_admin_devices} (no-store) — agent keys only", agentLinkH.Secrets, device, agentOnly),
@@ -308,6 +462,9 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/agent/rpc", "device", "Duplex channel: agent→main replies + reports — agent keys only", agentRPCH.Handle, device, agentOnly),
 		def("GET", storePrefix+"/agent/app/latest", "device", "Newest tablet-app release (?app=quibase; 204 none) — agent keys only", appRelH.Latest, device, agentOnly),
 		def("GET", storePrefix+"/agent/app/releases/:code/apk", "device", "Download a tablet-app APK (?app=quibase) — agent keys only", appRelH.APK, device, agentOnly),
+		def("GET", storePrefix+"/agent/customers", "device", "The store's customer changes for the Pi's offline copy (?since=<cursor>&limit) — agent keys only", customersH.Feed, device, agentOnly),
+		def("GET", storePrefix+"/agent/terminal-config", "device", "The counter terminal's settings + active staff with PIN hashes (ETag) — agent keys only", staffH.TerminalConfig, device, agentOnly),
+		def("GET", storePrefix+"/agent/counter-menu", "device", "The counter view's build + layout + the counter's pricing (ETag, gzip) — agent keys only", staffH.CounterMenu, device, agentOnly, channelGzip),
 		def("POST", storePrefix+"/agent/revoke", "device", "Agent self-revoke (kills its own key) — agent keys only", storeH.AgentSelfRevoke, device, agentOnly),
 		def("POST", storePrefix+"/agent/tablet-tokens", "device", "Mint a tablet's diagnostics report token {tablet_id, tablet_name} — agent keys only", diagH.MintTabletToken, device, agentOnly),
 		def("DELETE", storePrefix+"/agent/tablet-tokens/:tablet_id", "device", "Revoke a tablet's report token (idempotent) — agent keys only", diagH.RevokeTabletToken, device, agentOnly),
@@ -372,6 +529,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/me/menu/modifier-groups/:id/options/reorder", "store-session", "Reorder options", menuH.MeReorderOptions, storeSession),
 		def("PATCH", storePrefix+"/me/menu/modifier-groups/:id/options/:optId", "store-session", "Edit an option", menuH.MeUpdateOption, storeSession),
 		def("DELETE", storePrefix+"/me/menu/modifier-groups/:id/options/:optId", "store-session", "Delete an option", menuH.MeDeleteOption, storeSession),
+		def("PUT", storePrefix+"/me/menu/modifier-groups/:id/options/:optId/coupons", "store-session", "Counts for coupons {counts}: moves the option into the group's regular / premium family", menuH.MeOptionCoupons, storeSession),
 		// Store status (main 3.0).
 		def("GET", storePrefix+"/me/status", "store-session", "The store status channels see (open/paused/closed, types, sold out)", statusH.MeStatus, storeSession),
 		def("GET", storePrefix+"/me/ordering", "store-session", "Ordering settings (types, ETAs, scheduling, pause) + hours exceptions", statusH.MeOrdering, storeSession),
@@ -380,17 +538,59 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", storePrefix+"/me/pause", "store-session", "Take orders again", statusH.MeResume, storeSession),
 		def("POST", storePrefix+"/me/hours-exceptions", "store-session", "Set a date closed or its own hours {date, closed, hours, note}", statusH.MeSetException, storeSession),
 		def("DELETE", storePrefix+"/me/hours-exceptions/:id", "store-session", "Remove a date exception", statusH.MeDeleteException, storeSession),
+		// The call center's remote terminal (CALLCENTER-PLAN.md, contract §2.5zh).
+		// Its web app's server calls these with the device token (Bearer qccd_…).
+		def("POST", callcenterPrefix+"/login", "none", "The call center's own login (Store › Staff sets it; never the store manager's) opens the app on a browser {username, password, device_name?} -> {device_token (long-lived, revocable in Store › Staff), device, store} | 401 invalid_credentials | 429", ccH.Login),
+		def("POST", callcenterPrefix+"/logout", "callcenter-device", "Forget this browser: its device token is revoked", ccH.Logout),
+		def("GET", callcenterPrefix+"/me", "callcenter-device", "The store for the call center: {store, open, closed_reason, next_open_at, hours, pi {online}, settings {idle_lock_minutes}, square|null, device, session|null}", ccH.Me),
+		def("POST", callcenterPrefix+"/session", "callcenter-device", "An agent signs in with their 4-digit PIN {pin} (role callcenter only) -> {staff, role, limits, settings, expires_at} | 400 bad_pin | 401 wrong_pin | 403 wrong_role | 429 too_many_attempts", ccH.SessionStart),
+		def("GET", callcenterPrefix+"/session", "callcenter-device", "Who is signed in on this browser {staff|null, role?, limits?, settings, expires_at?}", ccH.SessionGet),
+		def("PUT", callcenterPrefix+"/session", "callcenter-device", "Keep-alive: the agent is active -> 204 | 401 login_required", ccH.SessionTouch),
+		def("DELETE", callcenterPrefix+"/session", "callcenter-device", "Lock: the agent's session ends -> 204", ccH.SessionEnd),
+		def("GET", callcenterPrefix+"/events", "callcenter-device", "SSE: the Pi's terminal events for this store under their own names + hello / store {pi_online, open} / session.ended", ccH.Events),
+		def("GET", callcenterPrefix+"/pi/*", "callcenter-session", "Relay to the store's Pi: /api/terminal/<path> for the call center's allowlist (same bodies and statuses) | 403 not_allowed_for_callcenter | 409 store_closed | 503 store_offline", ccH.Relay, channelGzip),
+		def("POST", callcenterPrefix+"/pi/*", "callcenter-session", "Relay (see GET)", ccH.Relay, channelGzip),
+		def("PUT", callcenterPrefix+"/pi/*", "callcenter-session", "Relay (see GET)", ccH.Relay),
+		def("PATCH", callcenterPrefix+"/pi/*", "callcenter-session", "Relay (see GET)", ccH.Relay),
+		def("DELETE", callcenterPrefix+"/pi/*", "callcenter-session", "Relay (see GET)", ccH.Relay),
+		def("GET", storePrefix+"/me/callcenter/login", "store-session", "The call center's own shared login {username, set, updated_at} (never the password)", ccH.MeLogin, storeSession),
+		def("PUT", storePrefix+"/me/callcenter/login", "store-session", "Set the call center's login {username, password (>= 10), keep_devices?}: valid only at /callcenter/v1/login, never the store's own login; signs every call-center browser out unless keep_devices -> {username, set, updated_at, devices_revoked} | 400 bad_username / bad_password / same_as_manager | 409 username_taken", ccH.MeSetLogin, storeSession),
+		def("DELETE", storePrefix+"/me/callcenter/login", "store-session", "Remove the call center's login: every call-center browser signed out", ccH.MeDeleteLogin, storeSession),
+		def("GET", storePrefix+"/me/callcenter/devices", "store-session", "The call center's browsers (device tokens): [{id, name, created_at, last_seen_at, staff_id?, staff_name?, revoked_at?}]", ccH.MeDevices, storeSession),
+		def("DELETE", storePrefix+"/me/callcenter/devices/:id", "store-session", "Revoke a call-center browser", ccH.MeRevokeDevice, storeSession),
+		def("GET", storePrefix+"/me/reports/callcenter", "store-session", "Orders + sales per call-center agent per store-local day ?from=&to= (YYYY-MM-DD, default today, <= 92 days) -> {from, to, timezone, rows, totals}", ccH.MeReport, storeSession),
 		// Pricing + deals (main 3.0).
+		def("GET", storePrefix+"/me/staff", "store-session", "The counter terminal's staff (never the PIN)", staffH.MeList, storeSession),
+		def("POST", storePrefix+"/me/staff", "store-session", "Add a person {first_name, last_name, role, pin, limits?}", staffH.MeCreate, storeSession),
+		def("GET", storePrefix+"/me/staff/journal", "store-session", "The terminal journal, newest first (?before=&limit=)", staffH.MeJournal, storeSession),
+		def("PATCH", storePrefix+"/me/staff/:id", "store-session", "Change a person {first_name, last_name, role, limits, active, pin}", staffH.MeUpdate, storeSession),
+		def("POST", storePrefix+"/me/staff/:id/pin", "store-session", "Reset a person's PIN {pin}", staffH.MeResetPin, storeSession),
+		def("DELETE", storePrefix+"/me/staff/:id", "store-session", "Delete a person", staffH.MeDelete, storeSession),
+		def("GET", storePrefix+"/me/reports/flags", "store-session", "Money main stored but flagged (M-2/M-7/M-12/M-13), newest 200: {flags[{id, at, event_id, event_type, subject, code, detail, resolved_at}]}", dayCloseH.MeMoneyFlags, storeSession),
+		def("GET", storePrefix+"/me/reports/audit", "store-session", "The store's audit log, newest first (append-only; db = a row a trigger saw change, before/after with secrets masked; app = an admin / manager write): ?before=<id>&limit=1-200 (50)&entity=&entity_id= → {entries[{id, at, actor_kind, actor_id, actor_name, source, action, entity, entity_id, before, after, detail, trace_id, request_id, ip}], next_before}", auditH.MeAudit, storeSession),
+		def("GET", storePrefix+"/me/reports/z", "store-session", "The Pi's Z reports (one per closed batch), newest first: ?date=YYYY-MM-DD = that business date, none = the newest 30", dayCloseH.MeZList, storeSession),
+		def("GET", storePrefix+"/me/reports/z/:id", "store-session", "One Z report as the Pi sent it", dayCloseH.MeZ, storeSession),
+		def("GET", storePrefix+"/me/drawers", "store-session", "Cash drawer sessions (per terminal + cashier), newest first: ?date=YYYY-MM-DD = opened that store-local date, none = the newest 50", dayCloseH.MeDrawers, storeSession),
+		def("GET", storePrefix+"/me/drawers/:id", "store-session", "One drawer session with its pay-ins / pay-outs", dayCloseH.MeDrawer, storeSession),
+		def("GET", storePrefix+"/me/terminal/settings", "store-session", "The store's terminal settings (role limits, auto-lock, counter start, receipt auto-Done, batch auto-close time)", staffH.MeSettings, storeSession),
+		def("PUT", storePrefix+"/me/terminal/settings", "store-session", "Replace the terminal settings", staffH.MeSaveSettings, storeSession),
 		def("GET", storePrefix+"/me/pricing", "store-session", "Pricing settings: the store's + each channel kind's sets", pricingH.MePricing, storeSession),
 		def("PUT", storePrefix+"/me/pricing", "store-session", "Replace the pricing settings {store, kinds}", pricingH.MeSavePricing, storeSession),
 		def("GET", storePrefix+"/me/pricing/context", "store-session", "What a channel kind prices with (?kind=web) — for previews", pricingH.MeContext, storeSession),
-		def("POST", storePrefix+"/me/quote", "store-session", "Price a cart as a channel kind would (?kind=web)", pricingH.MeQuote, storeSession),
 		def("GET", storePrefix+"/me/deals", "store-session", "The store's deals", pricingH.MeDeals, storeSession),
-		def("POST", storePrefix+"/me/deals", "store-session", "Add a deal (bundle, mix, nth, code, free_item)", pricingH.MeCreateDeal, storeSession),
+		def("POST", storePrefix+"/me/deals", "store-session", "Add a deal (bundle, mix, nth, code, free_item, coupon)", pricingH.MeCreateDeal, storeSession),
 		def("PUT", storePrefix+"/me/deals/:id", "store-session", "Replace a deal", pricingH.MeUpdateDeal, storeSession),
 		def("DELETE", storePrefix+"/me/deals/:id", "store-session", "Delete a deal", pricingH.MeDeleteDeal, storeSession),
 		// The menu bank + views (main 3.0).
 		def("GET", storePrefix+"/me/menu/bank", "store-session", "The whole menu bank (sizes, items with sizes + groups, options with prices)", viewH.MeBank, storeSession),
+		def("GET", storePrefix+"/me/menu/bank/document", "store-session", "The bank, views and deals as one document (names, no ids)", bankDocH.MeExport, storeSession),
+		def("POST", storePrefix+"/me/menu/bank/apply", "store-session", "Apply a bank document in one transaction (?dry_run=1 reports + rolls back, ?prune=1 deletes what it doesn't name)", bankDocH.MeApply, storeSession),
+		def("GET", storePrefix+"/me/menu/families", "store-session", "The store's item / mod families with their members (Families editor)", famH.MeList, storeSession),
+		def("POST", storePrefix+"/me/menu/families", "store-session", "Add a family {kind item|mod, name, class?}", famH.MeCreate, storeSession),
+		def("POST", storePrefix+"/me/menu/families/assign", "store-session", "Set the family of items / options {family_id|null, items, options}", famH.MeAssign, storeSession),
+		def("PATCH", storePrefix+"/me/menu/families/:id", "store-session", "Rename a family / change a mod family's class", famH.MeUpdate, storeSession),
+		def("DELETE", storePrefix+"/me/menu/families/:id", "store-session", "Delete a family (its members: no family; 409 while a coupon names it)", famH.MeDelete, storeSession),
+		def("POST", storePrefix+"/me/menu/families/:id/merge", "store-session", "Merge a family into another {into} (members + coupons move)", famH.MeMerge, storeSession),
 		def("GET", storePrefix+"/me/menu/sizes", "store-session", "List the store's sizes", viewH.MeListSizes, storeSession),
 		def("POST", storePrefix+"/me/menu/sizes", "store-session", "Add a size {name, short}", viewH.MeCreateSize, storeSession),
 		def("POST", storePrefix+"/me/menu/sizes/reorder", "store-session", "Reorder sizes {ids}", viewH.MeReorderSizes, storeSession),
@@ -404,11 +604,32 @@ func routeTable(d RouterDeps) []routeDef {
 		def("PATCH", storePrefix+"/me/menu/views/:id", "store-session", "Rename a view / set its rules", viewH.MeUpdateView, storeSession),
 		def("DELETE", storePrefix+"/me/menu/views/:id", "store-session", "Delete a view", viewH.MeDeleteView, storeSession),
 		def("GET", storePrefix+"/me/menu/views/:id/build", "store-session", "A view as its channels see it + needs attention", viewH.MeBuildView, storeSession),
+		def("GET", storePrefix+"/me/menu/views/:id/layout", "store-session", "A counter view's layout (tabs, screens, flows, functions)", viewH.MeGetLayout, storeSession),
+		def("PUT", storePrefix+"/me/menu/views/:id/layout", "store-session", "Replace a counter view's layout (422 lists every problem)", viewH.MePutLayout, storeSession),
+		def("DELETE", storePrefix+"/me/menu/views/:id/layout", "store-session", "Clear a counter view's layout", viewH.MeDeleteLayout, storeSession),
 		def("GET", storePrefix+"/me/menu/views/:id/entries", "store-session", "A view's entries", viewH.MeListEntries, storeSession),
 		def("POST", storePrefix+"/me/menu/views/:id/entries", "store-session", "Add an entry (item, merge, augment, map)", viewH.MeCreateEntry, storeSession),
 		def("PUT", storePrefix+"/me/menu/entries/:id", "store-session", "Replace an entry", viewH.MeUpdateEntry, storeSession),
 		def("DELETE", storePrefix+"/me/menu/entries/:id", "store-session", "Delete an entry", viewH.MeDeleteEntry, storeSession),
-		def("GET", storePrefix+"/me/menu/vendor", "store-session", "The vendor view (Brygid): mappings + names nothing routes", viewH.MeVendor, storeSession),
+		def("GET", storePrefix+"/me/square", "store-session", "Square: connection, locations, holds open", squareH.MeStatus, storeSession),
+		def("POST", storePrefix+"/me/square/connect", "store-session", "Square: the link to connect the account → {url}", squareH.MeConnect, storeSession),
+		def("POST", storePrefix+"/me/square/sandbox-token", "store-session", "Square: paste a sandbox access token + location (staging / dev only; 403 not_sandbox in production) {access_token, location_id}", squareH.MePasteSandboxToken, storeSession),
+		def("PUT", storePrefix+"/me/square/location", "store-session", "Square: the location payments go to {square_location_id}", squareH.MeSetLocation, storeSession),
+		def("DELETE", storePrefix+"/me/square", "store-session", "Square: disconnect (refused while holds are open)", squareH.MeDisconnect, storeSession),
+		def("GET", storePrefix+"/me/card-holds", "store-session", "Recent online card holds with who ordered (?status=&limit=)", squareH.MeHolds, storeSession),
+		def("POST", storePrefix+"/me/card-holds/:order_id/capture", "store-session", "Charge a waiting card order now", squareH.MeChargeNow, storeSession),
+		def("GET", storePrefix+"/me/site/contact", "store-session", "The store's email for receipt replies", accountH.MeContact, storeSession),
+		def("PUT", storePrefix+"/me/site/contact", "store-session", "Set the receipt reply-to email {reply_email}", accountH.MePutContact, storeSession),
+		def("GET", storePrefix+"/me/site/domains", "store-session", "The website's hosts", siteH.MeDomains, storeSession),
+		def("POST", storePrefix+"/me/site/domains", "store-session", "Add the store's own domain {host, primary} (unverified until checked)", siteH.MeAddDomain, storeSession),
+		def("POST", storePrefix+"/me/site/domains/:host/primary", "store-session", "Make a host the primary one", siteH.MeSetPrimary, storeSession),
+		def("DELETE", storePrefix+"/me/site/domains/:host", "store-session", "Remove a host", siteH.MeRemoveDomain, storeSession),
+		def("GET", storePrefix+"/me/site/website", "store-session", "The Website page: draft, published, changes, preview link", siteH.MeWebsite, storeSession),
+		def("PUT", storePrefix+"/me/site/website/draft", "store-session", "Save the website draft (the whole settings document)", siteH.MeSaveDraft, storeSession),
+		def("DELETE", storePrefix+"/me/site/website/draft", "store-session", "Discard the website draft", siteH.MeDiscardDraft, storeSession),
+		def("POST", storePrefix+"/me/site/website/publish", "store-session", "Publish the website draft", siteH.MePublish, storeSession),
+		def("POST", storePrefix+"/me/site/images", "store-session", "Upload a logo or cover photo (?kind=logo|cover, raw body ≤ 2 MB)", siteH.MeAddImage, storeSession),
+		def("GET", storePrefix+"/me/site/images/:id", "store-session", "A logo or cover photo", siteH.MeImage, storeSession),
 		def("POST", storePrefix+"/me/menu/vendor/maps", "store-session", "Map a vendor item name to a bank item {vendor_name, item_id}", viewH.MeVendorMap, storeSession),
 
 		// Operators (call-center order-takers) — read-only menu via bearer token.
@@ -422,8 +643,22 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", channelPrefix+"/operator/logout", "none", "An operator signs out (Bearer the sign-in)", operatorH.ChannelLogout),
 		def("GET", channelPrefix+"/me", "channel", "The channel behind the key and its store", channelH.Me, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/menu", "channel", "The channel's menu (ETag = menu version)", viewH.ChannelMenu, channelAuth, channelGzip),
-		def("POST", channelPrefix+"/orders", "channel", "Place an order (orders permission; idempotent on client_order_id)", orderPortH.Place, channelAuth, channelGzip),
+		def("POST", channelPrefix+"/orders", "channel", "Place an order (orders permission; idempotent on client_order_id; 202 pending when main is still at work)", orderPortH.Place, channelAuth, guest, channelGzip),
+		// Website customer accounts (weborder stage 2): X-Customer-Session from /account/verify.
+		def("POST", channelPrefix+"/account/code", "channel", "Text (or call) a sign-in code {phone, channel sms|call}", accountH.SendCode, channelAuth, channelGzip),
+		def("POST", channelPrefix+"/account/verify", "channel", "Check the code → a customer session {phone, code, name?}", accountH.Verify, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/account", "channel+customer", "The signed-in customer: profile, addresses, saved cards", accountH.Get, channelAuth, member, channelGzip),
+		def("PATCH", channelPrefix+"/account", "channel+customer", "Set name / email", accountH.Update, channelAuth, member, channelGzip),
+		def("DELETE", channelPrefix+"/account", "channel+customer", "Delete the account (saved cards removed from Square; orders stay)", accountH.Delete, channelAuth, member),
+		def("POST", channelPrefix+"/account/logout", "channel+customer", "End this session", accountH.Logout, channelAuth, member),
+		def("POST", channelPrefix+"/account/addresses", "channel+customer", "Save an address", accountH.AddAddress, channelAuth, member, channelGzip),
+		def("PUT", channelPrefix+"/account/addresses/:id", "channel+customer", "Replace an address", accountH.PutAddress, channelAuth, member, channelGzip),
+		def("DELETE", channelPrefix+"/account/addresses/:id", "channel+customer", "Delete an address", accountH.DeleteAddress, channelAuth, member),
+		def("DELETE", channelPrefix+"/account/cards/:id", "channel+customer", "Forget a saved card", accountH.DeleteCard, channelAuth, member),
+		def("GET", channelPrefix+"/account/orders", "channel+customer", "The account's orders, newest first (?before=&limit=)", accountH.Orders, channelAuth, member, channelGzip),
+		def("POST", channelPrefix+"/account/orders/:id/reorder", "channel+customer", "A past order as a new cart, priced today {type?}", accountH.Reorder, channelAuth, member, channelGzip),
 		def("GET", channelPrefix+"/orders", "channel", "This channel's orders, newest first (?before=&limit=)", orderPortH.List, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/orders/by-key/:key", "channel", "A placement by its client_order_id: {state pending|placed|refused|expired|voided, order?, error?, expires_at} | 404 unknown_key", orderPortH.ByKey, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/orders/:id", "channel", "One of this channel's orders", orderPortH.Get, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/orders/:id/status", "channel", "One of this channel's orders: its tracking state (track permission)", trackingH.Status, channelAuth, channelGzip),
 		// No gzip on the stream: the compressor would hold events back.
@@ -434,6 +669,9 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", channelPrefix+"/store", "channel", "The store's status: open/paused/closed, order types + ETAs, sold out", statusH.ChannelStore, channelAuth, channelGzip),
 		def("GET", channelPrefix+"/store/times", "channel", "Times an order can be promised for (?type=pickup|delivery&date=YYYY-MM-DD)", statusH.ChannelTimes, channelAuth, channelGzip),
 		def("POST", channelPrefix+"/store/delivery-check", "channel", "Does the store deliver to this address {line1, city, state, zip}", statusH.ChannelDeliveryCheck, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/payments", "channel", "How this channel takes payments (methods + the card SDK's setup)", squareH.ChannelPayments, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/site", "channel", "The store's website: published look + texts, hosts (ETag; ?preview=token → the draft)", siteH.ChannelSite, channelAuth, channelGzip),
+		def("GET", channelPrefix+"/site/images/:id", "channel", "A logo or cover photo of the store's website", siteH.ChannelImage, channelAuth),
 		def("GET", channelPrefix+"/menu/version", "channel", "The menu version (?since=N → changed)", viewH.ChannelMenuVersion, channelAuth, channelGzip),
 
 		def("GET", storeUIPath, "none", "Redirect → /app/store", redirectTo("/app/store")),

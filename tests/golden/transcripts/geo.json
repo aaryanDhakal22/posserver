@@ -268,37 +268,11 @@
   "compare": "exact"
  },
  {
-  "label": "locate stop",
+  "label": "locate stop (retired)",
   "method": "POST",
   "path": "/store/v1/agent/rpc",
   "params": {},
-  "status": 200,
-  "headers": {
-   "content-type": "application/json"
-  },
-  "cookies": [],
-  "body": "{\"type\":\"geo.locate.reply\",\"id\":\"<uuid#16>\",\"payload\":{\"ok\":true}}\n",
-  "mask": [],
-  "compare": "exact"
- },
- {
-  "label": "stop located",
-  "method": "",
-  "path": "",
-  "params": {},
-  "status": 0,
-  "headers": {},
-  "cookies": [],
-  "body": "{\"type\":\"order.geo\",\"id\":\"<uuid#17>\",\"payload\":{\"order_id\":\"<pos-stop>\",\"state\":\"located\",\"lat\":40.66,\"lng\":-74.12,\"quality\":\"exact\",\"distance_m\":1059,\"duration_s\":102,\"polyline\":\"fake_polyline\",\"outside_area\":false,\"store_to_s\":102,\"to_store_s\":107,\"times\":[{\"other\":\"<uuid#2>\",\"to_s\":79,\"from_s\":74},{\"other\":\"<uuid#8>\",\"to_s\":144,\"from_s\":139},{\"other\":\"<uuid#4>\",\"to_s\":179,\"from_s\":174}]}}",
-  "mask": [],
-  "compare": "exact"
- },
- {
-  "label": "stop located: reply",
-  "method": "POST",
-  "path": "/store/v1/agent/rpc",
-  "params": {},
-  "status": 204,
+  "status": 202,
   "headers": {},
   "cookies": [],
   "body": "",
@@ -306,58 +280,14 @@
   "compare": "exact"
  },
  {
-  "label": "locate bad",
+  "label": "forget stop (retired)",
   "method": "POST",
   "path": "/store/v1/agent/rpc",
   "params": {},
-  "status": 400,
-  "headers": {
-   "content-type": "application/json"
-  },
+  "status": 202,
+  "headers": {},
   "cookies": [],
-  "body": "{\"error\":\"bad rpc payload: geo.locate needs {order_id, address}\"}\n",
-  "mask": [],
-  "compare": "exact"
- },
- {
-  "label": "trip with stop",
-  "method": "POST",
-  "path": "/store/v1/agent/rpc",
-  "params": {},
-  "status": 200,
-  "headers": {
-   "content-type": "application/json"
-  },
-  "cookies": [],
-  "body": "{\"type\":\"geo.trip.reply\",\"id\":\"<uuid#18>\",\"payload\":{\"distance_m\":845,\"duration_s\":106,\"ok\":true,\"order_ids\":[\"<uuid#2>\",\"<pos-stop>\"],\"polyline\":\"fake_trip\",\"unlocated\":[]}}\n",
-  "mask": [],
-  "compare": "exact"
- },
- {
-  "label": "forget stop",
-  "method": "POST",
-  "path": "/store/v1/agent/rpc",
-  "params": {},
-  "status": 200,
-  "headers": {
-   "content-type": "application/json"
-  },
-  "cookies": [],
-  "body": "{\"type\":\"geo.forget.reply\",\"id\":\"<uuid#19>\",\"payload\":{\"ok\":true}}\n",
-  "mask": [],
-  "compare": "exact"
- },
- {
-  "label": "forget bad",
-  "method": "POST",
-  "path": "/store/v1/agent/rpc",
-  "params": {},
-  "status": 400,
-  "headers": {
-   "content-type": "application/json"
-  },
-  "cookies": [],
-  "body": "{\"error\":\"bad rpc payload: geo.forget needs {order_id}\"}\n",
+  "body": "",
   "mask": [],
   "compare": "exact"
  },
@@ -371,7 +301,7 @@
    "content-type": "application/json"
   },
   "cookies": [],
-  "body": "{\"type\":\"geo.search.reply\",\"id\":\"<uuid#20>\",\"payload\":{\"ok\":true}}\n",
+  "body": "{\"type\":\"geo.search.reply\",\"id\":\"<uuid#16>\",\"payload\":{\"ok\":true}}\n",
   "mask": [],
   "compare": "exact"
  },
@@ -383,7 +313,7 @@
   "status": 0,
   "headers": {},
   "cookies": [],
-  "body": "{\"type\":\"order.geo\",\"id\":\"<uuid#21>\",\"payload\":{\"order_id\":\"<uuid#6>\",\"state\":\"check\",\"distance_m\":0,\"duration_s\":0,\"polyline\":\"\",\"outside_area\":false,\"candidates\":[{\"label\":\"205 Golden<street-tag> Other Street, Bayonne, NJ 07002\",\"line1\":\"205 Golden<street-tag> Other Street\",\"city\":\"Bayonne\",\"state\":\"NJ\",\"postal_code\":\"07002\",\"lat\":40.67,\"lng\":-74.11}]}}",
+  "body": "{\"type\":\"order.geo\",\"id\":\"<uuid#17>\",\"payload\":{\"order_id\":\"<uuid#6>\",\"state\":\"check\",\"distance_m\":0,\"duration_s\":0,\"polyline\":\"\",\"outside_area\":false,\"candidates\":[{\"label\":\"205 Golden<street-tag> Other Street, Bayonne, NJ 07002\",\"line1\":\"205 Golden<street-tag> Other Street\",\"city\":\"Bayonne\",\"state\":\"NJ\",\"postal_code\":\"07002\",\"lat\":40.67,\"lng\":-74.11}]}}",
   "mask": [],
   "compare": "exact"
  },
@@ -409,7 +339,7 @@
    "content-type": "application/json"
   },
   "cookies": [],
-  "body": "{\"type\":\"geo.search.reply\",\"id\":\"<uuid#22>\",\"payload\":{\"code\":\"too_soon\",\"ok\":false,\"retry_after_ms\":\"\\u003cmasked\\u003e\"}}",
+  "body": "{\"type\":\"geo.search.reply\",\"id\":\"<uuid#18>\",\"payload\":{\"code\":\"too_soon\",\"ok\":false,\"retry_after_ms\":\"\\u003cmasked\\u003e\"}}",
   "mask": [
    "retry_after_ms"
   ],
@@ -425,7 +355,7 @@
    "content-type": "application/json"
   },
   "cookies": [],
-  "body": "{\"type\":\"location.radius.reply\",\"id\":\"<uuid#23>\",\"payload\":{\"radius_m\":500}}\n",
+  "body": "{\"type\":\"location.radius.reply\",\"id\":\"<uuid#19>\",\"payload\":{\"radius_m\":500}}\n",
   "mask": [],
   "compare": "exact"
  },
@@ -437,7 +367,7 @@
   "status": 0,
   "headers": {},
   "cookies": [],
-  "body": "{\"tenant\":{\"id\":\"<uuid#24>\",\"slug\":\"t-<tag>\",\"name\":\"<tag> Test Pizza\",\"config\":{}},\"location\":{\"id\":\"<uuid#25>\",\"slug\":\"main\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{},\"lat\":40.6666,\"lng\":-74.1158,\"delivery_radius_m\":500,\"map\":null},\"printers\":[]}",
+  "body": "{\"tenant\":{\"id\":\"<uuid#20>\",\"slug\":\"t-<tag>\",\"name\":\"<tag> Test Pizza\",\"config\":{}},\"location\":{\"id\":\"<uuid#21>\",\"slug\":\"main\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{},\"lat\":40.6666,\"lng\":-74.1158,\"delivery_radius_m\":500,\"map\":null},\"printers\":[]}",
   "mask": [],
   "compare": "exact"
  },
@@ -449,7 +379,7 @@
   "status": 0,
   "headers": {},
   "cookies": [],
-  "body": "{\"type\":\"order.geo\",\"id\":\"<uuid#26>\",\"payload\":{\"order_id\":\"<uuid#4>\",\"state\":\"located\",\"lat\":40.67,\"lng\":-74.11,\"quality\":\"exact\",\"distance_m\":804,\"duration_s\":82,\"polyline\":\"fake_polyline\",\"outside_area\":true,\"store_to_s\":82,\"to_store_s\":77,\"times\":[{\"other\":\"<uuid#8>\",\"to_s\":47,\"from_s\":52},{\"other\":\"<uuid#2>\",\"to_s\":109,\"from_s\":114}]}}",
+  "body": "{\"type\":\"order.geo\",\"id\":\"<uuid#22>\",\"payload\":{\"order_id\":\"<uuid#4>\",\"state\":\"located\",\"lat\":40.67,\"lng\":-74.11,\"quality\":\"exact\",\"distance_m\":804,\"duration_s\":82,\"polyline\":\"fake_polyline\",\"outside_area\":true,\"store_to_s\":82,\"to_store_s\":77,\"times\":[{\"other\":\"<uuid#8>\",\"to_s\":47,\"from_s\":52},{\"other\":\"<uuid#2>\",\"to_s\":109,\"from_s\":114}]}}",
   "mask": [],
   "compare": "exact"
  },
@@ -489,7 +419,7 @@
    "content-type": "application/json"
   },
   "cookies": [],
-  "body": "{\"id\":\"<uuid#25>\",\"tenant_id\":\"<uuid#24>\",\"slug\":\"main\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{},\"created_at\":\"<time>\",\"lat\":40.6666,\"lng\":-74.1158,\"geo_source\":\"manual\",\"delivery_radius_m\":500,\"map\":null}\n",
+  "body": "{\"id\":\"<uuid#21>\",\"tenant_id\":\"<uuid#20>\",\"slug\":\"main\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\",\"daily_reset_hour\":0,\"phone\":\"\",\"address_line1\":\"\",\"address_line2\":\"\",\"config\":{},\"created_at\":\"<time>\",\"lat\":40.6666,\"lng\":-74.1158,\"geo_source\":\"manual\",\"delivery_radius_m\":500,\"map\":null}\n",
   "mask": [],
   "compare": "exact"
  },

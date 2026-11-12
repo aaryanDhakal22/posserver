@@ -6,25 +6,64 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // Fees are a fee set: the service (online) fee and delivery.
+//
+// The delivery fee is the total the customer pays (DeliveryFeeCents); it is
+// split into the store's share and the driver's share (TERMINAL-PLAN
+// "Delivery fee"): DeliveryDriverCents is the driver's part of it (nil = the
+// default, DefaultDriverShareCents capped at the fee), the store keeps the
+// rest. The split never changes what a customer pays.
 type Fees struct {
 	ServiceFeeCents       int64  `json:"service_fee_cents"`
 	ServiceFeeBps         int    `json:"service_fee_bps"`
 	DeliveryFeeCents      int64  `json:"delivery_fee_cents"`
 	FreeDeliveryOverCents *int64 `json:"free_delivery_over_cents"`
 	DeliveryMinCents      int64  `json:"delivery_min_cents"`
+	DeliveryDriverCents   *int64 `json:"delivery_driver_cents,omitempty"`
 }
 
-// StoreSettings are a store's pricing defaults; TaxBps and Stacking are
-// store-wide, the rest each channel kind may replace (KindOverride).
+// DefaultDriverShareCents is the driver's share of the delivery fee when the
+// store hasn't set one (the owner's default: store $1 + driver $3 of $4).
+const DefaultDriverShareCents = 300
+
+// DriverShare is the driver's part of a delivery fee set (the default when
+// unset), never more than the fee.
+func (f Fees) DriverShare() int64 {
+	d := int64(DefaultDriverShareCents)
+	if f.DeliveryDriverCents != nil {
+		d = *f.DeliveryDriverCents
+	}
+	return min(max(d, 0), max(f.DeliveryFeeCents, 0))
+}
+
+// DeliverySplit splits the delivery fee an order was charged into the
+// store's and the driver's shares: the driver gets his share of it (at most
+// what was charged: a free delivery splits 0 + 0), the store the rest.
+func DeliverySplit(st Settings, chargedCents int64) (storeCents, driverCents int64) {
+	if chargedCents <= 0 {
+		return 0, 0
+	}
+	driverCents = min(max(st.DeliveryDriverCents, 0), chargedCents)
+	return chargedCents - driverCents, driverCents
+}
+
+// StoreSettings are a store's pricing defaults; TaxBps, Stacking and the
+// half-and-half pair are store-wide, the rest each channel kind may replace
+// (KindOverride).
 type StoreSettings struct {
 	TaxBps   int     `json:"tax_bps"`
 	Stacking string  `json:"stacking"`
 	Fees     Fees    `json:"fees"`
 	Tips     Tips    `json:"tips"`
 	CardFee  CardFee `json:"card_fee"`
+	// Half and half: a topping on a half at full (default) or half price;
+	// the cheaper of two half-specialties' extra over plain at this % off
+	// (default 0).
+	HalfToppingPrice    string `json:"half_topping_price"`
+	HalfSpecialtyOffPct int    `json:"half_specialty_off_pct"`
 }
 
 // KindOverride replaces whole sets for one channel kind (nil = the store's).
@@ -34,11 +73,21 @@ type KindOverride struct {
 	CardFee *CardFee `json:"card_fee"`
 }
 
-// DefaultStore are a new store's settings: Maryland's 6% food tax, no fees,
-// tips off, no card fee, the best single discount.
+// DefaultDeliveryFeeCents is a new store's delivery fee (the owner,
+// 2026-11-11: $4 = driver $3 + store $1).
+const DefaultDeliveryFeeCents = 400
+
+// DefaultStore are a new store's settings: Maryland's 6% food tax, a $4
+// delivery fee ($3 of it the driver's), no service fee, tips off, no card
+// fee, the best single discount. (Migration 00037 saved the old $0 defaults
+// for stores that existed before; 00039 moved every store still exactly on
+// them to the $4 fee with the driver's $3.)
 func DefaultStore() StoreSettings {
-	return StoreSettings{TaxBps: 600, Stacking: StackBest, Tips: Tips{Presets: []int{15, 18, 20}, DefaultPct: 18},
-		CardFee: CardFee{Mode: CardFeeNone}}
+	driver := int64(DefaultDriverShareCents)
+	return StoreSettings{TaxBps: 600, Stacking: StackBest,
+		Fees:    Fees{DeliveryFeeCents: DefaultDeliveryFeeCents, DeliveryDriverCents: &driver},
+		Tips:    Tips{Presets: []int{15, 18, 20}, DefaultPct: 18},
+		CardFee: CardFee{Mode: CardFeeNone}, HalfToppingPrice: HalfFull}
 }
 
 // DefaultOverrides: the website takes tips (the owner, 2026-11-02).
@@ -64,9 +113,12 @@ func Effective(s StoreSettings, o KindOverride) Settings {
 	if t.Presets == nil {
 		t.Presets = []int{}
 	}
+	if s.HalfToppingPrice == "" {
+		s.HalfToppingPrice = HalfFull
+	}
 	return Settings{TaxBps: s.TaxBps, Stacking: s.Stacking, ServiceFeeCents: f.ServiceFeeCents, ServiceFeeBps: f.ServiceFeeBps,
 		DeliveryFeeCents: f.DeliveryFeeCents, FreeDeliveryOverCents: f.FreeDeliveryOverCents, DeliveryMinCents: f.DeliveryMinCents,
-		Tips: t, CardFee: c}
+		DeliveryDriverCents: f.DriverShare(), Tips: t, CardFee: c, HalfToppingPrice: s.HalfToppingPrice, HalfSpecialtyOffPct: s.HalfSpecialtyOffPct}
 }
 
 var ErrBadSettings = errors.New("bad pricing settings")
@@ -84,6 +136,15 @@ func (s *StoreSettings) Validate() error {
 	if s.Stacking != StackBest && s.Stacking != StackAll && s.Stacking != StackSingle {
 		return bad("stacking must be best, stack or single")
 	}
+	if s.HalfToppingPrice == "" {
+		s.HalfToppingPrice = HalfFull
+	}
+	if s.HalfToppingPrice != HalfFull && s.HalfToppingPrice != HalfHalf {
+		return bad("half_topping_price must be full or half")
+	}
+	if s.HalfSpecialtyOffPct < 0 || s.HalfSpecialtyOffPct > 100 {
+		return bad("half_specialty_off_pct must be 0–100")
+	}
 	return validSets(&s.Fees, &s.Tips, &s.CardFee)
 }
 
@@ -98,6 +159,9 @@ func validSets(f *Fees, t *Tips, c *CardFee) error {
 			f.DeliveryFeeCents < 0 || f.DeliveryFeeCents > 10000 || f.DeliveryMinCents < 0 || f.DeliveryMinCents > 100000 ||
 			(f.FreeDeliveryOverCents != nil && (*f.FreeDeliveryOverCents < 0 || *f.FreeDeliveryOverCents > 100000)) {
 			return bad("fees out of range (service ≤ $100 or 30%, delivery ≤ $100, minimum ≤ $1000)")
+		}
+		if d := f.DeliveryDriverCents; d != nil && (*d < 0 || *d > f.DeliveryFeeCents) {
+			return bad("the driver's share of the delivery fee must be 0 up to the fee")
 		}
 	}
 	if t != nil {
@@ -187,9 +251,76 @@ func (d *Deal) Validate() error {
 		if emptyEligible(d.Eligible) || d.MinSubtotalCents < 0 {
 			return badDeal("a free item needs items or categories and a minimum")
 		}
+	case DealCoupon:
+		return d.validCoupon()
 	default:
-		return badDeal("kind must be bundle, mix, nth, code or free_item")
+		return badDeal("kind must be bundle, mix, nth, code, free_item or coupon")
 	}
+	return nil
+}
+
+// Coupon limits.
+const (
+	MaxCouponParts     = 8
+	MaxCouponPartQty   = 10
+	MaxCouponFreeMods  = 20
+	MaxCouponCardLines = 6
+	MaxCouponCardLine  = 60
+)
+
+// validCoupon checks a coupon (the app checks its families and sizes are the
+// store's) and trims its card and labels.
+func (d *Deal) validCoupon() error {
+	if d.PriceCents < 0 || d.PriceCents > MaxOpenPriceCents {
+		return badDeal("a coupon needs a price ($0 to $10,000)")
+	}
+	if len(d.Parts) == 0 || len(d.Parts) > MaxCouponParts {
+		return badDeal("a coupon has 1–8 parts")
+	}
+	card := []string{}
+	for _, l := range d.Card {
+		if l = strings.TrimSpace(l); l != "" {
+			card = append(card, l)
+		}
+	}
+	if len(card) > MaxCouponCardLines {
+		return badDeal("a coupon's card has up to 6 lines")
+	}
+	for _, l := range card {
+		if utf8.RuneCountInString(l) > MaxCouponCardLine {
+			return badDeal("a card line is up to 60 characters")
+		}
+	}
+	d.Card = card
+	for i := range d.Parts {
+		p := &d.Parts[i]
+		p.Label = strings.TrimSpace(p.Label)
+		if utf8.RuneCountInString(p.Label) > 60 {
+			return badDeal("a part's label is up to 60 characters")
+		}
+		if len(p.Families) == 0 || p.Qty < 1 || p.Qty > MaxCouponPartQty || p.RegularModsIncluded < 0 || p.RegularModsIncluded > MaxCouponFreeMods {
+			return badDeal("every coupon part needs families, 1–10 items and 0–20 free regular mods")
+		}
+		base := []string{}
+		for _, f := range p.UpchargeOver {
+			if !contains(p.Families, f) {
+				return badDeal("a part's upcharge_over families are some of its own families")
+			}
+			if !contains(base, f) {
+				base = append(base, f)
+			}
+		}
+		p.UpchargeOver = base
+		all := true
+		for _, f := range p.Families {
+			all = all && contains(base, f)
+		}
+		if len(base) == 0 || all {
+			p.UpchargeOver = nil // every unit is in the base: no upcharge
+		}
+	}
+	// A coupon's own fields only (none of the other kinds').
+	d.Slots, d.Eligible, d.Qty, d.EachCents, d.N, d.Pct, d.Code, d.AmountCents, d.FirstOrderOnly, d.MinSubtotalCents = nil, nil, 0, 0, 0, 0, "", 0, false, 0
 	return nil
 }
 
@@ -207,6 +338,9 @@ type StoreDeal struct {
 func (d *StoreDeal) ValidKinds() error {
 	if d.ChannelKinds == nil {
 		d.ChannelKinds = []string{"web", "operator", "counter"}
+		if d.Kind == DealCoupon { // the counter's (the cashier applies it)
+			d.ChannelKinds = []string{"counter"}
+		}
 	}
 	for _, k := range d.ChannelKinds {
 		ok := false

@@ -2,7 +2,7 @@
   import { goto } from '$app/navigation';
   import { base } from '$app/paths';
   import { timeAgo } from '$lib/api';
-  import { PI_BADGE, type StoreRow } from '$lib/admin/stores';
+  import { KITCHEN_OFFLINE_TITLE, PI_BADGE, type StoreRow } from '$lib/admin/stores';
   import Badge from '$lib/ui/Badge.svelte';
   import Icon from '$lib/ui/Icon.svelte';
   import SearchInput from '$lib/ui/SearchInput.svelte';
@@ -55,6 +55,7 @@
               <span class="flex items-center gap-2 min-w-0">
                 <span class="font-semibold text-text truncate">{r.tenant.name}</span>
                 <Badge tone={PI_BADGE[r.pi].tone} dot>{PI_BADGE[r.pi].label}</Badge>
+                {#if r.kitchenOffline}<Badge tone="bad" title={KITCHEN_OFFLINE_TITLE}>Kitchen offline</Badge>{/if}
               </span>
               <span class="text-xs text-muted truncate">
                 <span class="mono">{r.tenant.store_id ?? 'no store id'}</span> · {r.tenant.has_login ? r.tenant.username : 'no login'} · {r.ordersToday} order{r.ordersToday === 1 ? '' : 's'} today
@@ -90,6 +91,9 @@
               <td class="mono">{r.tenant.store_id ?? '—'}</td>
               <td>
                 <Badge tone={PI_BADGE[r.pi].tone} dot>{PI_BADGE[r.pi].label}</Badge>
+                {#if r.kitchenOffline}
+                  <Badge tone="bad" title={KITCHEN_OFFLINE_TITLE}>Kitchen offline</Badge>
+                {/if}
                 <div class="text-xs text-muted mt-0.5">{seen(r)}</div>
               </td>
               <td class="mono {r.printersDown ? 'text-bad' : ''}">{printers(r)}</td>

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"quiccpos/main/internal/app/orderport"
+	"quiccpos/main/internal/domain/notify"
 	appMiddleware "quiccpos/main/internal/transport/middleware"
 
 	"github.com/google/uuid"
@@ -18,6 +19,54 @@ import (
 type OrderPortHandler struct {
 	svc    *orderport.Service
 	logger zerolog.Logger
+	appEnv string
+	notes  *notify.Recorder // dev only
+}
+
+// SetDev turns on the dev-only test hooks (appEnv "dev").
+func (h *OrderPortHandler) SetDev(appEnv string, notes *notify.Recorder) {
+	h.appEnv, h.notes = appEnv, notes
+}
+
+func (h *OrderPortHandler) dev() bool { return h.appEnv == "dev" }
+
+// POST /admin/v1/dev/placements/sweep (dev only) — one sweep now, nothing stale-aged: {resumed, completed, …}.
+func (h *OrderPortHandler) DevSweep(c *echo.Context) error {
+	if !h.dev() {
+		return c.JSON(http.StatusNotFound, errCode("not found", "not_found"))
+	}
+	return c.JSON(http.StatusOK, h.svc.Sweep(c.Request().Context(), 0))
+}
+
+// POST /admin/v1/dev/placements/orphan {channel_id, order, charge_cents, hold} (dev only) —
+// a pending placement as a main that died mid-work leaves it → {hold_ref}.
+func (h *OrderPortHandler) DevOrphan(c *echo.Context) error {
+	if !h.dev() {
+		return c.JSON(http.StatusNotFound, errCode("not found", "not_found"))
+	}
+	var b struct {
+		ChannelID   uuid.UUID         `json:"channel_id"`
+		Order       orderport.Request `json:"order"`
+		ChargeCents int64             `json:"charge_cents"`
+		Hold        bool              `json:"hold"`
+	}
+	if err := echo.BindBody(c, &b); err != nil {
+		return c.JSON(http.StatusBadRequest, errCode("bad body", "bad_request"))
+	}
+	ref, err := h.svc.DevOrphan(c.Request().Context(), b.ChannelID, b.Order, b.ChargeCents, b.Hold)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, errCode(err.Error(), "bad_request"))
+	}
+	return c.JSON(http.StatusOK, map[string]string{"hold_ref": ref})
+}
+
+// GET /admin/v1/dev/notices?location_id= (dev only) — the owner notices main sent.
+func (h *OrderPortHandler) DevNotices(c *echo.Context) error {
+	id, err := uuid.Parse(c.QueryParam("location_id"))
+	if !h.dev() || h.notes == nil || err != nil {
+		return c.JSON(http.StatusNotFound, errCode("not found", "not_found"))
+	}
+	return c.JSON(http.StatusOK, map[string]any{"notices": h.notes.For(id)})
 }
 
 func NewOrderPortHandler(svc *orderport.Service, logger zerolog.Logger) *OrderPortHandler {
@@ -25,6 +74,11 @@ func NewOrderPortHandler(svc *orderport.Service, logger zerolog.Logger) *OrderPo
 }
 
 func (h *OrderPortHandler) fail(c *echo.Context, err error) error {
+	var pend *orderport.Pending
+	if errors.As(err, &pend) {
+		// main is still at work (DURABILITY-PLAN.md): ask GET /orders/by-key/{key}.
+		return c.JSON(http.StatusAccepted, map[string]string{"state": "pending", "client_order_id": pend.ClientOrderID})
+	}
 	var e *orderport.Error
 	if errors.As(err, &e) {
 		body := map[string]any{"error": e.Message, "code": e.Code}
@@ -51,12 +105,38 @@ func (h *OrderPortHandler) Place(c *echo.Context) error {
 	if op, ok := appMiddleware.ChannelOperatorFromContext(c.Request().Context()); ok {
 		req.TakenBy = &op
 	}
-	v, created, err := h.svc.Place(c.Request().Context(), ch, req)
+	if cu, ok := appMiddleware.CustomerFromContext(c.Request().Context()); ok {
+		req.Account = &cu // a signed-in website customer (X-Customer-Session)
+	}
+	ctx := c.Request().Context()
+	if h.dev() { // tests: answer 202 sooner (?wait_ms=)
+		if ms, err := strconv.Atoi(c.QueryParam("wait_ms")); err == nil && ms > 0 {
+			ctx = orderport.WithPlaceWait(ctx, time.Duration(ms)*time.Millisecond)
+		}
+	}
+	v, created, err := h.svc.Place(ctx, ch, req)
 	if err != nil {
 		return h.fail(c, err)
 	}
 	if created {
 		return c.JSON(http.StatusCreated, v)
+	}
+	return c.JSON(http.StatusOK, v)
+}
+
+// GET /channel/v1/orders/by-key/:key — a placement's state (DURABILITY-PLAN.md):
+// {state: pending|placed|refused|expired|voided, order?, error?, expires_at}.
+func (h *OrderPortHandler) ByKey(c *echo.Context) error {
+	ch, ok := appMiddleware.ChannelFromContext(c.Request().Context())
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, errCode("missing channel key", "unauthorized"))
+	}
+	v, err := h.svc.ByKey(c.Request().Context(), ch, c.Param("key"))
+	if errors.Is(err, orderport.ErrNotFound) {
+		return c.JSON(http.StatusNotFound, errCode("main has no order under that client_order_id", "unknown_key"))
+	}
+	if err != nil {
+		return h.fail(c, err)
 	}
 	return c.JSON(http.StatusOK, v)
 }

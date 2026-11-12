@@ -11,11 +11,8 @@ version: "3"
 vars:
   # Dev secrets come from a gitignored service-token file (no doppler login).
   DOPPLER_TOKEN_FILE: .doppler-dev-main
-  DEV_CONFIG: ./docker/docker-compose.dev.yml
   COMPOSE: "docker compose -f ./docker/docker-compose.dev.yml"
-  ENV_FILE: .env
   MIGRATIONS_DIR: backend/internal/migrate/sql
-  API_BASE: "http://localhost:1323"
 
 tasks:
   default:
@@ -61,16 +58,6 @@ tasks:
     desc: Show running dev services
     cmds:
       - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} ps
-
-  dev-config:
-    desc: Print the resolved docker-compose config (post env-substitution)
-    cmds:
-      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} config
-
-  dev-rebuild:
-    desc: Rebuild the api image without recreating other services
-    cmds:
-      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} build api
 
   dev-recreate-api:
     desc: Rebuild + restart only the api container
@@ -167,51 +154,8 @@ tasks:
       - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- {{.COMPOSE}} exec api sh -c "cd /src && sqlc generate -f sql/sqlc.yaml"
 
   # ──────────────────────────────────────────────────────────────────────
-  # Go code-quality (run locally, not in container)
-  # ──────────────────────────────────────────────────────────────────────
-
-  tidy:
-    desc: go mod tidy
-    dir: backend
-    cmds:
-      - go mod tidy
-
-  fmt:
-    desc: go fmt ./...
-    dir: backend
-    cmds:
-      - go fmt ./...
-
-  vet:
-    desc: go vet ./...
-    dir: backend
-    cmds:
-      - go vet ./...
-
-  build:
-    desc: Build the api binary locally to backend/tmp/main
-    dir: backend
-    cmds:
-      - go build -o ./tmp/main ./cmd/api
-
-  check:
-    desc: tidy + fmt + vet + build + ui-check (run before pushing)
-    cmds:
-      - task: tidy
-      - task: fmt
-      - task: vet
-      - task: build
-      - task: ui-check
-
-  # ──────────────────────────────────────────────────────────────────────
   # Frontend (SvelteKit → embedded into the Go binary)
   # ──────────────────────────────────────────────────────────────────────
-
-  ui-install:
-    desc: Install frontend deps
-    dir: backend/frontend
-    cmds:
-      - npm install
 
   ui-dev:
     desc: Vite dev server with HMR (proxies /api,/admin/v1,/store/v1 → :1323). Needs `task devup` running.
@@ -246,39 +190,6 @@ tasks:
       - 'echo "Generated key (copy into Doppler as ADMIN_API_KEY):"'
       - openssl rand -hex 32
 
-  admin-overview:
-    desc: GET /admin/v1/overview as a pretty-printed JSON dump
-    cmds:
-      - |
-        DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c 'curl -s -H "Authorization: Bearer $ADMIN_API_KEY" {{.API_BASE}}/admin/v1/overview | jq .'
-
-  admin-tenants:
-    desc: List tenants via the admin API
-    cmds:
-      - |
-        DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c 'curl -s -H "Authorization: Bearer $ADMIN_API_KEY" {{.API_BASE}}/admin/v1/tenants | jq .'
-
-  admin-devices:
-    desc: List devices via the admin API (key_hash NOT shown — never stored cleartext)
-    cmds:
-      - |
-        DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c 'curl -s -H "Authorization: Bearer $ADMIN_API_KEY" {{.API_BASE}}/admin/v1/devices | jq .'
-
-  # ──────────────────────────────────────────────────────────────────────
-  # ElasticMQ (local SQS) helpers
-  # ──────────────────────────────────────────────────────────────────────
-
-  sqs-list:
-    desc: Show approximate message counts on the dev queue
-    cmds:
-      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c 'aws --endpoint-url $SQS_ENDPOINT sqs get-queue-attributes --queue-url $SQS_QUEUE_URL --attribute-names All'
-
-  sqs-purge:
-    desc: Purge every message off the dev queue
-    prompt: This deletes every message currently queued. Continue?
-    cmds:
-      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- bash -c 'aws --endpoint-url $SQS_ENDPOINT sqs purge-queue --queue-url $SQS_QUEUE_URL'
-
   # ──────────────────────────────────────────────────────────────────────
   # Tests
   # ──────────────────────────────────────────────────────────────────────
@@ -289,7 +200,7 @@ tasks:
   test:
     desc: Run the main/ pytest suite (dev stack must be up)
     cmds:
-      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v -n 4 --dist loadgroup {{.CLI_ARGS}}
+      - DOPPLER_TOKEN=$(cat {{.DOPPLER_TOKEN_FILE}}) doppler run -- uv run --directory tests pytest -v -n ${MAIN_PYTEST_WORKERS:-4} --dist loadgroup {{.CLI_ARGS}}
 
   test-quick:
     desc: Fast subset of main/ tests
@@ -302,33 +213,20 @@ tasks:
     cmds:
       - go test ./...
 
-  # ──────────────────────────────────────────────────────────────────────
-  # Deploy
-  # ──────────────────────────────────────────────────────────────────────
-
-  transport-deploy:
-    desc: rsync the deploy folder up to the home-server box
+  test-migrate:
+    desc: "Schema tests on a throwaway Postgres 16 (Docker, random port, removed after): baseline = old chain + hardening, schema.sql, adoption, audit log + roles, indexes used, dump/restore"
+    dir: backend
     cmds:
-      - scp -r ./deploy/. homelab@zephyrus-prod:/srv/containers/posserver/
-
-  # ──────────────────────────────────────────────────────────────────────
-  # Versioning
-  #
-  # Each repo holds a bare semver in ./VERSION (e.g. `0.1.0`); tags are
-  # `vX.Y.Z`. CI builds `prod-vX.Y.Z` from any pushed tag matching `v*`.
-  # Releasing is not a task here: after the PR merge, the quicc-ops
-  # `deploy/release.sh main` tags origin/master's VERSION and waits for CI.
-  # ──────────────────────────────────────────────────────────────────────
-
-  version-current:
-    desc: Show the current version (./VERSION)
-    silent: true
-    cmds:
-      - ../scripts/version.sh current
-
-  version-describe:
-    desc: VERSION + git describe diagnostics
-    silent: true
-    cmds:
-      - ../scripts/version.sh describe
-
+      - |
+        set -eu
+        name=quicc-migrate-test-$$
+        docker run -d --rm --name "$name" --health-cmd "pg_isready -U quicc_owner -d t1" --health-interval 1s \
+          -e POSTGRES_USER=quicc_owner -e POSTGRES_PASSWORD=pw -e POSTGRES_DB=t1 -p 127.0.0.1::5432 postgres:16-alpine > /dev/null
+        trap 'docker stop "$name" > /dev/null 2>&1 || true' EXIT
+        for i in $(seq 60); do [ "$(docker inspect -f '{{"{{"}}.State.Health.Status{{"}}"}}' "$name")" = healthy ] && break; sleep 1; done
+        docker exec "$name" createdb -U quicc_owner t2
+        port=$(docker port "$name" 5432/tcp | head -1 | sed 's/.*://')
+        QUICC_TEST_PG_DSN="postgres://quicc_owner:pw@127.0.0.1:$port/t1?sslmode=disable" \
+        QUICC_TEST_PG_RESTORE_DSN="postgres://quicc_owner:pw@127.0.0.1:$port/t2?sslmode=disable" \
+        QUICC_TEST_PG_TOOLS="docker run --rm -i --network host postgres:16-alpine" \
+        go test -count=1 -p 1 ./internal/migrate/ ./internal/infra/database/auditconn/

@@ -51,11 +51,15 @@ func NewAlertsHandler(locs LocationLoader, sender AlertSender, logger zerolog.Lo
 }
 
 // locationErr is a location save's 400 body; a bad Pushover device name gets
-// code bad_device.
+// code bad_device, one that isn't this store's device_not_allowed.
 func locationErr(err error) map[string]string {
 	var bad *tenancy.BadDeviceError
 	if errors.As(err, &bad) {
 		return errCode(err.Error(), "bad_device")
+	}
+	var notAllowed *tenancy.DeviceNotAllowedError
+	if errors.As(err, &notAllowed) {
+		return errCode(err.Error(), "device_not_allowed")
 	}
 	return errResp(err.Error())
 }

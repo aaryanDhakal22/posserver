@@ -23,7 +23,6 @@ import json
 import os
 import secrets
 import time
-import uuid
 from collections.abc import Callable
 from datetime import datetime
 from typing import Any
@@ -47,11 +46,13 @@ SQS_QUEUE_URL = os.getenv("SQS_QUEUE_URL", "")
 SQS_DLQ_URL = os.getenv("SQS_DLQ_URL") or (SQS_QUEUE_URL + "-dlq" if SQS_QUEUE_URL else "")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 if IS_DEV:
-    # Dev publishes straight to the local ElasticMQ main consumes from.
-    SQS_ENDPOINT = "http://localhost:9324"
+    # Dev publishes straight to the local ElasticMQ main consumes from (a gate stack's own queue:
+    # SQS_HOST_ENDPOINT, set by scripts/gate-stack.sh env N).
+    SQS_ENDPOINT = os.getenv("SQS_HOST_ENDPOINT", "http://localhost:9324").rstrip("/")
     AWS_KEY, AWS_SECRET = "dev", "dev"
-    SQS_QUEUE_URL = SQS_QUEUE_URL.replace("elasticmq:9324", "localhost:9324")
-    SQS_DLQ_URL = SQS_DLQ_URL.replace("elasticmq:9324", "localhost:9324")
+    for _host in ("http://elasticmq:9324", "http://localhost:9324"):
+        SQS_QUEUE_URL = SQS_QUEUE_URL.replace(_host, SQS_ENDPOINT)
+        SQS_DLQ_URL = SQS_DLQ_URL.replace(_host, SQS_ENDPOINT)
 else:
     SQS_ENDPOINT = os.getenv("SQS_ENDPOINT") or None
     AWS_KEY, AWS_SECRET = os.getenv("AWS_ACCESS_KEY_ID"), os.getenv("AWS_SECRET_ACCESS_KEY")
@@ -129,12 +130,15 @@ class Store:
     """A throwaway tenant + location. `name` starts with a unique 8-char prefix
     so main's store_name fallback resolves it unambiguously."""
 
-    def __init__(self, admin: requests.Session, *, with_store_id: bool = True) -> None:
+    def __init__(self, admin: requests.Session, *, with_store_id: bool = True, test: bool = True) -> None:
         self.admin = admin
         self.tag = secrets.token_hex(4)  # 8 chars — the fallback match key
         self.name = f"{self.tag} Test Pizza"
         self.store_id = unique_store_id() if with_store_id else None
-        body: dict[str, Any] = {"slug": f"t-{self.tag}", "name": self.name}
+        # test: a throwaway test store, deletable with its money records
+        # (hardening S-1; test=False plays a real store: purged on dev only).
+        self.test = test
+        body: dict[str, Any] = {"slug": f"t-{self.tag}", "name": self.name, "test": test}
         if self.store_id is not None:
             body["store_id"] = self.store_id
         # Creating a tenant creates its one location (one tenant = one restaurant).
@@ -144,6 +148,8 @@ class Store:
         _CREATED_TENANTS.add(self.tenant_id)
         self.location_id: str = r.json()["location"]["id"]
         self._key: dict | None = None
+        self._login: tuple[str, str] | None = None
+        self._stream = None
 
     # -- device key (the agent's credential) --
     def mint_key(self, name: str = "test-agent") -> dict:
@@ -157,6 +163,15 @@ class Store:
             self._key = self.mint_key()
         return self._key["api_key"]
 
+    def online(self):
+        """Hold the store's Pi stream open (main refuses channel orders with
+        kitchen_offline while a store with a Pi key has no live stream). Closed
+        when the store is deleted."""
+        if self._stream is None:
+            from sse import SSEStream  # noqa: PLC0415 (sse imports conftest)
+            self._stream = SSEStream(self.key)
+        return self._stream
+
     @property
     def device_id(self) -> str:
         _ = self.key
@@ -164,10 +179,14 @@ class Store:
 
     # -- browser manager session (cookie) --
     def manager_session(self) -> requests.Session:
-        username, password = f"mgr{self.tag}", secrets.token_urlsafe(10)
-        r = self.admin.patch(f"{ADMIN_V1}/tenants/{self.tenant_id}/credentials",
-                             json={"username": username, "password": password}, timeout=5)
-        assert r.status_code == 204, r.text
+        # One login per store: a new password would end the sessions handed out
+        # before (main ends manager sessions when the password is rotated, M8).
+        if self._login is None:
+            self._login = (f"mgr{self.tag}", secrets.token_urlsafe(10))
+            r = self.admin.patch(f"{ADMIN_V1}/tenants/{self.tenant_id}/credentials",
+                                 json={"username": self._login[0], "password": self._login[1]}, timeout=5)
+            assert r.status_code == 204, r.text
+        username, password = self._login
         s = requests.Session()
         r = s.post(f"{STORE_V1}/session", json={"username": username, "password": password}, timeout=5)
         assert r.status_code == 200, r.text
@@ -182,8 +201,11 @@ class Store:
     def delete(self) -> None:
         """Delete the store; a delete main refuses fails the test (a store
         that can't be deleted is a bug, not something to sweep later)."""
+        if self._stream is not None:
+            self._stream.close()
+            self._stream = None
         try:
-            r = self.admin.delete(f"{ADMIN_V1}/tenants/{self.tenant_id}", timeout=10)
+            r = self.admin.delete(f"{ADMIN_V1}/tenants/{self.tenant_id}", params={} if self.test else {"purge": "1"}, timeout=10)
         except requests.RequestException:
             return  # main went away; the session sweep retries
         if r.status_code in (200, 204, 404):
@@ -296,18 +318,6 @@ def publish(sqs):
     return _publish
 
 
-@pytest.fixture
-def purged_queue(sqs):
-    """Opt-in: start from an empty dev queue. Dev-only by construction (the
-    sqs fixture skips elsewhere). ElasticMQ rate-limits purges; on cooldown we
-    just carry on — tests don't depend on an empty queue for correctness."""
-    try:
-        sqs.purge_queue(QueueUrl=SQS_QUEUE_URL)
-    except Exception:  # noqa: BLE001
-        pass
-    yield
-
-
 def wait_order(api_key: str, source_event_id: int | str, *, timeout: float = 30.0) -> dict:
     """Poll main's scoped by-source lookup until the order lands."""
     def _get():
@@ -356,7 +366,3 @@ def vendor_order(order_id: int, *, store_name: str, store_id: int | None,
     if store_id is not None:
         o["store_id"] = store_id
     return o
-
-
-def new_uuid() -> str:
-    return str(uuid.uuid4())

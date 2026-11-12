@@ -87,9 +87,19 @@ export interface Printer {
   is_receipt: boolean;
   /** Hardware address the Pi learned ('' = not known yet) — how it follows the printer to a new IP. */
   mac?: string;
+  /** Print width in font-A characters: 48 (80 mm, 576 dots), 42 (a 72 mm print area, 512 dots) or 32
+   * (58 mm, 384 dots). The Pi lays every slip out for it. */
+  print_columns: number;
   created_at: string;
   updated_at: string;
 }
+
+/** The print widths a printer can have (printers.print_columns), widest first. */
+export const PRINT_WIDTHS: { cols: number; label: string }[] = [
+  { cols: 48, label: '80 mm — 48 characters (576 dots)' },
+  { cols: 42, label: '72 mm print area — 42 characters (512 dots)' },
+  { cols: 32, label: '58 mm — 32 characters (384 dots)' }
+];
 
 /** A printer's name as the menu shows it: items on the receipt printer print
  * only on the receipt (agent ≥ 2.0.5) unless it is the store's only printer. */
@@ -127,10 +137,13 @@ export class ApiError extends Error {
   status: number;
   /** Seconds from a 429's Retry-After header, when present. */
   retryAfter?: number;
-  constructor(status: number, message: string, retryAfter?: number) {
+  /** The body's machine-readable `code` (e.g. "pin_taken"), when present. */
+  code?: string;
+  constructor(status: number, message: string, retryAfter?: number, code?: string) {
     super(message);
     this.status = status;
     this.retryAfter = retryAfter;
+    this.code = code;
   }
 }
 
@@ -141,18 +154,20 @@ export function errText(e: unknown): string {
   return String(e);
 }
 
-async function parseError(res: Response): Promise<string> {
+async function parseError(res: Response): Promise<{ message: string; code?: string }> {
   const text = await res.text();
   try {
-    return (JSON.parse(text).error as string) || text;
+    const j = JSON.parse(text);
+    return { message: (j.error as string) || text, code: typeof j.code === 'string' ? j.code : undefined };
   } catch {
-    return text || res.statusText;
+    return { message: text || res.statusText };
   }
 }
 
 async function toApiError(res: Response): Promise<ApiError> {
   const ra = Number(res.headers.get('Retry-After'));
-  return new ApiError(res.status, await parseError(res), Number.isFinite(ra) && ra > 0 ? ra : undefined);
+  const { message, code } = await parseError(res);
+  return new ApiError(res.status, message, Number.isFinite(ra) && ra > 0 ? ra : undefined, code);
 }
 
 export function getAdminKey(): string {
@@ -318,12 +333,16 @@ export interface Category {
   id: string; tenant_id: string; location_id: string; menu_id: string;
   name: string; description: string; available: boolean; position: number;
   default_printer_id: string | null;
+  /** "No kitchen ticket" (00041): its items without their own printer print on the receipt only. */
+  no_kitchen_ticket?: boolean;
 }
 export interface Item {
   id: string; tenant_id: string; location_id: string; category_id: string;
   name: string; description: string; price_cents: number; tax_rate_bps: number;
   in_stock: boolean; out_until: string | null; tags: string[];
   printer_id: string | null; position: number; attributes: Record<string, unknown>;
+  /** "No kitchen ticket" (00041): no station ticket, not in "Also on this order"; receipt only. */
+  no_kitchen_ticket?: boolean;
 }
 export interface ModifierGroup {
   id: string; tenant_id: string; location_id: string; name: string;
@@ -332,6 +351,15 @@ export interface ModifierGroup {
 export interface ModifierOption {
   id: string; tenant_id: string; location_id: string; group_id: string;
   name: string; price_delta_cents: number; in_stock: boolean; position: number;
+  /** Print on the delivery (driver) ticket even at $0 (00046). */
+  show_on_driver_ticket?: boolean;
+  /** Its mod family is regular: a coupon's free toppings can include it. */
+  counts_for_coupons?: boolean;
+}
+/** PUT …/options/:id/coupons — an option's switches after the change. */
+export interface OptionFlags {
+  option_id: string; show_on_driver_ticket: boolean; counts_for_coupons: boolean;
+  family_id: string | null; family_name?: string;
 }
 export interface ItemGroupLink { group: ModifierGroup; attach_position: number; }
 
@@ -341,14 +369,31 @@ export interface MenuSize { id: string; location_id: string; name: string; short
 export interface ItemSize { size_id: string; price_cents: number; kitchen_name?: string; position?: number; }
 export interface OptionPrice { size_id: string; price_cents: number; }
 /** GET /me/menu/bank — the bank as views compile from it. */
-export interface BankItem extends Item { kitchen_name: string; sku: string; sizes: ItemSize[]; group_ids: string[]; }
-export interface BankOption extends ModifierOption { is_default: boolean; kitchen_name: string; prices: OptionPrice[]; }
+export interface BankItem extends Item { kitchen_name: string; sku: string; sizes: ItemSize[]; group_ids: string[]; family_id?: string | null; }
+export interface BankOption extends ModifierOption { is_default: boolean; kitchen_name: string; prices: OptionPrice[]; family_id?: string | null; }
 export interface BankGroup extends ModifierGroup { portions: boolean; options: BankOption[]; }
 export interface Bank {
   location_id: string; version: number; sizes: MenuSize[];
   menus: (Menu & { categories: (Category & { items: BankItem[] })[] })[];
   groups: Record<string, BankGroup>;
+  families?: MenuFamily[];
 }
+
+// --- Families (00045): item / mod families; a mod family's class decides what a coupon may make free ---
+export type FamilyKind = 'item' | 'mod';
+export type FamilyClass = '' | 'regular' | 'premium' | 'unpriced';
+export interface MenuFamily { id: string; location_id: string; kind: FamilyKind; name: string; class: FamilyClass; position: number }
+export interface FamilyRow extends MenuFamily { items: number; options: number }
+export interface FamiliesListing {
+  families: FamilyRow[];
+  items: { id: string; name: string; category: string; family_id: string | null }[];
+  options: { id: string; name: string; group: string; group_id: string; price_cents: number; family_id: string | null }[];
+}
+export const FAMILY_CLASSES: { value: FamilyClass; label: string; help: string }[] = [
+  { value: 'regular', label: 'Regular', help: 'A coupon may make these free (e.g. pizza toppings at the normal price)' },
+  { value: 'premium', label: 'Premium', help: 'Never free in a coupon (steak, grilled chicken, add-ons)' },
+  { value: 'unpriced', label: 'Unpriced', help: 'No price: halves, choices, notes, "no X"' }
+];
 export type ViewKind = 'web' | 'operator' | 'counter' | 'vendor';
 export interface ViewRules { markup_bps: number; round: 'none' | 'ceil_99'; hidden_categories: string[]; require_photo: boolean; }
 export interface MenuView {
@@ -397,10 +442,15 @@ export interface StoreOrder {
   customer: { display_name?: string };
   fulfillment: { type: string };
   money: { total_cents: number };
+  /** The order's payments; tip_cents = the tip taken with one (never in the total). */
+  payments?: { method: string; amount_cents: number; tip_cents?: number }[];
   received_at: string;
   kitchen_order_number?: number;
   estimated_ready_at?: string;
   driver_name?: string;
+  /** refund_owed_cents: an online / website order changed below what it arrived paid with owes its customer
+   * that much back (agent 2.10aa): a note for the manager (refund it in the vendor's site / Square), not a payment. */
+  source_metadata?: { refund_owed_cents?: number; [k: string]: unknown };
 }
 /** A recent vendor item name that doesn't reach a kitchen printer. */
 export interface MenuImportResult {
@@ -411,6 +461,9 @@ export interface MenuImportResult {
   prints_on?: { printer: string; items: number }[];
   /** File items left with no printer — they print on every station. */
   items_no_printer?: number;
+  /** File items with "no kitchen ticket" (receipt only). */
+  items_no_kitchen?: number;
+  item_no_kitchen_changed?: number;
 }
 export interface UnmatchedName { name: string; routing: 'unmatched' | 'unassigned'; orders: number; last_seen: string; }
 export interface FloorDriver { id: string; name: string; position: number; status: string; updated_at: string; }
@@ -666,6 +719,8 @@ export interface OrderingSettings {
   pickup_enabled: boolean; delivery_enabled: boolean;
   pickup_eta_minutes: number; delivery_eta_minutes: number; schedule_days: number;
   paused_at: string | null; paused_until: string | null; pause_note: string;
+  /** The website's tip limit (and a tip added after the order), cents; default $50. */
+  tip_max_cents: number;
 }
 export interface HoursException { id: string; date: string; closed: boolean; hours: HoursRange[]; note: string; }
 /** GET /me/status — what every channel sees. */
@@ -706,14 +761,21 @@ export function storeTime(iso: string | null | undefined, tz: string): string {
 export interface PricingFees {
   service_fee_cents: number; service_fee_bps: number; delivery_fee_cents: number;
   free_delivery_over_cents: number | null; delivery_min_cents: number;
+  /** The driver's share of delivery_fee_cents (the rest is the store's); null/absent = $3, capped at the fee. */
+  delivery_driver_cents?: number | null;
 }
 export interface PricingTips { enabled: boolean; presets: number[]; default_pct: number }
 export interface PricingStore {
   tax_bps: number; stacking: 'best' | 'stack' | 'single'; fees: PricingFees; tips: PricingTips; card_fee: { mode: string; bps: number };
+  /** Half and half: a topping on a half at full or half price; the cheaper of two half-specialties' extra over plain at this % off. */
+  half_topping_price: 'full' | 'half'; half_specialty_off_pct: number;
 }
 export interface PricingKind { fees: PricingFees | null; tips: PricingTips | null; card_fee: { mode: string; bps: number } | null }
 export interface PricingBody { store: PricingStore; kinds: Record<string, PricingKind> }
-export type DealKind = 'bundle' | 'mix' | 'nth' | 'code' | 'free_item';
+export type DealKind = 'bundle' | 'mix' | 'nth' | 'code' | 'free_item' | 'coupon';
+/** A coupon part: qty items of one of these item families (at one of these sizes, when any), the N cheapest regular mods free on each;
+ *  upcharge_over: its base families (a unit of another of its families pays its price over the cheapest base item at its size). */
+export interface CouponPart { label: string; families: string[]; sizes?: string[]; qty: number; regular_mods_included: number; upcharge_over?: string[] }
 export interface DealEligible { items: string[]; categories: string[]; sizes: string[] }
 export interface StoreDeal {
   id: string; kind: DealKind; name: string; description: string; active: boolean; fulfil: string;
@@ -721,6 +783,7 @@ export interface StoreDeal {
   price_cents?: number; slots?: { label: string; eligible: DealEligible; included_options: number }[];
   eligible?: DealEligible | null; qty?: number; each_cents?: number; n?: number; pct?: number;
   code?: string; amount_cents?: number; first_order_only?: boolean; min_subtotal_cents?: number;
+  card?: string[]; parts?: CouponPart[];
   channel_kinds: string[]; position?: number;
 }
 export const DEAL_KINDS: { kind: DealKind; label: string; help: string }[] = [
@@ -728,6 +791,169 @@ export const DEAL_KINDS: { kind: DealKind; label: string; help: string }[] = [
   { kind: 'mix', label: 'Mix & match', help: 'Any N of these for $X each (e.g. any 2 pizzas $10 each)' },
   { kind: 'nth', label: 'Every Nth', help: 'Every Nth one is % off (e.g. 2nd wings half off)' },
   { kind: 'code', label: 'Promo code', help: 'A code customers type for % or $ off' },
-  { kind: 'free_item', label: 'Free item', help: 'One of these free once the order reaches $Y' }
+  { kind: 'free_item', label: 'Free item', help: 'One of these free once the order reaches $Y' },
+  { kind: 'coupon', label: 'Coupon', help: 'The cashier applies it when the order has every part (by family): the priciest item carries the price, the rest $0; N regular toppings free' }
 ];
 export const CHANNEL_KIND_LABELS: Record<string, string> = { web: 'Website', operator: 'Call center', counter: 'Counter', vendor: 'Vendor' };
+
+// --- Payments (weborder stage 2): Square + online card holds ----------------------
+
+export interface SquareLocation {
+  id: string;
+  name: string;
+  status: string;
+  currency: string;
+}
+
+export interface SquareStatus {
+  enabled: boolean;
+  env: 'production' | 'sandbox' | 'fake' | 'off';
+  app_id: string;
+  connected: boolean;
+  state: '' | 'connected' | 'revoked' | 'error';
+  merchant_id: string;
+  square_location_id: string;
+  locations: SquareLocation[];
+  last_error: string;
+  connected_at: string | null;
+  holds_open: number;
+  /** The grant includes the counter card reader's scope (PAYMENTS_WRITE_IN_PERSON); false = reconnect once; null = unknown. */
+  in_person?: boolean | null;
+  scopes?: string[];
+  /** This server runs Square's sandbox: "Paste a Square sandbox token" is offered (never in production). */
+  sandbox_paste?: boolean;
+  /** The connection is a pasted sandbox token. */
+  pasted?: boolean;
+}
+
+export type HoldStatus = 'held' | 'captured' | 'cancelled' | 'failed';
+
+export interface CardHoldRow {
+  order_id: string;
+  order_ref: string;
+  customer: string;
+  type: string;
+  placed_at: string;
+  order_status: string;
+  gateway: string;
+  payment_ref: string;
+  amount_cents: number;
+  tip_cents: number;
+  added_tip_cents: number;
+  status: HoldStatus;
+  capture_reason: string;
+  due_at: string;
+  capture_requested_at: string | null;
+  attempts: number;
+  last_error: string;
+  captured_cents: number;
+  tip_payment_ref: string;
+  tip_note: string;
+  captured_at: string | null;
+  cancelled_at: string | null;
+  created_at: string;
+}
+
+// --- Website (Store › Website, weborder) ----------------------------------
+
+export type BlockId = 'hero' | 'again' | 'categories' | 'deals' | 'picks' | 'hours' | 'about' | 'install';
+export type MisoSpot = 'peek' | 'side' | 'off';
+
+/** The website's settings document (main's site.Look; the storefront's defaults fill what's missing). */
+export interface SiteLook {
+  preset?: string;
+  brand?: string;
+  menu_layout?: '' | 'compact' | 'photo' | 'printed';
+  languages?: string[];
+  logo?: string;
+  cover?: string;
+  texts?: Partial<Record<'eyebrow' | 'headline' | 'lead' | 'about_title' | 'about' | 'eyebrow_es' | 'headline_es' | 'lead_es' | 'about_title_es' | 'about_es', string>>;
+  blocks?: { id: BlockId; on: boolean }[];
+  picks?: string[];
+  announcement?: { on: boolean; text?: string; text_es?: string; from?: string; to?: string };
+  miso_pages?: boolean;
+  miso_blocks?: Partial<Record<BlockId, MisoSpot>>;
+  privacy?: string;
+}
+
+export interface Website {
+  draft: SiteLook;
+  published: SiteLook;
+  has_draft: boolean;
+  changes: string[];
+  version: number;
+  draft_at: string | null;
+  published_at: string | null;
+  published_by: string;
+  /** <origin>/p/<token>, + "/menu" etc. for another page ("" = no host yet) */
+  preview_url: string;
+  preview_host: string;
+}
+
+export interface SiteImage {
+  id: string;
+  kind: 'logo' | 'cover';
+  content_type: string;
+  size: number;
+}
+
+export interface SiteDomain {
+  host: string;
+  primary: boolean;
+  verified: boolean;
+  created_at: string;
+}
+
+// --- Store › Staff (counter terminal staff + terminal settings, contract §2.5zb) ---
+export type StaffRole = 'cashier' | 'manager' | 'driver' | 'callcenter';
+export interface StaffLimits { refund_cents?: number; discount_pct?: number }
+export interface StaffEffective { refund_cents: number | null; discount_pct: number | null }
+export interface Staff {
+  id: string; first_name: string; last_name: string; role: StaffRole;
+  limits: StaffLimits; effective_limits: StaffEffective; active: boolean; created_at: string; updated_at: string;
+}
+export type TerminalTabName = 'info' | 'counter' | 'takeout' | 'delivery' | 'pickup' | 'history' | 'dispatch';
+export type ButtonFont =
+  | 'barlow' | 'barlow_condensed' | 'barlow_semi_condensed' | 'system'
+  | 'fira_sans_condensed' | 'ibm_plex_sans_condensed' | 'atkinson_hyperlegible';
+export interface TerminalSettings {
+  cashier_refund_cents: number; cashier_discount_pct: number; auto_lock_minutes: number; counter_start: number;
+  receipt_auto_done_seconds: number; auto_close_batch_at: string;
+  default_tab: TerminalTabName; show_history: boolean; button_font: ButtonFont; cashier_price_drop_pct: number;
+  click_sound: boolean; prices_on_buttons: boolean; out_of_area_margin_mi: number; name_on_paid_counter: boolean;
+  card_tips: boolean; card_tip_percents: number[]; employee_meal_pct: number; topping_max_count: number;
+  cashier_payout_cents: number; default_pickup_minutes: number; area_codes: string[]; drawer_start_cents: number;
+  waste_reasons: string[];
+  void_reasons: string[];
+  /** Send to phone: a charge on a cashier's phone nobody finishes expires after this (agent §2.10z). */
+  phone_charge_timeout_seconds: number;
+  /** The call-center app asks for the PIN again after this long idle (contract §2.5zh). */
+  callcenter_idle_lock_minutes?: number;
+}
+/** A browser the store's login opened the call-center app on. */
+export interface CallcenterDevice {
+  id: string; name: string; created_at: string; last_seen_at: string | null;
+  staff_id?: string; staff_name?: string; revoked_at?: string;
+}
+/** The call center's own shared login (never the password). */
+export interface CallcenterLogin { username: string; set: boolean; updated_at: string | null; devices_revoked?: number }
+export interface CallcenterReportRow {
+  day: string; staff_id: string; staff_name: string; orders: number; voided: number; pickup: number; delivery: number;
+  sales_cents: number; card_cents: number; tips_cents: number;
+}
+export interface CallcenterReport {
+  from: string; to: string; timezone: string; rows: CallcenterReportRow[];
+  totals: { orders: number; voided: number; sales_cents: number; card_cents: number; tips_cents: number };
+}
+/** The owner's defaults (main's staff.DefaultSettings): a field main doesn't send yet shows these. */
+export const TERMINAL_DEFAULTS: TerminalSettings = {
+  cashier_refund_cents: 2000, cashier_discount_pct: 20, auto_lock_minutes: 5, counter_start: 1, receipt_auto_done_seconds: 15,
+  auto_close_batch_at: '04:00', default_tab: 'info', show_history: false, button_font: 'barlow', cashier_price_drop_pct: 20,
+  click_sound: false, prices_on_buttons: false, out_of_area_margin_mi: 1, name_on_paid_counter: false, card_tips: false,
+  card_tip_percents: [15, 18, 20], employee_meal_pct: 20, topping_max_count: 3,
+  cashier_payout_cents: 2000, default_pickup_minutes: 15, area_codes: ['410', '443', '667'], drawer_start_cents: 10000,
+  waste_reasons: ['Never picked up', 'Made wrong / remade', 'Customer complaint', 'Burnt / dropped'],
+  void_reasons: ['Customer cancelled', 'Wrong order', 'Duplicate', 'Took too long', 'Other'],
+  phone_charge_timeout_seconds: 180,
+  callcenter_idle_lock_minutes: 15
+};

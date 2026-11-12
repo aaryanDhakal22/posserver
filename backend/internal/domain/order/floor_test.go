@@ -163,8 +163,10 @@ func TestValidRunStops(t *testing.T) {
 		{`null`, true, 0},
 		{`[]`, true, 0},
 		{`[{"order_id":"o1","eta":"2026-10-25T18:00:00Z"}]`, true, 1},
-		{`[{"opaque_id":"pos:0123456789ab","source":"pos","placed_at":"2026-10-25T17:40:00Z","sent_at":"2026-10-25T17:41:00Z","out_at":"2026-10-25T18:00:00Z","delivered_at":null,"distance_m":2400}]`, true, 1},
-		{`[{"order_id":"o1"},{"opaque_id":"pos:ab","source":"pos"}]`, true, 2},
+		{`[{"order_id":"o1"},{"order_id":"o2"}]`, true, 2},
+		// SoftTouch's anonymous POS stops (2.1.0) are refused since H3.
+		{`[{"opaque_id":"pos:0123456789ab","source":"pos","placed_at":"2026-10-25T17:40:00Z","sent_at":"2026-10-25T17:41:00Z","out_at":"2026-10-25T18:00:00Z","delivered_at":null,"distance_m":2400}]`, false, 0},
+		{`[{"order_id":"o1"},{"opaque_id":"pos:ab","source":"pos"}]`, false, 0},
 		{`[{"eta":"x"}]`, false, 0},
 		{`[null]`, false, 0},
 		{`{"order_id":"o1"}`, false, 0},

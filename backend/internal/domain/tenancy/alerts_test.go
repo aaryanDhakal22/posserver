@@ -74,3 +74,46 @@ func TestNormalizeOwnerDevices(t *testing.T) {
 		t.Fatalf("want BadDeviceError, got %v", err)
 	}
 }
+
+// A manager may keep the store's phones and add a new one nobody uses; not
+// another store's, not one of ours, and only allow-listed ones when the admin
+// set a list. The allow-list itself is the admin's.
+func TestCheckManagerDevices(t *testing.T) {
+	cur := Config{OwnerDevicesKey: "OwnerPhone"}
+	others := []Config{{OwnerDevicesKey: "RivalPhone,Shared"}, {AllowedDevicesKey: "RivalSpare"}, nil}
+	reserved := []string{"AdminPhone"}
+	try := func(cur Config, devices string) (Config, error) {
+		cfg := Config{OwnerDevicesKey: devices, AllowedDevicesKey: "Sneaky"}
+		return cfg, CheckManagerDevices(cfg, cur, others, reserved)
+	}
+	var notAllowed *DeviceNotAllowedError
+
+	for _, ok := range []string{"OwnerPhone", "", "OwnerPhone,NewTablet", "ownerphone"} {
+		if _, err := try(cur, ok); err != nil {
+			t.Errorf("%q: %v, want allowed", ok, err)
+		}
+	}
+	for _, bad := range []string{"RivalPhone", "OwnerPhone,rivalphone", "RivalSpare", "AdminPhone", "adminphone"} {
+		if _, err := try(cur, bad); !errors.As(err, &notAllowed) {
+			t.Errorf("%q: err = %v, want DeviceNotAllowedError", bad, err)
+		}
+	}
+	// The manager can't write the allow-list: absent stays absent, set stays as saved.
+	if cfg, _ := try(cur, "OwnerPhone"); cfg[AllowedDevicesKey] != nil {
+		t.Errorf("the manager set the allow-list: %v", cfg[AllowedDevicesKey])
+	}
+	listed := Config{OwnerDevicesKey: "OwnerPhone", AllowedDevicesKey: "Tablet2,Shared"}
+	if cfg, _ := try(listed, "OwnerPhone"); cfg[AllowedDevicesKey] != "Tablet2,Shared" {
+		t.Errorf("the allow-list changed: %v", cfg[AllowedDevicesKey])
+	}
+	// With a list: only its names (and the saved ones); a name the admin
+	// allowed is fine even when another store uses it (one owner, two stores).
+	for _, ok := range []string{"OwnerPhone,Tablet2", "Shared", "tablet2"} {
+		if _, err := try(listed, ok); err != nil {
+			t.Errorf("allow-listed %q: %v", ok, err)
+		}
+	}
+	if _, err := try(listed, "NewTablet"); !errors.As(err, &notAllowed) || notAllowed.Name != "NewTablet" {
+		t.Errorf("a name off the allow-list: err = %v", err)
+	}
+}

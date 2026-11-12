@@ -628,3 +628,65 @@ func TestBuildPayments_BalanceOwingIsCash(t *testing.T) {
 		t.Fatalf("nothing paid or owing → %+v, want nil", ps)
 	}
 }
+
+// H3: a vendor order whose customer name, note, address and item names carry
+// printer commands (ESC p = drawer kick, DLE DC4 = real-time pulse, GS V =
+// cut, ESC @ = reset) is cast without them, and its order.received event (the
+// frame the Pi prints from) has none either.
+func TestCast_StripsPrinterControlBytes(t *testing.T) {
+	c := newTestCaster(t)
+	payload := samplePayload
+	for old, repl := range map[string]string{
+		`"first_name":"ERIK"`:       `"first_name":"ERIK\u001bp\u0000\u0019ú"`,
+		`"last_name":"DAVIS"`:       `"last_name":"DAVIS\u0010\u0014\u0001\u0000\u0001"`,
+		`"notes": ""`:               `"notes": "ring bell\nPAID - CARD\u001dV\u0000"`,
+		`{"name":"Brownies"`:        `{"name":"Brownies\u001dV\u0000\u001b@"`,
+		`"name":"Add Pineapple"`:    `"name":"Add Pineapple\u001bp\u0000\u0019ú"`,
+		`"service_type": "takeout"`: `"service_type":"delivery","delivery_address":{"street":"123 Main\u001b@","cross_streets":"5th\r\nFREE DELIVERY\u001dV\u0001","suite":"4B\u0007","buz":"","city":"NYC","state":"NY","zip":"10001"}`,
+		`"size_name":"Serving","quantity":1,"price":4.49,"plu":"","who":"","group_id":"","notes":""`: `"size_name":"Serving","quantity":1,"price":4.49,"plu":"","who":"","group_id":"","notes":"warm\u001bp\u0000\u0019 it\nVOID"`,
+	} {
+		if !strings.Contains(payload, old) {
+			t.Fatalf("fixture changed: %s", old)
+		}
+		payload = strings.Replace(payload, old, repl, 1)
+	}
+	agg, err := c.Cast(context.Background(), order.CastInput{Raw: []byte(payload), TenantID: order.TenantID(testTenantID), LocationID: order.LocationID(testLocationID)})
+	if err != nil {
+		t.Fatalf("Cast: %v", err)
+	}
+	var texts []string
+	var walk func(items []order.LineItem)
+	walk = func(items []order.LineItem) {
+		for _, it := range items {
+			texts = append(texts, it.Name, it.Size, it.Notes)
+			walk(it.Children)
+		}
+	}
+	walk(agg.Items())
+	a := agg.Fulfillment().Address
+	texts = append(texts, agg.Customer().DisplayName, agg.Customer().Phone, agg.Notes(), a.Line1, a.Line2, a.Notes, a.City)
+	for _, s := range texts {
+		for _, r := range s {
+			if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+				t.Errorf("control character %#x kept in %q", r, s)
+			}
+		}
+	}
+	if got := agg.Notes(); got != "ring bell PAID - CARDV" {
+		t.Errorf("notes = %q (the line break must be a space: no forged line)", got)
+	}
+	if got := agg.Customer().DisplayName; !strings.HasPrefix(got, "ERIKp") || !strings.Contains(got, "DAVIS") {
+		t.Errorf("customer = %q", got)
+	}
+	if a.Notes != "5th  FREE DELIVERYV" || a.Line1 != "123 Main@" {
+		t.Errorf("address = %+v", a)
+	}
+	for _, ev := range agg.PullEvents() {
+		for _, esc := range []string{`\u001b`, `\u001d`, `\u0010`, `\u0000`, `\u0007`, `\n`, `\r`} {
+			// raw_payload (the vendor's bytes, kept for the record, never printed) is not part of the event
+			if strings.Contains(string(ev.Payload), esc) {
+				t.Errorf("event %s carries %s", ev.Type, esc)
+			}
+		}
+	}
+}

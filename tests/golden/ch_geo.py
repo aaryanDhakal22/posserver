@@ -1,6 +1,7 @@
 """Golden chapter: delivery maps as the Pi sees them — order.geo pushes for
 located / not found / ambiguous deliveries, geo.choose, geo.pin, geo.trip,
-POS stops (geo.locate / geo.forget), geo.search and location.radius — with
+the retired POS stops (geo.locate / geo.forget: 202 since H3), geo.search
+and location.radius — with
 main pointed at fake Census / Nominatim / OSRM (dev only, xdist group geo)."""
 
 from __future__ import annotations
@@ -77,7 +78,9 @@ def _run(rec: Rec, admin: requests.Session, a: Store, sqs, fake: FakeGeo) -> Non
                                                                    "zip": "07002", "suite": "", "cross_streets": "", "buz": ""})
             rec.alias(o["order_id"], f"order_id:{name}")
             sqs.send_message(QueueUrl=SQS_QUEUE_URL, MessageBody=json.dumps(o), MessageAttributes=online_attrs())
-            f = s.wait_event("order", lambda d: d.get("source_event_id") == str(o["order_id"]), timeout=30)
+            # keep_others: its order.geo push can come before this order frame on a fast machine
+            f = s.wait_event("order", lambda d: d.get("source_event_id") == str(o["order_id"]), timeout=30,
+                             keep_others=True)
             return f["id"] if f else ""
 
         known = deliver("known", streets["known"])
@@ -98,15 +101,17 @@ def _run(rec: Rec, admin: requests.Session, a: Store, sqs, fake: FakeGeo) -> Non
         rpc("trip", "geo.trip", {"order_ids": [other, known, missing]})
         rpc("trip bad", "geo.trip", {"order_ids": []})
 
+        # SoftTouch's POS stops (geo.locate / geo.forget, 2.1.0) were retired
+        # in H3 (2026-11-11): main answers them as an unknown type, 202 and
+        # nothing done. The transcript's stop steps were edited deliberately
+        # to that answer (the stop's push, "locate bad", "trip with stop" and
+        # "forget bad" went with it), not re-recorded.
         stop = str(uuid.uuid4())  # the agent's id for a POS check
         rec.alias(stop, "pos-stop")
-        rpc("locate stop", "geo.locate", {"order_id": stop, "address": {"line1": streets["stop"], "line2": "", "city": "Bayonne",
-                                                                         "state": "NJ", "postal_code": "07002"}})
-        geo("stop located", stop)
-        rpc("locate bad", "geo.locate", {"order_id": stop})
-        rpc("trip with stop", "geo.trip", {"order_ids": [stop, known]})
-        rpc("forget stop", "geo.forget", {"order_id": stop})
-        rpc("forget bad", "geo.forget", {})
+        rpc("locate stop (retired)", "geo.locate", {"order_id": stop, "address": {"line1": streets["stop"], "line2": "",
+                                                                                   "city": "Bayonne", "state": "NJ",
+                                                                                   "postal_code": "07002"}})
+        rpc("forget stop (retired)", "geo.forget", {"order_id": stop})
 
         rpc("search", "geo.search", {"order_id": missing, "query": streets["other"]})
         geo("search result", missing)

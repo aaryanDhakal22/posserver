@@ -156,6 +156,29 @@ func (s *Service) DeleteByID(ctx context.Context, id order.ID) error {
 	return nil
 }
 
+// OrderMoney is an order's tenant and whether it holds money records
+// (S-1); pgx.ErrNoRows = no such order.
+func (s *Service) OrderMoney(ctx context.Context, id uuid.UUID) (uuid.UUID, bool, error) {
+	r, ok := s.repo.(interface {
+		OrderMoney(ctx context.Context, id uuid.UUID) (uuid.UUID, bool, error)
+	})
+	if !ok {
+		return uuid.Nil, true, errors.New("order money check unavailable")
+	}
+	return r.OrderMoney(ctx, id)
+}
+
+// TenantOrderMoney reports whether any of a tenant's orders holds money.
+func (s *Service) TenantOrderMoney(ctx context.Context, tenantID uuid.UUID) (bool, error) {
+	r, ok := s.repo.(interface {
+		TenantOrderMoney(ctx context.Context, tenantID uuid.UUID) (bool, error)
+	})
+	if !ok {
+		return true, errors.New("order money check unavailable")
+	}
+	return r.TenantOrderMoney(ctx, tenantID)
+}
+
 // ListSummaries returns a cross-tenant, lightweight order listing (admin-only).
 func (s *Service) ListSummaries(ctx context.Context, f order.ListFilter) ([]order.Summary, error) {
 	return s.repo.ListSummaries(ctx, f)

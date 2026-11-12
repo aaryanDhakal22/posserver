@@ -10,7 +10,7 @@ tmp_dir = "tmp"
   cmd = "CGO_ENABLED=1 go build -o ./tmp/main ./cmd/api/main.go"
   delay = 1000
   entrypoint = ["./tmp/main"]
-  exclude_dir = ["assets", "tmp", "vendor", "testdata"]
+  exclude_dir = ["assets", "tmp", "vendor", "testdata", "frontend"] # frontend: no Go in it (the SPA is embedded from internal/transport/webapp/build); its builds and node_modules would restart main mid-test
   exclude_file = []
   exclude_regex = ["_test.go"]
   exclude_unchanged = false

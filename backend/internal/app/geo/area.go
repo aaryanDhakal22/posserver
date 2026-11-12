@@ -96,6 +96,15 @@ func AreaCacheKey(locationID uuid.UUID, key string) string {
 	return "area|" + locationID.String() + "|" + key
 }
 
+// PinCacheKey is the geo_cache key of a pin a store's staff set (geo.pin, a
+// candidate picked with geo.choose): the input's own key scoped to that
+// store. A pin used to sit under the shared key, where every store's lookups
+// read it: one store could move where another's drivers are sent for the
+// same address (security review, migration 00007).
+func PinCacheKey(tenantID uuid.UUID, key string) string {
+	return "pin|" + tenantID.String() + "|" + key
+}
+
 var startsWithNumber = regexp.MustCompile(`^\s*\d`)
 
 // CleanStreet keeps only the street part of a street line: the first comma
@@ -234,12 +243,19 @@ func areaPick(in Address, cs []Candidate) (one *Candidate, check []Candidate) {
 
 // --- the service side ---------------------------------------------------------------
 
-// cached looks the input up in geo_cache: its own key first (a pin or a
-// normal / cleaned-line result), then the location's area-retry entry
-// (corrected=true). pgx.ErrNoRows when neither is there.
+// cached looks the input up in geo_cache: the store's own pin first
+// (PinCacheKey), then the shared key (a normal / cleaned-line result), then
+// the location's area-retry entry (corrected=true). pgx.ErrNoRows when none
+// is there.
 func (s *Service) cached(ctx context.Context, in locateIn) (c models.GeoCache, corrected bool, err error) {
 	if in.key == "" {
 		return c, false, pgx.ErrNoRows
+	}
+	if in.tenantID != uuid.Nil {
+		c, err = s.q.GetGeoCache(ctx, PinCacheKey(in.tenantID, in.key))
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return c, false, err
+		}
 	}
 	c, err = s.q.GetGeoCache(ctx, in.key)
 	if !errors.Is(err, pgx.ErrNoRows) || in.locationID == uuid.Nil {

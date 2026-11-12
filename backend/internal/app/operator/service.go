@@ -15,11 +15,15 @@ import (
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	operatorDom "quiccpos/main/internal/domain/operator"
 	"quiccpos/main/internal/domain/tenancy"
+	"quiccpos/main/internal/shared/touch"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
 )
+
+// touches bounds the last-used stamps (one per id per minute, 5 s each).
+var touches = touch.New(touch.Every)
 
 var (
 	ErrInvalidCredentials = errors.New("invalid username or password")
@@ -150,7 +154,7 @@ func (s *Service) AuthenticateToken(ctx context.Context, rawToken string) (*oper
 		return nil, nil, fmt.Errorf("token lookup: %w", err)
 	}
 	// Fire-and-forget last-used stamp (best effort).
-	go func(id uuid.UUID) { _ = s.repo.TouchToken(context.Background(), id) }(ta.TokenID)
+	touches.Do(ta.TokenID, func(ctx context.Context) error { return s.repo.TouchToken(ctx, ta.TokenID) })
 
 	op := &operatorDom.Operator{ID: ta.OperatorID, Username: ta.Username, DisplayName: ta.DisplayName}
 	allowed, err := s.repo.ListAllowedLocations(ctx, ta.OperatorID)

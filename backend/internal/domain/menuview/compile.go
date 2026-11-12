@@ -30,6 +30,8 @@ type Build struct {
 	ModifierGroups []BuildGroup     `json:"modifier_groups"`
 	Maps           []BuildMap       `json:"maps,omitempty"`
 	NeedsAttention []NeedsAttention `json:"needs_attention"`
+	// Layout is a counter view's layout (ResolveLayout), absent without one.
+	Layout *BuildLayout `json:"layout,omitempty"`
 }
 
 type BuildView struct {
@@ -103,6 +105,9 @@ type BuildOption struct {
 	Prices     []menu.OptionPrice `json:"prices"`
 	IsDefault  bool               `json:"is_default"`
 	SoldOut    bool               `json:"sold_out"`
+	// ShowOnDriverTicket: print the choice on the delivery (driver) ticket
+	// even at $0 (00046; the Pi reads it from the counter build).
+	ShowOnDriverTicket bool `json:"show_on_driver_ticket,omitempty"`
 }
 
 // BuildMap is one vendor name → bank item mapping (vendor views).
@@ -207,6 +212,20 @@ func (c *compiler) run(entries []Entry) {
 	hiddenCat := map[uuid.UUID]bool{}
 	for _, id := range c.rules.HiddenCategories {
 		hiddenCat[id] = true
+	}
+	// A view limited to some menus hides every other menu's categories.
+	if len(c.rules.Menus) > 0 {
+		only := map[uuid.UUID]bool{}
+		for _, id := range c.rules.Menus {
+			only[id] = true
+		}
+		for _, m := range c.bank.Menus {
+			if !only[m.ID] {
+				for _, cat := range m.Categories {
+					hiddenCat[cat.ID] = true
+				}
+			}
+		}
 	}
 	byItem := map[uuid.UUID]*Entry{} // item entries by their one anchor
 	merged := map[uuid.UUID]bool{}   // bank items shown inside a merge
@@ -470,7 +489,7 @@ func (c *compiler) groups(ids []uuid.UUID) []uuid.UUID {
 				prices = append(prices, menu.OptionPrice{SizeID: p.SizeID, PriceCents: c.optionPrice(p.PriceCents)})
 			}
 			bg.Options = append(bg.Options, BuildOption{ID: o.ID, Name: o.Name, PriceCents: c.optionPrice(o.PriceDeltaCents),
-				Prices: prices, IsDefault: o.IsDefault, SoldOut: !o.InStock})
+				Prices: prices, IsDefault: o.IsDefault, SoldOut: !o.InStock, ShowOnDriverTicket: o.ShowOnDriverTicket})
 		}
 		c.build.ModifierGroups = append(c.build.ModifierGroups, bg)
 	}

@@ -12,6 +12,7 @@ import (
 	appMiddleware "quiccpos/main/internal/transport/middleware"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/labstack/echo/v5"
 	"github.com/rs/zerolog"
 )
@@ -203,6 +204,12 @@ func (h *ChannelHandler) adminErr(c *echo.Context, err error) error {
 	case errors.Is(err, channelApp.ErrBadKind), errors.Is(err, channelApp.ErrNameRequired), errors.Is(err, channelApp.ErrBadPayment),
 		errors.Is(err, channelApp.ErrBadView):
 		return c.JSON(http.StatusBadRequest, errResp(err.Error()))
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		// S-1: its orders / placements (money) keep it (RESTRICT).
+		return c.JSON(http.StatusConflict, map[string]any{"error": "this channel has orders or order placements: it can't be deleted",
+			"code": "channel_in_use"})
 	}
 	h.logger.Error().Err(err).Msg("channel admin")
 	return c.JSON(http.StatusInternalServerError, errResp("channel update failed"))

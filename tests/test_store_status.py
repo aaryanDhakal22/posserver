@@ -1,4 +1,4 @@
-"""Store status (main 3.0, PORTS-PLAN.md step 3).
+"""Store status (main 3.0, archive/PORTS-PLAN.md step 3).
 
   * /channel/v1/store: open / paused / closed, order types + ETAs, today,
     scheduling, sold out — OpenAPI-checked; the manager's /me/status is the same
@@ -24,7 +24,7 @@ import requests
 from conftest import ADMIN_V1, MAIN_BASE_URL, STORE_V1, wait_until
 from openapi import check
 from test_geo import _pin_store, _street, fake_geo  # noqa: F401 (fixture)
-from test_geo_locate import _ambiguous
+from test_geo_choose import _ambiguous
 
 CH_V1 = f"{MAIN_BASE_URL}/channel/v1"
 NY = ZoneInfo("America/New_York")  # every test store's zone

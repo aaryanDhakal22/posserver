@@ -1,6 +1,6 @@
 ########## BASE IMAGE ##########
 # Setup the base image for dependencies
-FROM golang:1.26.1-bookworm AS builder
+FROM golang:1.26.11-bookworm AS builder
 
 # Set the working directory
 WORKDIR /src

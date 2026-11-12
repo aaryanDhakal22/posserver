@@ -13,8 +13,10 @@ package sse
 import (
 	"context"
 	"sync"
+	"time"
 
 	"quiccpos/main/internal/observability"
+	"quiccpos/main/internal/shared/safego"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -66,8 +68,8 @@ type ScopeWaker interface {
 }
 
 // subscriberBuffer is each stream's queue. Generous so a reconnect backlog or a
-// burst never overflows it; an overflow still isn't a loss (the frame's order
-// stays unacked and is re-sent), just a delay.
+// burst never overflows it; an overflow closes that stream (Publish) so the
+// agent reconnects and catches up — never a silently dropped frame.
 const subscriberBuffer = 256
 
 type Broker struct {
@@ -81,6 +83,12 @@ type Broker struct {
 	meters  observability.Meters
 	// onSubscribe hooks run (off the caller's path) whenever a stream opens.
 	onSubscribe []func(scope Scope)
+	// onGone hooks run when a scope's last stream closes.
+	onGone []func(scope Scope)
+	// left is when each scope's last stream closed (Presence: how long its Pi
+	// has been away); started is when this broker began (a scope never seen).
+	left    map[Scope]time.Time
+	started time.Time
 }
 
 // OnSubscribe registers a hook called (in its own goroutine) whenever a
@@ -88,10 +96,17 @@ type Broker struct {
 // (re)connected agent has not acked. Wire before serving.
 func (b *Broker) OnSubscribe(fn func(scope Scope)) { b.onSubscribe = append(b.onSubscribe, fn) }
 
+// OnGone registers a hook run (off the caller's path) when a scope's LAST
+// stream closes: its Pi has no stream on this main any more (it dropped, is
+// reconnecting, or moved to the other blue-green slot).
+func (b *Broker) OnGone(fn func(scope Scope)) { b.onGone = append(b.onGone, fn) }
+
 func New(lg zerolog.Logger, meters observability.Meters) *Broker {
 	return &Broker{
 		clients: make(map[Scope]map[chan Frame]struct{}),
 		devices: make(map[chan Frame]uuid.UUID),
+		left:    make(map[Scope]time.Time),
+		started: time.Now(),
 		logger:  lg.With().Str("module", "sse-broker").Logger(),
 		meters:  meters,
 	}
@@ -130,7 +145,7 @@ func (b *Broker) SubscribeAs(ctx context.Context, scope Scope, deviceID uuid.UUI
 		}
 	}
 	for _, fn := range b.onSubscribe {
-		go fn(scope)
+		safego.Go(context.WithoutCancel(ctx), "sse.on_subscribe", func(context.Context) { fn(scope) })
 	}
 
 	return ch, func() {
@@ -150,8 +165,26 @@ func (b *Broker) removeLocked(scope Scope, ch chan Frame) {
 		}
 		if len(set) == 0 {
 			delete(b.clients, scope)
+			b.left[scope] = time.Now()
+			for _, fn := range b.onGone {
+				safego.Go(context.Background(), "sse.on_gone", func(context.Context) { fn(scope) }) // never under mu
+			}
 		}
 	}
+}
+
+// Presence is a scope's live streams and, when there are none, since when
+// (its last stream closed, else when this broker started).
+func (b *Broker) Presence(scope Scope) (streams int, awaySince time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if n := len(b.clients[scope]); n > 0 {
+		return n, time.Time{}
+	}
+	if t, ok := b.left[scope]; ok {
+		return 0, t
+	}
+	return 0, b.started
 }
 
 // DisconnectDevice closes every live stream opened by deviceID (a revoked
@@ -173,6 +206,19 @@ func (b *Broker) DisconnectDevice(deviceID uuid.UUID) int {
 		}
 	}
 	return n
+}
+
+// Scopes lists the scopes with at least one subscriber now.
+func (b *Broker) Scopes() []Scope {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	out := make([]Scope, 0, len(b.clients))
+	for sc, set := range b.clients {
+		if len(set) > 0 {
+			out = append(out, sc)
+		}
+	}
+	return out
 }
 
 // SubscribersFor returns how many clients are currently subscribed to a
@@ -198,7 +244,7 @@ func (b *Broker) Publish(ctx context.Context, scope Scope, frame Frame) int {
 	)
 	defer span.End()
 
-	delivered := 0
+	delivered, cut := 0, 0
 	b.mu.Lock()
 	set := b.clients[scope]
 	subs := len(set)
@@ -207,10 +253,22 @@ func (b *Broker) Publish(ctx context.Context, scope Scope, frame Frame) int {
 		case ch <- frame:
 			delivered++
 		default:
-			b.logger.Warn().Ctx(ctx).Msg("SSE subscriber channel full; dropping payload for them")
+			// A stream whose queue is full is too slow (or stalled): dropping
+			// the frame would lose a command or store_config for good. Cut the
+			// stream instead (its handler returns, the agent reconnects and
+			// catches up: unacked orders are re-sent, the handshake carries
+			// the store_config) — HARDENING-PLAN R-3.
+			dev := b.devices[ch]
+			b.removeLocked(scope, ch)
+			cut++
+			b.logger.Warn().Ctx(ctx).Str("device_id", dev.String()).Str("sse_event", frame.Event).
+				Msg("SSE subscriber too slow (queue full); stream closed so it reconnects")
 		}
 	}
 	b.mu.Unlock()
+	if cut > 0 {
+		span.SetAttributes(attribute.Int("sse.cut", cut))
+	}
 
 	span.SetAttributes(
 		attribute.Int("sse.subscribers", subs),

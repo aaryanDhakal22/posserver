@@ -64,6 +64,12 @@ func (h *SSE) Handle(ctx context.Context, ev order.DomainEvent) error {
 		return fmt.Errorf("decode snapshot from outbox payload: %w", err)
 	}
 
+	// A counter order came from the store's own Pi (floor event
+	// order.placed, TERMINAL-PLAN 0d): never echo it back.
+	if snap.Source == string(order.SourceCounter) {
+		return nil
+	}
+
 	tenantUUID, err := uuid.Parse(snap.TenantID)
 	if err != nil {
 		return fmt.Errorf("invalid tenant_id in snapshot: %w", err)

@@ -59,8 +59,18 @@
         return `${d.code}: ${d.pct ? `${d.pct}% off` : `${dollars(d.amount_cents ?? 0)} off`}${d.min_subtotal_cents ? ` over ${dollars(d.min_subtotal_cents)}` : ''}${d.first_order_only ? ', first order only' : ''}`;
       case 'free_item':
         return `Free ${eligLabel(d.eligible)} once the order reaches ${dollars(d.min_subtotal_cents ?? 0)}`;
+      case 'coupon':
+        return `${(d.parts ?? []).map(partLabel).join(' + ')} for ${dollars(d.price_cents ?? 0)}`;
     }
     return '';
+  }
+  // Coupons take items by family (Store › Menu › Families), maybe at some sizes.
+  const itemFamilies = $derived((bank?.families ?? []).filter((f) => f.kind === 'item'));
+  function partLabel(p: { label: string; families: string[]; sizes?: string[]; qty: number; regular_mods_included: number }): string {
+    const fams = p.families.map((id) => itemFamilies.find((f) => f.id === id)?.name ?? '(gone)').join(' / ');
+    const sizes = (p.sizes ?? []).map((id) => bank?.sizes.find((z) => z.id === id)?.name ?? '(gone)').join(' / ');
+    const what = p.label || (sizes ? `${sizes} ${fams}` : fams);
+    return `${p.qty > 1 ? `${p.qty} × ` : ''}${what}${p.regular_mods_included ? ` (${p.regular_mods_included} topping${p.regular_mods_included === 1 ? '' : 's'})` : ''}`;
   }
   function when(d: StoreDeal): string {
     const s = d.schedule;
@@ -98,7 +108,9 @@
     price: string; slots: { label: string; eligible: DealEligible; included: number }[];
     eligible: DealEligible; qty: number; each: string; n: number; pct: number;
     code: string; codeMode: 'pct' | 'amount'; amount: string; min: string; first: boolean;
+    card: string; parts: { label: string; families: string[]; sizes: string[]; qty: number; free: number; base: string[] }[];
   };
+  const newPart = () => ({ label: '', families: [] as string[], sizes: [] as string[], qty: 1, free: 0, base: [] as string[] });
   const noElig = (): DealEligible => ({ items: [], categories: [], sizes: [] });
   let draft = $state<Draft | null>(null);
   let open = $state(false);
@@ -109,7 +121,7 @@
     return {
       kind, name: '', description: '', active: true, channels: ['web', 'operator', 'counter'], fulfil: '', days: [], start: '', end: '',
       price: '', slots: [{ label: 'Pizza', eligible: noElig(), included: 0 }], eligible: noElig(), qty: 2, each: '', n: 2, pct: 50,
-      code: '', codeMode: 'pct', amount: '', min: '', first: false
+      code: '', codeMode: 'pct', amount: '', min: '', first: false, card: '', parts: [newPart()]
     };
   }
   function edit(d?: StoreDeal) {
@@ -124,9 +136,12 @@
         eligible: d.eligible ? { items: [...(d.eligible.items ?? [])], categories: [...(d.eligible.categories ?? [])], sizes: [...(d.eligible.sizes ?? [])] } : noElig(),
         qty: d.qty ?? 2, each: d.each_cents !== undefined ? centsInput(d.each_cents) : '', n: d.n ?? 2, pct: d.pct ?? 50,
         code: d.code ?? '', codeMode: d.amount_cents ? 'amount' : 'pct', amount: d.amount_cents ? centsInput(d.amount_cents) : '',
-        min: d.min_subtotal_cents ? centsInput(d.min_subtotal_cents) : '', first: !!d.first_order_only
+        min: d.min_subtotal_cents ? centsInput(d.min_subtotal_cents) : '', first: !!d.first_order_only,
+        card: (d.card ?? []).join('\n'),
+        parts: (d.parts ?? []).map((p) => ({ label: p.label, families: [...p.families], sizes: [...(p.sizes ?? [])], qty: p.qty, free: p.regular_mods_included, base: [...(p.upcharge_over ?? [])] }))
       };
       if (!draft.slots.length) draft.slots = blank('bundle').slots;
+      if (!draft.parts.length) draft.parts = [newPart()];
     }
     err = '';
     open = true;
@@ -157,6 +172,15 @@
         return { ...base, code: d.code, ...(d.codeMode === 'pct' ? { pct: Number(d.pct) } : { amount_cents: amountC }), min_subtotal_cents: minC, first_order_only: d.first };
       case 'free_item':
         return { ...base, eligible: d.eligible, min_subtotal_cents: minC };
+      case 'coupon':
+        return {
+          ...base, price_cents: priceC,
+          card: d.card.split('\n').map((l) => l.trim()).filter(Boolean),
+          parts: d.parts.map((p) => ({
+            label: p.label.trim(), families: p.families, sizes: p.sizes, qty: Number(p.qty) || 0, regular_mods_included: Number(p.free) || 0,
+            upcharge_over: p.base.filter((f) => p.families.includes(f))
+          }))
+        };
     }
   }
 
@@ -215,7 +239,11 @@
     const others = (preview.ctx.deals ?? []).filter((x) => x.id !== b.id);
     const ctx = { ...preview.ctx, deals: [...others, { ...b, id: b.id || 'draft', active: true }] };
     const lines = preview.lines.map((l) => ({ ...l, options: autoOptions(l.item_id) }));
-    return price(ctx as Context, { type: 'pickup', payment: 'card', lines, code: b.kind === 'code' ? b.code : '' }, new Date());
+    const cart = { type: 'pickup', payment: 'card', lines, code: b.kind === 'code' ? b.code : '' };
+    const q = price(ctx as Context, cart, new Date());
+    // A coupon: the cashier would apply it when the test cart fits it.
+    const offer = b.kind === 'coupon' ? q.coupon_offers?.find((o) => o.id === (b.id || 'draft')) : undefined;
+    return offer ? price(ctx as Context, { ...cart, coupons: [{ id: offer.id, lines: offer.lines }] }, new Date()) : q;
   });
 </script>
 
@@ -252,7 +280,14 @@
   {#if draft}
     <form id="deal-form" class="flex flex-col gap-4" onsubmit={save}>
       {#if !draft.id}
-        <SegmentedControl options={DEAL_KINDS.map((k) => ({ value: k.kind, label: k.label }))} bind:value={draft.kind} label="Kind of deal" />
+        <SegmentedControl
+          options={DEAL_KINDS.map((k) => ({ value: k.kind, label: k.label }))}
+          bind:value={draft.kind}
+          label="Kind of deal"
+          onchange={(v) => {
+            if (v === 'coupon' && draft) draft.channels = ['counter'];
+          }}
+        />
       {/if}
       <p class="help !mt-0">{DEAL_KINDS.find((k) => k.kind === draft!.kind)?.help}</p>
       <div class="grid gap-3 sm:grid-cols-2">
@@ -288,6 +323,73 @@
           </div>
         {/each}
         <div><Button size="sm" icon="plus" onclick={() => draft!.slots.push({ label: '', eligible: noElig(), included: 0 })}>Add a step</Button></div>
+      {:else if draft.kind === 'coupon'}
+        <div class="grid gap-3 sm:grid-cols-[auto_1fr]">
+          <div>
+            <label class="lbl" for="dl-cprice">Coupon price ($)</label>
+            <input id="dl-cprice" class="field mono text-right !w-32" inputmode="decimal" bind:value={draft.price} />
+          </div>
+          <div>
+            <label class="lbl" for="dl-card">Card lines (one per line, up to 6)</label>
+            <textarea id="dl-card" class="field" rows="3" bind:value={draft.card} placeholder={'8" hot sub\nFrench fries\nCan soda'}></textarea>
+          </div>
+        </div>
+        <p class="help !mt-0">The order must have every part. The priciest item carries the coupon price, the others $0.00; on each item the cheapest regular toppings up to the number below are free. The coupon isn't a discount: its items show these prices and the subtotal adds them up.</p>
+        {#if !itemFamilies.length}
+          <p class="field-error !m-0">No item families yet: add them on the Families tab first.</p>
+        {/if}
+        {#each draft.parts as part, i (i)}
+          <div class="subcard p-3.5 flex flex-col gap-3" data-testid="coupon-part">
+            <div class="flex flex-wrap items-end gap-2">
+              <div class="flex-1 min-w-[160px]">
+                <label class="lbl" for="dl-part-{i}">Part {i + 1}</label>
+                <input id="dl-part-{i}" class="field" bind:value={part.label} placeholder={'8" hot sub'} maxlength="60" />
+              </div>
+              <div>
+                <label class="lbl" for="dl-pqty-{i}">How many</label>
+                <input id="dl-pqty-{i}" type="number" min="1" max="10" class="field mono !w-20" bind:value={part.qty} />
+              </div>
+              <div>
+                <label class="lbl" for="dl-pfree-{i}">Regular toppings free</label>
+                <input id="dl-pfree-{i}" type="number" min="0" max="20" class="field mono !w-24" bind:value={part.free} />
+              </div>
+              <Button size="sm" variant="ghost" icon="trash" aria-label="Remove part {i + 1}" disabled={draft.parts.length < 2} onclick={() => draft!.parts.splice(i, 1)} />
+            </div>
+            <div>
+              <span class="lbl" id="dl-pf-{i}">Families</span>
+              <div class="flex flex-wrap gap-1.5" role="group" aria-labelledby="dl-pf-{i}">
+                {#each itemFamilies as f (f.id)}
+                  <button type="button" class="fchip" aria-pressed={part.families.includes(f.id)}
+                    onclick={() => (part.families = part.families.includes(f.id) ? part.families.filter((x) => x !== f.id) : [...part.families, f.id])}>{f.name}</button>
+                {/each}
+              </div>
+            </div>
+            {#if bank?.sizes.length}
+              <div>
+                <span class="lbl" id="dl-ps-{i}">Sizes (none = any size)</span>
+                <div class="flex flex-wrap gap-1.5" role="group" aria-labelledby="dl-ps-{i}">
+                  {#each bank.sizes as z (z.id)}
+                    <button type="button" class="fchip" aria-pressed={part.sizes.includes(z.id)}
+                      onclick={() => (part.sizes = part.sizes.includes(z.id) ? part.sizes.filter((x) => x !== z.id) : [...part.sizes, z.id])}>{z.name}</button>
+                  {/each}
+                </div>
+              </div>
+            {/if}
+            {#if part.families.length > 1}
+              <div>
+                <span class="lbl" id="dl-pb-{i}">Base price from (none = no upcharge)</span>
+                <div class="flex flex-wrap gap-1.5" role="group" aria-labelledby="dl-pb-{i}">
+                  {#each itemFamilies.filter((f) => part.families.includes(f.id)) as f (f.id)}
+                    <button type="button" class="fchip" aria-pressed={part.base.includes(f.id)}
+                      onclick={() => (part.base = part.base.includes(f.id) ? part.base.filter((x) => x !== f.id) : [...part.base, f.id])}>{f.name}</button>
+                  {/each}
+                </div>
+                <p class="help !mt-1">An item of another family here costs the coupon + its price over the cheapest base item at its size (an 8" specialty sub in an 8" sub combo).</p>
+              </div>
+            {/if}
+          </div>
+        {/each}
+        <div><Button size="sm" icon="plus" disabled={draft.parts.length >= 8} onclick={() => draft!.parts.push(newPart())}>Add a part</Button></div>
       {:else if draft.kind === 'code'}
         <div class="flex flex-wrap gap-3 items-end">
           <div>
@@ -389,7 +491,12 @@
               <div class="flex justify-between font-semibold"><span>Total with tax</span><span class="mono">{dollars(quote.total_cents)}</span></div>
               {#each quote.nudges as n, i (i)}<div class="text-muted">{n}</div>{/each}
               {#each quote.warnings as w, i (i)}<div class="text-muted">{w}</div>{/each}
-              {#each quote.errors.filter((x) => x.code.startsWith('code')) as x, i (i)}<div class="text-warn">{x.message}</div>{/each}
+              {#each quote.errors.filter((x) => x.code.startsWith('code') || x.code.startsWith('coupon')) as x, i (i)}<div class="text-warn">{x.message}</div>{/each}
+              {#if draft.kind === 'coupon'}
+                <div class={quote.coupons?.length ? 'text-ok' : 'text-muted'} data-testid="coupon-fit">
+                  {quote.coupons?.length ? `The cart fits: these items come to ${dollars(quote.coupons[0].total_cents)}` : 'The cart doesn’t fit this coupon yet.'}
+                </div>
+              {/if}
             </div>
           {/if}
         </div>

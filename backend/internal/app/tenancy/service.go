@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -39,6 +40,8 @@ type Service struct {
 	repo         tenancy.Repository
 	logger       zerolog.Logger
 	onDeviceGone func(id uuid.UUID)
+	// reservedDevices: QuiccPOS's own Pushover device names (SetReservedDevices).
+	reservedDevices []string
 }
 
 func NewService(repo tenancy.Repository, lg zerolog.Logger) *Service {
@@ -66,7 +69,29 @@ const defaultTimezone = "America/New_York"
 // CreateTenant creates a restaurant: the tenant and its single location (slug
 // "main", same name, default timezone) in one transaction. The location's
 // details (address, phone, timezone…) are edited afterwards via UpdateLocation.
-func (s *Service) CreateTenant(ctx context.Context, slug, name, username, password string, storeID *int64) (*tenancy.Tenant, *tenancy.Location, error) {
+// DevEnv reports whether main runs on dev (APP_ENV=dev): every store is a
+// test store unless created with test: false. A var so tests can switch it.
+var DevEnv = func() bool { return os.Getenv("APP_ENV") == "dev" }
+
+// StagingEnv: staging only ever sees test traffic, so every store there may
+// be deleted with its money (the console's cleanup, throwaway test stores).
+var StagingEnv = func() bool { return os.Getenv("APP_ENV") == "staging" }
+
+// MoneyDeletable reports whether a store's money records may be deleted:
+// a test store, or anything on staging (S-1). Prod and dev protect every
+// other store (dev: created with test: false).
+func MoneyDeletable(t *tenancy.Tenant) bool { return t.TestStore || StagingEnv() }
+
+// TestStoreDefault is a new store's test flag when the request doesn't say:
+// true on dev, false everywhere else (S-1).
+func TestStoreDefault(test *bool) bool {
+	if test != nil {
+		return *test
+	}
+	return DevEnv()
+}
+
+func (s *Service) CreateTenant(ctx context.Context, slug, name, username, password string, storeID *int64, test ...bool) (*tenancy.Tenant, *tenancy.Location, error) {
 	slug = strings.TrimSpace(slug)
 	name = strings.TrimSpace(name)
 	username = strings.TrimSpace(username)
@@ -93,7 +118,7 @@ func (s *Service) CreateTenant(ctx context.Context, slug, name, username, passwo
 	}
 	return s.repo.CreateTenant(ctx, tenancy.CreateTenantParams{
 		Slug: slug, Name: name, Username: username, PasswordHash: passwordHash, StoreID: storeID,
-		LocationSlug: defaultLocationSlug, Timezone: defaultTimezone,
+		LocationSlug: defaultLocationSlug, Timezone: defaultTimezone, TestStore: len(test) > 0 && test[0],
 	})
 }
 
@@ -136,7 +161,10 @@ func (s *Service) SetTenantStoreID(ctx context.Context, id uuid.UUID, storeID *i
 	return s.repo.SetTenantStoreID(ctx, id, storeID)
 }
 
-// SetTenantCredentials sets/rotates a tenant's store-manager login. Hashes the
+// SetTenantCredentials sets/rotates a tenant's store-manager login. A new
+// password ends every manager session issued before it (the store's session
+// epoch, M8); the same password again (with or without a new username) does
+// not. Hashes the
 // password with the same scheme as auth (HashKey). Both fields are required.
 func (s *Service) SetTenantCredentials(ctx context.Context, id uuid.UUID, username, password string) error {
 	username = strings.TrimSpace(username)
@@ -148,6 +176,16 @@ func (s *Service) SetTenantCredentials(ctx context.Context, id uuid.UUID, userna
 	}
 	if err := validUsername(username); err != nil {
 		return err
+	}
+	// The same password again (a rename, or a tool re-applying the login it
+	// set before) is not a rotation: the hash and the sessions stay.
+	if curUser, curHash, err := s.repo.TenantLogin(ctx, id); err == nil && curHash != "" {
+		if ok, needsRehash := authSvc.VerifyPassword(password, curHash); ok && !needsRehash {
+			if curUser == username {
+				return nil
+			}
+			return s.repo.SetTenantUsername(ctx, id, username)
+		}
 	}
 	h, err := authSvc.HashPassword(password)
 	if err != nil {
@@ -178,12 +216,27 @@ func (s *Service) AuthenticateTenant(ctx context.Context, username, password str
 		// Legacy SHA-256 hash: upgrade to bcrypt now that we know the password.
 		// Best-effort — a failure here must not fail the login.
 		if h, err := authSvc.HashPassword(password); err == nil {
-			if err := s.repo.SetTenantCredentials(ctx, auth.TenantID, username, h); err != nil {
+			if err := s.repo.RehashTenantPassword(ctx, auth.TenantID, h); err != nil {
 				s.logger.Warn().Err(err).Str("tenant_id", auth.TenantID.String()).Msg("password rehash to bcrypt failed")
 			}
 		}
 	}
-	return s.repo.GetTenantByID(ctx, auth.TenantID)
+	t, err := s.repo.GetTenantByID(ctx, auth.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	if t.RetiredAt != nil {
+		// A retired store keeps its records but nobody logs into it (M8): not
+		// the manager's browser, not a Pi linking with the manager login.
+		return nil, ErrInvalidCredentials
+	}
+	return t, nil
+}
+
+// SessionState is what a manager session cookie is checked against (the
+// store's session epoch, whether it is retired). pgx.ErrNoRows = no such store.
+func (s *Service) SessionState(ctx context.Context, tenantID uuid.UUID) (tenancy.SessionState, error) {
+	return s.repo.TenantSession(ctx, tenantID)
 }
 
 // PrimaryLocation returns the tenant's first location (creation order). Today a
@@ -255,6 +308,9 @@ func (s *Service) ResolveStoreByName(ctx context.Context, storeName string) (uui
 	}
 	var match *tenancy.Tenant
 	for i := range tenants {
+		if tenants[i].RetiredAt != nil {
+			continue // a retired store takes no orders
+		}
 		if strings.HasPrefix(strings.ToLower(tenants[i].Name), term) {
 			if match != nil {
 				return uuid.Nil, uuid.Nil, ErrStoreUnresolved // ambiguous prefix
@@ -295,7 +351,61 @@ func (s *Service) DeleteTenant(ctx context.Context, id uuid.UUID) error {
 	if id == uuid.Nil {
 		return errors.New("tenant id is required")
 	}
+	if _, err := s.Deletable(ctx, id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil // gone already: deleting twice is fine (golden: 204)
+		}
+		return err
+	}
 	return s.repo.DeleteTenantCascade(ctx, id)
+}
+
+// PurgeTenant deletes a store with its money whatever it is (dev only: the
+// admin handler allows ?purge=1 only when DevEnv()).
+func (s *Service) PurgeTenant(ctx context.Context, id uuid.UUID) error {
+	if id == uuid.Nil {
+		return errors.New("tenant id is required")
+	}
+	return s.repo.DeleteTenantCascade(ctx, id)
+}
+
+// Deletable says whether a store may be deleted with its money (S-1): a test
+// store may; any other store only while it has no money records — else
+// ErrHasMoney with the counts (retire it instead). pgx.ErrNoRows = no store.
+func (s *Service) Deletable(ctx context.Context, id uuid.UUID) (tenancy.MoneyRecords, error) {
+	t, err := s.repo.GetTenantByID(ctx, id)
+	if err != nil {
+		return tenancy.MoneyRecords{}, err
+	}
+	if MoneyDeletable(t) {
+		return tenancy.MoneyRecords{}, nil
+	}
+	m, err := s.repo.TenantMoneyRecords(ctx, id)
+	if err != nil {
+		return m, err
+	}
+	if m.Any() {
+		s.logger.Warn().Ctx(ctx).Str("tenant_id", id.String()).Interface("money", m).Msg("store delete refused: it has money records")
+		return m, tenancy.ErrHasMoney
+	}
+	return m, nil
+}
+
+// RetireTenant keeps a store with all its records but takes it out of use:
+// its devices are revoked (their streams cut; the Pi hears device_revoked)
+// and no vendor order routes to it any more.
+func (s *Service) RetireTenant(ctx context.Context, id uuid.UUID) (*tenancy.Tenant, error) {
+	ids, ok, err := s.repo.RetireTenant(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, pgx.ErrNoRows
+	}
+	for _, d := range ids {
+		s.deviceGone(d)
+	}
+	return s.repo.GetTenantByID(ctx, id)
 }
 
 // --- Locations -------------------------------------------------------------
@@ -344,6 +454,39 @@ func (s *Service) UpdateLocation(ctx context.Context, p tenancy.UpdateLocationPa
 		return nil, err
 	}
 	return s.repo.UpdateLocation(ctx, p)
+}
+
+// SetReservedDevices names QuiccPOS's own Pushover devices (the admin's):
+// no store's manager may save one as an owner phone.
+func (s *Service) SetReservedDevices(names []string) { s.reservedDevices = names }
+
+// UpdateLocationAsManager is UpdateLocation for the store's own manager
+// (PATCH /store/v1/me/location): the owner's alert phones may only be names
+// the store already has, names on its admin-set allow-list, or new names no
+// other store uses (tenancy.CheckManagerDevices); the allow-list itself
+// stays as saved. The admin's PATCH (UpdateLocation) is not limited.
+func (s *Service) UpdateLocationAsManager(ctx context.Context, p tenancy.UpdateLocationParams) (*tenancy.Location, error) {
+	cur, err := s.repo.GetLocationByID(ctx, p.ID)
+	if err != nil {
+		return nil, err
+	}
+	all, err := s.repo.ListAllLocations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list locations: %w", err)
+	}
+	others := make([]tenancy.Config, 0, len(all))
+	for _, l := range all {
+		if l.ID != p.ID {
+			others = append(others, l.Config)
+		}
+	}
+	if p.Config == nil {
+		p.Config = tenancy.Config{}
+	}
+	if err := tenancy.CheckManagerDevices(p.Config, cur.Config, others, s.reservedDevices); err != nil {
+		return nil, err
+	}
+	return s.UpdateLocation(ctx, p)
 }
 
 // SetLocationPin places the store pin by hand (a manager dragged it to the
@@ -660,6 +803,32 @@ func (s *Service) UpdatePrinter(ctx context.Context, id uuid.UUID, name, ip stri
 		}
 	}
 	return p, nil
+}
+
+// ErrPrinterNotHere: no such printer at this location (SetPrinterColumns).
+var ErrPrinterNotHere = errors.New("printer not found")
+
+// SetPrinterColumns sets the print width of a printer of locationID: 48, 42
+// or 32 font-A characters (tenancy.ErrBadPrintColumns otherwise,
+// ErrPrinterNotHere for another location's or an unknown printer). Store ›
+// Printers and the Pi's width test (RPC printer.width) both land here.
+func (s *Service) SetPrinterColumns(ctx context.Context, locationID, id uuid.UUID, cols int) (*tenancy.Printer, error) {
+	if !tenancy.ValidPrintColumns(cols) {
+		return nil, tenancy.ErrBadPrintColumns
+	}
+	p, err := s.repo.GetPrinterByID(ctx, id)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil, ErrPrinterNotHere
+	case err != nil:
+		return nil, err
+	case p.LocationID != locationID:
+		return nil, ErrPrinterNotHere
+	}
+	if p.PrintColumns == cols {
+		return p, nil
+	}
+	return s.repo.SetPrinterColumns(ctx, id, cols)
 }
 
 func (s *Service) DeletePrinter(ctx context.Context, id uuid.UUID) error {

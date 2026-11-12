@@ -27,6 +27,26 @@ type CreateTenantParams struct {
 	Slug, Name, Username, PasswordHash string
 	StoreID                            *int64
 	LocationSlug, Timezone             string
+	TestStore                          bool
+}
+
+// ErrHasMoney: the store (or order) holds money records (payments, card
+// holds, drawers, Z reports, the staff journal) and isn't a test store:
+// retire the store instead of deleting it (S-1).
+var ErrHasMoney = errors.New("this store has money records: retire it instead of deleting it")
+
+// MoneyRecords counts what a delete would take with it.
+type MoneyRecords struct {
+	Payments  int64 `json:"payments"`
+	CardHolds int64 `json:"card_holds"`
+	Drawers   int64 `json:"drawers"`
+	ZReports  int64 `json:"z_reports"`
+	Journal   int64 `json:"journal"`
+}
+
+// Any reports whether there is anything.
+func (m MoneyRecords) Any() bool {
+	return m.Payments+m.CardHolds+m.Drawers+m.ZReports+m.Journal > 0
 }
 
 // CreateDeviceParams is what the service hands the repo on mint. KeyHash is
@@ -61,6 +81,15 @@ type TenantAuth struct {
 	PasswordHash string
 }
 
+// SessionState is what a store-manager session is checked against on every
+// request (security review M8): Epoch goes up when the store's password is
+// rotated, so a cookie issued before carries an older one; Retired = the
+// store was taken out of use.
+type SessionState struct {
+	Epoch   int64
+	Retired bool
+}
+
 type Repository interface {
 	// CreateTenant persists a tenant together with its single location (one
 	// tenant = one restaurant = one location), in one transaction.
@@ -80,7 +109,20 @@ type Repository interface {
 	GetTenantAuthByUsername(ctx context.Context, username string) (*TenantAuth, error)
 	// SetTenantCredentials sets/rotates a tenant's login (passwordHash already
 	// hashed). A username held by another tenant returns ErrUsernameTaken.
+	// It also ends every manager session issued before it (the store's session
+	// epoch goes up by one).
 	SetTenantCredentials(ctx context.Context, id uuid.UUID, username, passwordHash string) error
+	// TenantLogin is a tenant's saved login ("" , "" when none is set).
+	TenantLogin(ctx context.Context, id uuid.UUID) (username, passwordHash string, err error)
+	// SetTenantUsername renames the login and keeps the password (sessions
+	// stay). A username held by another tenant returns ErrUsernameTaken.
+	SetTenantUsername(ctx context.Context, id uuid.UUID, username string) error
+	// RehashTenantPassword stores the same password under a stronger hash: no
+	// rotation, sessions stay.
+	RehashTenantPassword(ctx context.Context, id uuid.UUID, passwordHash string) error
+	// TenantSession is the state a manager session cookie is checked against.
+	// pgx.ErrNoRows when the tenant is gone.
+	TenantSession(ctx context.Context, id uuid.UUID) (SessionState, error)
 	ListTenants(ctx context.Context) ([]Tenant, error)
 	UpdateTenantConfig(ctx context.Context, id uuid.UUID, cfg Config) (*Tenant, error)
 
@@ -89,6 +131,11 @@ type Repository interface {
 	// devices, locations, then the tenant itself. All in one transaction.
 	// Used by the admin endpoint + the project-level test suite's teardown.
 	DeleteTenantCascade(ctx context.Context, id uuid.UUID) error
+	// TenantMoneyRecords counts the store's money records (S-1).
+	TenantMoneyRecords(ctx context.Context, id uuid.UUID) (MoneyRecords, error)
+	// RetireTenant marks the store retired and revokes its devices (their
+	// ids are returned, so their streams can be cut); false = no such store.
+	RetireTenant(ctx context.Context, id uuid.UUID) ([]uuid.UUID, bool, error)
 
 	GetLocationByID(ctx context.Context, id uuid.UUID) (*Location, error)
 	ListLocationsByTenant(ctx context.Context, tenantID uuid.UUID) ([]Location, error)
@@ -125,6 +172,8 @@ type Repository interface {
 	// its MAC unless mac is empty), logging the change — one transaction.
 	// ErrPrinterIPChanged when the printer's IP is no longer oldIP.
 	MovePrinterIP(ctx context.Context, locationID, printerID uuid.UUID, oldIP, newIP, mac, source string) (*Printer, error)
+	// SetPrinterColumns sets a printer's print width (48 | 42 | 32).
+	SetPrinterColumns(ctx context.Context, printerID uuid.UUID, cols int) (*Printer, error)
 	// SetPrinterMAC records a printer's hardware address.
 	SetPrinterMAC(ctx context.Context, printerID uuid.UUID, mac string) error
 	// InsertPrinterIPChange logs one printer IP change.

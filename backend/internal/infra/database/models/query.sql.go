@@ -77,6 +77,25 @@ func (q *Queries) AuthenticateChannel(ctx context.Context, keyHash pgtype.Text) 
 	return i, err
 }
 
+const authenticatePlatformKey = `-- name: AuthenticatePlatformKey :one
+SELECT id, name, key_hash, key_prefix, revoked_at, last_used_at, created_at FROM platform_keys WHERE key_hash = $1 AND revoked_at IS NULL
+`
+
+func (q *Queries) AuthenticatePlatformKey(ctx context.Context, keyHash string) (PlatformKey, error) {
+	row := q.db.QueryRow(ctx, authenticatePlatformKey, keyHash)
+	var i PlatformKey
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const builtinChannel = `-- name: BuiltinChannel :one
 SELECT id, tenant_id, location_id, kind, name, key_hash, key_prefix, permissions, builtin, revoked_at, last_used_at, created_at, updated_at, view_id FROM channels WHERE location_id = $1 AND builtin AND kind = $2 ORDER BY created_at LIMIT 1
 `
@@ -106,6 +125,78 @@ func (q *Queries) BuiltinChannel(ctx context.Context, arg BuiltinChannelParams) 
 		&i.ViewID,
 	)
 	return i, err
+}
+
+const cardHoldCancelled = `-- name: CardHoldCancelled :exec
+UPDATE card_holds SET status = 'cancelled', cancelled_at = now(), last_error = $2, updated_at = now() WHERE order_id = $1
+`
+
+type CardHoldCancelledParams struct {
+	OrderID   pgtype.UUID `json:"order_id"`
+	LastError string      `json:"last_error"`
+}
+
+func (q *Queries) CardHoldCancelled(ctx context.Context, arg CardHoldCancelledParams) error {
+	_, err := q.db.Exec(ctx, cardHoldCancelled, arg.OrderID, arg.LastError)
+	return err
+}
+
+const cardHoldCaptured = `-- name: CardHoldCaptured :execrows
+UPDATE card_holds SET status = 'captured', captured_cents = $2, tip_payment_ref = $3, tip_note = $4, captured_at = now(),
+    last_error = '', updated_at = now() WHERE order_id = $1 AND status = 'held' AND added_tip_cents = $5
+`
+
+type CardHoldCapturedParams struct {
+	OrderID       pgtype.UUID `json:"order_id"`
+	CapturedCents int64       `json:"captured_cents"`
+	TipPaymentRef string      `json:"tip_payment_ref"`
+	TipNote       string      `json:"tip_note"`
+	AddedTipCents int64       `json:"added_tip_cents"`
+}
+
+// M-14: only the hold the worker read (still held, the added tip it saw): a
+// tip set meanwhile makes this 0 rows and the capture is looked at again.
+func (q *Queries) CardHoldCaptured(ctx context.Context, arg CardHoldCapturedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cardHoldCaptured,
+		arg.OrderID,
+		arg.CapturedCents,
+		arg.TipPaymentRef,
+		arg.TipNote,
+		arg.AddedTipCents,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const cardHoldFailed = `-- name: CardHoldFailed :exec
+UPDATE card_holds SET status = 'failed', attempts = attempts + 1, last_error = $2, updated_at = now() WHERE order_id = $1
+`
+
+type CardHoldFailedParams struct {
+	OrderID   pgtype.UUID `json:"order_id"`
+	LastError string      `json:"last_error"`
+}
+
+func (q *Queries) CardHoldFailed(ctx context.Context, arg CardHoldFailedParams) error {
+	_, err := q.db.Exec(ctx, cardHoldFailed, arg.OrderID, arg.LastError)
+	return err
+}
+
+const cardHoldRetry = `-- name: CardHoldRetry :exec
+UPDATE card_holds SET attempts = attempts + 1, next_try_at = $2, last_error = $3, updated_at = now() WHERE order_id = $1
+`
+
+type CardHoldRetryParams struct {
+	OrderID   pgtype.UUID        `json:"order_id"`
+	NextTryAt pgtype.Timestamptz `json:"next_try_at"`
+	LastError string             `json:"last_error"`
+}
+
+func (q *Queries) CardHoldRetry(ctx context.Context, arg CardHoldRetryParams) error {
+	_, err := q.db.Exec(ctx, cardHoldRetry, arg.OrderID, arg.NextTryAt, arg.LastError)
+	return err
 }
 
 const channelEventExists = `-- name: ChannelEventExists :one
@@ -214,6 +305,157 @@ func (q *Queries) ChannelOrdersToAlert(ctx context.Context, arg ChannelOrdersToA
 	return items, nil
 }
 
+const claimCardHolds = `-- name: ClaimCardHolds :many
+UPDATE card_holds SET next_try_at = now() + interval '2 minutes', updated_at = now()
+WHERE order_id IN (
+    SELECT h.order_id FROM card_holds h
+    WHERE h.status = 'held' AND h.next_try_at <= now() AND (h.due_at <= now() OR h.capture_requested_at IS NOT NULL)
+      -- M-3: never capture a hold whose order was cancelled / rejected or
+      -- whose void is owed (the cancel worker releases those).
+      AND h.cancel_requested_at IS NULL
+      AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.id = h.order_id AND o.status IN ('cancelled', 'rejected'))
+    ORDER BY h.next_try_at LIMIT $1 FOR UPDATE SKIP LOCKED)
+RETURNING order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at, payment_id, cancel_requested_at, refund_requested_at, refunded_cents, refund_ref, tip_payment_id
+`
+
+// Holds to capture now (asked for, or past their safety time), leased for
+// two minutes so a slow capture isn't picked up twice.
+func (q *Queries) ClaimCardHolds(ctx context.Context, limit int32) ([]CardHold, error) {
+	rows, err := q.db.Query(ctx, claimCardHolds, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CardHold
+	for rows.Next() {
+		var i CardHold
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Gateway,
+			&i.PaymentRef,
+			&i.AmountCents,
+			&i.TipCents,
+			&i.AddedTipCents,
+			&i.Status,
+			&i.CaptureReason,
+			&i.DueAt,
+			&i.CaptureRequestedAt,
+			&i.NextTryAt,
+			&i.Attempts,
+			&i.LastError,
+			&i.CapturedCents,
+			&i.TipPaymentRef,
+			&i.TipNote,
+			&i.CapturedAt,
+			&i.CancelledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.PaymentID,
+			&i.CancelRequestedAt,
+			&i.RefundRequestedAt,
+			&i.RefundedCents,
+			&i.RefundRef,
+			&i.TipPaymentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const claimEmailReceipts = `-- name: ClaimEmailReceipts :many
+UPDATE email_receipts SET next_try_at = now() + interval '2 minutes'
+WHERE (order_id, kind) IN (
+    SELECT r.order_id, r.kind FROM email_receipts r WHERE r.status = 'pending' AND r.next_try_at <= now()
+    ORDER BY r.next_try_at LIMIT $1 FOR UPDATE SKIP LOCKED)
+RETURNING order_id, kind, location_id, status, attempts, next_try_at, last_error, message_id, sent_at, created_at
+`
+
+func (q *Queries) ClaimEmailReceipts(ctx context.Context, limit int32) ([]EmailReceipt, error) {
+	rows, err := q.db.Query(ctx, claimEmailReceipts, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EmailReceipt
+	for rows.Next() {
+		var i EmailReceipt
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.Kind,
+			&i.LocationID,
+			&i.Status,
+			&i.Attempts,
+			&i.NextTryAt,
+			&i.LastError,
+			&i.MessageID,
+			&i.SentAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const claimPlacement = `-- name: ClaimPlacement :execrows
+UPDATE order_placements
+SET worker = $1, attempts = attempts + 1, waiting = '',
+    card_token = CASE WHEN $2::text <> '' THEN $2::text ELSE card_token END,
+    verification_token = CASE WHEN $3::text <> '' THEN $3::text ELSE verification_token END,
+    updated_at = now()
+WHERE channel_id = $4 AND client_order_id = $5 AND state = 'pending'
+  AND worker = $6 AND attempts = $7
+`
+
+type ClaimPlacementParams struct {
+	Worker            string      `json:"worker"`
+	CardToken         string      `json:"card_token"`
+	VerificationToken string      `json:"verification_token"`
+	ChannelID         pgtype.UUID `json:"channel_id"`
+	ClientOrderID     string      `json:"client_order_id"`
+	OldWorker         string      `json:"old_worker"`
+	OldAttempts       int32       `json:"old_attempts"`
+}
+
+// Take over a pending placement nobody works on (or a stale worker's), as long
+// as nobody else took it first (worker + attempts unchanged). New tokens (a
+// retry after 3-D Secure) replace the stored ones.
+func (q *Queries) ClaimPlacement(ctx context.Context, arg ClaimPlacementParams) (int64, error) {
+	result, err := q.db.Exec(ctx, claimPlacement,
+		arg.Worker,
+		arg.CardToken,
+		arg.VerificationToken,
+		arg.ChannelID,
+		arg.ClientOrderID,
+		arg.OldWorker,
+		arg.OldAttempts,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const clearCustomerDefaultAddress = `-- name: ClearCustomerDefaultAddress :exec
+UPDATE customer_addresses SET is_default = false WHERE customer_id = $1 AND is_default
+`
+
+func (q *Queries) ClearCustomerDefaultAddress(ctx context.Context, customerID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearCustomerDefaultAddress, customerID)
+	return err
+}
+
 const clearReceiptPrinter = `-- name: ClearReceiptPrinter :exec
 UPDATE printers SET is_receipt = false, updated_at = now()
 WHERE location_id = $1 AND is_receipt
@@ -225,10 +467,19 @@ func (q *Queries) ClearReceiptPrinter(ctx context.Context, locationID pgtype.UUI
 	return err
 }
 
+const clearSitePrimary = `-- name: ClearSitePrimary :exec
+UPDATE site_domains SET is_primary = false WHERE location_id = $1 AND is_primary
+`
+
+func (q *Queries) ClearSitePrimary(ctx context.Context, locationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearSitePrimary, locationID)
+	return err
+}
+
 const clearStorePause = `-- name: ClearStorePause :one
 UPDATE store_ordering SET paused_at = NULL, paused_until = NULL, pause_note = '', updated_at = now()
 WHERE location_id = $1
-RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at
+RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at, tip_max_cents
 `
 
 func (q *Queries) ClearStorePause(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error) {
@@ -247,8 +498,32 @@ func (q *Queries) ClearStorePause(ctx context.Context, locationID pgtype.UUID) (
 		&i.PauseNote,
 		&i.RestockedAt,
 		&i.UpdatedAt,
+		&i.TipMaxCents,
 	)
 	return i, err
+}
+
+const countActiveAgents = `-- name: CountActiveAgents :one
+SELECT count(*)::bigint FROM devices WHERE location_id = $1 AND kind = 'agent' AND revoked_at IS NULL
+`
+
+// The store has a Pi (an agent key not revoked): only then is "kitchen offline" checked.
+func (q *Queries) CountActiveAgents(ctx context.Context, locationID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countActiveAgents, locationID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countCustomerAddresses = `-- name: CountCustomerAddresses :one
+SELECT count(*) FROM customer_addresses WHERE customer_id = $1
+`
+
+func (q *Queries) CountCustomerAddresses(ctx context.Context, customerID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countCustomerAddresses, customerID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countItemsForGroup = `-- name: CountItemsForGroup :one
@@ -544,9 +819,9 @@ func (q *Queries) CreateDevice(ctx context.Context, arg CreateDeviceParams) (Dev
 const createLineItem = `-- name: CreateLineItem :exec
 INSERT INTO line_items (
     id, order_id, parent_id, position, sku, name, quantity, unit_price_cents, line_total_cents, notes,
-    size, menu_item_id, printer_id, routing
+    size, menu_item_id, printer_id, routing, portion, mode, coupon, coupon_no
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 )
 `
 
@@ -565,6 +840,10 @@ type CreateLineItemParams struct {
 	MenuItemID     pgtype.UUID `json:"menu_item_id"`
 	PrinterID      pgtype.UUID `json:"printer_id"`
 	Routing        string      `json:"routing"`
+	Portion        string      `json:"portion"`
+	Mode           string      `json:"mode"`
+	Coupon         string      `json:"coupon"`
+	CouponNo       int32       `json:"coupon_no"`
 }
 
 func (q *Queries) CreateLineItem(ctx context.Context, arg CreateLineItemParams) error {
@@ -583,6 +862,10 @@ func (q *Queries) CreateLineItem(ctx context.Context, arg CreateLineItemParams) 
 		arg.MenuItemID,
 		arg.PrinterID,
 		arg.Routing,
+		arg.Portion,
+		arg.Mode,
+		arg.Coupon,
+		arg.CouponNo,
 	)
 	return err
 }
@@ -681,9 +964,9 @@ func (q *Queries) CreateMenu(ctx context.Context, arg CreateMenuParams) (Menu, e
 }
 
 const createMenuCategory = `-- name: CreateMenuCategory :one
-INSERT INTO menu_categories (tenant_id, location_id, menu_id, name, description, available, position, default_printer_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+INSERT INTO menu_categories (tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, no_kitchen_ticket)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 `
 
 type CreateMenuCategoryParams struct {
@@ -695,6 +978,7 @@ type CreateMenuCategoryParams struct {
 	Available        bool        `json:"available"`
 	Position         int32       `json:"position"`
 	DefaultPrinterID pgtype.UUID `json:"default_printer_id"`
+	NoKitchenTicket  bool        `json:"no_kitchen_ticket"`
 }
 
 func (q *Queries) CreateMenuCategory(ctx context.Context, arg CreateMenuCategoryParams) (MenuCategory, error) {
@@ -707,6 +991,7 @@ func (q *Queries) CreateMenuCategory(ctx context.Context, arg CreateMenuCategory
 		arg.Available,
 		arg.Position,
 		arg.DefaultPrinterID,
+		arg.NoKitchenTicket,
 	)
 	var i MenuCategory
 	err := row.Scan(
@@ -721,6 +1006,7 @@ func (q *Queries) CreateMenuCategory(ctx context.Context, arg CreateMenuCategory
 		&i.DefaultPrinterID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.NoKitchenTicket,
 	)
 	return i, err
 }
@@ -728,7 +1014,7 @@ func (q *Queries) CreateMenuCategory(ctx context.Context, arg CreateMenuCategory
 const createMenuItem = `-- name: CreateMenuItem :one
 INSERT INTO menu_items (tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 `
 
 type CreateMenuItemParams struct {
@@ -783,6 +1069,8 @@ func (q *Queries) CreateMenuItem(ctx context.Context, arg CreateMenuItemParams) 
 		&i.UpdatedAt,
 		&i.KitchenName,
 		&i.Sku,
+		&i.OutHold,
+		&i.NoKitchenTicket,
 	)
 	return i, err
 }
@@ -829,7 +1117,7 @@ const createMenuView = `-- name: CreateMenuView :one
 
 INSERT INTO menu_views (tenant_id, location_id, kind, name, rules)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, tenant_id, location_id, kind, name, rules, created_at, updated_at
+RETURNING id, tenant_id, location_id, kind, name, rules, created_at, updated_at, layout
 `
 
 type CreateMenuViewParams struct {
@@ -859,6 +1147,7 @@ func (q *Queries) CreateMenuView(ctx context.Context, arg CreateMenuViewParams) 
 		&i.Rules,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Layout,
 	)
 	return i, err
 }
@@ -970,7 +1259,7 @@ func (q *Queries) CreateModifierGroup(ctx context.Context, arg CreateModifierGro
 const createModifierOption = `-- name: CreateModifierOption :one
 INSERT INTO modifier_options (tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
-RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
+RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold
 `
 
 type CreateModifierOptionParams struct {
@@ -1007,6 +1296,7 @@ func (q *Queries) CreateModifierOption(ctx context.Context, arg CreateModifierOp
 		&i.UpdatedAt,
 		&i.IsDefault,
 		&i.KitchenName,
+		&i.OutHold,
 	)
 	return i, err
 }
@@ -1208,19 +1498,47 @@ func (q *Queries) CreatePayment(ctx context.Context, arg CreatePaymentParams) er
 	return err
 }
 
+const createPlatformKey = `-- name: CreatePlatformKey :one
+
+INSERT INTO platform_keys (name, key_hash, key_prefix) VALUES ($1, $2, $3) RETURNING id, name, key_hash, key_prefix, revoked_at, last_used_at, created_at
+`
+
+type CreatePlatformKeyParams struct {
+	Name      string `json:"name"`
+	KeyHash   string `json:"key_hash"`
+	KeyPrefix string `json:"key_prefix"`
+}
+
+// weborder stage 2: storefront platform keys, hosts, site settings.
+func (q *Queries) CreatePlatformKey(ctx context.Context, arg CreatePlatformKeyParams) (PlatformKey, error) {
+	row := q.db.QueryRow(ctx, createPlatformKey, arg.Name, arg.KeyHash, arg.KeyPrefix)
+	var i PlatformKey
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createPrinter = `-- name: CreatePrinter :one
 
-INSERT INTO printers (tenant_id, location_id, name, ip, mac)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+INSERT INTO printers (tenant_id, location_id, name, ip, mac, print_columns)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 `
 
 type CreatePrinterParams struct {
-	TenantID   pgtype.UUID `json:"tenant_id"`
-	LocationID pgtype.UUID `json:"location_id"`
-	Name       string      `json:"name"`
-	IP         string      `json:"ip"`
-	MAC        string      `json:"mac"`
+	TenantID     pgtype.UUID `json:"tenant_id"`
+	LocationID   pgtype.UUID `json:"location_id"`
+	Name         string      `json:"name"`
+	IP           string      `json:"ip"`
+	MAC          string      `json:"mac"`
+	PrintColumns int16       `json:"print_columns"`
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1233,6 +1551,7 @@ func (q *Queries) CreatePrinter(ctx context.Context, arg CreatePrinterParams) (P
 		arg.Name,
 		arg.IP,
 		arg.MAC,
+		arg.PrintColumns,
 	)
 	var i Printer
 	err := row.Scan(
@@ -1245,6 +1564,7 @@ func (q *Queries) CreatePrinter(ctx context.Context, arg CreatePrinterParams) (P
 		&i.UpdatedAt,
 		&i.IsReceipt,
 		&i.MAC,
+		&i.PrintColumns,
 	)
 	return i, err
 }
@@ -1284,9 +1604,9 @@ func (q *Queries) CreateStatusEvent(ctx context.Context, arg CreateStatusEventPa
 
 const createTenant = `-- name: CreateTenant :one
 
-INSERT INTO tenants (slug, name, username, password_hash, store_id)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, slug, name, config, username, password_hash, created_at, store_id
+INSERT INTO tenants (slug, name, username, password_hash, store_id, test_store)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at
 `
 
 type CreateTenantParams struct {
@@ -1295,6 +1615,7 @@ type CreateTenantParams struct {
 	Username     pgtype.Text `json:"username"`
 	PasswordHash pgtype.Text `json:"password_hash"`
 	StoreID      pgtype.Int8 `json:"store_id"`
+	TestStore    bool        `json:"test_store"`
 }
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -1310,6 +1631,7 @@ func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) (Ten
 		arg.Username,
 		arg.PasswordHash,
 		arg.StoreID,
+		arg.TestStore,
 	)
 	var i Tenant
 	err := row.Scan(
@@ -1321,22 +1643,98 @@ func (q *Queries) CreateTenant(ctx context.Context, arg CreateTenantParams) (Ten
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.StoreID,
+		&i.TestStore,
+		&i.RetiredAt,
 	)
 	return i, err
 }
 
-const deferExternalStopPush = `-- name: DeferExternalStopPush :exec
-UPDATE geo_external_stops SET next_try_at = $1 WHERE order_id = $2
+const customerBySession = `-- name: CustomerBySession :one
+UPDATE customer_sessions s SET last_used_at = now(), expires_at = GREATEST(s.expires_at, $3::timestamptz)
+FROM customers c
+WHERE s.token_hash = $1 AND s.location_id = $2 AND s.expires_at > now() AND c.id = s.customer_id
+RETURNING c.id, c.tenant_id, c.location_id, c.phone, c.name, c.email, c.square_customer_id, c.created_at, c.updated_at, c.last_seen_at, c.first_name, c.last_name, c.notes, c.source, c.name_source, c.notes_source
 `
 
-type DeferExternalStopPushParams struct {
-	NextTryAt pgtype.Timestamptz `json:"next_try_at"`
-	OrderID   pgtype.UUID        `json:"order_id"`
+type CustomerBySessionParams struct {
+	TokenHash  string             `json:"token_hash"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Column3    pgtype.Timestamptz `json:"column_3"`
 }
 
-func (q *Queries) DeferExternalStopPush(ctx context.Context, arg DeferExternalStopPushParams) error {
-	_, err := q.db.Exec(ctx, deferExternalStopPush, arg.NextTryAt, arg.OrderID)
-	return err
+// A live session's customer; the session is renewed (90 days from now) as it is read.
+func (q *Queries) CustomerBySession(ctx context.Context, arg CustomerBySessionParams) (Customer, error) {
+	row := q.db.QueryRow(ctx, customerBySession, arg.TokenHash, arg.LocationID, arg.Column3)
+	var i Customer
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Phone,
+		&i.Name,
+		&i.Email,
+		&i.SquareCustomerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastSeenAt,
+		&i.FirstName,
+		&i.LastName,
+		&i.Notes,
+		&i.Source,
+		&i.NameSource,
+		&i.NotesSource,
+	)
+	return i, err
+}
+
+const customerChanges = `-- name: CustomerChanges :many
+SELECT id, at, deleted FROM (
+    SELECT c.id, c.updated_at AS at, false AS deleted FROM customers c
+    WHERE c.location_id = $1 AND (c.updated_at, c.id) > ($2::timestamptz, $3::uuid)
+    UNION ALL
+    SELECT t.customer_id, t.deleted_at, true FROM customer_tombstones t
+    WHERE t.location_id = $1 AND (t.deleted_at, t.customer_id) > ($2::timestamptz, $3::uuid)
+) ch ORDER BY at, id LIMIT $4
+`
+
+type CustomerChangesParams struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	AfterAt    pgtype.Timestamptz `json:"after_at"`
+	AfterID    pgtype.UUID        `json:"after_id"`
+	MaxRows    int32              `json:"max_rows"`
+}
+
+type CustomerChangesRow struct {
+	ID      pgtype.UUID        `json:"id"`
+	At      pgtype.Timestamptz `json:"at"`
+	Deleted bool               `json:"deleted"`
+}
+
+// The Pi's change feed: customers changed and customers deleted at the store
+// after the cursor (ts, id), oldest first.
+func (q *Queries) CustomerChanges(ctx context.Context, arg CustomerChangesParams) ([]CustomerChangesRow, error) {
+	rows, err := q.db.Query(ctx, customerChanges,
+		arg.LocationID,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.MaxRows,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CustomerChangesRow
+	for rows.Next() {
+		var i CustomerChangesRow
+		if err := rows.Scan(&i.ID, &i.At, &i.Deleted); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const deferOrderGeoPush = `-- name: DeferOrderGeoPush :exec
@@ -1382,6 +1780,61 @@ func (q *Queries) DeleteChannel(ctx context.Context, id pgtype.UUID) (int64, err
 	return result.RowsAffected(), nil
 }
 
+const deleteCustomer = `-- name: DeleteCustomer :execrows
+DELETE FROM customers WHERE id = $1
+`
+
+func (q *Queries) DeleteCustomer(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteCustomer, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteCustomerAddress = `-- name: DeleteCustomerAddress :execrows
+DELETE FROM customer_addresses WHERE id = $1 AND customer_id = $2
+`
+
+type DeleteCustomerAddressParams struct {
+	ID         pgtype.UUID `json:"id"`
+	CustomerID pgtype.UUID `json:"customer_id"`
+}
+
+func (q *Queries) DeleteCustomerAddress(ctx context.Context, arg DeleteCustomerAddressParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteCustomerAddress, arg.ID, arg.CustomerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteCustomerCard = `-- name: DeleteCustomerCard :execrows
+DELETE FROM customer_cards WHERE id = $1 AND customer_id = $2
+`
+
+type DeleteCustomerCardParams struct {
+	ID         pgtype.UUID `json:"id"`
+	CustomerID pgtype.UUID `json:"customer_id"`
+}
+
+func (q *Queries) DeleteCustomerCard(ctx context.Context, arg DeleteCustomerCardParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteCustomerCard, arg.ID, arg.CustomerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteCustomerSession = `-- name: DeleteCustomerSession :exec
+DELETE FROM customer_sessions WHERE token_hash = $1
+`
+
+func (q *Queries) DeleteCustomerSession(ctx context.Context, tokenHash string) error {
+	_, err := q.db.Exec(ctx, deleteCustomerSession, tokenHash)
+	return err
+}
+
 const deleteDeal = `-- name: DeleteDeal :execrows
 DELETE FROM deals WHERE id = $1 AND location_id = $2
 `
@@ -1406,65 +1859,6 @@ DELETE FROM devices WHERE id = $1
 func (q *Queries) DeleteDevice(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, deleteDevice, id)
 	return err
-}
-
-const deleteExternalStop = `-- name: DeleteExternalStop :execrows
-DELETE FROM geo_external_stops
-WHERE order_id = $1 AND tenant_id = $2 AND location_id = $3
-`
-
-type DeleteExternalStopParams struct {
-	OrderID    pgtype.UUID `json:"order_id"`
-	TenantID   pgtype.UUID `json:"tenant_id"`
-	LocationID pgtype.UUID `json:"location_id"`
-}
-
-func (q *Queries) DeleteExternalStop(ctx context.Context, arg DeleteExternalStopParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteExternalStop, arg.OrderID, arg.TenantID, arg.LocationID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const deleteExternalWork = `-- name: DeleteExternalWork :exec
-DELETE FROM geo_external_work WHERE order_id = $1
-`
-
-func (q *Queries) DeleteExternalWork(ctx context.Context, orderID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteExternalWork, orderID)
-	return err
-}
-
-const deleteExternalWorkIfDone = `-- name: DeleteExternalWorkIfDone :exec
-DELETE FROM geo_external_work w USING geo_external_stops s
-WHERE w.order_id = $1 AND s.order_id = w.order_id
-  AND s.pushed_at IS NOT NULL AND s.state <> 'check' AND s.state <> 'pending'
-`
-
-// After the agent acked a result that needs no address any more.
-func (q *Queries) DeleteExternalWorkIfDone(ctx context.Context, orderID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, deleteExternalWorkIfDone, orderID)
-	return err
-}
-
-const deleteExternalWorkRead = `-- name: DeleteExternalWorkRead :execrows
-DELETE FROM geo_external_work WHERE order_id = $1 AND created_at = $2
-`
-
-type DeleteExternalWorkReadParams struct {
-	OrderID pgtype.UUID        `json:"order_id"`
-	ReadAt  pgtype.Timestamptz `json:"read_at"`
-}
-
-// The worker's own located / given-up work row only (created_at as read): a
-// geo.locate that replaced it meanwhile keeps its new address.
-func (q *Queries) DeleteExternalWorkRead(ctx context.Context, arg DeleteExternalWorkReadParams) (int64, error) {
-	result, err := q.db.Exec(ctx, deleteExternalWorkRead, arg.OrderID, arg.ReadAt)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const deleteItemSizes = `-- name: DeleteItemSizes :exec
@@ -1692,6 +2086,35 @@ func (q *Queries) DeletePrintersByLocation(ctx context.Context, locationID pgtyp
 	return err
 }
 
+const deleteSiteDomain = `-- name: DeleteSiteDomain :execrows
+DELETE FROM site_domains WHERE host = $1 AND location_id = $2
+`
+
+type DeleteSiteDomainParams struct {
+	Host       string      `json:"host"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+func (q *Queries) DeleteSiteDomain(ctx context.Context, arg DeleteSiteDomainParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSiteDomain, arg.Host, arg.LocationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteSquareConnection = `-- name: DeleteSquareConnection :execrows
+DELETE FROM square_connections WHERE location_id = $1
+`
+
+func (q *Queries) DeleteSquareConnection(ctx context.Context, locationID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSquareConnection, locationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteStoreHoursException = `-- name: DeleteStoreHoursException :execrows
 DELETE FROM store_hours_exceptions WHERE id = $1 AND location_id = $2
 `
@@ -1763,6 +2186,23 @@ func (q *Queries) DeleteTenantPrinters(ctx context.Context, tenantID pgtype.UUID
 	return err
 }
 
+const deleteUnusedSiteImages = `-- name: DeleteUnusedSiteImages :execrows
+DELETE FROM site_images WHERE location_id = $1 AND created_at < now() - interval '1 day' AND NOT (id = ANY($2::uuid[]))
+`
+
+type DeleteUnusedSiteImagesParams struct {
+	LocationID pgtype.UUID   `json:"location_id"`
+	Keep       []pgtype.UUID `json:"keep"`
+}
+
+func (q *Queries) DeleteUnusedSiteImages(ctx context.Context, arg DeleteUnusedSiteImagesParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteUnusedSiteImages, arg.LocationID, arg.Keep)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const detachGroupFromAllItems = `-- name: DetachGroupFromAllItems :exec
 DELETE FROM item_modifier_groups WHERE group_id = $1 AND tenant_id = $2
 `
@@ -1803,6 +2243,61 @@ func (q *Queries) DiagReportExists(ctx context.Context, id pgtype.UUID) (bool, e
 	return exists, err
 }
 
+const discardSiteDraft = `-- name: DiscardSiteDraft :exec
+UPDATE site_settings SET draft = '{}'::jsonb, draft_at = NULL, updated_at = now() WHERE location_id = $1
+`
+
+func (q *Queries) DiscardSiteDraft(ctx context.Context, locationID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, discardSiteDraft, locationID)
+	return err
+}
+
+const emailReceiptDone = `-- name: EmailReceiptDone :exec
+UPDATE email_receipts SET status = $3, message_id = $4, last_error = $5, attempts = attempts + 1,
+    sent_at = CASE WHEN $3 = 'sent' THEN now() ELSE sent_at END
+WHERE order_id = $1 AND kind = $2
+`
+
+type EmailReceiptDoneParams struct {
+	OrderID   pgtype.UUID `json:"order_id"`
+	Kind      string      `json:"kind"`
+	Status    string      `json:"status"`
+	MessageID string      `json:"message_id"`
+	LastError string      `json:"last_error"`
+}
+
+func (q *Queries) EmailReceiptDone(ctx context.Context, arg EmailReceiptDoneParams) error {
+	_, err := q.db.Exec(ctx, emailReceiptDone,
+		arg.OrderID,
+		arg.Kind,
+		arg.Status,
+		arg.MessageID,
+		arg.LastError,
+	)
+	return err
+}
+
+const emailReceiptRetry = `-- name: EmailReceiptRetry :exec
+UPDATE email_receipts SET attempts = attempts + 1, next_try_at = $3, last_error = $4 WHERE order_id = $1 AND kind = $2
+`
+
+type EmailReceiptRetryParams struct {
+	OrderID   pgtype.UUID        `json:"order_id"`
+	Kind      string             `json:"kind"`
+	NextTryAt pgtype.Timestamptz `json:"next_try_at"`
+	LastError string             `json:"last_error"`
+}
+
+func (q *Queries) EmailReceiptRetry(ctx context.Context, arg EmailReceiptRetryParams) error {
+	_, err := q.db.Exec(ctx, emailReceiptRetry,
+		arg.OrderID,
+		arg.Kind,
+		arg.NextTryAt,
+		arg.LastError,
+	)
+	return err
+}
+
 const enqueueMissingOrderGeo = `-- name: EnqueueMissingOrderGeo :execrows
 INSERT INTO order_geo (order_id, tenant_id, location_id)
 SELECT o.id, o.tenant_id, o.location_id FROM orders o
@@ -1819,6 +2314,26 @@ func (q *Queries) EnqueueMissingOrderGeo(ctx context.Context, since pgtype.Times
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const ensureSitePreviewToken = `-- name: EnsureSitePreviewToken :one
+INSERT INTO site_settings (location_id, tenant_id, preview_token) VALUES ($1, $2, $3)
+ON CONFLICT (location_id) DO UPDATE SET preview_token =
+    CASE WHEN site_settings.preview_token = '' THEN EXCLUDED.preview_token ELSE site_settings.preview_token END
+RETURNING preview_token
+`
+
+type EnsureSitePreviewTokenParams struct {
+	LocationID   pgtype.UUID `json:"location_id"`
+	TenantID     pgtype.UUID `json:"tenant_id"`
+	PreviewToken string      `json:"preview_token"`
+}
+
+func (q *Queries) EnsureSitePreviewToken(ctx context.Context, arg EnsureSitePreviewTokenParams) (string, error) {
+	row := q.db.QueryRow(ctx, ensureSitePreviewToken, arg.LocationID, arg.TenantID, arg.PreviewToken)
+	var preview_token string
+	err := row.Scan(&preview_token)
+	return preview_token, err
 }
 
 const ensureStoreOrdering = `-- name: EnsureStoreOrdering :exec
@@ -1854,6 +2369,34 @@ func (q *Queries) ExpireOutUntil(ctx context.Context) (int64, error) {
 	return result.RowsAffected(), nil
 }
 
+const fillCustomerAddress = `-- name: FillCustomerAddress :exec
+UPDATE customer_addresses SET line2 = $2, city = $3, state = $4, zip = $5, notes = $6, label = $7 WHERE id = $1
+`
+
+type FillCustomerAddressParams struct {
+	ID    pgtype.UUID `json:"id"`
+	Line2 string      `json:"line2"`
+	City  string      `json:"city"`
+	State string      `json:"state"`
+	Zip   string      `json:"zip"`
+	Notes string      `json:"notes"`
+	Label string      `json:"label"`
+}
+
+// The import fills an existing address's blank fields (never overwrites).
+func (q *Queries) FillCustomerAddress(ctx context.Context, arg FillCustomerAddressParams) error {
+	_, err := q.db.Exec(ctx, fillCustomerAddress,
+		arg.ID,
+		arg.Line2,
+		arg.City,
+		arg.State,
+		arg.Zip,
+		arg.Notes,
+		arg.Label,
+	)
+	return err
+}
+
 const findDiagReportIDsByPrefix = `-- name: FindDiagReportIDsByPrefix :many
 SELECT id FROM diag_reports WHERE id::text LIKE $1::text || '%' ORDER BY received_at DESC LIMIT 2
 `
@@ -1879,8 +2422,35 @@ func (q *Queries) FindDiagReportIDsByPrefix(ctx context.Context, prefix string) 
 	return items, nil
 }
 
+const finishPlacement = `-- name: FinishPlacement :execrows
+UPDATE order_placements
+SET state = $3, result = $4, worker = '', waiting = '', card_token = '', verification_token = '', updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2 AND state = 'pending'
+`
+
+type FinishPlacementParams struct {
+	ChannelID     pgtype.UUID `json:"channel_id"`
+	ClientOrderID string      `json:"client_order_id"`
+	State         string      `json:"state"`
+	Result        []byte      `json:"result"`
+}
+
+// A final state other than placed (refused / expired / voided): the tokens go.
+func (q *Queries) FinishPlacement(ctx context.Context, arg FinishPlacementParams) (int64, error) {
+	result, err := q.db.Exec(ctx, finishPlacement,
+		arg.ChannelID,
+		arg.ClientOrderID,
+		arg.State,
+		arg.Result,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const firstMenuViewOfKind = `-- name: FirstMenuViewOfKind :one
-SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at FROM menu_views WHERE location_id = $1 AND kind = $2 ORDER BY created_at ASC LIMIT 1
+SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at, layout FROM menu_views WHERE location_id = $1 AND kind = $2 ORDER BY created_at ASC LIMIT 1
 `
 
 type FirstMenuViewOfKindParams struct {
@@ -1900,6 +2470,7 @@ func (q *Queries) FirstMenuViewOfKind(ctx context.Context, arg FirstMenuViewOfKi
 		&i.Rules,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Layout,
 	)
 	return i, err
 }
@@ -2020,32 +2591,6 @@ func (q *Queries) GetAgentState(ctx context.Context, locationID pgtype.UUID) (Ag
 	return i, err
 }
 
-const getAgentUpdate = `-- name: GetAgentUpdate :one
-SELECT id, tenant_id, location_id, action, requested_by, force, state, from_version, to_version,
-       error, requested_at, updated_at
-FROM agent_updates WHERE id = $1
-`
-
-func (q *Queries) GetAgentUpdate(ctx context.Context, id pgtype.UUID) (AgentUpdate, error) {
-	row := q.db.QueryRow(ctx, getAgentUpdate, id)
-	var i AgentUpdate
-	err := row.Scan(
-		&i.ID,
-		&i.TenantID,
-		&i.LocationID,
-		&i.Action,
-		&i.RequestedBy,
-		&i.Force,
-		&i.State,
-		&i.FromVersion,
-		&i.ToVersion,
-		&i.Error,
-		&i.RequestedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
 const getAppReleaseAPK = `-- name: GetAppReleaseAPK :one
 SELECT apk FROM app_releases WHERE app = $1 AND version_code = $2
 `
@@ -2060,6 +2605,91 @@ func (q *Queries) GetAppReleaseAPK(ctx context.Context, arg GetAppReleaseAPKPara
 	var apk []byte
 	err := row.Scan(&apk)
 	return apk, err
+}
+
+const getCardHold = `-- name: GetCardHold :one
+SELECT order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at, payment_id, cancel_requested_at, refund_requested_at, refunded_cents, refund_ref, tip_payment_id FROM card_holds WHERE order_id = $1
+`
+
+func (q *Queries) GetCardHold(ctx context.Context, orderID pgtype.UUID) (CardHold, error) {
+	row := q.db.QueryRow(ctx, getCardHold, orderID)
+	var i CardHold
+	err := row.Scan(
+		&i.OrderID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Gateway,
+		&i.PaymentRef,
+		&i.AmountCents,
+		&i.TipCents,
+		&i.AddedTipCents,
+		&i.Status,
+		&i.CaptureReason,
+		&i.DueAt,
+		&i.CaptureRequestedAt,
+		&i.NextTryAt,
+		&i.Attempts,
+		&i.LastError,
+		&i.CapturedCents,
+		&i.TipPaymentRef,
+		&i.TipNote,
+		&i.CapturedAt,
+		&i.CancelledAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PaymentID,
+		&i.CancelRequestedAt,
+		&i.RefundRequestedAt,
+		&i.RefundedCents,
+		&i.RefundRef,
+		&i.TipPaymentID,
+	)
+	return i, err
+}
+
+const getCardHoldByRef = `-- name: GetCardHoldByRef :one
+SELECT order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at, payment_id, cancel_requested_at, refund_requested_at, refunded_cents, refund_ref, tip_payment_id FROM card_holds WHERE location_id = $1 AND payment_ref = $2
+`
+
+type GetCardHoldByRefParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	PaymentRef string      `json:"payment_ref"`
+}
+
+func (q *Queries) GetCardHoldByRef(ctx context.Context, arg GetCardHoldByRefParams) (CardHold, error) {
+	row := q.db.QueryRow(ctx, getCardHoldByRef, arg.LocationID, arg.PaymentRef)
+	var i CardHold
+	err := row.Scan(
+		&i.OrderID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Gateway,
+		&i.PaymentRef,
+		&i.AmountCents,
+		&i.TipCents,
+		&i.AddedTipCents,
+		&i.Status,
+		&i.CaptureReason,
+		&i.DueAt,
+		&i.CaptureRequestedAt,
+		&i.NextTryAt,
+		&i.Attempts,
+		&i.LastError,
+		&i.CapturedCents,
+		&i.TipPaymentRef,
+		&i.TipNote,
+		&i.CapturedAt,
+		&i.CancelledAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PaymentID,
+		&i.CancelRequestedAt,
+		&i.RefundRequestedAt,
+		&i.RefundedCents,
+		&i.RefundRef,
+		&i.TipPaymentID,
+	)
+	return i, err
 }
 
 const getChannel = `-- name: GetChannel :one
@@ -2089,7 +2719,7 @@ func (q *Queries) GetChannel(ctx context.Context, id pgtype.UUID) (Channel, erro
 }
 
 const getChannelOrder = `-- name: GetChannelOrder :one
-SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id FROM channel_orders WHERE order_id = $1
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id, customer_id FROM channel_orders WHERE order_id = $1
 `
 
 func (q *Queries) GetChannelOrder(ctx context.Context, orderID pgtype.UUID) (ChannelOrder, error) {
@@ -2106,12 +2736,13 @@ func (q *Queries) GetChannelOrder(ctx context.Context, orderID pgtype.UUID) (Cha
 		&i.TrackToken,
 		&i.AlertedAt,
 		&i.OperatorID,
+		&i.CustomerID,
 	)
 	return i, err
 }
 
 const getChannelOrderByClient = `-- name: GetChannelOrderByClient :one
-SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id FROM channel_orders WHERE channel_id = $1 AND client_order_id = $2
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id, customer_id FROM channel_orders WHERE channel_id = $1 AND client_order_id = $2
 `
 
 type GetChannelOrderByClientParams struct {
@@ -2133,12 +2764,13 @@ func (q *Queries) GetChannelOrderByClient(ctx context.Context, arg GetChannelOrd
 		&i.TrackToken,
 		&i.AlertedAt,
 		&i.OperatorID,
+		&i.CustomerID,
 	)
 	return i, err
 }
 
 const getChannelOrderByToken = `-- name: GetChannelOrderByToken :one
-SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id FROM channel_orders WHERE track_token = $1
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id, customer_id FROM channel_orders WHERE track_token = $1
 `
 
 func (q *Queries) GetChannelOrderByToken(ctx context.Context, trackToken pgtype.Text) (ChannelOrder, error) {
@@ -2155,6 +2787,89 @@ func (q *Queries) GetChannelOrderByToken(ctx context.Context, trackToken pgtype.
 		&i.TrackToken,
 		&i.AlertedAt,
 		&i.OperatorID,
+		&i.CustomerID,
+	)
+	return i, err
+}
+
+const getChannelOrderForCustomer = `-- name: GetChannelOrderForCustomer :one
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id, customer_id FROM channel_orders WHERE order_id = $1 AND customer_id = $2
+`
+
+type GetChannelOrderForCustomerParams struct {
+	OrderID    pgtype.UUID `json:"order_id"`
+	CustomerID pgtype.UUID `json:"customer_id"`
+}
+
+func (q *Queries) GetChannelOrderForCustomer(ctx context.Context, arg GetChannelOrderForCustomerParams) (ChannelOrder, error) {
+	row := q.db.QueryRow(ctx, getChannelOrderForCustomer, arg.OrderID, arg.CustomerID)
+	var i ChannelOrder
+	err := row.Scan(
+		&i.OrderID,
+		&i.ChannelID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.ClientOrderID,
+		&i.Payment,
+		&i.CreatedAt,
+		&i.TrackToken,
+		&i.AlertedAt,
+		&i.OperatorID,
+		&i.CustomerID,
+	)
+	return i, err
+}
+
+const getCustomer = `-- name: GetCustomer :one
+SELECT id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, first_name, last_name, notes, source, name_source, notes_source FROM customers WHERE id = $1
+`
+
+func (q *Queries) GetCustomer(ctx context.Context, id pgtype.UUID) (Customer, error) {
+	row := q.db.QueryRow(ctx, getCustomer, id)
+	var i Customer
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Phone,
+		&i.Name,
+		&i.Email,
+		&i.SquareCustomerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastSeenAt,
+		&i.FirstName,
+		&i.LastName,
+		&i.Notes,
+		&i.Source,
+		&i.NameSource,
+		&i.NotesSource,
+	)
+	return i, err
+}
+
+const getCustomerCard = `-- name: GetCustomerCard :one
+SELECT id, customer_id, gateway, card_ref, brand, last4, exp_month, exp_year, created_at FROM customer_cards WHERE id = $1 AND customer_id = $2
+`
+
+type GetCustomerCardParams struct {
+	ID         pgtype.UUID `json:"id"`
+	CustomerID pgtype.UUID `json:"customer_id"`
+}
+
+func (q *Queries) GetCustomerCard(ctx context.Context, arg GetCustomerCardParams) (CustomerCard, error) {
+	row := q.db.QueryRow(ctx, getCustomerCard, arg.ID, arg.CustomerID)
+	var i CustomerCard
+	err := row.Scan(
+		&i.ID,
+		&i.CustomerID,
+		&i.Gateway,
+		&i.CardRef,
+		&i.Brand,
+		&i.Last4,
+		&i.ExpMonth,
+		&i.ExpYear,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -2248,71 +2963,6 @@ func (q *Queries) GetDiagReport(ctx context.Context, id pgtype.UUID) (GetDiagRep
 	return i, err
 }
 
-const getExternalStop = `-- name: GetExternalStop :one
-SELECT order_id, tenant_id, location_id, state, lat, lng, quality, distance_m, duration_s,
-       polyline, outside_area, store_to_s, to_store_s, attempts, next_try_at, last_error,
-       pushed_at, created_at, updated_at, expires_at, confirmed, corrected, note
-FROM geo_external_stops
-WHERE order_id = $1 AND tenant_id = $2 AND location_id = $3
-`
-
-type GetExternalStopParams struct {
-	OrderID    pgtype.UUID `json:"order_id"`
-	TenantID   pgtype.UUID `json:"tenant_id"`
-	LocationID pgtype.UUID `json:"location_id"`
-}
-
-func (q *Queries) GetExternalStop(ctx context.Context, arg GetExternalStopParams) (GeoExternalStop, error) {
-	row := q.db.QueryRow(ctx, getExternalStop, arg.OrderID, arg.TenantID, arg.LocationID)
-	var i GeoExternalStop
-	err := row.Scan(
-		&i.OrderID,
-		&i.TenantID,
-		&i.LocationID,
-		&i.State,
-		&i.Lat,
-		&i.Lng,
-		&i.Quality,
-		&i.DistanceM,
-		&i.DurationS,
-		&i.Polyline,
-		&i.OutsideArea,
-		&i.StoreToS,
-		&i.ToStoreS,
-		&i.Attempts,
-		&i.NextTryAt,
-		&i.LastError,
-		&i.PushedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.ExpiresAt,
-		&i.Confirmed,
-		&i.Corrected,
-		&i.Note,
-	)
-	return i, err
-}
-
-const getExternalWork = `-- name: GetExternalWork :one
-SELECT order_id, address, address_key, candidates, confirmed_address, created_at, discard_at
-FROM geo_external_work WHERE order_id = $1
-`
-
-func (q *Queries) GetExternalWork(ctx context.Context, orderID pgtype.UUID) (GeoExternalWork, error) {
-	row := q.db.QueryRow(ctx, getExternalWork, orderID)
-	var i GeoExternalWork
-	err := row.Scan(
-		&i.OrderID,
-		&i.Address,
-		&i.AddressKey,
-		&i.Candidates,
-		&i.ConfirmedAddress,
-		&i.CreatedAt,
-		&i.DiscardAt,
-	)
-	return i, err
-}
-
 const getGeoCache = `-- name: GetGeoCache :one
 
 SELECT address_key, lat, lng, quality, source, pinned, updated_at
@@ -2369,7 +3019,7 @@ func (q *Queries) GetLatestAppRelease(ctx context.Context, app string) (GetLates
 
 const getLineItemsByOrderID = `-- name: GetLineItemsByOrderID :many
 SELECT id, order_id, parent_id, position, sku, name, quantity, unit_price_cents, line_total_cents, notes,
-       size, menu_item_id, printer_id, routing
+       size, menu_item_id, printer_id, routing, portion, mode, coupon, coupon_no
 FROM line_items WHERE order_id = $1
 ORDER BY parent_id NULLS FIRST, position
 `
@@ -2398,6 +3048,10 @@ func (q *Queries) GetLineItemsByOrderID(ctx context.Context, orderID pgtype.UUID
 			&i.MenuItemID,
 			&i.PrinterID,
 			&i.Routing,
+			&i.Portion,
+			&i.Mode,
+			&i.Coupon,
+			&i.CouponNo,
 		); err != nil {
 			return nil, err
 		}
@@ -2459,7 +3113,7 @@ type GetLocationGeoRow struct {
 	DeliveryRadiusM int32         `json:"delivery_radius_m"`
 }
 
-// The store's position + radius (an external stop has no orders row to join).
+// The store's position + radius.
 func (q *Queries) GetLocationGeo(ctx context.Context, arg GetLocationGeoParams) (GetLocationGeoRow, error) {
 	row := q.db.QueryRow(ctx, getLocationGeo, arg.LocationID, arg.TenantID)
 	var i GetLocationGeoRow
@@ -2495,7 +3149,7 @@ func (q *Queries) GetMenuByID(ctx context.Context, arg GetMenuByIDParams) (Menu,
 }
 
 const getMenuCategoryByID = `-- name: GetMenuCategoryByID :one
-SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 FROM menu_categories WHERE id = $1 AND tenant_id = $2
 `
 
@@ -2519,12 +3173,13 @@ func (q *Queries) GetMenuCategoryByID(ctx context.Context, arg GetMenuCategoryBy
 		&i.DefaultPrinterID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.NoKitchenTicket,
 	)
 	return i, err
 }
 
 const getMenuItemByID = `-- name: GetMenuItemByID :one
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 FROM menu_items WHERE id = $1 AND tenant_id = $2
 `
 
@@ -2555,6 +3210,8 @@ func (q *Queries) GetMenuItemByID(ctx context.Context, arg GetMenuItemByIDParams
 		&i.UpdatedAt,
 		&i.KitchenName,
 		&i.Sku,
+		&i.OutHold,
+		&i.NoKitchenTicket,
 	)
 	return i, err
 }
@@ -2601,7 +3258,7 @@ func (q *Queries) GetMenuVersion(ctx context.Context, locationID pgtype.UUID) (G
 }
 
 const getMenuView = `-- name: GetMenuView :one
-SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at FROM menu_views WHERE id = $1
+SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at, layout FROM menu_views WHERE id = $1
 `
 
 func (q *Queries) GetMenuView(ctx context.Context, id pgtype.UUID) (MenuView, error) {
@@ -2616,6 +3273,7 @@ func (q *Queries) GetMenuView(ctx context.Context, id pgtype.UUID) (MenuView, er
 		&i.Rules,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Layout,
 	)
 	return i, err
 }
@@ -2662,6 +3320,17 @@ func (q *Queries) GetMenuViewEntry(ctx context.Context, id pgtype.UUID) (MenuVie
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getMenuViewLayout = `-- name: GetMenuViewLayout :one
+SELECT layout FROM menu_views WHERE id = $1
+`
+
+func (q *Queries) GetMenuViewLayout(ctx context.Context, id pgtype.UUID) ([]byte, error) {
+	row := q.db.QueryRow(ctx, getMenuViewLayout, id)
+	var layout []byte
+	err := row.Scan(&layout)
+	return layout, err
 }
 
 const getModifierGroupByID = `-- name: GetModifierGroupByID :one
@@ -2766,7 +3435,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2 AND source = $3 AND source_event_id = $4
 `
@@ -2824,6 +3494,12 @@ func (q *Queries) GetOrderBySourceEventInScope(ctx context.Context, arg GetOrder
 		&i.AgentStatus,
 		&i.AgentStatusAt,
 		&i.AgentBatchID,
+		&i.DeliveryFeeCents,
+		&i.DriverFeeCents,
+		&i.ServiceFeeCents,
+		&i.CardFeeCents,
+		&i.DiscountCents,
+		&i.MoneyChangedAt,
 	)
 	return i, err
 }
@@ -2919,7 +3595,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE id = $1 AND tenant_id = $2 AND location_id = $3
 `
@@ -2973,6 +3650,12 @@ func (q *Queries) GetOrderInScope(ctx context.Context, arg GetOrderInScopeParams
 		&i.AgentStatus,
 		&i.AgentStatusAt,
 		&i.AgentBatchID,
+		&i.DeliveryFeeCents,
+		&i.DriverFeeCents,
+		&i.ServiceFeeCents,
+		&i.CardFeeCents,
+		&i.DiscountCents,
+		&i.MoneyChangedAt,
 	)
 	return i, err
 }
@@ -2985,7 +3668,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE id = $1 AND tenant_id = $2 AND location_id = $3
 FOR UPDATE
@@ -3040,6 +3724,12 @@ func (q *Queries) GetOrderInScopeForUpdate(ctx context.Context, arg GetOrderInSc
 		&i.AgentStatus,
 		&i.AgentStatusAt,
 		&i.AgentBatchID,
+		&i.DeliveryFeeCents,
+		&i.DriverFeeCents,
+		&i.ServiceFeeCents,
+		&i.CardFeeCents,
+		&i.DiscountCents,
+		&i.MoneyChangedAt,
 	)
 	return i, err
 }
@@ -3052,7 +3742,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2
 ORDER BY received_at DESC
@@ -3118,6 +3809,12 @@ func (q *Queries) GetOrdersPageInScope(ctx context.Context, arg GetOrdersPageInS
 			&i.AgentStatus,
 			&i.AgentStatusAt,
 			&i.AgentBatchID,
+			&i.DeliveryFeeCents,
+			&i.DriverFeeCents,
+			&i.ServiceFeeCents,
+			&i.CardFeeCents,
+			&i.DiscountCents,
+			&i.MoneyChangedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -3130,19 +3827,32 @@ func (q *Queries) GetOrdersPageInScope(ctx context.Context, arg GetOrdersPageInS
 }
 
 const getPaymentsByOrderID = `-- name: GetPaymentsByOrderID :many
-SELECT id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code
+SELECT id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code, tip_cents
 FROM payments WHERE order_id = $1
 `
 
-func (q *Queries) GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]Payment, error) {
+type GetPaymentsByOrderIDRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	OrderID     pgtype.UUID        `json:"order_id"`
+	Processor   string             `json:"processor"`
+	Status      string             `json:"status"`
+	AmountCents int64              `json:"amount_cents"`
+	Token       string             `json:"token"`
+	Last4       string             `json:"last4"`
+	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
+	AuthCode    string             `json:"auth_code"`
+	TipCents    int64              `json:"tip_cents"`
+}
+
+func (q *Queries) GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]GetPaymentsByOrderIDRow, error) {
 	rows, err := q.db.Query(ctx, getPaymentsByOrderID, orderID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Payment
+	var items []GetPaymentsByOrderIDRow
 	for rows.Next() {
-		var i Payment
+		var i GetPaymentsByOrderIDRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.OrderID,
@@ -3153,6 +3863,7 @@ func (q *Queries) GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID)
 			&i.Last4,
 			&i.CapturedAt,
 			&i.AuthCode,
+			&i.TipCents,
 		); err != nil {
 			return nil, err
 		}
@@ -3164,8 +3875,48 @@ func (q *Queries) GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID)
 	return items, nil
 }
 
+const getPlacement = `-- name: GetPlacement :one
+SELECT channel_id, client_order_id, tenant_id, location_id, body_hash, request, card_token, verification_token, customer_id, operator, expires_at, state, waiting, result, order_id, worker, attempts, charge_started, charge_cents, due_alert_at, due_alerted, created_at, updated_at FROM order_placements WHERE channel_id = $1 AND client_order_id = $2
+`
+
+type GetPlacementParams struct {
+	ChannelID     pgtype.UUID `json:"channel_id"`
+	ClientOrderID string      `json:"client_order_id"`
+}
+
+func (q *Queries) GetPlacement(ctx context.Context, arg GetPlacementParams) (OrderPlacement, error) {
+	row := q.db.QueryRow(ctx, getPlacement, arg.ChannelID, arg.ClientOrderID)
+	var i OrderPlacement
+	err := row.Scan(
+		&i.ChannelID,
+		&i.ClientOrderID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.BodyHash,
+		&i.Request,
+		&i.CardToken,
+		&i.VerificationToken,
+		&i.CustomerID,
+		&i.Operator,
+		&i.ExpiresAt,
+		&i.State,
+		&i.Waiting,
+		&i.Result,
+		&i.OrderID,
+		&i.Worker,
+		&i.Attempts,
+		&i.ChargeStarted,
+		&i.ChargeCents,
+		&i.DueAlertAt,
+		&i.DueAlerted,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getPrinterByID = `-- name: GetPrinterByID :one
-SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 FROM printers WHERE id = $1
 `
 
@@ -3182,6 +3933,112 @@ func (q *Queries) GetPrinterByID(ctx context.Context, id pgtype.UUID) (Printer, 
 		&i.UpdatedAt,
 		&i.IsReceipt,
 		&i.MAC,
+		&i.PrintColumns,
+	)
+	return i, err
+}
+
+const getSiteDomain = `-- name: GetSiteDomain :one
+SELECT host, tenant_id, location_id, is_primary, verified, created_at FROM site_domains WHERE host = $1
+`
+
+func (q *Queries) GetSiteDomain(ctx context.Context, host string) (SiteDomain, error) {
+	row := q.db.QueryRow(ctx, getSiteDomain, host)
+	var i SiteDomain
+	err := row.Scan(
+		&i.Host,
+		&i.TenantID,
+		&i.LocationID,
+		&i.IsPrimary,
+		&i.Verified,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getSiteImage = `-- name: GetSiteImage :one
+SELECT id, kind, content_type, bytes, created_at FROM site_images WHERE id = $1 AND location_id = $2
+`
+
+type GetSiteImageParams struct {
+	ID         pgtype.UUID `json:"id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+type GetSiteImageRow struct {
+	ID          pgtype.UUID        `json:"id"`
+	Kind        string             `json:"kind"`
+	ContentType string             `json:"content_type"`
+	Bytes       []byte             `json:"bytes"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) GetSiteImage(ctx context.Context, arg GetSiteImageParams) (GetSiteImageRow, error) {
+	row := q.db.QueryRow(ctx, getSiteImage, arg.ID, arg.LocationID)
+	var i GetSiteImageRow
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.ContentType,
+		&i.Bytes,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getSiteReplyEmail = `-- name: GetSiteReplyEmail :one
+SELECT reply_email FROM site_settings WHERE location_id = $1
+`
+
+func (q *Queries) GetSiteReplyEmail(ctx context.Context, locationID pgtype.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, getSiteReplyEmail, locationID)
+	var reply_email string
+	err := row.Scan(&reply_email)
+	return reply_email, err
+}
+
+const getSiteSettings = `-- name: GetSiteSettings :one
+SELECT location_id, tenant_id, draft, published, version, updated_at, reply_email, draft_at, published_at, published_by, preview_token FROM site_settings WHERE location_id = $1
+`
+
+func (q *Queries) GetSiteSettings(ctx context.Context, locationID pgtype.UUID) (SiteSetting, error) {
+	row := q.db.QueryRow(ctx, getSiteSettings, locationID)
+	var i SiteSetting
+	err := row.Scan(
+		&i.LocationID,
+		&i.TenantID,
+		&i.Draft,
+		&i.Published,
+		&i.Version,
+		&i.UpdatedAt,
+		&i.ReplyEmail,
+		&i.DraftAt,
+		&i.PublishedAt,
+		&i.PublishedBy,
+		&i.PreviewToken,
+	)
+	return i, err
+}
+
+const getSquareConnection = `-- name: GetSquareConnection :one
+SELECT location_id, tenant_id, merchant_id, square_location_id, access_token_enc, refresh_token_enc, expires_at, refreshed_at, status, last_error, connected_at FROM square_connections WHERE location_id = $1
+`
+
+func (q *Queries) GetSquareConnection(ctx context.Context, locationID pgtype.UUID) (SquareConnection, error) {
+	row := q.db.QueryRow(ctx, getSquareConnection, locationID)
+	var i SquareConnection
+	err := row.Scan(
+		&i.LocationID,
+		&i.TenantID,
+		&i.MerchantID,
+		&i.SquareLocationID,
+		&i.AccessTokenEnc,
+		&i.RefreshTokenEnc,
+		&i.ExpiresAt,
+		&i.RefreshedAt,
+		&i.Status,
+		&i.LastError,
+		&i.ConnectedAt,
 	)
 	return i, err
 }
@@ -3221,7 +4078,7 @@ func (q *Queries) GetStatusEventsByOrderID(ctx context.Context, orderID pgtype.U
 }
 
 const getStoreOrdering = `-- name: GetStoreOrdering :one
-SELECT location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at FROM store_ordering WHERE location_id = $1
+SELECT location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at, tip_max_cents FROM store_ordering WHERE location_id = $1
 `
 
 func (q *Queries) GetStoreOrdering(ctx context.Context, locationID pgtype.UUID) (StoreOrdering, error) {
@@ -3240,6 +4097,7 @@ func (q *Queries) GetStoreOrdering(ctx context.Context, locationID pgtype.UUID) 
 		&i.PauseNote,
 		&i.RestockedAt,
 		&i.UpdatedAt,
+		&i.TipMaxCents,
 	)
 	return i, err
 }
@@ -3290,7 +4148,7 @@ func (q *Queries) GetTenantAuthByUsername(ctx context.Context, username pgtype.T
 }
 
 const getTenantByID = `-- name: GetTenantByID :one
-SELECT id, slug, name, config, username, password_hash, created_at, store_id FROM tenants WHERE id = $1
+SELECT id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at FROM tenants WHERE id = $1
 `
 
 func (q *Queries) GetTenantByID(ctx context.Context, id pgtype.UUID) (Tenant, error) {
@@ -3305,12 +4163,14 @@ func (q *Queries) GetTenantByID(ctx context.Context, id pgtype.UUID) (Tenant, er
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.StoreID,
+		&i.TestStore,
+		&i.RetiredAt,
 	)
 	return i, err
 }
 
 const getTenantByStoreID = `-- name: GetTenantByStoreID :one
-SELECT id, slug, name, config, username, password_hash, created_at, store_id FROM tenants WHERE store_id = $1
+SELECT id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at FROM tenants WHERE store_id = $1 AND retired_at IS NULL
 `
 
 // Order routing: the external vendor's store_id → tenant (see app/tenancy.ResolveStore).
@@ -3326,6 +4186,8 @@ func (q *Queries) GetTenantByStoreID(ctx context.Context, storeID pgtype.Int8) (
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.StoreID,
+		&i.TestStore,
+		&i.RetiredAt,
 	)
 	return i, err
 }
@@ -3407,6 +4269,36 @@ func (q *Queries) InsertAgentUpdate(ctx context.Context, arg InsertAgentUpdatePa
 	return err
 }
 
+const insertCardHold = `-- name: InsertCardHold :exec
+INSERT INTO card_holds (order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, due_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+`
+
+type InsertCardHoldParams struct {
+	OrderID     pgtype.UUID        `json:"order_id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	Gateway     string             `json:"gateway"`
+	PaymentRef  string             `json:"payment_ref"`
+	AmountCents int64              `json:"amount_cents"`
+	TipCents    int64              `json:"tip_cents"`
+	DueAt       pgtype.Timestamptz `json:"due_at"`
+}
+
+func (q *Queries) InsertCardHold(ctx context.Context, arg InsertCardHoldParams) error {
+	_, err := q.db.Exec(ctx, insertCardHold,
+		arg.OrderID,
+		arg.TenantID,
+		arg.LocationID,
+		arg.Gateway,
+		arg.PaymentRef,
+		arg.AmountCents,
+		arg.TipCents,
+		arg.DueAt,
+	)
+	return err
+}
+
 const insertChannelEvent = `-- name: InsertChannelEvent :one
 INSERT INTO channel_events (channel_id, order_id, type, payload) VALUES ($1, $2, $3, $4) RETURNING id
 `
@@ -3432,8 +4324,8 @@ func (q *Queries) InsertChannelEvent(ctx context.Context, arg InsertChannelEvent
 
 const insertChannelOrder = `-- name: InsertChannelOrder :exec
 
-INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment, track_token, operator_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO channel_orders (order_id, channel_id, tenant_id, location_id, client_order_id, payment, track_token, operator_id, customer_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type InsertChannelOrderParams struct {
@@ -3445,6 +4337,7 @@ type InsertChannelOrderParams struct {
 	Payment       []byte      `json:"payment"`
 	TrackToken    pgtype.Text `json:"track_token"`
 	OperatorID    pgtype.UUID `json:"operator_id"`
+	CustomerID    pgtype.UUID `json:"customer_id"`
 }
 
 // ─── Channel orders (main 3.0 step 5) ───────────────────────────────────────
@@ -3458,6 +4351,116 @@ func (q *Queries) InsertChannelOrder(ctx context.Context, arg InsertChannelOrder
 		arg.Payment,
 		arg.TrackToken,
 		arg.OperatorID,
+		arg.CustomerID,
+	)
+	return err
+}
+
+const insertCustomerAddress = `-- name: InsertCustomerAddress :one
+INSERT INTO customer_addresses (customer_id, label, line1, line2, city, state, zip, notes, is_default)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id, customer_id, label, line1, line2, city, state, zip, notes, is_default, created_at
+`
+
+type InsertCustomerAddressParams struct {
+	CustomerID pgtype.UUID `json:"customer_id"`
+	Label      string      `json:"label"`
+	Line1      string      `json:"line1"`
+	Line2      string      `json:"line2"`
+	City       string      `json:"city"`
+	State      string      `json:"state"`
+	Zip        string      `json:"zip"`
+	Notes      string      `json:"notes"`
+	IsDefault  bool        `json:"is_default"`
+}
+
+func (q *Queries) InsertCustomerAddress(ctx context.Context, arg InsertCustomerAddressParams) (CustomerAddress, error) {
+	row := q.db.QueryRow(ctx, insertCustomerAddress,
+		arg.CustomerID,
+		arg.Label,
+		arg.Line1,
+		arg.Line2,
+		arg.City,
+		arg.State,
+		arg.Zip,
+		arg.Notes,
+		arg.IsDefault,
+	)
+	var i CustomerAddress
+	err := row.Scan(
+		&i.ID,
+		&i.CustomerID,
+		&i.Label,
+		&i.Line1,
+		&i.Line2,
+		&i.City,
+		&i.State,
+		&i.Zip,
+		&i.Notes,
+		&i.IsDefault,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertCustomerCard = `-- name: InsertCustomerCard :one
+INSERT INTO customer_cards (customer_id, gateway, card_ref, brand, last4, exp_month, exp_year)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (customer_id, card_ref) DO UPDATE SET brand = EXCLUDED.brand
+RETURNING id, customer_id, gateway, card_ref, brand, last4, exp_month, exp_year, created_at
+`
+
+type InsertCustomerCardParams struct {
+	CustomerID pgtype.UUID `json:"customer_id"`
+	Gateway    string      `json:"gateway"`
+	CardRef    string      `json:"card_ref"`
+	Brand      string      `json:"brand"`
+	Last4      string      `json:"last4"`
+	ExpMonth   int32       `json:"exp_month"`
+	ExpYear    int32       `json:"exp_year"`
+}
+
+func (q *Queries) InsertCustomerCard(ctx context.Context, arg InsertCustomerCardParams) (CustomerCard, error) {
+	row := q.db.QueryRow(ctx, insertCustomerCard,
+		arg.CustomerID,
+		arg.Gateway,
+		arg.CardRef,
+		arg.Brand,
+		arg.Last4,
+		arg.ExpMonth,
+		arg.ExpYear,
+	)
+	var i CustomerCard
+	err := row.Scan(
+		&i.ID,
+		&i.CustomerID,
+		&i.Gateway,
+		&i.CardRef,
+		&i.Brand,
+		&i.Last4,
+		&i.ExpMonth,
+		&i.ExpYear,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertCustomerSession = `-- name: InsertCustomerSession :exec
+INSERT INTO customer_sessions (token_hash, customer_id, location_id, expires_at) VALUES ($1, $2, $3, $4)
+`
+
+type InsertCustomerSessionParams struct {
+	TokenHash  string             `json:"token_hash"`
+	CustomerID pgtype.UUID        `json:"customer_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) InsertCustomerSession(ctx context.Context, arg InsertCustomerSessionParams) error {
+	_, err := q.db.Exec(ctx, insertCustomerSession,
+		arg.TokenHash,
+		arg.CustomerID,
+		arg.LocationID,
+		arg.ExpiresAt,
 	)
 	return err
 }
@@ -3585,6 +4588,75 @@ func (q *Queries) InsertDriver(ctx context.Context, arg InsertDriverParams) erro
 	return err
 }
 
+const insertEmailReceipt = `-- name: InsertEmailReceipt :exec
+INSERT INTO email_receipts (order_id, kind, location_id) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING
+`
+
+type InsertEmailReceiptParams struct {
+	OrderID    pgtype.UUID `json:"order_id"`
+	Kind       string      `json:"kind"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+func (q *Queries) InsertEmailReceipt(ctx context.Context, arg InsertEmailReceiptParams) error {
+	_, err := q.db.Exec(ctx, insertEmailReceipt, arg.OrderID, arg.Kind, arg.LocationID)
+	return err
+}
+
+const insertImportedCustomer = `-- name: InsertImportedCustomer :one
+INSERT INTO customers (tenant_id, location_id, phone, name, first_name, last_name, notes, source, name_source, notes_source)
+VALUES ($1, $2, $3, $4, $5, $6,
+        $7, 'import',
+        CASE WHEN $4::text = '' THEN '' ELSE 'import' END,
+        CASE WHEN $7::text = '' THEN '' ELSE 'import' END)
+ON CONFLICT (location_id, phone) DO NOTHING
+RETURNING id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, first_name, last_name, notes, source, name_source, notes_source
+`
+
+type InsertImportedCustomerParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	Phone      string      `json:"phone"`
+	Name       string      `json:"name"`
+	FirstName  string      `json:"first_name"`
+	LastName   string      `json:"last_name"`
+	Notes      string      `json:"notes"`
+}
+
+// No row (pgx.ErrNoRows) = the phone is taken: another writer (the Pi's
+// customer.upsert, a website sign-in) created it after the import read.
+func (q *Queries) InsertImportedCustomer(ctx context.Context, arg InsertImportedCustomerParams) (Customer, error) {
+	row := q.db.QueryRow(ctx, insertImportedCustomer,
+		arg.TenantID,
+		arg.LocationID,
+		arg.Phone,
+		arg.Name,
+		arg.FirstName,
+		arg.LastName,
+		arg.Notes,
+	)
+	var i Customer
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Phone,
+		&i.Name,
+		&i.Email,
+		&i.SquareCustomerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastSeenAt,
+		&i.FirstName,
+		&i.LastName,
+		&i.Notes,
+		&i.Source,
+		&i.NameSource,
+		&i.NotesSource,
+	)
+	return i, err
+}
+
 const insertItemSize = `-- name: InsertItemSize :exec
 INSERT INTO menu_item_sizes (tenant_id, location_id, item_id, size_id, price_cents, kitchen_name, position)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -3707,6 +4779,82 @@ func (q *Queries) InsertOutboxEvent(ctx context.Context, arg InsertOutboxEventPa
 	return err
 }
 
+const insertPlacement = `-- name: InsertPlacement :one
+
+INSERT INTO order_placements (channel_id, client_order_id, tenant_id, location_id, body_hash, request,
+    card_token, verification_token, customer_id, operator, expires_at, state, result, worker)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+ON CONFLICT (channel_id, client_order_id) DO NOTHING
+RETURNING channel_id, client_order_id, tenant_id, location_id, body_hash, request, card_token, verification_token, customer_id, operator, expires_at, state, waiting, result, order_id, worker, attempts, charge_started, charge_cents, due_alert_at, due_alerted, created_at, updated_at
+`
+
+type InsertPlacementParams struct {
+	ChannelID         pgtype.UUID        `json:"channel_id"`
+	ClientOrderID     string             `json:"client_order_id"`
+	TenantID          pgtype.UUID        `json:"tenant_id"`
+	LocationID        pgtype.UUID        `json:"location_id"`
+	BodyHash          string             `json:"body_hash"`
+	Request           []byte             `json:"request"`
+	CardToken         string             `json:"card_token"`
+	VerificationToken string             `json:"verification_token"`
+	CustomerID        pgtype.UUID        `json:"customer_id"`
+	Operator          []byte             `json:"operator"`
+	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
+	State             string             `json:"state"`
+	Result            []byte             `json:"result"`
+	Worker            string             `json:"worker"`
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Order placements (DURABILITY-PLAN.md: a channel order is a placement first)
+// ───────────────────────────────────────────────────────────────────────────
+// A new placement, or nothing when the key exists (then GetPlacement).
+func (q *Queries) InsertPlacement(ctx context.Context, arg InsertPlacementParams) (OrderPlacement, error) {
+	row := q.db.QueryRow(ctx, insertPlacement,
+		arg.ChannelID,
+		arg.ClientOrderID,
+		arg.TenantID,
+		arg.LocationID,
+		arg.BodyHash,
+		arg.Request,
+		arg.CardToken,
+		arg.VerificationToken,
+		arg.CustomerID,
+		arg.Operator,
+		arg.ExpiresAt,
+		arg.State,
+		arg.Result,
+		arg.Worker,
+	)
+	var i OrderPlacement
+	err := row.Scan(
+		&i.ChannelID,
+		&i.ClientOrderID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.BodyHash,
+		&i.Request,
+		&i.CardToken,
+		&i.VerificationToken,
+		&i.CustomerID,
+		&i.Operator,
+		&i.ExpiresAt,
+		&i.State,
+		&i.Waiting,
+		&i.Result,
+		&i.OrderID,
+		&i.Worker,
+		&i.Attempts,
+		&i.ChargeStarted,
+		&i.ChargeCents,
+		&i.DueAlertAt,
+		&i.DueAlerted,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const insertPrinterIPChange = `-- name: InsertPrinterIPChange :exec
 INSERT INTO printer_ip_changes (tenant_id, location_id, printer_id, old_ip, new_ip, mac, source)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -3733,6 +4881,70 @@ func (q *Queries) InsertPrinterIPChange(ctx context.Context, arg InsertPrinterIP
 		arg.Source,
 	)
 	return err
+}
+
+const insertSiteDomain = `-- name: InsertSiteDomain :one
+INSERT INTO site_domains (host, tenant_id, location_id, is_primary, verified)
+VALUES ($1, $2, $3, $4, $5) RETURNING host, tenant_id, location_id, is_primary, verified, created_at
+`
+
+type InsertSiteDomainParams struct {
+	Host       string      `json:"host"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	IsPrimary  bool        `json:"is_primary"`
+	Verified   bool        `json:"verified"`
+}
+
+func (q *Queries) InsertSiteDomain(ctx context.Context, arg InsertSiteDomainParams) (SiteDomain, error) {
+	row := q.db.QueryRow(ctx, insertSiteDomain,
+		arg.Host,
+		arg.TenantID,
+		arg.LocationID,
+		arg.IsPrimary,
+		arg.Verified,
+	)
+	var i SiteDomain
+	err := row.Scan(
+		&i.Host,
+		&i.TenantID,
+		&i.LocationID,
+		&i.IsPrimary,
+		&i.Verified,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const insertSiteImage = `-- name: InsertSiteImage :one
+INSERT INTO site_images (location_id, tenant_id, kind, content_type, bytes) VALUES ($1, $2, $3, $4, $5)
+RETURNING id, created_at
+`
+
+type InsertSiteImageParams struct {
+	LocationID  pgtype.UUID `json:"location_id"`
+	TenantID    pgtype.UUID `json:"tenant_id"`
+	Kind        string      `json:"kind"`
+	ContentType string      `json:"content_type"`
+	Bytes       []byte      `json:"bytes"`
+}
+
+type InsertSiteImageRow struct {
+	ID        pgtype.UUID        `json:"id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) InsertSiteImage(ctx context.Context, arg InsertSiteImageParams) (InsertSiteImageRow, error) {
+	row := q.db.QueryRow(ctx, insertSiteImage,
+		arg.LocationID,
+		arg.TenantID,
+		arg.Kind,
+		arg.ContentType,
+		arg.Bytes,
+	)
+	var i InsertSiteImageRow
+	err := row.Scan(&i.ID, &i.CreatedAt)
+	return i, err
 }
 
 const insertTabletReportToken = `-- name: InsertTabletReportToken :one
@@ -3762,6 +4974,28 @@ func (q *Queries) InsertTabletReportToken(ctx context.Context, arg InsertTabletR
 	var id pgtype.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const joinGuestOrders = `-- name: JoinGuestOrders :execrows
+UPDATE channel_orders co SET customer_id = $3
+FROM orders o, channels ch
+WHERE co.order_id = o.id AND ch.id = co.channel_id AND co.location_id = $1 AND co.customer_id IS NULL
+  AND ch.kind = 'web' AND o.customer_phone = $2
+`
+
+type JoinGuestOrdersParams struct {
+	LocationID    pgtype.UUID `json:"location_id"`
+	CustomerPhone string      `json:"customer_phone"`
+	CustomerID    pgtype.UUID `json:"customer_id"`
+}
+
+// A verified phone takes over that number's guest web orders at the store.
+func (q *Queries) JoinGuestOrders(ctx context.Context, arg JoinGuestOrdersParams) (int64, error) {
+	result, err := q.db.Exec(ctx, joinGuestOrders, arg.LocationID, arg.CustomerPhone, arg.CustomerID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const lastDiagPage = `-- name: LastDiagPage :one
@@ -3810,6 +5044,54 @@ func (q *Queries) LatestChannelEvent(ctx context.Context, channelID pgtype.UUID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const linkCardHoldPayment = `-- name: LinkCardHoldPayment :exec
+UPDATE card_holds h SET payment_id = (
+    SELECT p.id FROM payments p WHERE p.order_id = h.order_id AND p.processor = 'card' ORDER BY p.id LIMIT 1)
+WHERE h.order_id = $1
+`
+
+// The hold's own payment row (M-4), written in the order's transaction.
+func (q *Queries) LinkCardHoldPayment(ctx context.Context, orderID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, linkCardHoldPayment, orderID)
+	return err
+}
+
+const listAddressesOfCustomers = `-- name: ListAddressesOfCustomers :many
+SELECT id, customer_id, label, line1, line2, city, state, zip, notes, is_default, created_at FROM customer_addresses WHERE customer_id = ANY($1::uuid[]) ORDER BY customer_id, is_default DESC, created_at
+`
+
+func (q *Queries) ListAddressesOfCustomers(ctx context.Context, ids []pgtype.UUID) ([]CustomerAddress, error) {
+	rows, err := q.db.Query(ctx, listAddressesOfCustomers, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CustomerAddress
+	for rows.Next() {
+		var i CustomerAddress
+		if err := rows.Scan(
+			&i.ID,
+			&i.CustomerID,
+			&i.Label,
+			&i.Line1,
+			&i.Line2,
+			&i.City,
+			&i.State,
+			&i.Zip,
+			&i.Notes,
+			&i.IsDefault,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listAgentBackups = `-- name: ListAgentBackups :many
@@ -4074,8 +5356,168 @@ func (q *Queries) ListAppReleases(ctx context.Context, app string) ([]ListAppRel
 	return items, nil
 }
 
+const listCardHolds = `-- name: ListCardHolds :many
+SELECT order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, added_tip_cents, status, capture_reason, due_at, capture_requested_at, next_try_at, attempts, last_error, captured_cents, tip_payment_ref, tip_note, captured_at, cancelled_at, created_at, updated_at, payment_id, cancel_requested_at, refund_requested_at, refunded_cents, refund_ref, tip_payment_id FROM card_holds WHERE location_id = $1 ORDER BY created_at DESC LIMIT $2
+`
+
+type ListCardHoldsParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Limit      int32       `json:"limit"`
+}
+
+func (q *Queries) ListCardHolds(ctx context.Context, arg ListCardHoldsParams) ([]CardHold, error) {
+	rows, err := q.db.Query(ctx, listCardHolds, arg.LocationID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CardHold
+	for rows.Next() {
+		var i CardHold
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Gateway,
+			&i.PaymentRef,
+			&i.AmountCents,
+			&i.TipCents,
+			&i.AddedTipCents,
+			&i.Status,
+			&i.CaptureReason,
+			&i.DueAt,
+			&i.CaptureRequestedAt,
+			&i.NextTryAt,
+			&i.Attempts,
+			&i.LastError,
+			&i.CapturedCents,
+			&i.TipPaymentRef,
+			&i.TipNote,
+			&i.CapturedAt,
+			&i.CancelledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.PaymentID,
+			&i.CancelRequestedAt,
+			&i.RefundRequestedAt,
+			&i.RefundedCents,
+			&i.RefundRef,
+			&i.TipPaymentID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCardHoldsWithOrders = `-- name: ListCardHoldsWithOrders :many
+SELECT h.order_id, h.tenant_id, h.location_id, h.gateway, h.payment_ref, h.amount_cents, h.tip_cents, h.added_tip_cents, h.status, h.capture_reason, h.due_at, h.capture_requested_at, h.next_try_at, h.attempts, h.last_error, h.captured_cents, h.tip_payment_ref, h.tip_note, h.captured_at, h.cancelled_at, h.created_at, h.updated_at, h.payment_id, h.cancel_requested_at, h.refund_requested_at, h.refunded_cents, h.refund_ref, h.tip_payment_id, o.customer_display_name, o.fulfillment_type, o.placed_at, o.status AS order_status
+FROM card_holds h JOIN orders o ON o.id = h.order_id
+WHERE h.location_id = $1 AND ($3::text IS NULL OR h.status = $3)
+ORDER BY h.created_at DESC LIMIT $2
+`
+
+type ListCardHoldsWithOrdersParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Limit      int32       `json:"limit"`
+	Status     pgtype.Text `json:"status"`
+}
+
+type ListCardHoldsWithOrdersRow struct {
+	OrderID             pgtype.UUID        `json:"order_id"`
+	TenantID            pgtype.UUID        `json:"tenant_id"`
+	LocationID          pgtype.UUID        `json:"location_id"`
+	Gateway             string             `json:"gateway"`
+	PaymentRef          string             `json:"payment_ref"`
+	AmountCents         int64              `json:"amount_cents"`
+	TipCents            int64              `json:"tip_cents"`
+	AddedTipCents       int64              `json:"added_tip_cents"`
+	Status              string             `json:"status"`
+	CaptureReason       string             `json:"capture_reason"`
+	DueAt               pgtype.Timestamptz `json:"due_at"`
+	CaptureRequestedAt  pgtype.Timestamptz `json:"capture_requested_at"`
+	NextTryAt           pgtype.Timestamptz `json:"next_try_at"`
+	Attempts            int32              `json:"attempts"`
+	LastError           string             `json:"last_error"`
+	CapturedCents       int64              `json:"captured_cents"`
+	TipPaymentRef       string             `json:"tip_payment_ref"`
+	TipNote             string             `json:"tip_note"`
+	CapturedAt          pgtype.Timestamptz `json:"captured_at"`
+	CancelledAt         pgtype.Timestamptz `json:"cancelled_at"`
+	CreatedAt           pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
+	PaymentID           pgtype.UUID        `json:"payment_id"`
+	CancelRequestedAt   pgtype.Timestamptz `json:"cancel_requested_at"`
+	RefundRequestedAt   pgtype.Timestamptz `json:"refund_requested_at"`
+	RefundedCents       int64              `json:"refunded_cents"`
+	RefundRef           string             `json:"refund_ref"`
+	TipPaymentID        pgtype.UUID        `json:"tip_payment_id"`
+	CustomerDisplayName string             `json:"customer_display_name"`
+	FulfillmentType     string             `json:"fulfillment_type"`
+	PlacedAt            pgtype.Timestamptz `json:"placed_at"`
+	OrderStatus         string             `json:"order_status"`
+}
+
+// The Payments page: a store's holds with who ordered, newest first (?status=).
+func (q *Queries) ListCardHoldsWithOrders(ctx context.Context, arg ListCardHoldsWithOrdersParams) ([]ListCardHoldsWithOrdersRow, error) {
+	rows, err := q.db.Query(ctx, listCardHoldsWithOrders, arg.LocationID, arg.Limit, arg.Status)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCardHoldsWithOrdersRow
+	for rows.Next() {
+		var i ListCardHoldsWithOrdersRow
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Gateway,
+			&i.PaymentRef,
+			&i.AmountCents,
+			&i.TipCents,
+			&i.AddedTipCents,
+			&i.Status,
+			&i.CaptureReason,
+			&i.DueAt,
+			&i.CaptureRequestedAt,
+			&i.NextTryAt,
+			&i.Attempts,
+			&i.LastError,
+			&i.CapturedCents,
+			&i.TipPaymentRef,
+			&i.TipNote,
+			&i.CapturedAt,
+			&i.CancelledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.PaymentID,
+			&i.CancelRequestedAt,
+			&i.RefundRequestedAt,
+			&i.RefundedCents,
+			&i.RefundRef,
+			&i.TipPaymentID,
+			&i.CustomerDisplayName,
+			&i.FulfillmentType,
+			&i.PlacedAt,
+			&i.OrderStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCategoriesByLocation = `-- name: ListCategoriesByLocation :many
-SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 FROM menu_categories WHERE location_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -4100,6 +5542,7 @@ func (q *Queries) ListCategoriesByLocation(ctx context.Context, locationID pgtyp
 			&i.DefaultPrinterID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.NoKitchenTicket,
 		); err != nil {
 			return nil, err
 		}
@@ -4112,7 +5555,7 @@ func (q *Queries) ListCategoriesByLocation(ctx context.Context, locationID pgtyp
 }
 
 const listCategoriesByMenu = `-- name: ListCategoriesByMenu :many
-SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+SELECT id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 FROM menu_categories WHERE menu_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -4137,6 +5580,7 @@ func (q *Queries) ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) 
 			&i.DefaultPrinterID,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.NoKitchenTicket,
 		); err != nil {
 			return nil, err
 		}
@@ -4149,7 +5593,7 @@ func (q *Queries) ListCategoriesByMenu(ctx context.Context, menuID pgtype.UUID) 
 }
 
 const listChannelOrders = `-- name: ListChannelOrders :many
-SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id FROM channel_orders
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id, customer_id FROM channel_orders
 WHERE channel_id = $1 AND created_at < $2
 ORDER BY created_at DESC
 LIMIT $3
@@ -4181,6 +5625,7 @@ func (q *Queries) ListChannelOrders(ctx context.Context, arg ListChannelOrdersPa
 			&i.TrackToken,
 			&i.AlertedAt,
 			&i.OperatorID,
+			&i.CustomerID,
 		); err != nil {
 			return nil, err
 		}
@@ -4259,6 +5704,207 @@ func (q *Queries) ListChannelsByLocation(ctx context.Context, locationID pgtype.
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.ViewID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCustomerAddresses = `-- name: ListCustomerAddresses :many
+SELECT id, customer_id, label, line1, line2, city, state, zip, notes, is_default, created_at FROM customer_addresses WHERE customer_id = $1 ORDER BY is_default DESC, created_at
+`
+
+func (q *Queries) ListCustomerAddresses(ctx context.Context, customerID pgtype.UUID) ([]CustomerAddress, error) {
+	rows, err := q.db.Query(ctx, listCustomerAddresses, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CustomerAddress
+	for rows.Next() {
+		var i CustomerAddress
+		if err := rows.Scan(
+			&i.ID,
+			&i.CustomerID,
+			&i.Label,
+			&i.Line1,
+			&i.Line2,
+			&i.City,
+			&i.State,
+			&i.Zip,
+			&i.Notes,
+			&i.IsDefault,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCustomerCards = `-- name: ListCustomerCards :many
+SELECT id, customer_id, gateway, card_ref, brand, last4, exp_month, exp_year, created_at FROM customer_cards WHERE customer_id = $1 ORDER BY created_at DESC
+`
+
+func (q *Queries) ListCustomerCards(ctx context.Context, customerID pgtype.UUID) ([]CustomerCard, error) {
+	rows, err := q.db.Query(ctx, listCustomerCards, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CustomerCard
+	for rows.Next() {
+		var i CustomerCard
+		if err := rows.Scan(
+			&i.ID,
+			&i.CustomerID,
+			&i.Gateway,
+			&i.CardRef,
+			&i.Brand,
+			&i.Last4,
+			&i.ExpMonth,
+			&i.ExpYear,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCustomerOrders = `-- name: ListCustomerOrders :many
+SELECT order_id, channel_id, tenant_id, location_id, client_order_id, payment, created_at, track_token, alerted_at, operator_id, customer_id FROM channel_orders WHERE customer_id = $1 AND created_at < $2 ORDER BY created_at DESC LIMIT $3
+`
+
+type ListCustomerOrdersParams struct {
+	CustomerID pgtype.UUID        `json:"customer_id"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	Limit      int32              `json:"limit"`
+}
+
+func (q *Queries) ListCustomerOrders(ctx context.Context, arg ListCustomerOrdersParams) ([]ChannelOrder, error) {
+	rows, err := q.db.Query(ctx, listCustomerOrders, arg.CustomerID, arg.CreatedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ChannelOrder
+	for rows.Next() {
+		var i ChannelOrder
+		if err := rows.Scan(
+			&i.OrderID,
+			&i.ChannelID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.ClientOrderID,
+			&i.Payment,
+			&i.CreatedAt,
+			&i.TrackToken,
+			&i.AlertedAt,
+			&i.OperatorID,
+			&i.CustomerID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCustomersByIDs = `-- name: ListCustomersByIDs :many
+SELECT id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, first_name, last_name, notes, source, name_source, notes_source FROM customers WHERE id = ANY($1::uuid[])
+`
+
+func (q *Queries) ListCustomersByIDs(ctx context.Context, ids []pgtype.UUID) ([]Customer, error) {
+	rows, err := q.db.Query(ctx, listCustomersByIDs, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Customer
+	for rows.Next() {
+		var i Customer
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Phone,
+			&i.Name,
+			&i.Email,
+			&i.SquareCustomerID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.LastSeenAt,
+			&i.FirstName,
+			&i.LastName,
+			&i.Notes,
+			&i.Source,
+			&i.NameSource,
+			&i.NotesSource,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCustomersByPhones = `-- name: ListCustomersByPhones :many
+
+SELECT id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, first_name, last_name, notes, source, name_source, notes_source FROM customers WHERE location_id = $1 AND phone = ANY($2::text[])
+`
+
+type ListCustomersByPhonesParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Phones     []string    `json:"phones"`
+}
+
+// Terminal stage 0c: the bulk import + the Pi's change feed.
+func (q *Queries) ListCustomersByPhones(ctx context.Context, arg ListCustomersByPhonesParams) ([]Customer, error) {
+	rows, err := q.db.Query(ctx, listCustomersByPhones, arg.LocationID, arg.Phones)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Customer
+	for rows.Next() {
+		var i Customer
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.Phone,
+			&i.Name,
+			&i.Email,
+			&i.SquareCustomerID,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.LastSeenAt,
+			&i.FirstName,
+			&i.LastName,
+			&i.Notes,
+			&i.Source,
+			&i.NameSource,
+			&i.NotesSource,
 		); err != nil {
 			return nil, err
 		}
@@ -4525,57 +6171,6 @@ func (q *Queries) ListDriverShifts(ctx context.Context, arg ListDriverShiftsPara
 	return items, nil
 }
 
-const listDueExternalStops = `-- name: ListDueExternalStops :many
-SELECT order_id, tenant_id, location_id, state, attempts, created_at, updated_at
-FROM geo_external_stops
-WHERE pushed_at IS NULL AND next_try_at <= $1::timestamptz AND expires_at > $1::timestamptz
-ORDER BY next_try_at ASC
-LIMIT $2
-`
-
-type ListDueExternalStopsParams struct {
-	Now     pgtype.Timestamptz `json:"now"`
-	MaxRows int32              `json:"max_rows"`
-}
-
-type ListDueExternalStopsRow struct {
-	OrderID    pgtype.UUID        `json:"order_id"`
-	TenantID   pgtype.UUID        `json:"tenant_id"`
-	LocationID pgtype.UUID        `json:"location_id"`
-	State      string             `json:"state"`
-	Attempts   int32              `json:"attempts"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) ListDueExternalStops(ctx context.Context, arg ListDueExternalStopsParams) ([]ListDueExternalStopsRow, error) {
-	rows, err := q.db.Query(ctx, listDueExternalStops, arg.Now, arg.MaxRows)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListDueExternalStopsRow
-	for rows.Next() {
-		var i ListDueExternalStopsRow
-		if err := rows.Scan(
-			&i.OrderID,
-			&i.TenantID,
-			&i.LocationID,
-			&i.State,
-			&i.Attempts,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listDueOrderGeo = `-- name: ListDueOrderGeo :many
 SELECT order_id, tenant_id, location_id, state, attempts, created_at, updated_at
 FROM order_geo
@@ -4627,39 +6222,30 @@ func (q *Queries) ListDueOrderGeo(ctx context.Context, arg ListDueOrderGeoParams
 	return items, nil
 }
 
-const listExternalStopsByIDs = `-- name: ListExternalStopsByIDs :many
-SELECT order_id, state, lat, lng FROM geo_external_stops
-WHERE tenant_id = $1 AND location_id = $2 AND order_id = ANY($3::uuid[])
-  AND expires_at > now()
+const listEmailReceipts = `-- name: ListEmailReceipts :many
+SELECT order_id, kind, location_id, status, attempts, next_try_at, last_error, message_id, sent_at, created_at FROM email_receipts WHERE order_id = $1 ORDER BY created_at
 `
 
-type ListExternalStopsByIDsParams struct {
-	TenantID   pgtype.UUID   `json:"tenant_id"`
-	LocationID pgtype.UUID   `json:"location_id"`
-	Ids        []pgtype.UUID `json:"ids"`
-}
-
-type ListExternalStopsByIDsRow struct {
-	OrderID pgtype.UUID   `json:"order_id"`
-	State   string        `json:"state"`
-	Lat     pgtype.Float8 `json:"lat"`
-	Lng     pgtype.Float8 `json:"lng"`
-}
-
-func (q *Queries) ListExternalStopsByIDs(ctx context.Context, arg ListExternalStopsByIDsParams) ([]ListExternalStopsByIDsRow, error) {
-	rows, err := q.db.Query(ctx, listExternalStopsByIDs, arg.TenantID, arg.LocationID, arg.Ids)
+func (q *Queries) ListEmailReceipts(ctx context.Context, orderID pgtype.UUID) ([]EmailReceipt, error) {
+	rows, err := q.db.Query(ctx, listEmailReceipts, orderID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListExternalStopsByIDsRow
+	var items []EmailReceipt
 	for rows.Next() {
-		var i ListExternalStopsByIDsRow
+		var i EmailReceipt
 		if err := rows.Scan(
 			&i.OrderID,
-			&i.State,
-			&i.Lat,
-			&i.Lng,
+			&i.Kind,
+			&i.LocationID,
+			&i.Status,
+			&i.Attempts,
+			&i.NextTryAt,
+			&i.LastError,
+			&i.MessageID,
+			&i.SentAt,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -4797,7 +6383,7 @@ func (q *Queries) ListItemSizesByLocation(ctx context.Context, locationID pgtype
 }
 
 const listItemsByCategory = `-- name: ListItemsByCategory :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 FROM menu_items WHERE category_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -4829,6 +6415,8 @@ func (q *Queries) ListItemsByCategory(ctx context.Context, categoryID pgtype.UUI
 			&i.UpdatedAt,
 			&i.KitchenName,
 			&i.Sku,
+			&i.OutHold,
+			&i.NoKitchenTicket,
 		); err != nil {
 			return nil, err
 		}
@@ -4841,7 +6429,7 @@ func (q *Queries) ListItemsByCategory(ctx context.Context, categoryID pgtype.UUI
 }
 
 const listItemsByLocation = `-- name: ListItemsByLocation :many
-SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+SELECT id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 FROM menu_items WHERE location_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -4873,97 +6461,8 @@ func (q *Queries) ListItemsByLocation(ctx context.Context, locationID pgtype.UUI
 			&i.UpdatedAt,
 			&i.KitchenName,
 			&i.Sku,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listLiveExternalStops = `-- name: ListLiveExternalStops :many
-SELECT order_id, lat, lng FROM geo_external_stops
-WHERE tenant_id = $1 AND location_id = $2
-  AND state = 'located' AND lat IS NOT NULL AND lng IS NOT NULL
-  AND order_id <> $3 AND expires_at > now()
-ORDER BY created_at ASC
-LIMIT $4
-`
-
-type ListLiveExternalStopsParams struct {
-	TenantID   pgtype.UUID `json:"tenant_id"`
-	LocationID pgtype.UUID `json:"location_id"`
-	ExcludeID  pgtype.UUID `json:"exclude_id"`
-	MaxRows    int32       `json:"max_rows"`
-}
-
-type ListLiveExternalStopsRow struct {
-	OrderID pgtype.UUID   `json:"order_id"`
-	Lat     pgtype.Float8 `json:"lat"`
-	Lng     pgtype.Float8 `json:"lng"`
-}
-
-// The location's other located external stops, for the drive-time table.
-func (q *Queries) ListLiveExternalStops(ctx context.Context, arg ListLiveExternalStopsParams) ([]ListLiveExternalStopsRow, error) {
-	rows, err := q.db.Query(ctx, listLiveExternalStops,
-		arg.TenantID,
-		arg.LocationID,
-		arg.ExcludeID,
-		arg.MaxRows,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListLiveExternalStopsRow
-	for rows.Next() {
-		var i ListLiveExternalStopsRow
-		if err := rows.Scan(&i.OrderID, &i.Lat, &i.Lng); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const listLiveExternalStopsForRadius = `-- name: ListLiveExternalStopsForRadius :many
-SELECT order_id, lat, lng, outside_area FROM geo_external_stops
-WHERE tenant_id = $1 AND location_id = $2
-  AND state = 'located' AND lat IS NOT NULL AND lng IS NOT NULL AND expires_at > now()
-`
-
-type ListLiveExternalStopsForRadiusParams struct {
-	TenantID   pgtype.UUID `json:"tenant_id"`
-	LocationID pgtype.UUID `json:"location_id"`
-}
-
-type ListLiveExternalStopsForRadiusRow struct {
-	OrderID     pgtype.UUID   `json:"order_id"`
-	Lat         pgtype.Float8 `json:"lat"`
-	Lng         pgtype.Float8 `json:"lng"`
-	OutsideArea bool          `json:"outside_area"`
-}
-
-func (q *Queries) ListLiveExternalStopsForRadius(ctx context.Context, arg ListLiveExternalStopsForRadiusParams) ([]ListLiveExternalStopsForRadiusRow, error) {
-	rows, err := q.db.Query(ctx, listLiveExternalStopsForRadius, arg.TenantID, arg.LocationID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListLiveExternalStopsForRadiusRow
-	for rows.Next() {
-		var i ListLiveExternalStopsForRadiusRow
-		if err := rows.Scan(
-			&i.OrderID,
-			&i.Lat,
-			&i.Lng,
-			&i.OutsideArea,
+			&i.OutHold,
+			&i.NoKitchenTicket,
 		); err != nil {
 			return nil, err
 		}
@@ -5168,7 +6667,7 @@ func (q *Queries) ListMenuViewEntries(ctx context.Context, viewID pgtype.UUID) (
 }
 
 const listMenuViews = `-- name: ListMenuViews :many
-SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at FROM menu_views WHERE location_id = $1 ORDER BY created_at ASC
+SELECT id, tenant_id, location_id, kind, name, rules, created_at, updated_at, layout FROM menu_views WHERE location_id = $1 ORDER BY created_at ASC
 `
 
 func (q *Queries) ListMenuViews(ctx context.Context, locationID pgtype.UUID) ([]MenuView, error) {
@@ -5189,6 +6688,7 @@ func (q *Queries) ListMenuViews(ctx context.Context, locationID pgtype.UUID) ([]
 			&i.Rules,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Layout,
 		); err != nil {
 			return nil, err
 		}
@@ -5466,7 +6966,7 @@ func (q *Queries) ListOptionPricesByLocation(ctx context.Context, locationID pgt
 }
 
 const listOptionsByGroup = `-- name: ListOptionsByGroup :many
-SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
+SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold
 FROM modifier_options WHERE group_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -5492,6 +6992,7 @@ func (q *Queries) ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) (
 			&i.UpdatedAt,
 			&i.IsDefault,
 			&i.KitchenName,
+			&i.OutHold,
 		); err != nil {
 			return nil, err
 		}
@@ -5504,7 +7005,7 @@ func (q *Queries) ListOptionsByGroup(ctx context.Context, groupID pgtype.UUID) (
 }
 
 const listOptionsByLocation = `-- name: ListOptionsByLocation :many
-SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
+SELECT id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold
 FROM modifier_options WHERE location_id = $1 ORDER BY position ASC, created_at ASC
 `
 
@@ -5530,6 +7031,7 @@ func (q *Queries) ListOptionsByLocation(ctx context.Context, locationID pgtype.U
 			&i.UpdatedAt,
 			&i.IsDefault,
 			&i.KitchenName,
+			&i.OutHold,
 		); err != nil {
 			return nil, err
 		}
@@ -5573,6 +7075,139 @@ func (q *Queries) ListOrderGeoByIDs(ctx context.Context, arg ListOrderGeoByIDsPa
 			&i.State,
 			&i.Lat,
 			&i.Lng,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listParkedExpired = `-- name: ListParkedExpired :many
+SELECT channel_id, client_order_id, tenant_id, location_id, body_hash, request, card_token, verification_token, customer_id, operator, expires_at, state, waiting, result, order_id, worker, attempts, charge_started, charge_cents, due_alert_at, due_alerted, created_at, updated_at FROM order_placements
+WHERE state = 'pending' AND waiting <> '' AND COALESCE(expires_at, created_at + interval '30 minutes') < now()
+LIMIT 50
+`
+
+// Parked placements nobody came back for (their deadline, else 30 minutes).
+func (q *Queries) ListParkedExpired(ctx context.Context) ([]OrderPlacement, error) {
+	rows, err := q.db.Query(ctx, listParkedExpired)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrderPlacement
+	for rows.Next() {
+		var i OrderPlacement
+		if err := rows.Scan(
+			&i.ChannelID,
+			&i.ClientOrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.BodyHash,
+			&i.Request,
+			&i.CardToken,
+			&i.VerificationToken,
+			&i.CustomerID,
+			&i.Operator,
+			&i.ExpiresAt,
+			&i.State,
+			&i.Waiting,
+			&i.Result,
+			&i.OrderID,
+			&i.Worker,
+			&i.Attempts,
+			&i.ChargeStarted,
+			&i.ChargeCents,
+			&i.DueAlertAt,
+			&i.DueAlerted,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPlacementDueAlerts = `-- name: ListPlacementDueAlerts :many
+SELECT channel_id, client_order_id, tenant_id, location_id, body_hash, request, card_token, verification_token, customer_id, operator, expires_at, state, waiting, result, order_id, worker, attempts, charge_started, charge_cents, due_alert_at, due_alerted, created_at, updated_at FROM order_placements
+WHERE state = 'placed' AND NOT due_alerted AND due_alert_at <= now()
+LIMIT 50
+`
+
+func (q *Queries) ListPlacementDueAlerts(ctx context.Context) ([]OrderPlacement, error) {
+	rows, err := q.db.Query(ctx, listPlacementDueAlerts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrderPlacement
+	for rows.Next() {
+		var i OrderPlacement
+		if err := rows.Scan(
+			&i.ChannelID,
+			&i.ClientOrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.BodyHash,
+			&i.Request,
+			&i.CardToken,
+			&i.VerificationToken,
+			&i.CustomerID,
+			&i.Operator,
+			&i.ExpiresAt,
+			&i.State,
+			&i.Waiting,
+			&i.Result,
+			&i.OrderID,
+			&i.Worker,
+			&i.Attempts,
+			&i.ChargeStarted,
+			&i.ChargeCents,
+			&i.DueAlertAt,
+			&i.DueAlerted,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPlatformKeys = `-- name: ListPlatformKeys :many
+SELECT id, name, key_hash, key_prefix, revoked_at, last_used_at, created_at FROM platform_keys ORDER BY created_at
+`
+
+func (q *Queries) ListPlatformKeys(ctx context.Context) ([]PlatformKey, error) {
+	rows, err := q.db.Query(ctx, listPlatformKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PlatformKey
+	for rows.Next() {
+		var i PlatformKey
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.KeyHash,
+			&i.KeyPrefix,
+			&i.RevokedAt,
+			&i.LastUsedAt,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -5670,7 +7305,7 @@ func (q *Queries) ListPrinterIPChanges(ctx context.Context, arg ListPrinterIPCha
 }
 
 const listPrintersByLocation = `-- name: ListPrintersByLocation :many
-SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+SELECT id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 FROM printers WHERE location_id = $1 ORDER BY name ASC
 `
 
@@ -5693,6 +7328,7 @@ func (q *Queries) ListPrintersByLocation(ctx context.Context, locationID pgtype.
 			&i.UpdatedAt,
 			&i.IsReceipt,
 			&i.MAC,
+			&i.PrintColumns,
 		); err != nil {
 			return nil, err
 		}
@@ -5794,7 +7430,9 @@ func (q *Queries) ListRestoreOrderIDs(ctx context.Context, arg ListRestoreOrderI
 const listRoutingByLocation = `-- name: ListRoutingByLocation :many
 SELECT i.id AS item_id,
        i.name AS item_name,
-       COALESCE(i.printer_id, c.default_printer_id)::uuid AS printer_id
+       (CASE WHEN i.no_kitchen_ticket OR (i.printer_id IS NULL AND c.no_kitchen_ticket) THEN NULL
+             ELSE COALESCE(i.printer_id, c.default_printer_id) END)::uuid AS printer_id,
+       (i.no_kitchen_ticket OR (i.printer_id IS NULL AND c.no_kitchen_ticket))::boolean AS no_kitchen
 FROM menu_items i
 JOIN menu_categories c ON c.id = i.category_id
 JOIN menus m ON m.id = c.menu_id
@@ -5806,11 +7444,13 @@ type ListRoutingByLocationRow struct {
 	ItemID    pgtype.UUID `json:"item_id"`
 	ItemName  string      `json:"item_name"`
 	PrinterID pgtype.UUID `json:"printer_id"`
+	NoKitchen bool        `json:"no_kitchen"`
 }
 
 // Kitchen routing table for one location: every menu item's name with its
-// effective printer (the item's own printer, else its category's default),
-// best candidate first — available menus/categories first, then menu,
+// effective printer (the item's own printer, else its category's default;
+// none and no_kitchen when the item, or its category for an item without
+// its own printer, has "no kitchen ticket", 00041), best candidate first — available menus/categories first, then menu,
 // category and item position. The router keeps the first row per name.
 func (q *Queries) ListRoutingByLocation(ctx context.Context, locationID pgtype.UUID) ([]ListRoutingByLocationRow, error) {
 	rows, err := q.db.Query(ctx, listRoutingByLocation, locationID)
@@ -5821,7 +7461,43 @@ func (q *Queries) ListRoutingByLocation(ctx context.Context, locationID pgtype.U
 	var items []ListRoutingByLocationRow
 	for rows.Next() {
 		var i ListRoutingByLocationRow
-		if err := rows.Scan(&i.ItemID, &i.ItemName, &i.PrinterID); err != nil {
+		if err := rows.Scan(
+			&i.ItemID,
+			&i.ItemName,
+			&i.PrinterID,
+			&i.NoKitchen,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listSiteDomains = `-- name: ListSiteDomains :many
+SELECT host, tenant_id, location_id, is_primary, verified, created_at FROM site_domains WHERE location_id = $1 ORDER BY is_primary DESC, host
+`
+
+func (q *Queries) ListSiteDomains(ctx context.Context, locationID pgtype.UUID) ([]SiteDomain, error) {
+	rows, err := q.db.Query(ctx, listSiteDomains, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SiteDomain
+	for rows.Next() {
+		var i SiteDomain
+		if err := rows.Scan(
+			&i.Host,
+			&i.TenantID,
+			&i.LocationID,
+			&i.IsPrimary,
+			&i.Verified,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -5854,6 +7530,149 @@ func (q *Queries) ListSoldOutItems(ctx context.Context, locationID pgtype.UUID) 
 	for rows.Next() {
 		var i ListSoldOutItemsRow
 		if err := rows.Scan(&i.ID, &i.Name, &i.OutUntil); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStalePlacements = `-- name: ListStalePlacements :many
+SELECT channel_id, client_order_id, tenant_id, location_id, body_hash, request, card_token, verification_token, customer_id, operator, expires_at, state, waiting, result, order_id, worker, attempts, charge_started, charge_cents, due_alert_at, due_alerted, created_at, updated_at FROM order_placements
+WHERE state = 'pending' AND waiting = '' AND (worker <> $1 OR updated_at < $2)
+ORDER BY updated_at
+LIMIT 20
+`
+
+type ListStalePlacementsParams struct {
+	Worker string             `json:"worker"`
+	Before pgtype.Timestamptz `json:"before"`
+}
+
+// Pending placements whose worker is another main (restarted) or silent too long.
+func (q *Queries) ListStalePlacements(ctx context.Context, arg ListStalePlacementsParams) ([]OrderPlacement, error) {
+	rows, err := q.db.Query(ctx, listStalePlacements, arg.Worker, arg.Before)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OrderPlacement
+	for rows.Next() {
+		var i OrderPlacement
+		if err := rows.Scan(
+			&i.ChannelID,
+			&i.ClientOrderID,
+			&i.TenantID,
+			&i.LocationID,
+			&i.BodyHash,
+			&i.Request,
+			&i.CardToken,
+			&i.VerificationToken,
+			&i.CustomerID,
+			&i.Operator,
+			&i.ExpiresAt,
+			&i.State,
+			&i.Waiting,
+			&i.Result,
+			&i.OrderID,
+			&i.Worker,
+			&i.Attempts,
+			&i.ChargeStarted,
+			&i.ChargeCents,
+			&i.DueAlertAt,
+			&i.DueAlerted,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStockItems = `-- name: ListStockItems :many
+
+SELECT i.id, i.name, c.name AS category, i.in_stock, i.out_until, i.out_hold
+FROM menu_items i JOIN menu_categories c ON c.id = i.category_id
+WHERE i.location_id = $1 ORDER BY c.position, c.name, i.position, i.name
+`
+
+type ListStockItemsRow struct {
+	ID       pgtype.UUID        `json:"id"`
+	Name     string             `json:"name"`
+	Category string             `json:"category"`
+	InStock  bool               `json:"in_stock"`
+	OutUntil pgtype.Timestamptz `json:"out_until"`
+	OutHold  bool               `json:"out_hold"`
+}
+
+// weborder stage 3: sold out from Quibase (through the Pi).
+func (q *Queries) ListStockItems(ctx context.Context, locationID pgtype.UUID) ([]ListStockItemsRow, error) {
+	rows, err := q.db.Query(ctx, listStockItems, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStockItemsRow
+	for rows.Next() {
+		var i ListStockItemsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Category,
+			&i.InStock,
+			&i.OutUntil,
+			&i.OutHold,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStockOptions = `-- name: ListStockOptions :many
+SELECT g.id AS group_id, g.name AS group_name, o.id, o.name, o.in_stock, o.out_hold
+FROM modifier_groups g JOIN modifier_options o ON o.group_id = g.id
+WHERE g.location_id = $1 ORDER BY g.name, o.position, o.name
+`
+
+type ListStockOptionsRow struct {
+	GroupID   pgtype.UUID `json:"group_id"`
+	GroupName string      `json:"group_name"`
+	ID        pgtype.UUID `json:"id"`
+	Name      string      `json:"name"`
+	InStock   bool        `json:"in_stock"`
+	OutHold   bool        `json:"out_hold"`
+}
+
+func (q *Queries) ListStockOptions(ctx context.Context, locationID pgtype.UUID) ([]ListStockOptionsRow, error) {
+	rows, err := q.db.Query(ctx, listStockOptions, locationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStockOptionsRow
+	for rows.Next() {
+		var i ListStockOptionsRow
+		if err := rows.Scan(
+			&i.GroupID,
+			&i.GroupName,
+			&i.ID,
+			&i.Name,
+			&i.InStock,
+			&i.OutHold,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -5994,7 +7813,7 @@ func (q *Queries) ListTabletTokens(ctx context.Context, locationID pgtype.UUID) 
 }
 
 const listTenants = `-- name: ListTenants :many
-SELECT id, slug, name, config, username, password_hash, created_at, store_id FROM tenants ORDER BY created_at ASC
+SELECT id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at FROM tenants ORDER BY created_at ASC
 `
 
 func (q *Queries) ListTenants(ctx context.Context) ([]Tenant, error) {
@@ -6015,6 +7834,8 @@ func (q *Queries) ListTenants(ctx context.Context) ([]Tenant, error) {
 			&i.PasswordHash,
 			&i.CreatedAt,
 			&i.StoreID,
+			&i.TestStore,
+			&i.RetiredAt,
 		); err != nil {
 			return nil, err
 		}
@@ -6137,28 +7958,11 @@ func (q *Queries) MarkDispatchSucceeded(ctx context.Context, arg MarkDispatchSuc
 	return err
 }
 
-const markExternalStopPushed = `-- name: MarkExternalStopPushed :execrows
-UPDATE geo_external_stops SET pushed_at = now(), confirmed = false
-WHERE order_id = $1 AND updated_at = $2
-`
-
-type MarkExternalStopPushedParams struct {
-	OrderID   pgtype.UUID        `json:"order_id"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-}
-
-func (q *Queries) MarkExternalStopPushed(ctx context.Context, arg MarkExternalStopPushedParams) (int64, error) {
-	result, err := q.db.Exec(ctx, markExternalStopPushed, arg.OrderID, arg.UpdatedAt)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
 const markFloorEventSeen = `-- name: MarkFloorEventSeen :execrows
 INSERT INTO floor_events_seen (event_id, tenant_id, location_id, order_id, type, result)
 VALUES ($1, $2, $3, $4, $5, $6)
-ON CONFLICT (event_id) DO NOTHING
+ON CONFLICT (event_id) DO UPDATE SET result = EXCLUDED.result, order_id = EXCLUDED.order_id, received_at = now()
+WHERE floor_events_seen.result IN ('invalid', 'not_found') AND floor_events_seen.location_id = EXCLUDED.location_id
 `
 
 type MarkFloorEventSeenParams struct {
@@ -6170,7 +7974,10 @@ type MarkFloorEventSeenParams struct {
 	Result     string      `json:"result"`
 }
 
-// Idempotency gate for agent floor events: 0 rows = already applied.
+// Idempotency gate for agent floor events: 0 rows = already seen. An event
+// main refused (invalid / not_found) is looked at again when the Pi sends it
+// again (it keeps refused payments, counter orders and customers queued), so
+// a newer main can still apply it.
 func (q *Queries) MarkFloorEventSeen(ctx context.Context, arg MarkFloorEventSeenParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markFloorEventSeen,
 		arg.EventID,
@@ -6241,13 +8048,73 @@ func (q *Queries) MarkOrdersAcked(ctx context.Context, arg MarkOrdersAckedParams
 	return items, nil
 }
 
+const markPlacementPlaced = `-- name: MarkPlacementPlaced :execrows
+UPDATE order_placements
+SET state = 'placed', order_id = $3, due_alert_at = $4, worker = '', waiting = '', result = NULL,
+    card_token = '', verification_token = '', updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2 AND state = 'pending'
+`
+
+type MarkPlacementPlacedParams struct {
+	ChannelID     pgtype.UUID        `json:"channel_id"`
+	ClientOrderID string             `json:"client_order_id"`
+	OrderID       pgtype.UUID        `json:"order_id"`
+	DueAlertAt    pgtype.Timestamptz `json:"due_alert_at"`
+}
+
+// In the order's own transaction: the key and its result together.
+func (q *Queries) MarkPlacementPlaced(ctx context.Context, arg MarkPlacementPlacedParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markPlacementPlaced,
+		arg.ChannelID,
+		arg.ClientOrderID,
+		arg.OrderID,
+		arg.DueAlertAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const moveMenuCategory = `-- name: MoveMenuCategory :exec
+UPDATE menu_categories SET menu_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2
+`
+
+type MoveMenuCategoryParams struct {
+	ID       pgtype.UUID `json:"id"`
+	TenantID pgtype.UUID `json:"tenant_id"`
+	MenuID   pgtype.UUID `json:"menu_id"`
+}
+
+// The bank import: a category moves to another menu of the location.
+func (q *Queries) MoveMenuCategory(ctx context.Context, arg MoveMenuCategoryParams) error {
+	_, err := q.db.Exec(ctx, moveMenuCategory, arg.ID, arg.TenantID, arg.MenuID)
+	return err
+}
+
+const moveMenuItem = `-- name: MoveMenuItem :exec
+UPDATE menu_items SET category_id = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2
+`
+
+type MoveMenuItemParams struct {
+	ID         pgtype.UUID `json:"id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	CategoryID pgtype.UUID `json:"category_id"`
+}
+
+// The bank import (bankimport): an item moves to another category of the location.
+func (q *Queries) MoveMenuItem(ctx context.Context, arg MoveMenuItemParams) error {
+	_, err := q.db.Exec(ctx, moveMenuItem, arg.ID, arg.TenantID, arg.CategoryID)
+	return err
+}
+
 const movePrinterIP = `-- name: MovePrinterIP :one
 UPDATE printers
 SET ip = $1,
     mac = CASE WHEN $2::text = '' THEN mac ELSE $2::text END,
     updated_at = now()
 WHERE id = $3 AND location_id = $4 AND ip = $5
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 `
 
 type MovePrinterIPParams struct {
@@ -6280,8 +8147,33 @@ func (q *Queries) MovePrinterIP(ctx context.Context, arg MovePrinterIPParams) (P
 		&i.UpdatedAt,
 		&i.IsReceipt,
 		&i.MAC,
+		&i.PrintColumns,
 	)
 	return i, err
+}
+
+const parkPlacement = `-- name: ParkPlacement :exec
+UPDATE order_placements SET waiting = $3, result = $4, worker = '', updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2 AND state = 'pending'
+`
+
+type ParkPlacementParams struct {
+	ChannelID     pgtype.UUID `json:"channel_id"`
+	ClientOrderID string      `json:"client_order_id"`
+	Waiting       string      `json:"waiting"`
+	Result        []byte      `json:"result"`
+}
+
+// Still pending, but nobody works on it until the caller comes back (3-D
+// Secure, or a temporary failure the caller may retry).
+func (q *Queries) ParkPlacement(ctx context.Context, arg ParkPlacementParams) error {
+	_, err := q.db.Exec(ctx, parkPlacement,
+		arg.ChannelID,
+		arg.ClientOrderID,
+		arg.Waiting,
+		arg.Result,
+	)
+	return err
 }
 
 const pendingEventsForHandler = `-- name: PendingEventsForHandler :many
@@ -6384,6 +8276,30 @@ func (q *Queries) PruneChannelEvents(ctx context.Context, createdAt pgtype.Times
 	return result.RowsAffected(), nil
 }
 
+const pruneCustomerSessions = `-- name: PruneCustomerSessions :execrows
+DELETE FROM customer_sessions WHERE expires_at < now()
+`
+
+func (q *Queries) PruneCustomerSessions(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneCustomerSessions)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const pruneCustomerTombstones = `-- name: PruneCustomerTombstones :execrows
+DELETE FROM customer_tombstones WHERE deleted_at < $1
+`
+
+func (q *Queries) PruneCustomerTombstones(ctx context.Context, deletedAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneCustomerTombstones, deletedAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const pruneDiagReports = `-- name: PruneDiagReports :execrows
 DELETE FROM diag_reports WHERE received_at < $1
 `
@@ -6396,45 +8312,122 @@ func (q *Queries) PruneDiagReports(ctx context.Context, receivedAt pgtype.Timest
 	return result.RowsAffected(), nil
 }
 
-const pruneExternalStops = `-- name: PruneExternalStops :execrows
-DELETE FROM geo_external_stops WHERE expires_at <= $1::timestamptz
+const prunePlacements = `-- name: PrunePlacements :execrows
+DELETE FROM order_placements WHERE state <> 'pending' AND created_at < $1
 `
 
-func (q *Queries) PruneExternalStops(ctx context.Context, now pgtype.Timestamptz) (int64, error) {
-	result, err := q.db.Exec(ctx, pruneExternalStops, now)
+func (q *Queries) PrunePlacements(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, prunePlacements, createdAt)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
 }
 
-const pruneExternalWork = `-- name: PruneExternalWork :execrows
-DELETE FROM geo_external_work WHERE discard_at <= $1::timestamptz
+const publishSiteDraft = `-- name: PublishSiteDraft :one
+UPDATE site_settings SET published = draft, draft = '{}'::jsonb, draft_at = NULL, version = version + 1,
+    published_at = now(), published_by = $2, updated_at = now()
+WHERE location_id = $1 AND draft_at IS NOT NULL
+RETURNING version, published_at
 `
 
-func (q *Queries) PruneExternalWork(ctx context.Context, now pgtype.Timestamptz) (int64, error) {
-	result, err := q.db.Exec(ctx, pruneExternalWork, now)
+type PublishSiteDraftParams struct {
+	LocationID  pgtype.UUID `json:"location_id"`
+	PublishedBy string      `json:"published_by"`
+}
+
+type PublishSiteDraftRow struct {
+	Version     int64              `json:"version"`
+	PublishedAt pgtype.Timestamptz `json:"published_at"`
+}
+
+func (q *Queries) PublishSiteDraft(ctx context.Context, arg PublishSiteDraftParams) (PublishSiteDraftRow, error) {
+	row := q.db.QueryRow(ctx, publishSiteDraft, arg.LocationID, arg.PublishedBy)
+	var i PublishSiteDraftRow
+	err := row.Scan(&i.Version, &i.PublishedAt)
+	return i, err
+}
+
+const queueFinalReceipt = `-- name: QueueFinalReceipt :execrows
+INSERT INTO email_receipts (order_id, kind, location_id)
+SELECT r.order_id, 'final', r.location_id FROM email_receipts r WHERE r.order_id = $1 AND r.kind = 'placed'
+ON CONFLICT DO NOTHING
+`
+
+// A final receipt only for an order that got a receipt when it was placed.
+func (q *Queries) QueueFinalReceipt(ctx context.Context, orderID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, queueFinalReceipt, orderID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected(), nil
 }
 
-const requeueLocationExternalStops = `-- name: RequeueLocationExternalStops :execrows
-UPDATE geo_external_stops SET state = 'pending', attempts = 0, next_try_at = now(), pushed_at = NULL,
-    confirmed = false, updated_at = now()
-WHERE tenant_id = $1 AND location_id = $2
-  AND state = 'located' AND lat IS NOT NULL AND expires_at > now()
+const requestCardHoldCapture = `-- name: RequestCardHoldCapture :execrows
+UPDATE card_holds SET capture_requested_at = COALESCE(capture_requested_at, now()),
+    capture_reason = CASE WHEN capture_reason = '' THEN $3 ELSE capture_reason END, next_try_at = LEAST(next_try_at, now()), updated_at = now()
+WHERE location_id = $1 AND order_id = ANY($2::uuid[]) AND status = 'held' AND cancel_requested_at IS NULL
 `
 
-type RequeueLocationExternalStopsParams struct {
-	TenantID   pgtype.UUID `json:"tenant_id"`
-	LocationID pgtype.UUID `json:"location_id"`
+type RequestCardHoldCaptureParams struct {
+	LocationID    pgtype.UUID   `json:"location_id"`
+	Column2       []pgtype.UUID `json:"column_2"`
+	CaptureReason string        `json:"capture_reason"`
 }
 
-// The store moved: re-route the located stops from their own point.
-func (q *Queries) RequeueLocationExternalStops(ctx context.Context, arg RequeueLocationExternalStopsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, requeueLocationExternalStops, arg.TenantID, arg.LocationID)
+func (q *Queries) RequestCardHoldCapture(ctx context.Context, arg RequestCardHoldCaptureParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requestCardHoldCapture, arg.LocationID, arg.Column2, arg.CaptureReason)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const requestCardHoldCaptureForBatch = `-- name: RequestCardHoldCaptureForBatch :execrows
+UPDATE card_holds h SET capture_requested_at = COALESCE(h.capture_requested_at, now()),
+    capture_reason = CASE WHEN h.capture_reason = '' THEN 'batch_close' ELSE h.capture_reason END,
+    next_try_at = LEAST(h.next_try_at, now()), updated_at = now()
+FROM orders o
+WHERE o.id = h.order_id AND h.location_id = $1 AND h.status = 'held' AND h.cancel_requested_at IS NULL AND o.agent_batch_id = $2
+`
+
+type RequestCardHoldCaptureForBatchParams struct {
+	LocationID   pgtype.UUID `json:"location_id"`
+	AgentBatchID pgtype.Int8 `json:"agent_batch_id"`
+}
+
+func (q *Queries) RequestCardHoldCaptureForBatch(ctx context.Context, arg RequestCardHoldCaptureForBatchParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requestCardHoldCaptureForBatch, arg.LocationID, arg.AgentBatchID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const requestCardHoldCaptureForDriver = `-- name: RequestCardHoldCaptureForDriver :execrows
+UPDATE card_holds h SET capture_requested_at = COALESCE(h.capture_requested_at, now()),
+    capture_reason = CASE WHEN h.capture_reason = '' THEN 'clock_out' ELSE h.capture_reason END,
+    next_try_at = LEAST(h.next_try_at, now()), updated_at = now()
+WHERE h.location_id = $1 AND h.status = 'held' AND h.cancel_requested_at IS NULL AND h.order_id::text IN (
+    SELECT jsonb_array_elements_text(r.sent_ids) FROM delivery_runs r
+    WHERE r.location_id = $1 AND r.driver_id = $2 AND r.at >= $3 AND r.at <= $4)
+`
+
+type RequestCardHoldCaptureForDriverParams struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	DriverID   string             `json:"driver_id"`
+	At         pgtype.Timestamptz `json:"at"`
+	At_2       pgtype.Timestamptz `json:"at_2"`
+}
+
+// A driver clocked out: their deliveries sent between clock-in and clock-out.
+func (q *Queries) RequestCardHoldCaptureForDriver(ctx context.Context, arg RequestCardHoldCaptureForDriverParams) (int64, error) {
+	result, err := q.db.Exec(ctx, requestCardHoldCaptureForDriver,
+		arg.LocationID,
+		arg.DriverID,
+		arg.At,
+		arg.At_2,
+	)
 	if err != nil {
 		return 0, err
 	}
@@ -6510,6 +8503,29 @@ func (q *Queries) ResetOrderGeoForChoice(ctx context.Context, arg ResetOrderGeoF
 	return err
 }
 
+const relocateOrderGeo = `-- name: RelocateOrderGeo :exec
+INSERT INTO order_geo (order_id, tenant_id, location_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (order_id) DO UPDATE SET state = 'pending', lat = NULL, lng = NULL, quality = '',
+    distance_m = 0, duration_s = 0, polyline = '', outside_area = false, store_to_s = NULL, to_store_s = NULL,
+    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, created_at = now(), updated_at = now(),
+    candidates = NULL, confirmed_address = NULL, confirmed = false, corrected = false, note = ''
+`
+
+type RelocateOrderGeoParams struct {
+	OrderID    pgtype.UUID `json:"order_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+// A delivery's address changed after it was placed (the Pi's order.changed,
+// or a takeout moved to a delivery): work it again from scratch, as at
+// intake. created_at restarts so the retry window counts from the change.
+func (q *Queries) RelocateOrderGeo(ctx context.Context, arg RelocateOrderGeoParams) error {
+	_, err := q.db.Exec(ctx, relocateOrderGeo, arg.OrderID, arg.TenantID, arg.LocationID)
+	return err
+}
+
 const resetOrderGeoForPin = `-- name: ResetOrderGeoForPin :exec
 UPDATE order_geo SET state = 'pending', attempts = 0, next_try_at = now(),
     last_error = '', pushed_at = NULL, candidates = NULL, confirmed_address = NULL,
@@ -6524,7 +8540,7 @@ func (q *Queries) ResetOrderGeoForPin(ctx context.Context, orderID pgtype.UUID) 
 
 const restockItems = `-- name: RestockItems :execrows
 UPDATE menu_items SET in_stock = true, out_until = NULL, updated_at = now()
-WHERE location_id = $1 AND NOT in_stock AND (out_until IS NULL OR out_until <= now())
+WHERE location_id = $1 AND NOT in_stock AND NOT out_hold AND (out_until IS NULL OR out_until <= now())
 `
 
 // The daily restock: every 86'd item of the location without a later
@@ -6539,7 +8555,7 @@ func (q *Queries) RestockItems(ctx context.Context, locationID pgtype.UUID) (int
 
 const restockOptions = `-- name: RestockOptions :execrows
 UPDATE modifier_options SET in_stock = true, updated_at = now()
-WHERE location_id = $1 AND NOT in_stock
+WHERE location_id = $1 AND NOT in_stock AND NOT out_hold
 `
 
 func (q *Queries) RestockOptions(ctx context.Context, locationID pgtype.UUID) (int64, error) {
@@ -6632,6 +8648,25 @@ func (q *Queries) RevokeOperatorToken(ctx context.Context, tokenHash string) (in
 	return result.RowsAffected(), nil
 }
 
+const revokePlatformKey = `-- name: RevokePlatformKey :one
+UPDATE platform_keys SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1 RETURNING id, name, key_hash, key_prefix, revoked_at, last_used_at, created_at
+`
+
+func (q *Queries) RevokePlatformKey(ctx context.Context, id pgtype.UUID) (PlatformKey, error) {
+	row := q.db.QueryRow(ctx, revokePlatformKey, id)
+	var i PlatformKey
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.KeyHash,
+		&i.KeyPrefix,
+		&i.RevokedAt,
+		&i.LastUsedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const revokeTabletTokenByID = `-- name: RevokeTabletTokenByID :execrows
 UPDATE tablet_report_tokens SET revoked_at = COALESCE(revoked_at, now()) WHERE id = $1
 `
@@ -6660,118 +8695,6 @@ type RevokeTabletTokensForTabletParams struct {
 // ---------------------------------------------------------------------------
 func (q *Queries) RevokeTabletTokensForTablet(ctx context.Context, arg RevokeTabletTokensForTabletParams) (int64, error) {
 	result, err := q.db.Exec(ctx, revokeTabletTokensForTablet, arg.LocationID, arg.TabletID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const saveExternalStopResult = `-- name: SaveExternalStopResult :one
-UPDATE geo_external_stops SET
-    state = $1, lat = $2, lng = $3, quality = $4,
-    distance_m = $5, duration_s = $6, polyline = $7,
-    outside_area = $8, store_to_s = $9, to_store_s = $10,
-    corrected = $11, note = '',
-    attempts = attempts + 1, next_try_at = now(), last_error = $12,
-    pushed_at = NULL, updated_at = now()
-WHERE order_id = $13 AND updated_at = $14
-RETURNING updated_at
-`
-
-type SaveExternalStopResultParams struct {
-	State       string             `json:"state"`
-	Lat         pgtype.Float8      `json:"lat"`
-	Lng         pgtype.Float8      `json:"lng"`
-	Quality     string             `json:"quality"`
-	DistanceM   int32              `json:"distance_m"`
-	DurationS   int32              `json:"duration_s"`
-	Polyline    string             `json:"polyline"`
-	OutsideArea bool               `json:"outside_area"`
-	StoreToS    pgtype.Int4        `json:"store_to_s"`
-	ToStoreS    pgtype.Int4        `json:"to_store_s"`
-	Corrected   bool               `json:"corrected"`
-	LastError   string             `json:"last_error"`
-	OrderID     pgtype.UUID        `json:"order_id"`
-	ReadAt      pgtype.Timestamptz `json:"read_at"`
-}
-
-// A final result (located / check / not_found); see SaveExternalStopRetry.
-func (q *Queries) SaveExternalStopResult(ctx context.Context, arg SaveExternalStopResultParams) (pgtype.Timestamptz, error) {
-	row := q.db.QueryRow(ctx, saveExternalStopResult,
-		arg.State,
-		arg.Lat,
-		arg.Lng,
-		arg.Quality,
-		arg.DistanceM,
-		arg.DurationS,
-		arg.Polyline,
-		arg.OutsideArea,
-		arg.StoreToS,
-		arg.ToStoreS,
-		arg.Corrected,
-		arg.LastError,
-		arg.OrderID,
-		arg.ReadAt,
-	)
-	var updated_at pgtype.Timestamptz
-	err := row.Scan(&updated_at)
-	return updated_at, err
-}
-
-const saveExternalStopRetry = `-- name: SaveExternalStopRetry :execrows
-UPDATE geo_external_stops SET attempts = attempts + 1, next_try_at = $1,
-    last_error = $2, updated_at = now()
-WHERE order_id = $3 AND updated_at = $4
-`
-
-type SaveExternalStopRetryParams struct {
-	NextTryAt pgtype.Timestamptz `json:"next_try_at"`
-	LastError string             `json:"last_error"`
-	OrderID   pgtype.UUID        `json:"order_id"`
-	ReadAt    pgtype.Timestamptz `json:"read_at"`
-}
-
-// Both guarded by the updated_at the worker read: a re-locate, pin or
-// choice that arrived meanwhile wins (the row is due again anyway).
-func (q *Queries) SaveExternalStopRetry(ctx context.Context, arg SaveExternalStopRetryParams) (int64, error) {
-	result, err := q.db.Exec(ctx, saveExternalStopRetry,
-		arg.NextTryAt,
-		arg.LastError,
-		arg.OrderID,
-		arg.ReadAt,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const saveExternalStopSearch = `-- name: SaveExternalStopSearch :execrows
-UPDATE geo_external_stops SET state = $1, lat = NULL, lng = NULL, quality = '',
-    confirmed = false, corrected = false, note = $2, distance_m = 0, duration_s = 0,
-    polyline = '', outside_area = false, store_to_s = NULL, to_store_s = NULL,
-    next_try_at = now(), last_error = '', pushed_at = NULL, updated_at = now()
-WHERE order_id = $3 AND tenant_id = $4 AND location_id = $5
-`
-
-type SaveExternalStopSearchParams struct {
-	State      string      `json:"state"`
-	Note       string      `json:"note"`
-	OrderID    pgtype.UUID `json:"order_id"`
-	TenantID   pgtype.UUID `json:"tenant_id"`
-	LocationID pgtype.UUID `json:"location_id"`
-}
-
-// geo.search for an external stop; the candidates go on the work row
-// (UpsertExternalWorkSearch, same tx).
-func (q *Queries) SaveExternalStopSearch(ctx context.Context, arg SaveExternalStopSearchParams) (int64, error) {
-	result, err := q.db.Exec(ctx, saveExternalStopSearch,
-		arg.State,
-		arg.Note,
-		arg.OrderID,
-		arg.TenantID,
-		arg.LocationID,
-	)
 	if err != nil {
 		return 0, err
 	}
@@ -6902,6 +8825,24 @@ func (q *Queries) SaveOrderGeoSearch(ctx context.Context, arg SaveOrderGeoSearch
 	return result.RowsAffected(), nil
 }
 
+const saveSiteDraft = `-- name: SaveSiteDraft :exec
+
+INSERT INTO site_settings (location_id, tenant_id, draft, draft_at) VALUES ($1, $2, $3, now())
+ON CONFLICT (location_id) DO UPDATE SET draft = EXCLUDED.draft, draft_at = now(), updated_at = now()
+`
+
+type SaveSiteDraftParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	Draft      []byte      `json:"draft"`
+}
+
+// The Website page (00029).
+func (q *Queries) SaveSiteDraft(ctx context.Context, arg SaveSiteDraftParams) error {
+	_, err := q.db.Exec(ctx, saveSiteDraft, arg.LocationID, arg.TenantID, arg.Draft)
+	return err
+}
+
 const searchOrdersInScope = `-- name: SearchOrdersInScope :many
 SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        kitchen_order_number, status, source_status, currency,
@@ -6910,7 +8851,8 @@ SELECT id, tenant_id, location_id, schema_version, source, source_event_id,
        fulfillment_type, fulfillment_address, promised_at, table_id,
        notes, source_metadata, raw_payload,
        placed_at, received_at, updated_at, estimated_ready_at, driver_name, floor_at,
-       agent_ack_at, agent_status, agent_status_at, agent_batch_id
+       agent_ack_at, agent_status, agent_status_at, agent_batch_id,
+       delivery_fee_cents, driver_fee_cents, service_fee_cents, card_fee_cents, discount_cents, money_changed_at
 FROM orders
 WHERE tenant_id = $1 AND location_id = $2
   AND ($3::text = '' OR customer_display_name ILIKE '%' || $3 || '%'
@@ -6998,6 +8940,12 @@ func (q *Queries) SearchOrdersInScope(ctx context.Context, arg SearchOrdersInSco
 			&i.AgentStatus,
 			&i.AgentStatusAt,
 			&i.AgentBatchID,
+			&i.DeliveryFeeCents,
+			&i.DriverFeeCents,
+			&i.ServiceFeeCents,
+			&i.CardFeeCents,
+			&i.DiscountCents,
+			&i.MoneyChangedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -7007,6 +8955,25 @@ func (q *Queries) SearchOrdersInScope(ctx context.Context, arg SearchOrdersInSco
 		return nil, err
 	}
 	return items, nil
+}
+
+const setCardHoldAddedTip = `-- name: SetCardHoldAddedTip :execrows
+UPDATE card_holds SET added_tip_cents = $3, updated_at = now()
+WHERE location_id = $1 AND order_id = $2 AND status = 'held' AND cancel_requested_at IS NULL
+`
+
+type SetCardHoldAddedTipParams struct {
+	LocationID    pgtype.UUID `json:"location_id"`
+	OrderID       pgtype.UUID `json:"order_id"`
+	AddedTipCents int64       `json:"added_tip_cents"`
+}
+
+func (q *Queries) SetCardHoldAddedTip(ctx context.Context, arg SetCardHoldAddedTipParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setCardHoldAddedTip, arg.LocationID, arg.OrderID, arg.AddedTipCents)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setCategoryPosition = `-- name: SetCategoryPosition :exec
@@ -7090,6 +9057,20 @@ func (q *Queries) SetChannelView(ctx context.Context, arg SetChannelViewParams) 
 	return i, err
 }
 
+const setCustomerSquareID = `-- name: SetCustomerSquareID :exec
+UPDATE customers SET square_customer_id = $2, updated_at = now() WHERE id = $1
+`
+
+type SetCustomerSquareIDParams struct {
+	ID               pgtype.UUID `json:"id"`
+	SquareCustomerID string      `json:"square_customer_id"`
+}
+
+func (q *Queries) SetCustomerSquareID(ctx context.Context, arg SetCustomerSquareIDParams) error {
+	_, err := q.db.Exec(ctx, setCustomerSquareID, arg.ID, arg.SquareCustomerID)
+	return err
+}
+
 const setDiagReportResolved = `-- name: SetDiagReportResolved :execrows
 UPDATE diag_reports
 SET resolved_at = CASE WHEN $1::bool THEN COALESCE(resolved_at, now()) ELSE NULL END
@@ -7107,101 +9088,6 @@ func (q *Queries) SetDiagReportResolved(ctx context.Context, arg SetDiagReportRe
 		return 0, err
 	}
 	return result.RowsAffected(), nil
-}
-
-const setExternalStopOutsideArea = `-- name: SetExternalStopOutsideArea :execrows
-UPDATE geo_external_stops SET outside_area = $1, pushed_at = NULL, next_try_at = now(), updated_at = now()
-WHERE order_id = $2 AND tenant_id = $3 AND location_id = $4
-  AND state = 'located' AND outside_area <> $1
-`
-
-type SetExternalStopOutsideAreaParams struct {
-	OutsideArea bool        `json:"outside_area"`
-	OrderID     pgtype.UUID `json:"order_id"`
-	TenantID    pgtype.UUID `json:"tenant_id"`
-	LocationID  pgtype.UUID `json:"location_id"`
-}
-
-func (q *Queries) SetExternalStopOutsideArea(ctx context.Context, arg SetExternalStopOutsideAreaParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setExternalStopOutsideArea,
-		arg.OutsideArea,
-		arg.OrderID,
-		arg.TenantID,
-		arg.LocationID,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const setExternalStopPoint = `-- name: SetExternalStopPoint :execrows
-UPDATE geo_external_stops SET state = 'pending', lat = $1, lng = $2, quality = $3,
-    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = true,
-    corrected = false, note = '', updated_at = now()
-WHERE order_id = $4 AND tenant_id = $5 AND location_id = $6
-`
-
-type SetExternalStopPointParams struct {
-	Lat        pgtype.Float8 `json:"lat"`
-	Lng        pgtype.Float8 `json:"lng"`
-	Quality    string        `json:"quality"`
-	OrderID    pgtype.UUID   `json:"order_id"`
-	TenantID   pgtype.UUID   `json:"tenant_id"`
-	LocationID pgtype.UUID   `json:"location_id"`
-}
-
-// A pin or a chosen candidate: re-route from this point and push it again,
-// confirmed (staff's own pick).
-func (q *Queries) SetExternalStopPoint(ctx context.Context, arg SetExternalStopPointParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setExternalStopPoint,
-		arg.Lat,
-		arg.Lng,
-		arg.Quality,
-		arg.OrderID,
-		arg.TenantID,
-		arg.LocationID,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const setExternalWorkCandidates = `-- name: SetExternalWorkCandidates :execrows
-UPDATE geo_external_work SET candidates = $1
-WHERE order_id = $2 AND created_at = $3
-`
-
-type SetExternalWorkCandidatesParams struct {
-	Candidates []byte             `json:"candidates"`
-	OrderID    pgtype.UUID        `json:"order_id"`
-	ReadAt     pgtype.Timestamptz `json:"read_at"`
-}
-
-// Guarded by the created_at the worker read: a geo.locate that replaced the
-// work row meanwhile (new address) is not overwritten.
-func (q *Queries) SetExternalWorkCandidates(ctx context.Context, arg SetExternalWorkCandidatesParams) (int64, error) {
-	result, err := q.db.Exec(ctx, setExternalWorkCandidates, arg.Candidates, arg.OrderID, arg.ReadAt)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const setExternalWorkConfirmed = `-- name: SetExternalWorkConfirmed :exec
-UPDATE geo_external_work SET candidates = NULL, confirmed_address = $1
-WHERE order_id = $2
-`
-
-type SetExternalWorkConfirmedParams struct {
-	ConfirmedAddress []byte      `json:"confirmed_address"`
-	OrderID          pgtype.UUID `json:"order_id"`
-}
-
-func (q *Queries) SetExternalWorkConfirmed(ctx context.Context, arg SetExternalWorkConfirmedParams) error {
-	_, err := q.db.Exec(ctx, setExternalWorkConfirmed, arg.ConfirmedAddress, arg.OrderID)
-	return err
 }
 
 const setGroupPortions = `-- name: SetGroupPortions :execrows
@@ -7246,6 +9132,22 @@ func (q *Queries) SetItemBank(ctx context.Context, arg SetItemBankParams) (int64
 	return result.RowsAffected(), nil
 }
 
+const setItemNoKitchen = `-- name: SetItemNoKitchen :exec
+UPDATE menu_items SET no_kitchen_ticket = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2
+`
+
+type SetItemNoKitchenParams struct {
+	ID              pgtype.UUID `json:"id"`
+	TenantID        pgtype.UUID `json:"tenant_id"`
+	NoKitchenTicket bool        `json:"no_kitchen_ticket"`
+}
+
+// "No kitchen ticket" on an item (00041).
+func (q *Queries) SetItemNoKitchen(ctx context.Context, arg SetItemNoKitchenParams) error {
+	_, err := q.db.Exec(ctx, setItemNoKitchen, arg.ID, arg.TenantID, arg.NoKitchenTicket)
+	return err
+}
+
 const setItemPosition = `-- name: SetItemPosition :exec
 UPDATE menu_items SET position = $3, updated_at = now() WHERE id = $1 AND tenant_id = $2
 `
@@ -7274,6 +9176,45 @@ type SetItemPrinterParams struct {
 func (q *Queries) SetItemPrinter(ctx context.Context, arg SetItemPrinterParams) error {
 	_, err := q.db.Exec(ctx, setItemPrinter, arg.ID, arg.TenantID, arg.PrinterID)
 	return err
+}
+
+const setItemStock = `-- name: SetItemStock :one
+UPDATE menu_items SET in_stock = $3, out_hold = (NOT $3::boolean AND $4::boolean), out_until = NULL, updated_at = now()
+WHERE id = $1 AND location_id = $2
+RETURNING id, name, in_stock, out_until, out_hold
+`
+
+type SetItemStockParams struct {
+	ID         pgtype.UUID `json:"id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	InStock    bool        `json:"in_stock"`
+	Column4    bool        `json:"column_4"`
+}
+
+type SetItemStockRow struct {
+	ID       pgtype.UUID        `json:"id"`
+	Name     string             `json:"name"`
+	InStock  bool               `json:"in_stock"`
+	OutUntil pgtype.Timestamptz `json:"out_until"`
+	OutHold  bool               `json:"out_hold"`
+}
+
+func (q *Queries) SetItemStock(ctx context.Context, arg SetItemStockParams) (SetItemStockRow, error) {
+	row := q.db.QueryRow(ctx, setItemStock,
+		arg.ID,
+		arg.LocationID,
+		arg.InStock,
+		arg.Column4,
+	)
+	var i SetItemStockRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.InStock,
+		&i.OutUntil,
+		&i.OutHold,
+	)
+	return i, err
 }
 
 const setLocationDeliveryRadius = `-- name: SetLocationDeliveryRadius :execrows
@@ -7439,6 +9380,24 @@ func (q *Queries) SetMenuSizePosition(ctx context.Context, arg SetMenuSizePositi
 	return err
 }
 
+const setMenuViewLayout = `-- name: SetMenuViewLayout :execrows
+UPDATE menu_views SET layout = $2, updated_at = now()
+WHERE id = $1 AND kind = 'counter'
+`
+
+type SetMenuViewLayoutParams struct {
+	ID     pgtype.UUID `json:"id"`
+	Layout []byte      `json:"layout"`
+}
+
+func (q *Queries) SetMenuViewLayout(ctx context.Context, arg SetMenuViewLayoutParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setMenuViewLayout, arg.ID, arg.Layout)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const setOperatorPassword = `-- name: SetOperatorPassword :exec
 UPDATE operators SET password_hash = $2, updated_at = now() WHERE id = $1
 `
@@ -7495,6 +9454,43 @@ func (q *Queries) SetOptionPosition(ctx context.Context, arg SetOptionPositionPa
 	return err
 }
 
+const setOptionStock = `-- name: SetOptionStock :one
+UPDATE modifier_options SET in_stock = $3, out_hold = (NOT $3::boolean AND $4::boolean), updated_at = now()
+WHERE id = $1 AND location_id = $2
+RETURNING id, name, in_stock, out_hold
+`
+
+type SetOptionStockParams struct {
+	ID         pgtype.UUID `json:"id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	InStock    bool        `json:"in_stock"`
+	Column4    bool        `json:"column_4"`
+}
+
+type SetOptionStockRow struct {
+	ID      pgtype.UUID `json:"id"`
+	Name    string      `json:"name"`
+	InStock bool        `json:"in_stock"`
+	OutHold bool        `json:"out_hold"`
+}
+
+func (q *Queries) SetOptionStock(ctx context.Context, arg SetOptionStockParams) (SetOptionStockRow, error) {
+	row := q.db.QueryRow(ctx, setOptionStock,
+		arg.ID,
+		arg.LocationID,
+		arg.InStock,
+		arg.Column4,
+	)
+	var i SetOptionStockRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.InStock,
+		&i.OutHold,
+	)
+	return i, err
+}
+
 const setOrderAgentStatus = `-- name: SetOrderAgentStatus :execrows
 UPDATE orders
 SET agent_status = $1, agent_status_at = $2,
@@ -7528,6 +9524,31 @@ func (q *Queries) SetOrderAgentStatus(ctx context.Context, arg SetOrderAgentStat
 	return result.RowsAffected(), nil
 }
 
+const setOrderCardPayment = `-- name: SetOrderCardPayment :exec
+UPDATE payments SET status = $2, amount_cents = $3, tip_cents = $4, captured_at = $5 WHERE id = $1
+`
+
+type SetOrderCardPaymentParams struct {
+	ID          pgtype.UUID        `json:"id"`
+	Status      string             `json:"status"`
+	AmountCents int64              `json:"amount_cents"`
+	TipCents    int64              `json:"tip_cents"`
+	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
+}
+
+// The hold's own payment row follows it (authorized → captured / voided);
+// M-4: by the payment's id, never every card row of the order.
+func (q *Queries) SetOrderCardPayment(ctx context.Context, arg SetOrderCardPaymentParams) error {
+	_, err := q.db.Exec(ctx, setOrderCardPayment,
+		arg.ID,
+		arg.Status,
+		arg.AmountCents,
+		arg.TipCents,
+		arg.CapturedAt,
+	)
+	return err
+}
+
 const setOrderGeoOutsideArea = `-- name: SetOrderGeoOutsideArea :execrows
 UPDATE order_geo SET outside_area = $1, pushed_at = NULL, next_try_at = now(), updated_at = now()
 WHERE order_id = $2 AND state = 'located' AND outside_area <> $1
@@ -7547,6 +9568,51 @@ func (q *Queries) SetOrderGeoOutsideArea(ctx context.Context, arg SetOrderGeoOut
 	return result.RowsAffected(), nil
 }
 
+const setPlacementDueAlerted = `-- name: SetPlacementDueAlerted :exec
+UPDATE order_placements SET due_alerted = true WHERE channel_id = $1 AND client_order_id = $2
+`
+
+type SetPlacementDueAlertedParams struct {
+	ChannelID     pgtype.UUID `json:"channel_id"`
+	ClientOrderID string      `json:"client_order_id"`
+}
+
+func (q *Queries) SetPlacementDueAlerted(ctx context.Context, arg SetPlacementDueAlertedParams) error {
+	_, err := q.db.Exec(ctx, setPlacementDueAlerted, arg.ChannelID, arg.ClientOrderID)
+	return err
+}
+
+const setPrinterColumns = `-- name: SetPrinterColumns :one
+UPDATE printers SET print_columns = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
+`
+
+type SetPrinterColumnsParams struct {
+	ID           pgtype.UUID `json:"id"`
+	PrintColumns int16       `json:"print_columns"`
+}
+
+// The printer's print width in font-A characters (32 | 42 | 48): Store ›
+// Printers or the Pi's width test (RPC printer.width).
+func (q *Queries) SetPrinterColumns(ctx context.Context, arg SetPrinterColumnsParams) (Printer, error) {
+	row := q.db.QueryRow(ctx, setPrinterColumns, arg.ID, arg.PrintColumns)
+	var i Printer
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Name,
+		&i.IP,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.IsReceipt,
+		&i.MAC,
+		&i.PrintColumns,
+	)
+	return i, err
+}
+
 const setPrinterMAC = `-- name: SetPrinterMAC :exec
 UPDATE printers SET mac = $2, updated_at = now() WHERE id = $1
 `
@@ -7564,7 +9630,7 @@ func (q *Queries) SetPrinterMAC(ctx context.Context, arg SetPrinterMACParams) er
 const setPrinterReceipt = `-- name: SetPrinterReceipt :one
 UPDATE printers SET is_receipt = $2, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 `
 
 type SetPrinterReceiptParams struct {
@@ -7585,14 +9651,103 @@ func (q *Queries) SetPrinterReceipt(ctx context.Context, arg SetPrinterReceiptPa
 		&i.UpdatedAt,
 		&i.IsReceipt,
 		&i.MAC,
+		&i.PrintColumns,
 	)
 	return i, err
+}
+
+const setSiteDomainVerified = `-- name: SetSiteDomainVerified :one
+UPDATE site_domains SET verified = $2 WHERE host = $1 RETURNING host, tenant_id, location_id, is_primary, verified, created_at
+`
+
+type SetSiteDomainVerifiedParams struct {
+	Host     string `json:"host"`
+	Verified bool   `json:"verified"`
+}
+
+func (q *Queries) SetSiteDomainVerified(ctx context.Context, arg SetSiteDomainVerifiedParams) (SiteDomain, error) {
+	row := q.db.QueryRow(ctx, setSiteDomainVerified, arg.Host, arg.Verified)
+	var i SiteDomain
+	err := row.Scan(
+		&i.Host,
+		&i.TenantID,
+		&i.LocationID,
+		&i.IsPrimary,
+		&i.Verified,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const setSitePrimary = `-- name: SetSitePrimary :execrows
+UPDATE site_domains SET is_primary = true WHERE host = $1 AND location_id = $2
+`
+
+type SetSitePrimaryParams struct {
+	Host       string      `json:"host"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+func (q *Queries) SetSitePrimary(ctx context.Context, arg SetSitePrimaryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSitePrimary, arg.Host, arg.LocationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setSiteReplyEmail = `-- name: SetSiteReplyEmail :exec
+INSERT INTO site_settings (location_id, tenant_id, reply_email) VALUES ($1, $2, $3)
+ON CONFLICT (location_id) DO UPDATE SET reply_email = EXCLUDED.reply_email, updated_at = now()
+`
+
+type SetSiteReplyEmailParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	ReplyEmail string      `json:"reply_email"`
+}
+
+func (q *Queries) SetSiteReplyEmail(ctx context.Context, arg SetSiteReplyEmailParams) error {
+	_, err := q.db.Exec(ctx, setSiteReplyEmail, arg.LocationID, arg.TenantID, arg.ReplyEmail)
+	return err
+}
+
+const setSquareConnectionStatus = `-- name: SetSquareConnectionStatus :exec
+UPDATE square_connections SET status = $2, last_error = $3 WHERE location_id = $1
+`
+
+type SetSquareConnectionStatusParams struct {
+	LocationID pgtype.UUID `json:"location_id"`
+	Status     string      `json:"status"`
+	LastError  string      `json:"last_error"`
+}
+
+func (q *Queries) SetSquareConnectionStatus(ctx context.Context, arg SetSquareConnectionStatusParams) error {
+	_, err := q.db.Exec(ctx, setSquareConnectionStatus, arg.LocationID, arg.Status, arg.LastError)
+	return err
+}
+
+const setSquareLocation = `-- name: SetSquareLocation :execrows
+UPDATE square_connections SET square_location_id = $2 WHERE location_id = $1
+`
+
+type SetSquareLocationParams struct {
+	LocationID       pgtype.UUID `json:"location_id"`
+	SquareLocationID string      `json:"square_location_id"`
+}
+
+func (q *Queries) SetSquareLocation(ctx context.Context, arg SetSquareLocationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSquareLocation, arg.LocationID, arg.SquareLocationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setStorePause = `-- name: SetStorePause :one
 UPDATE store_ordering SET paused_at = $2, paused_until = $3, pause_note = $4, updated_at = now()
 WHERE location_id = $1
-RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at
+RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at, tip_max_cents
 `
 
 type SetStorePauseParams struct {
@@ -7623,6 +9778,7 @@ func (q *Queries) SetStorePause(ctx context.Context, arg SetStorePauseParams) (S
 		&i.PauseNote,
 		&i.RestockedAt,
 		&i.UpdatedAt,
+		&i.TipMaxCents,
 	)
 	return i, err
 }
@@ -7642,7 +9798,7 @@ func (q *Queries) SetStoreRestocked(ctx context.Context, arg SetStoreRestockedPa
 }
 
 const setTenantCredentials = `-- name: SetTenantCredentials :exec
-UPDATE tenants SET username = $2, password_hash = $3 WHERE id = $1
+UPDATE tenants SET username = $2, password_hash = $3, session_epoch = session_epoch + 1 WHERE id = $1
 `
 
 type SetTenantCredentialsParams struct {
@@ -7651,7 +9807,9 @@ type SetTenantCredentialsParams struct {
 	PasswordHash pgtype.Text `json:"password_hash"`
 }
 
-// Set/rotate a tenant's store-manager login (username + already-hashed password).
+// Set/rotate a tenant's store-manager login (username + already-hashed
+// password). Every manager session issued before it ends (session_epoch, M8;
+// read / rehashed by plain SQL in repositories/tenancy_repo.go).
 func (q *Queries) SetTenantCredentials(ctx context.Context, arg SetTenantCredentialsParams) error {
 	_, err := q.db.Exec(ctx, setTenantCredentials, arg.ID, arg.Username, arg.PasswordHash)
 	return err
@@ -7659,7 +9817,7 @@ func (q *Queries) SetTenantCredentials(ctx context.Context, arg SetTenantCredent
 
 const setTenantStoreID = `-- name: SetTenantStoreID :one
 UPDATE tenants SET store_id = $2 WHERE id = $1
-RETURNING id, slug, name, config, username, password_hash, created_at, store_id
+RETURNING id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at
 `
 
 type SetTenantStoreIDParams struct {
@@ -7680,6 +9838,8 @@ func (q *Queries) SetTenantStoreID(ctx context.Context, arg SetTenantStoreIDPara
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.StoreID,
+		&i.TestStore,
+		&i.RetiredAt,
 	)
 	return i, err
 }
@@ -7704,6 +9864,94 @@ func (q *Queries) SettleAgentUpdateRequest(ctx context.Context, arg SettleAgentU
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const squareConnectionsByMerchant = `-- name: SquareConnectionsByMerchant :many
+SELECT location_id, tenant_id, merchant_id, square_location_id, access_token_enc, refresh_token_enc, expires_at, refreshed_at, status, last_error, connected_at FROM square_connections WHERE merchant_id = $1
+`
+
+func (q *Queries) SquareConnectionsByMerchant(ctx context.Context, merchantID string) ([]SquareConnection, error) {
+	rows, err := q.db.Query(ctx, squareConnectionsByMerchant, merchantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SquareConnection
+	for rows.Next() {
+		var i SquareConnection
+		if err := rows.Scan(
+			&i.LocationID,
+			&i.TenantID,
+			&i.MerchantID,
+			&i.SquareLocationID,
+			&i.AccessTokenEnc,
+			&i.RefreshTokenEnc,
+			&i.ExpiresAt,
+			&i.RefreshedAt,
+			&i.Status,
+			&i.LastError,
+			&i.ConnectedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const squareConnectionsToRefresh = `-- name: SquareConnectionsToRefresh :many
+SELECT location_id, tenant_id, merchant_id, square_location_id, access_token_enc, refresh_token_enc, expires_at, refreshed_at, status, last_error, connected_at FROM square_connections WHERE status <> 'revoked' AND refreshed_at < $1 ORDER BY refreshed_at LIMIT 50
+`
+
+func (q *Queries) SquareConnectionsToRefresh(ctx context.Context, refreshedAt pgtype.Timestamptz) ([]SquareConnection, error) {
+	rows, err := q.db.Query(ctx, squareConnectionsToRefresh, refreshedAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SquareConnection
+	for rows.Next() {
+		var i SquareConnection
+		if err := rows.Scan(
+			&i.LocationID,
+			&i.TenantID,
+			&i.MerchantID,
+			&i.SquareLocationID,
+			&i.AccessTokenEnc,
+			&i.RefreshTokenEnc,
+			&i.ExpiresAt,
+			&i.RefreshedAt,
+			&i.Status,
+			&i.LastError,
+			&i.ConnectedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const startPlacementCharge = `-- name: StartPlacementCharge :exec
+UPDATE order_placements SET charge_started = true, charge_cents = $3, updated_at = now()
+WHERE channel_id = $1 AND client_order_id = $2
+`
+
+type StartPlacementChargeParams struct {
+	ChannelID     pgtype.UUID `json:"channel_id"`
+	ClientOrderID string      `json:"client_order_id"`
+	ChargeCents   int64       `json:"charge_cents"`
+}
+
+func (q *Queries) StartPlacementCharge(ctx context.Context, arg StartPlacementChargeParams) error {
+	_, err := q.db.Exec(ctx, startPlacementCharge, arg.ChannelID, arg.ClientOrderID, arg.ChargeCents)
+	return err
 }
 
 const touchChannel = `-- name: TouchChannel :exec
@@ -7731,6 +9979,15 @@ UPDATE operator_tokens SET last_used_at = now() WHERE id = $1
 
 func (q *Queries) TouchOperatorToken(ctx context.Context, id pgtype.UUID) error {
 	_, err := q.db.Exec(ctx, touchOperatorToken, id)
+	return err
+}
+
+const touchPlatformKey = `-- name: TouchPlatformKey :exec
+UPDATE platform_keys SET last_used_at = now() WHERE id = $1
+`
+
+func (q *Queries) TouchPlatformKey(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, touchPlatformKey, id)
 	return err
 }
 
@@ -7807,6 +10064,104 @@ func (q *Queries) UpdateChannel(ctx context.Context, arg UpdateChannelParams) (C
 	return i, err
 }
 
+const updateCustomerAddress = `-- name: UpdateCustomerAddress :one
+UPDATE customer_addresses SET label = $3, line1 = $4, line2 = $5, city = $6, state = $7, zip = $8, notes = $9, is_default = $10
+WHERE id = $1 AND customer_id = $2 RETURNING id, customer_id, label, line1, line2, city, state, zip, notes, is_default, created_at
+`
+
+type UpdateCustomerAddressParams struct {
+	ID         pgtype.UUID `json:"id"`
+	CustomerID pgtype.UUID `json:"customer_id"`
+	Label      string      `json:"label"`
+	Line1      string      `json:"line1"`
+	Line2      string      `json:"line2"`
+	City       string      `json:"city"`
+	State      string      `json:"state"`
+	Zip        string      `json:"zip"`
+	Notes      string      `json:"notes"`
+	IsDefault  bool        `json:"is_default"`
+}
+
+func (q *Queries) UpdateCustomerAddress(ctx context.Context, arg UpdateCustomerAddressParams) (CustomerAddress, error) {
+	row := q.db.QueryRow(ctx, updateCustomerAddress,
+		arg.ID,
+		arg.CustomerID,
+		arg.Label,
+		arg.Line1,
+		arg.Line2,
+		arg.City,
+		arg.State,
+		arg.Zip,
+		arg.Notes,
+		arg.IsDefault,
+	)
+	var i CustomerAddress
+	err := row.Scan(
+		&i.ID,
+		&i.CustomerID,
+		&i.Label,
+		&i.Line1,
+		&i.Line2,
+		&i.City,
+		&i.State,
+		&i.Zip,
+		&i.Notes,
+		&i.IsDefault,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const updateCustomerProfile = `-- name: UpdateCustomerProfile :one
+UPDATE customers SET name = $1, email = $2,
+    first_name  = CASE WHEN $3::bool THEN $4 ELSE first_name END,
+    last_name   = CASE WHEN $3::bool THEN $5 ELSE last_name END,
+    name_source = CASE WHEN $3::bool THEN 'web' ELSE name_source END, updated_at = now()
+WHERE id = $6 RETURNING id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, first_name, last_name, notes, source, name_source, notes_source
+`
+
+type UpdateCustomerProfileParams struct {
+	Name      string      `json:"name"`
+	Email     string      `json:"email"`
+	NameSet   bool        `json:"name_set"`
+	FirstName string      `json:"first_name"`
+	LastName  string      `json:"last_name"`
+	ID        pgtype.UUID `json:"id"`
+}
+
+// The website's profile: a name it sends is the customer's own (name_source web).
+// When it didn't change the name, first + last stay as they are.
+func (q *Queries) UpdateCustomerProfile(ctx context.Context, arg UpdateCustomerProfileParams) (Customer, error) {
+	row := q.db.QueryRow(ctx, updateCustomerProfile,
+		arg.Name,
+		arg.Email,
+		arg.NameSet,
+		arg.FirstName,
+		arg.LastName,
+		arg.ID,
+	)
+	var i Customer
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Phone,
+		&i.Name,
+		&i.Email,
+		&i.SquareCustomerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastSeenAt,
+		&i.FirstName,
+		&i.LastName,
+		&i.Notes,
+		&i.Source,
+		&i.NameSource,
+		&i.NotesSource,
+	)
+	return i, err
+}
+
 const updateDeal = `-- name: UpdateDeal :one
 UPDATE deals SET kind = $3, name = $4, description = $5, active = $6, channel_kinds = $7, def = $8, code = $9, updated_at = now()
 WHERE id = $1 AND location_id = $2
@@ -7854,6 +10209,34 @@ func (q *Queries) UpdateDeal(ctx context.Context, arg UpdateDealParams) (Deal, e
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const updateImportedCustomer = `-- name: UpdateImportedCustomer :exec
+UPDATE customers SET name = $2, first_name = $3, last_name = $4, name_source = $5, notes = $6, notes_source = $7
+WHERE id = $1
+`
+
+type UpdateImportedCustomerParams struct {
+	ID          pgtype.UUID `json:"id"`
+	Name        string      `json:"name"`
+	FirstName   string      `json:"first_name"`
+	LastName    string      `json:"last_name"`
+	NameSource  string      `json:"name_source"`
+	Notes       string      `json:"notes"`
+	NotesSource string      `json:"notes_source"`
+}
+
+func (q *Queries) UpdateImportedCustomer(ctx context.Context, arg UpdateImportedCustomerParams) error {
+	_, err := q.db.Exec(ctx, updateImportedCustomer,
+		arg.ID,
+		arg.Name,
+		arg.FirstName,
+		arg.LastName,
+		arg.NameSource,
+		arg.Notes,
+		arg.NotesSource,
+	)
+	return err
 }
 
 const updateLocationDetails = `-- name: UpdateLocationDetails :one
@@ -7959,9 +10342,9 @@ func (q *Queries) UpdateMenu(ctx context.Context, arg UpdateMenuParams) (Menu, e
 }
 
 const updateMenuCategory = `-- name: UpdateMenuCategory :one
-UPDATE menu_categories SET name = $3, description = $4, available = $5, default_printer_id = $6, updated_at = now()
+UPDATE menu_categories SET name = $3, description = $4, available = $5, default_printer_id = $6, no_kitchen_ticket = $7, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at
+RETURNING id, tenant_id, location_id, menu_id, name, description, available, position, default_printer_id, created_at, updated_at, no_kitchen_ticket
 `
 
 type UpdateMenuCategoryParams struct {
@@ -7971,6 +10354,7 @@ type UpdateMenuCategoryParams struct {
 	Description      string      `json:"description"`
 	Available        bool        `json:"available"`
 	DefaultPrinterID pgtype.UUID `json:"default_printer_id"`
+	NoKitchenTicket  bool        `json:"no_kitchen_ticket"`
 }
 
 func (q *Queries) UpdateMenuCategory(ctx context.Context, arg UpdateMenuCategoryParams) (MenuCategory, error) {
@@ -7981,6 +10365,7 @@ func (q *Queries) UpdateMenuCategory(ctx context.Context, arg UpdateMenuCategory
 		arg.Description,
 		arg.Available,
 		arg.DefaultPrinterID,
+		arg.NoKitchenTicket,
 	)
 	var i MenuCategory
 	err := row.Scan(
@@ -7995,14 +10380,16 @@ func (q *Queries) UpdateMenuCategory(ctx context.Context, arg UpdateMenuCategory
 		&i.DefaultPrinterID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.NoKitchenTicket,
 	)
 	return i, err
 }
 
 const updateMenuItem = `-- name: UpdateMenuItem :one
-UPDATE menu_items SET name = $3, description = $4, price_cents = $5, tax_rate_bps = $6, in_stock = $7, out_until = $8, tags = $9, attributes = $10, updated_at = now()
+UPDATE menu_items SET name = $3, description = $4, price_cents = $5, tax_rate_bps = $6, in_stock = $7, out_until = $8, tags = $9, attributes = $10, updated_at = now(),
+    out_hold = CASE WHEN $7 THEN false ELSE out_hold END
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku
+RETURNING id, tenant_id, location_id, category_id, name, description, price_cents, tax_rate_bps, in_stock, out_until, tags, printer_id, position, attributes, created_at, updated_at, kitchen_name, sku, out_hold, no_kitchen_ticket
 `
 
 type UpdateMenuItemParams struct {
@@ -8051,6 +10438,8 @@ func (q *Queries) UpdateMenuItem(ctx context.Context, arg UpdateMenuItemParams) 
 		&i.UpdatedAt,
 		&i.KitchenName,
 		&i.Sku,
+		&i.OutHold,
+		&i.NoKitchenTicket,
 	)
 	return i, err
 }
@@ -8092,7 +10481,7 @@ func (q *Queries) UpdateMenuSize(ctx context.Context, arg UpdateMenuSizeParams) 
 const updateMenuView = `-- name: UpdateMenuView :one
 UPDATE menu_views SET name = $2, rules = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, kind, name, rules, created_at, updated_at
+RETURNING id, tenant_id, location_id, kind, name, rules, created_at, updated_at, layout
 `
 
 type UpdateMenuViewParams struct {
@@ -8113,6 +10502,7 @@ func (q *Queries) UpdateMenuView(ctx context.Context, arg UpdateMenuViewParams) 
 		&i.Rules,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Layout,
 	)
 	return i, err
 }
@@ -8216,9 +10606,10 @@ func (q *Queries) UpdateModifierGroup(ctx context.Context, arg UpdateModifierGro
 }
 
 const updateModifierOption = `-- name: UpdateModifierOption :one
-UPDATE modifier_options SET name = $3, price_delta_cents = $4, in_stock = $5, updated_at = now()
+UPDATE modifier_options SET name = $3, price_delta_cents = $4, in_stock = $5, updated_at = now(),
+    out_hold = CASE WHEN $5 THEN false ELSE out_hold END
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name
+RETURNING id, tenant_id, location_id, group_id, name, price_delta_cents, in_stock, position, created_at, updated_at, is_default, kitchen_name, out_hold
 `
 
 type UpdateModifierOptionParams struct {
@@ -8251,6 +10642,7 @@ func (q *Queries) UpdateModifierOption(ctx context.Context, arg UpdateModifierOp
 		&i.UpdatedAt,
 		&i.IsDefault,
 		&i.KitchenName,
+		&i.OutHold,
 	)
 	return i, err
 }
@@ -8320,7 +10712,7 @@ func (q *Queries) UpdateOrderFloor(ctx context.Context, arg UpdateOrderFloorPara
 const updatePrinter = `-- name: UpdatePrinter :one
 UPDATE printers SET name = $2, ip = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac
+RETURNING id, tenant_id, location_id, name, ip, created_at, updated_at, is_receipt, mac, print_columns
 `
 
 type UpdatePrinterParams struct {
@@ -8342,15 +10734,38 @@ func (q *Queries) UpdatePrinter(ctx context.Context, arg UpdatePrinterParams) (P
 		&i.UpdatedAt,
 		&i.IsReceipt,
 		&i.MAC,
+		&i.PrintColumns,
 	)
 	return i, err
 }
 
+const updateSquareTokens = `-- name: UpdateSquareTokens :exec
+UPDATE square_connections SET access_token_enc = $2, refresh_token_enc = $3, expires_at = $4, refreshed_at = now(),
+    status = 'connected', last_error = '' WHERE location_id = $1
+`
+
+type UpdateSquareTokensParams struct {
+	LocationID      pgtype.UUID        `json:"location_id"`
+	AccessTokenEnc  []byte             `json:"access_token_enc"`
+	RefreshTokenEnc []byte             `json:"refresh_token_enc"`
+	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) UpdateSquareTokens(ctx context.Context, arg UpdateSquareTokensParams) error {
+	_, err := q.db.Exec(ctx, updateSquareTokens,
+		arg.LocationID,
+		arg.AccessTokenEnc,
+		arg.RefreshTokenEnc,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
 const updateStoreOrdering = `-- name: UpdateStoreOrdering :one
 UPDATE store_ordering SET pickup_enabled = $2, delivery_enabled = $3, pickup_eta_minutes = $4,
-       delivery_eta_minutes = $5, schedule_days = $6, updated_at = now()
+       delivery_eta_minutes = $5, schedule_days = $6, tip_max_cents = $7, updated_at = now()
 WHERE location_id = $1
-RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at
+RETURNING location_id, tenant_id, pickup_enabled, delivery_enabled, pickup_eta_minutes, delivery_eta_minutes, schedule_days, paused_at, paused_until, pause_note, restocked_at, updated_at, tip_max_cents
 `
 
 type UpdateStoreOrderingParams struct {
@@ -8360,6 +10775,7 @@ type UpdateStoreOrderingParams struct {
 	PickupEtaMinutes   int32       `json:"pickup_eta_minutes"`
 	DeliveryEtaMinutes int32       `json:"delivery_eta_minutes"`
 	ScheduleDays       int32       `json:"schedule_days"`
+	TipMaxCents        int64       `json:"tip_max_cents"`
 }
 
 func (q *Queries) UpdateStoreOrdering(ctx context.Context, arg UpdateStoreOrderingParams) (StoreOrdering, error) {
@@ -8370,6 +10786,7 @@ func (q *Queries) UpdateStoreOrdering(ctx context.Context, arg UpdateStoreOrderi
 		arg.PickupEtaMinutes,
 		arg.DeliveryEtaMinutes,
 		arg.ScheduleDays,
+		arg.TipMaxCents,
 	)
 	var i StoreOrdering
 	err := row.Scan(
@@ -8385,13 +10802,14 @@ func (q *Queries) UpdateStoreOrdering(ctx context.Context, arg UpdateStoreOrderi
 		&i.PauseNote,
 		&i.RestockedAt,
 		&i.UpdatedAt,
+		&i.TipMaxCents,
 	)
 	return i, err
 }
 
 const updateTenantConfig = `-- name: UpdateTenantConfig :one
 UPDATE tenants SET config = $2 WHERE id = $1
-RETURNING id, slug, name, config, username, password_hash, created_at, store_id
+RETURNING id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at
 `
 
 type UpdateTenantConfigParams struct {
@@ -8411,6 +10829,8 @@ func (q *Queries) UpdateTenantConfig(ctx context.Context, arg UpdateTenantConfig
 		&i.PasswordHash,
 		&i.CreatedAt,
 		&i.StoreID,
+		&i.TestStore,
+		&i.RetiredAt,
 	)
 	return i, err
 }
@@ -8514,6 +10934,83 @@ func (q *Queries) UpsertAgentUpdateStatus(ctx context.Context, arg UpsertAgentUp
 	return err
 }
 
+const upsertCustomerByPhone = `-- name: UpsertCustomerByPhone :one
+
+INSERT INTO customers (tenant_id, location_id, phone, name, first_name, last_name, name_source, source)
+VALUES ($1, $2, $3, $4, $5, $6,
+        CASE WHEN $4::text = '' THEN '' ELSE 'web' END, 'web')
+ON CONFLICT (location_id, phone) DO UPDATE SET last_seen_at = now(),
+    name        = CASE WHEN customers.name = '' THEN EXCLUDED.name ELSE customers.name END,
+    first_name  = CASE WHEN customers.name = '' THEN EXCLUDED.first_name ELSE customers.first_name END,
+    last_name   = CASE WHEN customers.name = '' THEN EXCLUDED.last_name ELSE customers.last_name END,
+    name_source = CASE WHEN customers.name = '' AND EXCLUDED.name <> '' THEN 'web' ELSE customers.name_source END
+RETURNING id, tenant_id, location_id, phone, name, email, square_customer_id, created_at, updated_at, last_seen_at, first_name, last_name, notes, source, name_source, notes_source, (xmax = 0) AS created
+`
+
+type UpsertCustomerByPhoneParams struct {
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+	Phone      string      `json:"phone"`
+	Name       string      `json:"name"`
+	FirstName  string      `json:"first_name"`
+	LastName   string      `json:"last_name"`
+}
+
+type UpsertCustomerByPhoneRow struct {
+	ID               pgtype.UUID        `json:"id"`
+	TenantID         pgtype.UUID        `json:"tenant_id"`
+	LocationID       pgtype.UUID        `json:"location_id"`
+	Phone            string             `json:"phone"`
+	Name             string             `json:"name"`
+	Email            string             `json:"email"`
+	SquareCustomerID string             `json:"square_customer_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	LastSeenAt       pgtype.Timestamptz `json:"last_seen_at"`
+	FirstName        string             `json:"first_name"`
+	LastName         string             `json:"last_name"`
+	Notes            string             `json:"notes"`
+	Source           string             `json:"source"`
+	NameSource       string             `json:"name_source"`
+	NotesSource      string             `json:"notes_source"`
+	Created          bool               `json:"created"`
+}
+
+// weborder stage 2: customer accounts + email receipts.
+// Website sign-in: a name typed there fills an empty one (with its first +
+// last split, name_source web); an existing name is kept.
+func (q *Queries) UpsertCustomerByPhone(ctx context.Context, arg UpsertCustomerByPhoneParams) (UpsertCustomerByPhoneRow, error) {
+	row := q.db.QueryRow(ctx, upsertCustomerByPhone,
+		arg.TenantID,
+		arg.LocationID,
+		arg.Phone,
+		arg.Name,
+		arg.FirstName,
+		arg.LastName,
+	)
+	var i UpsertCustomerByPhoneRow
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.LocationID,
+		&i.Phone,
+		&i.Name,
+		&i.Email,
+		&i.SquareCustomerID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastSeenAt,
+		&i.FirstName,
+		&i.LastName,
+		&i.Notes,
+		&i.Source,
+		&i.NameSource,
+		&i.NotesSource,
+		&i.Created,
+	)
+	return i, err
+}
+
 const upsertDriverShift = `-- name: UpsertDriverShift :exec
 INSERT INTO driver_shifts (id, tenant_id, location_id, driver_id, driver_name, clock_in, clock_out, auto_out, updated_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
@@ -8546,89 +11043,6 @@ func (q *Queries) UpsertDriverShift(ctx context.Context, arg UpsertDriverShiftPa
 		arg.ClockOut,
 		arg.AutoOut,
 	)
-	return err
-}
-
-const upsertExternalStop = `-- name: UpsertExternalStop :execrows
-
-INSERT INTO geo_external_stops (order_id, tenant_id, location_id, expires_at)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (order_id) DO UPDATE SET
-    state = 'pending', lat = NULL, lng = NULL, quality = '', distance_m = 0, duration_s = 0,
-    polyline = '', outside_area = false, store_to_s = NULL, to_store_s = NULL, attempts = 0,
-    next_try_at = now(), last_error = '', pushed_at = NULL, confirmed = false, created_at = now(), updated_at = now(),
-    expires_at = EXCLUDED.expires_at
-WHERE geo_external_stops.tenant_id = EXCLUDED.tenant_id AND geo_external_stops.location_id = EXCLUDED.location_id
-`
-
-type UpsertExternalStopParams struct {
-	OrderID    pgtype.UUID        `json:"order_id"`
-	TenantID   pgtype.UUID        `json:"tenant_id"`
-	LocationID pgtype.UUID        `json:"location_id"`
-	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
-}
-
-// ---------------------------------------------------------------------------
-// External stops (2.1.0): POS deliveries the agent asks main to locate (RPC
-// geo.locate). No orders row; a point + push state, and the address text in
-// geo_external_work only while it is needed.
-// ---------------------------------------------------------------------------
-// A (re)locate request: back to pending with no point, a fresh 24 h expiry.
-func (q *Queries) UpsertExternalStop(ctx context.Context, arg UpsertExternalStopParams) (int64, error) {
-	result, err := q.db.Exec(ctx, upsertExternalStop,
-		arg.OrderID,
-		arg.TenantID,
-		arg.LocationID,
-		arg.ExpiresAt,
-	)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const upsertExternalWork = `-- name: UpsertExternalWork :exec
-INSERT INTO geo_external_work (order_id, address, address_key, discard_at)
-VALUES ($1, $2, $3, $4)
-ON CONFLICT (order_id) DO UPDATE SET
-    address = EXCLUDED.address, address_key = EXCLUDED.address_key, candidates = NULL,
-    confirmed_address = NULL, created_at = now(), discard_at = EXCLUDED.discard_at
-`
-
-type UpsertExternalWorkParams struct {
-	OrderID    pgtype.UUID        `json:"order_id"`
-	Address    []byte             `json:"address"`
-	AddressKey string             `json:"address_key"`
-	DiscardAt  pgtype.Timestamptz `json:"discard_at"`
-}
-
-func (q *Queries) UpsertExternalWork(ctx context.Context, arg UpsertExternalWorkParams) error {
-	_, err := q.db.Exec(ctx, upsertExternalWork,
-		arg.OrderID,
-		arg.Address,
-		arg.AddressKey,
-		arg.DiscardAt,
-	)
-	return err
-}
-
-const upsertExternalWorkSearch = `-- name: UpsertExternalWorkSearch :exec
-INSERT INTO geo_external_work (order_id, address, address_key, candidates, discard_at)
-VALUES ($1, '{}'::jsonb, '', $2, $3)
-ON CONFLICT (order_id) DO UPDATE SET candidates = EXCLUDED.candidates, confirmed_address = NULL
-`
-
-type UpsertExternalWorkSearchParams struct {
-	OrderID    pgtype.UUID        `json:"order_id"`
-	Candidates []byte             `json:"candidates"`
-	DiscardAt  pgtype.Timestamptz `json:"discard_at"`
-}
-
-// The search's candidates (NULL: none found) for geo.choose. A stop whose
-// address text is gone gets an empty work row (no address, no cache key),
-// discarded as usual.
-func (q *Queries) UpsertExternalWorkSearch(ctx context.Context, arg UpsertExternalWorkSearchParams) error {
-	_, err := q.db.Exec(ctx, upsertExternalWorkSearch, arg.OrderID, arg.Candidates, arg.DiscardAt)
 	return err
 }
 
@@ -8702,6 +11116,54 @@ func (q *Queries) UpsertPricingSettings(ctx context.Context, arg UpsertPricingSe
 	return err
 }
 
+const upsertSquareConnection = `-- name: UpsertSquareConnection :one
+
+INSERT INTO square_connections (location_id, tenant_id, merchant_id, square_location_id, access_token_enc, refresh_token_enc, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+ON CONFLICT (location_id) DO UPDATE SET merchant_id = EXCLUDED.merchant_id, square_location_id = EXCLUDED.square_location_id,
+    access_token_enc = EXCLUDED.access_token_enc, refresh_token_enc = EXCLUDED.refresh_token_enc, expires_at = EXCLUDED.expires_at,
+    refreshed_at = now(), status = 'connected', last_error = '', connected_at = now()
+RETURNING location_id, tenant_id, merchant_id, square_location_id, access_token_enc, refresh_token_enc, expires_at, refreshed_at, status, last_error, connected_at
+`
+
+type UpsertSquareConnectionParams struct {
+	LocationID       pgtype.UUID        `json:"location_id"`
+	TenantID         pgtype.UUID        `json:"tenant_id"`
+	MerchantID       string             `json:"merchant_id"`
+	SquareLocationID string             `json:"square_location_id"`
+	AccessTokenEnc   []byte             `json:"access_token_enc"`
+	RefreshTokenEnc  []byte             `json:"refresh_token_enc"`
+	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
+}
+
+// weborder stage 2: Square connections + card holds.
+func (q *Queries) UpsertSquareConnection(ctx context.Context, arg UpsertSquareConnectionParams) (SquareConnection, error) {
+	row := q.db.QueryRow(ctx, upsertSquareConnection,
+		arg.LocationID,
+		arg.TenantID,
+		arg.MerchantID,
+		arg.SquareLocationID,
+		arg.AccessTokenEnc,
+		arg.RefreshTokenEnc,
+		arg.ExpiresAt,
+	)
+	var i SquareConnection
+	err := row.Scan(
+		&i.LocationID,
+		&i.TenantID,
+		&i.MerchantID,
+		&i.SquareLocationID,
+		&i.AccessTokenEnc,
+		&i.RefreshTokenEnc,
+		&i.ExpiresAt,
+		&i.RefreshedAt,
+		&i.Status,
+		&i.LastError,
+		&i.ConnectedAt,
+	)
+	return i, err
+}
+
 const upsertStoreHoursException = `-- name: UpsertStoreHoursException :one
 INSERT INTO store_hours_exceptions (tenant_id, location_id, day, closed, hours, note)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -8739,25 +11201,6 @@ func (q *Queries) UpsertStoreHoursException(ctx context.Context, arg UpsertStore
 		&i.CreatedAt,
 	)
 	return i, err
-}
-
-const wakeLocationExternalStops = `-- name: WakeLocationExternalStops :execrows
-UPDATE geo_external_stops SET next_try_at = now()
-WHERE tenant_id = $1 AND location_id = $2
-  AND pushed_at IS NULL AND state <> 'pending'
-`
-
-type WakeLocationExternalStopsParams struct {
-	TenantID   pgtype.UUID `json:"tenant_id"`
-	LocationID pgtype.UUID `json:"location_id"`
-}
-
-func (q *Queries) WakeLocationExternalStops(ctx context.Context, arg WakeLocationExternalStopsParams) (int64, error) {
-	result, err := q.db.Exec(ctx, wakeLocationExternalStops, arg.TenantID, arg.LocationID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
 }
 
 const wakeLocationOrderGeo = `-- name: WakeLocationOrderGeo :execrows

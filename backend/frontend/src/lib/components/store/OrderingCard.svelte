@@ -14,10 +14,14 @@
 
   let s = $state<OrderingSettings | null>(null);
   let saving = $state(false);
+  // The tip limit is edited in dollars (X: default $50).
+  let tipMax = $state('50');
+  let tipErr = $state('');
 
   onMount(async () => {
     try {
       s = (await storeApi<{ settings: OrderingSettings; exceptions: HoursException[] }>('/me/ordering')).settings;
+      tipMax = String((s.tip_max_cents ?? 5000) / 100);
     } catch (e) {
       toast.error(e);
     }
@@ -26,6 +30,12 @@
   async function save(e: SubmitEvent) {
     e.preventDefault();
     if (!s || saving) return;
+    tipErr = '';
+    const tip = Number(tipMax.trim());
+    if (!tipMax.trim() || !Number.isFinite(tip) || tip < 0 || tip > 1000 || Math.round(tip * 100) !== tip * 100) {
+      tipErr = 'Tip limit: a dollar amount from $0 to $1,000.';
+      return;
+    }
     saving = true;
     try {
       s = await storeApi<OrderingSettings>('/me/ordering', {
@@ -35,9 +45,11 @@
           delivery_enabled: s.delivery_enabled,
           pickup_eta_minutes: Number(s.pickup_eta_minutes) || 0,
           delivery_eta_minutes: Number(s.delivery_eta_minutes) || 0,
-          schedule_days: Number(s.schedule_days) || 0
+          schedule_days: Number(s.schedule_days) || 0,
+          tip_max_cents: Math.round(tip * 100)
         })
       });
+      tipMax = String(s.tip_max_cents / 100);
       toast.success('Ordering saved — channels see it right away');
     } catch (err) {
       toast.error(err);
@@ -73,6 +85,12 @@
           <label class="lbl" for="or-days">Order ahead up to (days)</label>
           <input id="or-days" type="number" min="0" max="30" class="field mono !w-28" bind:value={s.schedule_days} />
           <p class="help">0 = ASAP orders only. Customers pick a time every 15 minutes, starting the estimate above from now (or from opening).</p>
+        </div>
+        <div>
+          <label class="lbl" for="or-tip-max">Online tips up to ($)</label>
+          <input id="or-tip-max" inputmode="decimal" class="field mono !w-28" bind:value={tipMax} aria-invalid={!!tipErr || undefined} />
+          {#if tipErr}<p class="field-error" role="alert">{tipErr}</p>{/if}
+          <p class="help">A bigger tip on the website (or added after the order) is refused with a message. Default $50.</p>
         </div>
         {#if resetLabel}<p class="help !mt-0">86'd items come back by themselves when the new day starts ({resetLabel}), unless they have their own “until”.</p>{/if}
         <div><Button type="submit" variant="primary" loading={saving}>Save ordering</Button></div>

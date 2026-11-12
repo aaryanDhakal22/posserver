@@ -61,6 +61,37 @@ type AppRelease struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type CardHold struct {
+	OrderID            pgtype.UUID        `json:"order_id"`
+	TenantID           pgtype.UUID        `json:"tenant_id"`
+	LocationID         pgtype.UUID        `json:"location_id"`
+	Gateway            string             `json:"gateway"`
+	PaymentRef         string             `json:"payment_ref"`
+	AmountCents        int64              `json:"amount_cents"`
+	TipCents           int64              `json:"tip_cents"`
+	AddedTipCents      int64              `json:"added_tip_cents"`
+	Status             string             `json:"status"`
+	CaptureReason      string             `json:"capture_reason"`
+	DueAt              pgtype.Timestamptz `json:"due_at"`
+	CaptureRequestedAt pgtype.Timestamptz `json:"capture_requested_at"`
+	NextTryAt          pgtype.Timestamptz `json:"next_try_at"`
+	Attempts           int32              `json:"attempts"`
+	LastError          string             `json:"last_error"`
+	CapturedCents      int64              `json:"captured_cents"`
+	TipPaymentRef      string             `json:"tip_payment_ref"`
+	TipNote            string             `json:"tip_note"`
+	CapturedAt         pgtype.Timestamptz `json:"captured_at"`
+	CancelledAt        pgtype.Timestamptz `json:"cancelled_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	PaymentID          pgtype.UUID        `json:"payment_id"`
+	CancelRequestedAt  pgtype.Timestamptz `json:"cancel_requested_at"`
+	RefundRequestedAt  pgtype.Timestamptz `json:"refund_requested_at"`
+	RefundedCents      int64              `json:"refunded_cents"`
+	RefundRef          string             `json:"refund_ref"`
+	TipPaymentID       pgtype.UUID        `json:"tip_payment_id"`
+}
+
 type Channel struct {
 	ID          pgtype.UUID        `json:"id"`
 	TenantID    pgtype.UUID        `json:"tenant_id"`
@@ -98,6 +129,67 @@ type ChannelOrder struct {
 	TrackToken    pgtype.Text        `json:"track_token"`
 	AlertedAt     pgtype.Timestamptz `json:"alerted_at"`
 	OperatorID    pgtype.UUID        `json:"operator_id"`
+	CustomerID    pgtype.UUID        `json:"customer_id"`
+}
+
+type Customer struct {
+	ID               pgtype.UUID        `json:"id"`
+	TenantID         pgtype.UUID        `json:"tenant_id"`
+	LocationID       pgtype.UUID        `json:"location_id"`
+	Phone            string             `json:"phone"`
+	Name             string             `json:"name"`
+	Email            string             `json:"email"`
+	SquareCustomerID string             `json:"square_customer_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	LastSeenAt       pgtype.Timestamptz `json:"last_seen_at"`
+	FirstName        string             `json:"first_name"`
+	LastName         string             `json:"last_name"`
+	Notes            string             `json:"notes"`
+	Source           string             `json:"source"`
+	NameSource       string             `json:"name_source"`
+	NotesSource      string             `json:"notes_source"`
+}
+
+type CustomerAddress struct {
+	ID         pgtype.UUID        `json:"id"`
+	CustomerID pgtype.UUID        `json:"customer_id"`
+	Label      string             `json:"label"`
+	Line1      string             `json:"line1"`
+	Line2      string             `json:"line2"`
+	City       string             `json:"city"`
+	State      string             `json:"state"`
+	Zip        string             `json:"zip"`
+	Notes      string             `json:"notes"`
+	IsDefault  bool               `json:"is_default"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type CustomerCard struct {
+	ID         pgtype.UUID        `json:"id"`
+	CustomerID pgtype.UUID        `json:"customer_id"`
+	Gateway    string             `json:"gateway"`
+	CardRef    string             `json:"card_ref"`
+	Brand      string             `json:"brand"`
+	Last4      string             `json:"last4"`
+	ExpMonth   int32              `json:"exp_month"`
+	ExpYear    int32              `json:"exp_year"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type CustomerSession struct {
+	TokenHash  string             `json:"token_hash"`
+	CustomerID pgtype.UUID        `json:"customer_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	ExpiresAt  pgtype.Timestamptz `json:"expires_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+}
+
+type CustomerTombstone struct {
+	CustomerID pgtype.UUID        `json:"customer_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	DeletedAt  pgtype.Timestamptz `json:"deleted_at"`
 }
 
 type Deal struct {
@@ -144,6 +236,15 @@ type Device struct {
 	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
 }
 
+type DeviceTombstone struct {
+	KeyHash    string             `json:"key_hash"`
+	DeviceID   pgtype.UUID        `json:"device_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Kind       string             `json:"kind"`
+	DeletedAt  pgtype.Timestamptz `json:"deleted_at"`
+}
+
 type DiagReport struct {
 	ID           pgtype.UUID        `json:"id"`
 	TenantID     pgtype.UUID        `json:"tenant_id"`
@@ -164,6 +265,59 @@ type DiagReport struct {
 	ReceivedAt   pgtype.Timestamptz `json:"received_at"`
 	PagedAt      pgtype.Timestamptz `json:"paged_at"`
 	ResolvedAt   pgtype.Timestamptz `json:"resolved_at"`
+}
+
+type DrawerMovement struct {
+	ID          pgtype.UUID        `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	DrawerID    pgtype.UUID        `json:"drawer_id"`
+	Kind        string             `json:"kind"`
+	AmountCents int64              `json:"amount_cents"`
+	Reason      string             `json:"reason"`
+	StaffID     string             `json:"staff_id"`
+	ApprovedBy  string             `json:"approved_by"`
+	At          pgtype.Timestamptz `json:"at"`
+}
+
+type DrawerSession struct {
+	ID               pgtype.UUID        `json:"id"`
+	TenantID         pgtype.UUID        `json:"tenant_id"`
+	LocationID       pgtype.UUID        `json:"location_id"`
+	DeviceID         string             `json:"device_id"`
+	DeviceName       string             `json:"device_name"`
+	StaffID          string             `json:"staff_id"`
+	StaffName        string             `json:"staff_name"`
+	BatchID          pgtype.Int8        `json:"batch_id"`
+	OpenedAt         pgtype.Timestamptz `json:"opened_at"`
+	StartCents       int64              `json:"start_cents"`
+	HandoverFrom     pgtype.UUID        `json:"handover_from"`
+	ClosedAt         pgtype.Timestamptz `json:"closed_at"`
+	ClosedBy         string             `json:"closed_by"`
+	CloseReason      string             `json:"close_reason"`
+	CountedCents     pgtype.Int8        `json:"counted_cents"`
+	Denominations    []byte             `json:"denominations"`
+	ExpectedCents    pgtype.Int8        `json:"expected_cents"`
+	OverShortCents   pgtype.Int8        `json:"over_short_cents"`
+	Flagged          bool               `json:"flagged"`
+	CashSalesCents   int64              `json:"cash_sales_cents"`
+	CashRefundsCents int64              `json:"cash_refunds_cents"`
+	CashTipsCents    int64              `json:"cash_tips_cents"`
+	PayInsCents      int64              `json:"pay_ins_cents"`
+	PayOutsCents     int64              `json:"pay_outs_cents"`
+	NoSales          int32              `json:"no_sales"`
+	Payments         int32              `json:"payments"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+}
+
+type DrawerSessionRevision struct {
+	Seq        int64              `json:"seq"`
+	DrawerID   pgtype.UUID        `json:"drawer_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	EventID    pgtype.UUID        `json:"event_id"`
+	Old        []byte             `json:"old"`
+	RevisedAt  pgtype.Timestamptz `json:"revised_at"`
 }
 
 type Driver struct {
@@ -188,6 +342,19 @@ type DriverShift struct {
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
 }
 
+type EmailReceipt struct {
+	OrderID    pgtype.UUID        `json:"order_id"`
+	Kind       string             `json:"kind"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	Status     string             `json:"status"`
+	Attempts   int32              `json:"attempts"`
+	NextTryAt  pgtype.Timestamptz `json:"next_try_at"`
+	LastError  string             `json:"last_error"`
+	MessageID  string             `json:"message_id"`
+	SentAt     pgtype.Timestamptz `json:"sent_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
 type FloorEventsSeen struct {
 	EventID    pgtype.UUID        `json:"event_id"`
 	TenantID   pgtype.UUID        `json:"tenant_id"`
@@ -206,42 +373,6 @@ type GeoCache struct {
 	Source     string             `json:"source"`
 	Pinned     bool               `json:"pinned"`
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
-}
-
-type GeoExternalStop struct {
-	OrderID     pgtype.UUID        `json:"order_id"`
-	TenantID    pgtype.UUID        `json:"tenant_id"`
-	LocationID  pgtype.UUID        `json:"location_id"`
-	State       string             `json:"state"`
-	Lat         pgtype.Float8      `json:"lat"`
-	Lng         pgtype.Float8      `json:"lng"`
-	Quality     string             `json:"quality"`
-	DistanceM   int32              `json:"distance_m"`
-	DurationS   int32              `json:"duration_s"`
-	Polyline    string             `json:"polyline"`
-	OutsideArea bool               `json:"outside_area"`
-	StoreToS    pgtype.Int4        `json:"store_to_s"`
-	ToStoreS    pgtype.Int4        `json:"to_store_s"`
-	Attempts    int32              `json:"attempts"`
-	NextTryAt   pgtype.Timestamptz `json:"next_try_at"`
-	LastError   string             `json:"last_error"`
-	PushedAt    pgtype.Timestamptz `json:"pushed_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-	ExpiresAt   pgtype.Timestamptz `json:"expires_at"`
-	Confirmed   bool               `json:"confirmed"`
-	Corrected   bool               `json:"corrected"`
-	Note        string             `json:"note"`
-}
-
-type GeoExternalWork struct {
-	OrderID          pgtype.UUID        `json:"order_id"`
-	Address          []byte             `json:"address"`
-	AddressKey       string             `json:"address_key"`
-	Candidates       []byte             `json:"candidates"`
-	ConfirmedAddress []byte             `json:"confirmed_address"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-	DiscardAt        pgtype.Timestamptz `json:"discard_at"`
 }
 
 type ItemModifierGroup struct {
@@ -266,6 +397,10 @@ type LineItem struct {
 	MenuItemID     pgtype.UUID `json:"menu_item_id"`
 	PrinterID      pgtype.UUID `json:"printer_id"`
 	Routing        string      `json:"routing"`
+	Portion        string      `json:"portion"`
+	Mode           string      `json:"mode"`
+	Coupon         string      `json:"coupon"`
+	CouponNo       int32       `json:"coupon_no"`
 }
 
 type Location struct {
@@ -315,27 +450,30 @@ type MenuCategory struct {
 	DefaultPrinterID pgtype.UUID        `json:"default_printer_id"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	NoKitchenTicket  bool               `json:"no_kitchen_ticket"`
 }
 
 type MenuItem struct {
-	ID          pgtype.UUID        `json:"id"`
-	TenantID    pgtype.UUID        `json:"tenant_id"`
-	LocationID  pgtype.UUID        `json:"location_id"`
-	CategoryID  pgtype.UUID        `json:"category_id"`
-	Name        string             `json:"name"`
-	Description string             `json:"description"`
-	PriceCents  int64              `json:"price_cents"`
-	TaxRateBps  int32              `json:"tax_rate_bps"`
-	InStock     bool               `json:"in_stock"`
-	OutUntil    pgtype.Timestamptz `json:"out_until"`
-	Tags        []byte             `json:"tags"`
-	PrinterID   pgtype.UUID        `json:"printer_id"`
-	Position    int32              `json:"position"`
-	Attributes  []byte             `json:"attributes"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
-	KitchenName string             `json:"kitchen_name"`
-	Sku         string             `json:"sku"`
+	ID              pgtype.UUID        `json:"id"`
+	TenantID        pgtype.UUID        `json:"tenant_id"`
+	LocationID      pgtype.UUID        `json:"location_id"`
+	CategoryID      pgtype.UUID        `json:"category_id"`
+	Name            string             `json:"name"`
+	Description     string             `json:"description"`
+	PriceCents      int64              `json:"price_cents"`
+	TaxRateBps      int32              `json:"tax_rate_bps"`
+	InStock         bool               `json:"in_stock"`
+	OutUntil        pgtype.Timestamptz `json:"out_until"`
+	Tags            []byte             `json:"tags"`
+	PrinterID       pgtype.UUID        `json:"printer_id"`
+	Position        int32              `json:"position"`
+	Attributes      []byte             `json:"attributes"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	KitchenName     string             `json:"kitchen_name"`
+	Sku             string             `json:"sku"`
+	OutHold         bool               `json:"out_hold"`
+	NoKitchenTicket bool               `json:"no_kitchen_ticket"`
 }
 
 type MenuItemSize struct {
@@ -374,6 +512,7 @@ type MenuView struct {
 	Rules      []byte             `json:"rules"`
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+	Layout     []byte             `json:"layout"`
 }
 
 type MenuViewBuild struct {
@@ -429,6 +568,7 @@ type ModifierOption struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 	IsDefault       bool               `json:"is_default"`
 	KitchenName     string             `json:"kitchen_name"`
+	OutHold         bool               `json:"out_hold"`
 }
 
 type ModifierOptionPrice struct {
@@ -437,6 +577,19 @@ type ModifierOptionPrice struct {
 	OptionID   pgtype.UUID `json:"option_id"`
 	SizeID     pgtype.UUID `json:"size_id"`
 	PriceCents int64       `json:"price_cents"`
+}
+
+type MoneyFlag struct {
+	ID         int64              `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	At         pgtype.Timestamptz `json:"at"`
+	EventID    pgtype.UUID        `json:"event_id"`
+	EventType  string             `json:"event_type"`
+	Subject    string             `json:"subject"`
+	Code       string             `json:"code"`
+	Detail     []byte             `json:"detail"`
+	ResolvedAt pgtype.Timestamptz `json:"resolved_at"`
 }
 
 type Operator struct {
@@ -503,6 +656,12 @@ type Order struct {
 	AgentStatus         []byte             `json:"agent_status"`
 	AgentStatusAt       pgtype.Timestamptz `json:"agent_status_at"`
 	AgentBatchID        pgtype.Int8        `json:"agent_batch_id"`
+	DeliveryFeeCents    pgtype.Int8        `json:"delivery_fee_cents"`
+	DriverFeeCents      pgtype.Int8        `json:"driver_fee_cents"`
+	ServiceFeeCents     pgtype.Int8        `json:"service_fee_cents"`
+	CardFeeCents        pgtype.Int8        `json:"card_fee_cents"`
+	DiscountCents       pgtype.Int8        `json:"discount_cents"`
+	MoneyChangedAt      pgtype.Timestamptz `json:"money_changed_at"`
 }
 
 type OrderGeo struct {
@@ -530,6 +689,45 @@ type OrderGeo struct {
 	Confirmed        bool               `json:"confirmed"`
 	Corrected        bool               `json:"corrected"`
 	Note             string             `json:"note"`
+}
+
+type OrderMoneyChange struct {
+	ID         int64              `json:"id"`
+	OrderID    pgtype.UUID        `json:"order_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	EventID    pgtype.UUID        `json:"event_id"`
+	At         pgtype.Timestamptz `json:"at"`
+	Before     []byte             `json:"before"`
+	After      []byte             `json:"after"`
+	AfterZ     bool               `json:"after_z"`
+	ReceivedAt pgtype.Timestamptz `json:"received_at"`
+}
+
+type OrderPlacement struct {
+	ChannelID         pgtype.UUID        `json:"channel_id"`
+	ClientOrderID     string             `json:"client_order_id"`
+	TenantID          pgtype.UUID        `json:"tenant_id"`
+	LocationID        pgtype.UUID        `json:"location_id"`
+	BodyHash          string             `json:"body_hash"`
+	Request           []byte             `json:"request"`
+	CardToken         string             `json:"card_token"`
+	VerificationToken string             `json:"verification_token"`
+	CustomerID        pgtype.UUID        `json:"customer_id"`
+	Operator          []byte             `json:"operator"`
+	ExpiresAt         pgtype.Timestamptz `json:"expires_at"`
+	State             string             `json:"state"`
+	Waiting           string             `json:"waiting"`
+	Result            []byte             `json:"result"`
+	OrderID           pgtype.UUID        `json:"order_id"`
+	Worker            string             `json:"worker"`
+	Attempts          int32              `json:"attempts"`
+	ChargeStarted     bool               `json:"charge_started"`
+	ChargeCents       int64              `json:"charge_cents"`
+	DueAlertAt        pgtype.Timestamptz `json:"due_alert_at"`
+	DueAlerted        bool               `json:"due_alerted"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
 }
 
 type OutboxDispatch struct {
@@ -563,6 +761,26 @@ type Payment struct {
 	Last4       string             `json:"last4"`
 	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
 	AuthCode    string             `json:"auth_code"`
+	TipCents    int64              `json:"tip_cents"`
+	StaffID     pgtype.UUID        `json:"staff_id"`
+	RefundOf    pgtype.UUID        `json:"refund_of"`
+	ReceivedAt  pgtype.Timestamptz `json:"received_at"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	ClientKey   string             `json:"client_key"`
+	Origin      string             `json:"origin"`
+	BatchID     pgtype.Int8        `json:"batch_id"`
+	ApprovedBy  string             `json:"approved_by"`
+	Flags       []string           `json:"flags"`
+}
+
+type PlatformKey struct {
+	ID         pgtype.UUID        `json:"id"`
+	Name       string             `json:"name"`
+	KeyHash    string             `json:"key_hash"`
+	KeyPrefix  string             `json:"key_prefix"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
 type PricingSetting struct {
@@ -574,15 +792,16 @@ type PricingSetting struct {
 }
 
 type Printer struct {
-	ID         pgtype.UUID        `json:"id"`
-	TenantID   pgtype.UUID        `json:"tenant_id"`
-	LocationID pgtype.UUID        `json:"location_id"`
-	Name       string             `json:"name"`
-	IP         string             `json:"ip"`
-	CreatedAt  pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
-	IsReceipt  bool               `json:"is_receipt"`
-	MAC        string             `json:"mac"`
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	Name         string             `json:"name"`
+	IP           string             `json:"ip"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	IsReceipt    bool               `json:"is_receipt"`
+	MAC          string             `json:"mac"`
+	PrintColumns int16              `json:"print_columns"`
 }
 
 type PrinterIpChange struct {
@@ -595,6 +814,80 @@ type PrinterIpChange struct {
 	MAC        string             `json:"mac"`
 	Source     string             `json:"source"`
 	At         pgtype.Timestamptz `json:"at"`
+}
+
+type SiteDomain struct {
+	Host       string             `json:"host"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	IsPrimary  bool               `json:"is_primary"`
+	Verified   bool               `json:"verified"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type SiteImage struct {
+	ID          pgtype.UUID        `json:"id"`
+	LocationID  pgtype.UUID        `json:"location_id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	Kind        string             `json:"kind"`
+	ContentType string             `json:"content_type"`
+	Bytes       []byte             `json:"bytes"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+}
+
+type SiteSetting struct {
+	LocationID   pgtype.UUID        `json:"location_id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	Draft        []byte             `json:"draft"`
+	Published    []byte             `json:"published"`
+	Version      int64              `json:"version"`
+	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
+	ReplyEmail   string             `json:"reply_email"`
+	DraftAt      pgtype.Timestamptz `json:"draft_at"`
+	PublishedAt  pgtype.Timestamptz `json:"published_at"`
+	PublishedBy  string             `json:"published_by"`
+	PreviewToken string             `json:"preview_token"`
+}
+
+type SquareConnection struct {
+	LocationID       pgtype.UUID        `json:"location_id"`
+	TenantID         pgtype.UUID        `json:"tenant_id"`
+	MerchantID       string             `json:"merchant_id"`
+	SquareLocationID string             `json:"square_location_id"`
+	AccessTokenEnc   []byte             `json:"access_token_enc"`
+	RefreshTokenEnc  []byte             `json:"refresh_token_enc"`
+	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
+	RefreshedAt      pgtype.Timestamptz `json:"refreshed_at"`
+	Status           string             `json:"status"`
+	LastError        string             `json:"last_error"`
+	ConnectedAt      pgtype.Timestamptz `json:"connected_at"`
+}
+
+type Staff struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	FirstName  string             `json:"first_name"`
+	LastName   string             `json:"last_name"`
+	PinHash    string             `json:"pin_hash"`
+	Role       string             `json:"role"`
+	Limits     []byte             `json:"limits"`
+	Active     bool               `json:"active"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type StaffJournal struct {
+	ID         pgtype.UUID        `json:"id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	LocationID pgtype.UUID        `json:"location_id"`
+	At         pgtype.Timestamptz `json:"at"`
+	StaffID    pgtype.UUID        `json:"staff_id"`
+	DeviceID   string             `json:"device_id"`
+	Action     string             `json:"action"`
+	OrderID    pgtype.UUID        `json:"order_id"`
+	Detail     []byte             `json:"detail"`
+	ReceivedAt pgtype.Timestamptz `json:"received_at"`
 }
 
 type StatusEvent struct {
@@ -632,6 +925,7 @@ type StoreOrdering struct {
 	PauseNote          string             `json:"pause_note"`
 	RestockedAt        pgtype.Timestamptz `json:"restocked_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	TipMaxCents        int64              `json:"tip_max_cents"`
 }
 
 type TabletReportToken struct {
@@ -656,4 +950,53 @@ type Tenant struct {
 	PasswordHash pgtype.Text        `json:"password_hash"`
 	CreatedAt    pgtype.Timestamptz `json:"created_at"`
 	StoreID      pgtype.Int8        `json:"store_id"`
+	TestStore    bool               `json:"test_store"`
+	RetiredAt    pgtype.Timestamptz `json:"retired_at"`
+}
+
+type TerminalSetting struct {
+	LocationID pgtype.UUID        `json:"location_id"`
+	TenantID   pgtype.UUID        `json:"tenant_id"`
+	Settings   []byte             `json:"settings"`
+	Version    int64              `json:"version"`
+	UpdatedAt  pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ZReport struct {
+	ID                  pgtype.UUID        `json:"id"`
+	TenantID            pgtype.UUID        `json:"tenant_id"`
+	LocationID          pgtype.UUID        `json:"location_id"`
+	BatchID             int64              `json:"batch_id"`
+	BusinessDate        pgtype.Date        `json:"business_date"`
+	OpenedAt            pgtype.Timestamptz `json:"opened_at"`
+	ClosedAt            pgtype.Timestamptz `json:"closed_at"`
+	Report              []byte             `json:"report"`
+	ReceivedAt          pgtype.Timestamptz `json:"received_at"`
+	Version             int32              `json:"version"`
+	Flagged             bool               `json:"flagged"`
+	MainCheck           []byte             `json:"main_check"`
+	MainDifferenceCents pgtype.Int8        `json:"main_difference_cents"`
+	SalesTotalCents     pgtype.Int8        `json:"sales_total_cents"`
+	SalesTaxCents       pgtype.Int8        `json:"sales_tax_cents"`
+	TipsCardCents       pgtype.Int8        `json:"tips_card_cents"`
+	TipsCashCents       pgtype.Int8        `json:"tips_cash_cents"`
+	RefundsCents        pgtype.Int8        `json:"refunds_cents"`
+	OverShortCents      pgtype.Int8        `json:"over_short_cents"`
+	DifferenceCents     pgtype.Int8        `json:"difference_cents"`
+}
+
+type ZReportVersion struct {
+	Seq          int64              `json:"seq"`
+	ID           pgtype.UUID        `json:"id"`
+	TenantID     pgtype.UUID        `json:"tenant_id"`
+	LocationID   pgtype.UUID        `json:"location_id"`
+	BatchID      int64              `json:"batch_id"`
+	Version      int32              `json:"version"`
+	BusinessDate pgtype.Date        `json:"business_date"`
+	OpenedAt     pgtype.Timestamptz `json:"opened_at"`
+	ClosedAt     pgtype.Timestamptz `json:"closed_at"`
+	Report       []byte             `json:"report"`
+	ReceivedAt   pgtype.Timestamptz `json:"received_at"`
+	SupersededAt pgtype.Timestamptz `json:"superseded_at"`
+	SupersededBy pgtype.UUID        `json:"superseded_by"`
 }

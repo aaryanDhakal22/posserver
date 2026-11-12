@@ -534,6 +534,12 @@ func (r *OrderRepository) Create(ctx context.Context, o *order.Order) error {
 
     // … line_items, payments, status_events …
 
+    // A channel order (main 3.0 / weborder) writes, in the same tx: its
+    // channel_orders link (+ customer_id for a signed-in website customer),
+    // its card_holds row when the card was only authorized (Square), and an
+    // email_receipts 'placed' row for a web order with an email. So a saved
+    // order always has its hold and its receipt queued, or none of it exists.
+
     // Drain DomainEvents into the outbox in the SAME transaction.
     for _, ev := range o.PullEvents() {
         if err := insertOutboxEvent(ctx, q, ev, r.handlerNames); err != nil {

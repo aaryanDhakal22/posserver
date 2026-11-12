@@ -26,6 +26,7 @@ type CreateCategoryParams struct {
 	Available                    bool
 	Position                     int
 	DefaultPrinterID             *uuid.UUID
+	NoKitchenTicket              bool
 }
 
 type UpdateCategoryParams struct {
@@ -33,6 +34,7 @@ type UpdateCategoryParams struct {
 	Name, Description string
 	Available         bool
 	DefaultPrinterID  *uuid.UUID
+	NoKitchenTicket   bool
 }
 
 type CreateItemParams struct {
@@ -100,6 +102,9 @@ type RouteEntry struct {
 	ItemID    uuid.UUID
 	Name      string
 	PrinterID *uuid.UUID
+	// NoKitchen: "no kitchen ticket" (the item's, or its category's for an
+	// item without its own printer); PrinterID is nil then.
+	NoKitchen bool
 }
 
 type Repository interface {
@@ -133,6 +138,7 @@ type Repository interface {
 	ListItemsByCategory(ctx context.Context, categoryID uuid.UUID) ([]Item, error)
 	UpdateItem(ctx context.Context, p UpdateItemParams) (*Item, error)
 	SetItemPrinter(ctx context.Context, id, tenantID uuid.UUID, printerID *uuid.UUID) error
+	SetItemNoKitchen(ctx context.Context, id, tenantID uuid.UUID, on bool) error
 	ReorderItems(ctx context.Context, tenantID uuid.UUID, ids []uuid.UUID) error
 	DeleteItem(ctx context.Context, id, tenantID uuid.UUID) error
 

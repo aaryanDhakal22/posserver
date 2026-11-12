@@ -107,6 +107,10 @@ type Fee struct {
 	Type   string
 	Label  string
 	Amount Money
+	// DriverCents is the driver's share of a delivery fee (Type "delivery";
+	// the store keeps Amount − DriverCents). Informational: Amount is what
+	// the customer paid. 0 = no split known.
+	DriverCents Money `json:",omitempty"`
 }
 
 type Discount struct {
@@ -165,6 +169,19 @@ type LineItem struct {
 	Notes     string
 	Children  []LineItem
 
+	// Half and half (modifier children of channel orders, migration 00032):
+	// Portion is "" (whole) | first | second; Mode is add | only | no |
+	// specialty ("" on lines from before, or from a vendor). Name keeps the
+	// readable text ("Pepperoni (1st half)") for Pis that don't read these.
+	Portion string
+	Mode    string
+
+	// Coupon (top-level lines, migration 00048): the coupon this line was
+	// sold in (a coupon re-prices its lines, never a discount) and which of
+	// the order's coupons it is (1-based). "" / 0 = in no coupon.
+	Coupon   string
+	CouponNo int
+
 	// Kitchen routing, stamped on top-level items when the order arrives
 	// (modifiers/children inherit their parent's). Zero values = not routed
 	// (orders that predate routing print as one full receipt).
@@ -189,6 +206,9 @@ const (
 	RoutingMatched    Routing = "matched"    // menu item found + it (or its category) has a printer
 	RoutingUnmatched  Routing = "unmatched"  // no menu item with that name
 	RoutingUnassigned Routing = "unassigned" // menu item found, but no printer assigned
+	// RoutingNoKitchen: the menu item has "no kitchen ticket" (00041): no
+	// station ticket, not in "Also on this order", receipt only.
+	RoutingNoKitchen Routing = "none"
 )
 
 type PaymentStatus string
@@ -210,6 +230,9 @@ type Payment struct {
 	Last4      string
 	AuthCode   string
 	CapturedAt *time.Time
+	// Tip: the tip taken with it (a counter card payment's tip, a tip added
+	// afterwards; never in the order's money).
+	Tip Money
 }
 
 // ---------------------------------------------------------------------------
@@ -261,6 +284,9 @@ type Order struct {
 }
 
 type NewOrderInput struct {
+	// ID is the order's id when another system already gave it one (a
+	// counter order keeps the Pi's id); zero = a new UUIDv7.
+	ID            ID
 	TenantID      TenantID
 	LocationID    LocationID
 	Source        Source
@@ -281,6 +307,10 @@ type NewOrderInput struct {
 	SourceMetadata map[string]any
 	RawPayload     []byte
 
+	// MoneyFlagged: the caller checked the money itself and flags a mismatch
+	// (a counter order is stored and flagged, never refused, M-2 / M-13).
+	MoneyFlagged bool
+
 	// Channel: the sales channel (main 3.0), saved with the order.
 	Channel *ChannelRef
 }
@@ -294,6 +324,28 @@ type ChannelRef struct {
 	Payment       []byte
 	TrackToken    string     // the public tracking link's token ("" = none)
 	OperatorID    *uuid.UUID // the call-center operator who took it (main 3.0)
+	Hold          *CardHold  // an online card hold to capture later (weborder stage 2)
+	CustomerID    *uuid.UUID // the signed-in customer's account (weborder stage 2)
+	Receipt       bool       // queue the email receipt (a web order with an email)
+	// Placement: the order ends a placement (DURABILITY-PLAN.md) — the save
+	// marks it placed in the same transaction and fails if it isn't pending
+	// any more. PlacementDueCheck: a scheduled order's Pi check (due − 30 min).
+	Placement         bool
+	PlacementDueCheck *time.Time
+}
+
+// ErrPlacementGone: the order's placement was finished elsewhere (the
+// sweeper voided it) while it was being saved; nothing was saved.
+var ErrPlacementGone = errors.New("order: its placement is no longer pending")
+
+// CardHold is an authorized card payment the order's channel took: main
+// captures it later (the driver's clock-out, Close batch, or DueAt).
+type CardHold struct {
+	Gateway     string
+	Ref         string
+	AmountCents int64 // without the tip
+	TipCents    int64
+	DueAt       time.Time
 }
 
 var (
@@ -332,14 +384,21 @@ func NewOrder(in NewOrderInput) (*Order, error) {
 	if in.PlacedAt.IsZero() {
 		return nil, ErrPlacedAtZero
 	}
-	if !moneyReconciles(in.Money) {
+	if !in.MoneyFlagged && !moneyReconcilesFor(in.Source, in.Money) {
 		return nil, ErrTotalMismatch
 	}
+	// Names, notes and addresses from outside: no control characters, cut
+	// to the order's text limits (H3, sanitize.go).
+	in.sanitize()
 
 	now := time.Now().UTC()
 	rawCopy := append([]byte(nil), in.RawPayload...)
+	id := in.ID
+	if uuid.UUID(id) == uuid.Nil {
+		id = ID(uuid.Must(uuid.NewV7()))
+	}
 	o := &Order{
-		id:             ID(uuid.Must(uuid.NewV7())),
+		id:             id,
 		tenantID:       in.TenantID,
 		locationID:     in.LocationID,
 		schemaVersion:  1,
@@ -507,6 +566,27 @@ func (o *Order) Transition(to Status, actor string, actorID uuid.UUID, reason st
 func (o *Order) AttachPayment(p Payment) {
 	o.payments = append(o.payments, p)
 	o.updatedAt = time.Now().UTC()
+}
+
+// moneyReconcilesFor: exact for every source but the vendor's (its float
+// dollars may round by a cent), M-13.
+func moneyReconcilesFor(src Source, m MoneyBreakdown) bool {
+	if src == SourceOnline {
+		return moneyReconciles(m)
+	}
+	return moneyDiff(m) == 0
+}
+
+// moneyDiff is total − (subtotal + tax + tip + fees − discounts).
+func moneyDiff(m MoneyBreakdown) Money {
+	var fees, discounts Money
+	for _, f := range m.Fees {
+		fees += f.Amount
+	}
+	for _, d := range m.Discounts {
+		discounts += d.Amount
+	}
+	return m.Total - (m.Subtotal + m.Tax + m.Tip + fees - discounts)
 }
 
 func moneyReconciles(m MoneyBreakdown) bool {

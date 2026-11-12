@@ -33,4 +33,14 @@ type Device struct {
 type Repository interface {
 	GetActiveByKeyHash(ctx context.Context, hash string) (*Device, error)
 	Touch(ctx context.Context, id uuid.UUID) error
+	// RevokedKey reports whether a key that isn't active was revoked or
+	// deleted (its device, location or store): F-4's device_revoked, vs a
+	// key main has never seen (unknown_key).
+	RevokedKey(ctx context.Context, hash string) (deviceID *uuid.UUID, revoked bool, err error)
 }
+
+// Key states (F-4): what main says about a key it doesn't accept.
+const (
+	KeyRevoked = "device_revoked" // revoked, or its device / location / store deleted: the Pi may unlink
+	KeyUnknown = "unknown_key"    // no record of it (e.g. a main restored from an older backup): the Pi keeps its link
+)

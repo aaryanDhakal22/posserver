@@ -39,6 +39,7 @@ const lookAhead = 14
 
 var (
 	ErrBadSettings  = errors.New("eta minutes must be 0..240 and schedule days 0..30")
+	ErrBadTipCap    = errors.New("the tip limit must be $0 to $1000")
 	ErrBadType      = errors.New("type must be pickup or delivery")
 	ErrTypeOff      = errors.New("that order type is off")
 	ErrScheduleOff  = errors.New("this store takes ASAP orders only")
@@ -57,13 +58,26 @@ type Settings struct {
 	PausedAt           *time.Time `json:"paused_at"`
 	PausedUntil        *time.Time `json:"paused_until"`
 	PauseNote          string     `json:"pause_note"`
+	// TipMaxCents caps a website tip (and a tip added after the order): X,
+	// default $50 (M-20, the owner's D7). Larger tips are refused with a
+	// message.
+	TipMaxCents int64 `json:"tip_max_cents"`
 }
+
+// DefaultTipMaxCents / MaxTipCapCents bound the tip cap.
+const (
+	DefaultTipMaxCents = 5000
+	MaxTipCapCents     = 100000
+)
 
 // Validate checks the editable numbers.
 func (s Settings) Validate() error {
 	if s.PickupETAMinutes < 0 || s.PickupETAMinutes > 240 || s.DeliveryETAMinutes < 0 || s.DeliveryETAMinutes > 240 ||
 		s.ScheduleDays < 0 || s.ScheduleDays > 30 {
 		return ErrBadSettings
+	}
+	if s.TipMaxCents < 0 || s.TipMaxCents > MaxTipCapCents {
+		return ErrBadTipCap
 	}
 	return nil
 }
@@ -296,6 +310,9 @@ type Status struct {
 	NextOpenAt *time.Time `json:"next_open_at"` // when ASAP orders are next taken (null = open now, or unknown)
 	ClosesAt   *time.Time `json:"closes_at"`
 	Today      Today      `json:"today"`
+	// Week is today and the next six days (special days applied), for a
+	// storefront's hours card (weborder stage 4).
+	Week       []Today    `json:"week"`
 	OrderTypes OrderTypes `json:"order_types"`
 	Scheduling Scheduling `json:"scheduling"`
 }
@@ -329,6 +346,19 @@ type Scheduling struct {
 	SlotMinutes int `json:"slot_minutes"`
 }
 
+// day is one local date's hours, closed flag and special-day note.
+func (s Schedule) day(local time.Time) Today {
+	hours, exc := s.DayHours(local)
+	d := Today{Date: local.Format(time.DateOnly), Hours: hours, Closed: s.HoursSet() && len(hours) == 0}
+	if exc != nil {
+		d.Note, d.Closed = exc.Note, exc.Closed || len(hours) == 0
+	}
+	if d.Hours == nil {
+		d.Hours = []tenancy.HoursRange{}
+	}
+	return d
+}
+
 // Compute is the status at now.
 func Compute(now time.Time, sch Schedule, st Settings, radiusM int) Status {
 	local := now.In(sch.zone())
@@ -341,13 +371,10 @@ func Compute(now time.Time, sch Schedule, st Settings, radiusM int) Status {
 		},
 		Scheduling: Scheduling{DaysAhead: st.ScheduleDays, SlotMinutes: SlotMinutes},
 	}
-	hours, exc := sch.DayHours(local)
-	out.Today = Today{Date: local.Format(time.DateOnly), Hours: hours, Closed: sch.HoursSet() && len(hours) == 0}
-	if exc != nil {
-		out.Today.Note, out.Today.Closed = exc.Note, exc.Closed || len(hours) == 0
-	}
-	if out.Today.Hours == nil {
-		out.Today.Hours = []tenancy.HoursRange{}
+	out.Today = sch.day(local)
+	out.Week = make([]Today, 7)
+	for i := range out.Week {
+		out.Week[i] = sch.day(local.AddDate(0, 0, i))
 	}
 	paused := st.Paused(now)
 	if paused {

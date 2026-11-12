@@ -266,7 +266,7 @@
       "post": {
         "operationId": "placeOrder",
         "summary": "Place an order",
-        "description": "Checked against the store's status (open now, or promised_at one of /store/times), re-priced (cart problems → 422 cart_invalid with issues; expected_total_cents different from main's → 409 price_changed: refresh), a delivery address the store reaches (the website must be inside the area; the call center and counter may send any), paid through the payment port (cash = due at the store / to the driver; card only where a card processor is connected). Idempotent: the same client_order_id answers 200 with the same order. Needs the orders permission and the payment method in the channel's payments.",
+        "description": "Checked against the store's status (open now, or promised_at one of /store/times), re-priced (cart problems → 422 cart_invalid with issues; expected_total_cents different from main's → 409 price_changed: refresh), a delivery address the store reaches (the website must be inside the area; the call center and counter may send any), paid through the payment port (cash = due at the store / to the driver; card only where a card processor is connected). Idempotent: the same client_order_id answers 200 with the same order. Needs the orders permission and the payment method in the channel's payments. Durable (DURABILITY-PLAN.md): main records the order under its client_order_id before any money moves and finishes the work even if the caller hangs up; the same client_order_id with a different order → 409 key_reused; arriving after expires_at → 409 expired (never charged); the store's Pi offline ~30 s → 409 kitchen_offline (a scheduled order due ≥ 1 h ahead is still taken); still at work after ~25 s → 202 {state: pending}: ask GET /channel/v1/orders/by-key/{client_order_id}. verification_required isn't final: send the same order again with payment.verification_token.",
         "requestBody": {
           "required": true,
           "content": {
@@ -298,6 +298,16 @@
               }
             }
           },
+          "202": {
+            "description": "Still at work: ask GET /channel/v1/orders/by-key/{client_order_id}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderPending"
+                }
+              }
+            }
+          },
           "400": {
             "description": "A malformed order (bad_request)",
             "content": {
@@ -309,10 +319,17 @@
             }
           },
           "401": {
-            "$ref": "#/components/responses/Unauthorized"
+            "description": "Bad channel key, or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
           },
           "402": {
-            "description": "payment_declined",
+            "description": "payment_declined, or verification_required (verify the buyer, then send verification_token)",
             "content": {
               "application/json": {
                 "schema": {
@@ -332,7 +349,7 @@
             }
           },
           "409": {
-            "description": "store_paused, store_closed, bad_time, price_changed, payment_unavailable",
+            "description": "store_paused, store_closed, bad_time, price_changed, payment_unavailable; key_reused (the same client_order_id with a different order), expired (after expires_at: never charged), voided (the card hold was released before the order was saved), kitchen_offline (the store's Pi is offline), payment_canceled",
             "content": {
               "application/json": {
                 "schema": {
@@ -342,7 +359,7 @@
             }
           },
           "422": {
-            "description": "cart_invalid (issues), outside_area, address_unknown",
+            "description": "cart_invalid (issues), outside_area, address_unknown; card_not_found (a saved card no longer on the account); tip_too_big (the tip is over the store's tip limit, tip_max_cents on Store › Details, default $50: the message names it)",
             "content": {
               "application/json": {
                 "schema": {
@@ -361,7 +378,18 @@
               }
             }
           }
-        }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Signed-in website customer: the order joins their account; needed for payment.card_id / save_card"
+          }
+        ]
       },
       "get": {
         "operationId": "listOrders",
@@ -413,6 +441,51 @@
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/channel/v1/orders/by-key/{client_order_id}": {
+      "get": {
+        "operationId": "getOrderByKey",
+        "summary": "An order's placement by its client_order_id",
+        "description": "What happened to a POST /orders: pending, placed (with the order), refused / expired / voided (with the error). 404 unknown_key: main never got it — send the same order again.",
+        "parameters": [
+          {
+            "name": "client_order_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The placement",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderPlacement"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "description": "unknown_key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderError"
+                }
+              }
+            }
           },
           "503": {
             "$ref": "#/components/responses/Unavailable"
@@ -665,7 +738,7 @@
       "get": {
         "operationId": "getStore",
         "summary": "The store's status: open, paused or closed, order types and ready-time estimates, today's hours, sold-out items",
-        "description": "accepting = ASAP orders are taken now. When it is false, next_open_at says when they are again (null = unknown: paused until the store unpauses, or open with every order type off). Brygid-style vendor orders are not affected by a pause.",
+        "description": "accepting = ASAP orders are taken now. When it is false, next_open_at says when they are again (null = unknown: paused until the store unpauses, or open with every order type off). Brygid-style vendor orders are not affected by a pause. kitchen_offline = the store's kitchen (its Pi) can't get an order right now: say so before checkout (ASAP orders are refused).",
         "responses": {
           "200": {
             "description": "The status",
@@ -835,6 +908,970 @@
         }
       }
     },
+    "/channel/v1/site": {
+      "get": {
+        "operationId": "getSite",
+        "summary": "The store's website: published look + texts and hosts",
+        "description": "ETag = a hash of the answer; send If-None-Match to get a 304 while nothing changed. The storefront polls this (and /menu/version) to know when to re-render. With ?preview=<token> (the Website page's private link) it answers with the open draft instead (preview: true); a stale token is 403 bad_preview.",
+        "parameters": [
+          {
+            "name": "If-None-Match",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "preview",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The store's preview token: answer with the draft"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The site",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Site"
+                }
+              }
+            }
+          },
+          "304": {
+            "description": "Not changed since the ETag you sent"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/channel/v1/payments": {
+      "get": {
+        "operationId": "getPayments",
+        "summary": "How this channel takes payments: methods and the card SDK's setup",
+        "responses": {
+          "200": {
+            "description": "The payment setup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Payments"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/channel/v1/account/code": {
+      "post": {
+        "operationId": "sendSignInCode",
+        "summary": "Text (or call) a sign-in code",
+        "responses": {
+          "202": {
+            "description": "Sent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CodeSent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "400": {
+            "description": "bad_phone / bad_request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too_many (3 per phone per 10 min, 8 a day) / call_too_soon (30 s after a text)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "send_failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "phone"
+                ],
+                "properties": {
+                  "phone": {
+                    "type": "string"
+                  },
+                  "channel": {
+                    "enum": [
+                      "sms",
+                      "call"
+                    ],
+                    "default": "sms"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channel/v1/account/verify": {
+      "post": {
+        "operationId": "verifySignInCode",
+        "summary": "Check the code → a customer session (creates the account the first time)",
+        "responses": {
+          "200": {
+            "description": "Signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomerSession"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "400": {
+            "description": "bad_phone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "bad_code",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "too_many",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "phone",
+                  "code"
+                ],
+                "properties": {
+                  "phone": {
+                    "type": "string"
+                  },
+                  "code": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "For a new account"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channel/v1/account": {
+      "get": {
+        "operationId": "getAccount",
+        "summary": "The signed-in customer: profile, addresses, saved cards",
+        "responses": {
+          "200": {
+            "description": "The account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          }
+        ]
+      },
+      "patch": {
+        "operationId": "updateAccount",
+        "summary": "Set name and/or email",
+        "responses": {
+          "200": {
+            "description": "The account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Account"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "400": {
+            "description": "bad_request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "maxLength": 80
+                  },
+                  "email": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAccount",
+        "summary": "Delete the account: addresses and saved cards (removed from Square too); past orders stay, unlinked",
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          }
+        ]
+      }
+    },
+    "/channel/v1/account/logout": {
+      "post": {
+        "operationId": "signOut",
+        "summary": "End this session",
+        "responses": {
+          "204": {
+            "description": "Signed out"
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          }
+        ]
+      }
+    },
+    "/channel/v1/account/addresses": {
+      "post": {
+        "operationId": "addAddress",
+        "summary": "Save an address",
+        "responses": {
+          "201": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Address"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "400": {
+            "description": "bad_request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "too_many_addresses",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddressRequest"
+              }
+            }
+          }
+        }
+      }
+    },
+    "/channel/v1/account/addresses/{id}": {
+      "put": {
+        "operationId": "putAddress",
+        "summary": "Replace an address",
+        "responses": {
+          "200": {
+            "description": "Saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Address"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "400": {
+            "description": "bad_request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddressRequest"
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteAddress",
+        "summary": "Delete an address",
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/channel/v1/account/cards/{id}": {
+      "delete": {
+        "operationId": "deleteSavedCard",
+        "summary": "Forget a saved card (turned off at Square)",
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ]
+      }
+    },
+    "/channel/v1/account/orders": {
+      "get": {
+        "operationId": "listAccountOrders",
+        "summary": "The account's orders at this store, newest first (guest orders with the same phone included)",
+        "responses": {
+          "200": {
+            "description": "Orders",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "orders"
+                  ],
+                  "properties": {
+                    "orders": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Order"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "400": {
+            "description": "bad_request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ]
+      }
+    },
+    "/channel/v1/account/orders/{id}/reorder": {
+      "post": {
+        "operationId": "reorder",
+        "summary": "A past order as a new cart, priced today",
+        "responses": {
+          "200": {
+            "description": "The cart",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reorder"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Bad channel key, sign_in or session_invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Not the store's website",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "404": {
+            "description": "not_found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        },
+        "parameters": [
+          {
+            "name": "X-Customer-Session",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The customer's session (qcs_… from /account/verify)"
+          },
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "pickup",
+                      "delivery"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/channel/v1/openapi.json": {
       "get": {
         "operationId": "getSpec",
@@ -853,6 +1890,56 @@
           }
         }
       }
+    },
+    "/channel/v1/site/images/{id}": {
+      "get": {
+        "operationId": "getSiteImage",
+        "summary": "A logo or cover photo of the store's website",
+        "description": "The bytes (image/png, image/jpeg, image/webp or, for a logo, image/svg+xml). An id never changes: cache it for good. Ids come from the site settings' logo / cover.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The image",
+            "content": {
+              "image/*": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not one of this store's images",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -860,7 +1947,7 @@
       "channelKey": {
         "type": "http",
         "scheme": "bearer",
-        "description": "The channel's key: Authorization: Bearer qch_… — or an operator's sign-in (Bearer qops_… from /channel/v1/operator/login) with X-Location-ID: the store; without it 400 location_required, a store the operator may not work on 403 location_not_allowed."
+        "description": "The channel's key: Authorization: Bearer qch_… — or an operator's sign-in (Bearer qops_… from /channel/v1/operator/login) with X-Location-ID: the store; without it 400 location_required, a store the operator may not work on 403 location_not_allowed. — or the storefront's platform key (Bearer qpk_…, one per storefront server) with X-Site-Host: the host it is serving; the store behind a verified host answers as its built-in web channel. Without the header 400 host_required; a host no store is served on (or not verified yet) 404 unknown_site. Website customers: X-Customer-Session: qcs_… (from POST /channel/v1/account/verify, 90 days, renewed on use) on /account/* and POST /orders — 401 sign_in without it where required, 401 session_invalid when bad or expired; only the store's web channel takes it (403 otherwise). The storefront forwards the customer's IP as X-Customer-IP (sign-in limits)."
       }
     },
     "responses": {
@@ -1172,6 +2259,10 @@
           },
           "sold_out": {
             "type": "boolean"
+          },
+          "show_on_driver_ticket": {
+            "type": "boolean",
+            "description": "Print this choice on the delivery (driver) ticket even at $0; present only when true"
           }
         },
         "additionalProperties": false
@@ -1461,10 +2552,12 @@
           "next_open_at",
           "closes_at",
           "today",
+          "week",
           "order_types",
           "scheduling",
           "sold_out",
-          "menu_version"
+          "menu_version",
+          "kitchen_offline"
         ],
         "properties": {
           "store": {
@@ -1589,6 +2682,38 @@
             },
             "additionalProperties": false
           },
+          "week": {
+            "type": "array",
+            "description": "Today and the next six days (special days applied), for an hours card",
+            "items": {
+              "type": "object",
+              "required": [
+                "date",
+                "closed",
+                "hours",
+                "note"
+              ],
+              "properties": {
+                "date": {
+                  "type": "string",
+                  "format": "date"
+                },
+                "closed": {
+                  "type": "boolean"
+                },
+                "hours": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HoursRange"
+                  }
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
           "order_types": {
             "type": "object",
             "required": [
@@ -1652,6 +2777,10 @@
           },
           "menu_version": {
             "type": "integer"
+          },
+          "kitchen_offline": {
+            "type": "boolean",
+            "description": "The store's Pi (its kitchen) can't get an order now: no live connection to main for ~30 s, or its printer reports stopped. ASAP orders are refused with 409 kitchen_offline; orders scheduled at least 1 h ahead are still taken. Always false for a store with no Pi set up."
           }
         },
         "additionalProperties": false
@@ -1771,9 +2900,21 @@
             "enum": [
               "",
               "whole",
+              "first",
+              "second",
               "left",
               "right"
-            ]
+            ],
+            "description": "whole (default) | first | second half, on a group with portions; left = first and right = second (older carts)"
+          },
+          "mode": {
+            "enum": [
+              "",
+              "add",
+              "only",
+              "no"
+            ],
+            "description": "add (default); only = that half (a whole pick: the whole pie) starts from the plain pizza with just its ONLY toppings; no = take it off (free)"
           }
         },
         "additionalProperties": false
@@ -1803,6 +2944,21 @@
             "items": {
               "$ref": "#/components/schemas/Pick"
             }
+          },
+          "halves": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 2,
+            "items": {
+              "$ref": "#/components/schemas/Half"
+            },
+            "description": "Half and half: up to two half-specialties, one per half. One costs that specialty's price; two cost the dearer + the cheaper's extra over its plain pizza at the store's half_specialty_off_pct % off"
+          },
+          "price_cents": {
+            "type": "integer",
+            "description": "An open-price item's price (the counter only, 0–1000000); refused on any other item"
           }
         },
         "additionalProperties": false
@@ -1831,6 +2987,21 @@
               "$ref": "#/components/schemas/Pick"
             }
           },
+          "halves": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "maxItems": 2,
+            "items": {
+              "$ref": "#/components/schemas/Half"
+            },
+            "description": "Half and half: up to two half-specialties, one per half. One costs that specialty's price; two cost the dearer + the cheaper's extra over its plain pizza at the store's half_specialty_off_pct % off"
+          },
+          "price_cents": {
+            "type": "integer",
+            "description": "An open-price item's price (the counter only, 0–1000000); a custom line's price (0–999999); refused on any other item"
+          },
           "qty": {
             "type": "integer",
             "description": "1–50"
@@ -1850,6 +3021,14 @@
             "items": {
               "$ref": "#/components/schemas/Selection"
             }
+          },
+          "custom": {
+            "type": "boolean",
+            "description": "A custom line (the counter only; any other channel answers custom_line): name + price_cents, no menu item, taxed at the store rate, never in a deal"
+          },
+          "name": {
+            "type": "string",
+            "description": "A custom line's name (1–60 characters after trimming; blank = \"Open item\")"
           }
         },
         "additionalProperties": false
@@ -1900,6 +3079,29 @@
               "boolean",
               "null"
             ]
+          },
+          "coupons": {
+            "type": "array",
+            "description": "Applied coupons: a coupon deal and the cart line units it takes (one index per unit)",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "lines"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "lines": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "additionalProperties": false
@@ -1933,10 +3135,12 @@
             "type": "integer"
           },
           "unit_cents": {
-            "type": "integer"
+            "type": "integer",
+            "description": "The item's own price (with its options)"
           },
           "total_cents": {
-            "type": "integer"
+            "type": "integer",
+            "description": "The line as sold: its units in a coupon at their coupon prices (a coupon re-prices its lines, never a discount); the subtotal is the sum of the lines"
           },
           "regular_cents": {
             "type": [
@@ -1947,6 +3151,10 @@
           },
           "deal_id": {
             "type": "string"
+          },
+          "custom": {
+            "type": "boolean",
+            "description": "A custom line (absent otherwise)"
           }
         },
         "additionalProperties": false
@@ -1989,7 +3197,7 @@
         "properties": {
           "code": {
             "type": "string",
-            "description": "empty, unknown_item, unknown_size, unknown_option, option_rules, sold_out, deal_ended, deal_unavailable, deal_slot, code_invalid, code_minimum, code_first_order, code_not_combinable, type_off, bad_type, delivery_minimum"
+            "description": "empty, unknown_item, unknown_size, unknown_option, option_rules, sold_out, deal_ended, deal_unavailable, deal_slot, code_invalid, code_minimum, code_first_order, code_not_combinable, type_off, bad_type, delivery_minimum, open_price, custom_line, coupon_ended, coupon_unavailable, coupon_fit"
           },
           "message": {
             "type": "string",
@@ -2075,6 +3283,162 @@
             "items": {
               "type": "string"
             }
+          },
+          "line_warnings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Issue"
+            },
+            "description": "Warnings about a line, with its index; each message is in warnings too. Today: the counter's missed required group / min_select (code option_rules), which other channels get as an error. Absent when there are none"
+          },
+          "coupons": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "index",
+                "id",
+                "name",
+                "card",
+                "price_cents",
+                "lines",
+                "regular_cents",
+                "total_cents",
+                "units"
+              ],
+              "properties": {
+                "index": {
+                  "type": "integer"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "card": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "price_cents": {
+                  "type": "integer"
+                },
+                "lines": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                "regular_cents": {
+                  "type": "integer",
+                  "description": "The units at their own prices (never shown as a saving)"
+                },
+                "total_cents": {
+                  "type": "integer"
+                },
+                "units": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "line",
+                      "part",
+                      "carrier",
+                      "item_cents",
+                      "mods_cents",
+                      "free_mods",
+                      "unit_cents",
+                      "regular_cents"
+                    ],
+                    "properties": {
+                      "line": {
+                        "type": "integer"
+                      },
+                      "part": {
+                        "type": "integer"
+                      },
+                      "carrier": {
+                        "type": "boolean"
+                      },
+                      "item_cents": {
+                        "type": "integer",
+                        "description": "The coupon price on the carrier (0 on the others) + upcharge_cents"
+                      },
+                      "upcharge_cents": {
+                        "type": "integer",
+                        "description": "Its part's upcharge_over: its price over the cheapest base item at its size (absent when none)"
+                      },
+                      "mods_cents": {
+                        "type": "integer"
+                      },
+                      "free_mods": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "unit_cents": {
+                        "type": "integer"
+                      },
+                      "regular_cents": {
+                        "type": "integer"
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "The cart's coupons that apply (absent when none): they re-price their lines (each line's total_cents), never a discount"
+          },
+          "coupon_offers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "card",
+                "price_cents",
+                "lines",
+                "regular_cents",
+                "total_cents"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "card": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "price_cents": {
+                  "type": "integer"
+                },
+                "lines": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                "regular_cents": {
+                  "type": "integer"
+                },
+                "total_cents": {
+                  "type": "integer"
+                }
+              },
+              "additionalProperties": false
+            },
+            "description": "Live coupons the units not in a coupon fully fit, the most off the units' own prices first (absent when none)"
           }
         },
         "additionalProperties": false
@@ -2133,7 +3497,8 @@
               "mix",
               "nth",
               "code",
-              "free_item"
+              "free_item",
+              "coupon"
             ]
           },
           "name": {
@@ -2234,6 +3599,57 @@
           },
           "min_subtotal_cents": {
             "type": "integer"
+          },
+          "card": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "A coupon: the card's lines"
+          },
+          "parts": {
+            "type": "array",
+            "description": "A coupon: its parts (qty items of these item families, at these sizes when any; the N cheapest regular mods free on each)",
+            "items": {
+              "type": "object",
+              "required": [
+                "label",
+                "families",
+                "qty",
+                "regular_mods_included"
+              ],
+              "properties": {
+                "label": {
+                  "type": "string"
+                },
+                "families": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "sizes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "qty": {
+                  "type": "integer"
+                },
+                "regular_mods_included": {
+                  "type": "integer"
+                },
+                "upcharge_over": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Some of its families, the base: a unit of another of its families pays its own price over the cheapest base item at its size (none at that size: it doesn't fit)"
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "additionalProperties": false
@@ -2272,6 +3688,10 @@
           },
           "delivery_min_cents": {
             "type": "integer"
+          },
+          "delivery_driver_cents": {
+            "type": "integer",
+            "description": "The driver's share of delivery_fee_cents (the store keeps the rest). Informational: the customer pays delivery_fee_cents."
           },
           "tips": {
             "type": "object",
@@ -2322,6 +3742,17 @@
               "stack",
               "single"
             ]
+          },
+          "half_topping_price": {
+            "enum": [
+              "full",
+              "half"
+            ],
+            "description": "A topping on a half: the full whole-pie price (default) or half of it, rounded up to the cent"
+          },
+          "half_specialty_off_pct": {
+            "type": "integer",
+            "description": "Two half-specialties: the cheaper one's extra over its plain pizza at this % off (0–100, default 0)"
           }
         },
         "additionalProperties": false
@@ -2355,6 +3786,22 @@
                 "tax_bps": {
                   "type": "integer",
                   "description": "0 = the store rate"
+                },
+                "half_base": {
+                  "type": "string",
+                  "description": "A specialty pizza's plain pizza (a bank item id); absent = the item is its own plain"
+                },
+                "no_tax": {
+                  "type": "boolean",
+                  "description": "The item isn't taxed"
+                },
+                "open_price": {
+                  "type": "boolean",
+                  "description": "The line carries its own price (price_cents); only the counter may sell one"
+                },
+                "family": {
+                  "type": "string",
+                  "description": "The item's family (an item family id); absent = none (never in a coupon)"
                 }
               },
               "additionalProperties": false
@@ -2388,6 +3835,26 @@
               }
             },
             "additionalProperties": false
+          },
+          "options": {
+            "type": "object",
+            "description": "Modifier option id → its family and class (only options with a family; coupons)",
+            "additionalProperties": {
+              "type": "object",
+              "properties": {
+                "family": {
+                  "type": "string"
+                },
+                "class": {
+                  "enum": [
+                    "regular",
+                    "premium",
+                    "unpriced"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
           }
         },
         "additionalProperties": false
@@ -2444,6 +3911,29 @@
           "code": {
             "type": "string"
           },
+          "coupons": {
+            "type": "array",
+            "description": "Applied coupons (the quote's coupon_offers sent back): a coupon deal and the cart line units it takes (one index per unit); one that doesn't apply as asked is a cart problem (422 cart_invalid), as in the quote",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "lines"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "lines": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
           "tip_cents": {
             "type": [
               "integer",
@@ -2476,7 +3966,20 @@
               },
               "token": {
                 "type": "string",
-                "description": "The card processor's token (card)"
+                "description": "The card processor's one-time token (card): Square Web Payments SDK tokenize() — card data never reaches main"
+              },
+              "verification_token": {
+                "type": "string",
+                "description": "Square verifyBuyer()'s token when the bank asks for 3-D Secure (402 verification_required)"
+              },
+              "card_id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "A saved card of the signed-in customer (instead of token)"
+              },
+              "save_card": {
+                "type": "boolean",
+                "description": "Keep this card for next time (signed-in customers; an unticked box at checkout)"
               }
             },
             "additionalProperties": false
@@ -2552,6 +4055,14 @@
               "null"
             ],
             "description": "The total the channel showed; refused if main's differs"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The channel's deadline: arriving later, the order is refused (expired) and never charged. The storefront sends it; optional."
           }
         },
         "additionalProperties": false
@@ -3163,6 +4674,632 @@
           },
           "display_name": {
             "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "Site": {
+        "type": "object",
+        "required": [
+          "version",
+          "primary_host",
+          "hosts",
+          "settings",
+          "email"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "description": "The settings' version (0 = never saved)"
+          },
+          "primary_host": {
+            "type": "string",
+            "description": "The host links should use (\"\" = none yet)"
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Every verified host the store is served on"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/SiteSettings"
+          },
+          "preview": {
+            "type": "boolean",
+            "description": "These are the open draft's settings (asked with ?preview=)"
+          },
+          "email": {
+            "type": "string",
+            "description": "The store's contact email (receipt replies; the privacy page). \"\" = none"
+          }
+        }
+      },
+      "Payments": {
+        "type": "object",
+        "required": [
+          "methods",
+          "card",
+          "hold_hours"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "methods": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "cash",
+                "card"
+              ]
+            },
+            "description": "What an order through this channel may be paid with"
+          },
+          "card": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "provider",
+                  "env",
+                  "app_id",
+                  "location_id"
+                ],
+                "additionalProperties": false,
+                "properties": {
+                  "provider": {
+                    "const": "square"
+                  },
+                  "env": {
+                    "enum": [
+                      "production",
+                      "sandbox",
+                      "fake"
+                    ]
+                  },
+                  "app_id": {
+                    "type": "string",
+                    "description": "Square application id for the Web Payments SDK"
+                  },
+                  "location_id": {
+                    "type": "string",
+                    "description": "The store's Square location id for the Web Payments SDK"
+                  }
+                }
+              }
+            ],
+            "description": "How to take a card: null when the store has no card processor connected (card orders then go to the test card on dev / staging, or are refused with 409 payment_unavailable)"
+          },
+          "hold_hours": {
+            "type": "integer",
+            "description": "A card is authorized at checkout and captured later (the driver's clock-out, Close batch, or after this many hours)"
+          }
+        }
+      },
+      "Customer": {
+        "type": "object",
+        "required": [
+          "id",
+          "phone",
+          "name",
+          "email",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "phone": {
+            "type": "string",
+            "description": "10 digits"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Address": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "line1",
+          "line2",
+          "city",
+          "state",
+          "zip",
+          "notes",
+          "default",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          },
+          "line1": {
+            "type": "string"
+          },
+          "line2": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "zip": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "default": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AddressRequest": {
+        "type": "object",
+        "required": [
+          "line1"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "line1": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "line2": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "zip": {
+            "type": "string"
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "default": {
+            "type": "boolean"
+          }
+        },
+        "description": "line1 and a zip or city; the account's first address is its default; up to 20"
+      },
+      "SavedCard": {
+        "type": "object",
+        "required": [
+          "id",
+          "brand",
+          "last4",
+          "exp_month",
+          "exp_year",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Send as payment.card_id"
+          },
+          "brand": {
+            "type": "string"
+          },
+          "last4": {
+            "type": "string"
+          },
+          "exp_month": {
+            "type": "integer"
+          },
+          "exp_year": {
+            "type": "integer"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Account": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Customer"
+          },
+          {
+            "type": "object",
+            "required": [
+              "addresses",
+              "cards"
+            ],
+            "properties": {
+              "addresses": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/Address"
+                }
+              },
+              "cards": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SavedCard"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "CodeSent": {
+        "type": "object",
+        "required": [
+          "sent_to",
+          "channel",
+          "call_after_s"
+        ],
+        "properties": {
+          "sent_to": {
+            "type": "string",
+            "description": "The masked number, e.g. (410) •••-0101"
+          },
+          "channel": {
+            "enum": [
+              "sms",
+              "call"
+            ]
+          },
+          "call_after_s": {
+            "type": "integer",
+            "description": "Offer 'Call me instead' after this many seconds"
+          }
+        }
+      },
+      "CustomerSession": {
+        "type": "object",
+        "required": [
+          "session",
+          "expires_at",
+          "customer",
+          "new",
+          "joined_orders"
+        ],
+        "properties": {
+          "session": {
+            "type": "string",
+            "description": "qcs_… — send as X-Customer-Session"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "customer": {
+            "$ref": "#/components/schemas/Customer"
+          },
+          "new": {
+            "type": "boolean",
+            "description": "The account was created now"
+          },
+          "joined_orders": {
+            "type": "integer",
+            "description": "Past guest web orders with this phone now in the account"
+          }
+        }
+      },
+      "Reorder": {
+        "type": "object",
+        "required": [
+          "lines",
+          "dropped",
+          "quote",
+          "issues"
+        ],
+        "properties": {
+          "lines": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CartLine"
+            },
+            "description": "The past order's lines still on the menu"
+          },
+          "dropped": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Items that can't be ordered any more"
+          },
+          "quote": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/Quote"
+              }
+            ],
+            "description": "The lines priced today (null when nothing is left)"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Issue"
+            }
+          }
+        }
+      },
+      "SiteSettings": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "The look and texts from Store › Website ({} until published). Every field is optional: missing = the storefront's default.",
+        "properties": {
+          "preset": {
+            "type": "string",
+            "enum": [
+              "pizzeria-loud",
+              "cafe-calm",
+              "taqueria-bold",
+              "classic-paper"
+            ]
+          },
+          "brand": {
+            "type": "string",
+            "pattern": "^#[0-9A-F]{6}$",
+            "description": "The brand colour"
+          },
+          "menu_layout": {
+            "type": "string",
+            "enum": [
+              "compact",
+              "photo",
+              "printed"
+            ],
+            "description": "Missing = the preset's own"
+          },
+          "languages": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "en",
+                "es"
+              ]
+            },
+            "description": "[\"en\"] or [\"en\",\"es\"] (the Spanish switch)"
+          },
+          "logo": {
+            "type": "string",
+            "format": "uuid",
+            "description": "A site image: GET /channel/v1/site/images/{id}"
+          },
+          "cover": {
+            "type": "string",
+            "format": "uuid",
+            "description": "A site image (16:9)"
+          },
+          "texts": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "The store's words (\"\" = the storefront's own); *_es = the Spanish text",
+            "properties": {
+              "eyebrow": {
+                "type": "string"
+              },
+              "headline": {
+                "type": "string"
+              },
+              "lead": {
+                "type": "string"
+              },
+              "about_title": {
+                "type": "string"
+              },
+              "about": {
+                "type": "string"
+              },
+              "eyebrow_es": {
+                "type": "string"
+              },
+              "headline_es": {
+                "type": "string"
+              },
+              "lead_es": {
+                "type": "string"
+              },
+              "about_title_es": {
+                "type": "string"
+              },
+              "about_es": {
+                "type": "string"
+              }
+            }
+          },
+          "blocks": {
+            "type": "array",
+            "description": "The home page's blocks in order, each on or off (missing = the default set)",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "on"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "enum": [
+                    "hero",
+                    "again",
+                    "categories",
+                    "deals",
+                    "picks",
+                    "hours",
+                    "about",
+                    "install"
+                  ]
+                },
+                "on": {
+                  "type": "boolean"
+                }
+              }
+            }
+          },
+          "picks": {
+            "type": "array",
+            "maxItems": 8,
+            "items": {
+              "type": "string"
+            },
+            "description": "\"From the menu\": menu item ids, in order"
+          },
+          "announcement": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "One line on top of every page, optionally only between two store-local dates (inclusive)",
+            "properties": {
+              "on": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "string"
+              },
+              "text_es": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string",
+                "format": "date"
+              },
+              "to": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          },
+          "miso_pages": {
+            "type": "boolean",
+            "description": "Miso on cart, checkout, sign-in and the empty pages (missing = on)"
+          },
+          "miso_blocks": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string",
+              "enum": [
+                "peek",
+                "side",
+                "off"
+              ]
+            },
+            "description": "Miso around each home block"
+          },
+          "privacy": {
+            "type": "string",
+            "description": "The privacy policy (\"\" = the default text)"
+          }
+        }
+      },
+      "OrderPending": {
+        "type": "object",
+        "required": [
+          "state",
+          "client_order_id"
+        ],
+        "properties": {
+          "state": {
+            "const": "pending"
+          },
+          "client_order_id": {
+            "type": "string"
+          }
+        }
+      },
+      "OrderPlacement": {
+        "type": "object",
+        "required": [
+          "state",
+          "expires_at"
+        ],
+        "description": "A placement: pending (main is at work; with error when it waits for the caller — verification_required / try_again), placed (order), refused / expired / voided (error).",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "placed",
+              "refused",
+              "expired",
+              "voided"
+            ]
+          },
+          "order": {
+            "$ref": "#/components/schemas/Order"
+          },
+          "error": {
+            "type": "object",
+            "required": [
+              "code",
+              "message"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
+      "Half": {
+        "type": "object",
+        "required": [
+          "item_id",
+          "half"
+        ],
+        "properties": {
+          "item_id": {
+            "type": "string",
+            "description": "A specialty pizza: a menu item, priced at the line's size"
+          },
+          "half": {
+            "enum": [
+              1,
+              2
+            ],
+            "description": "1 = the 1st half, 2 = the 2nd"
           }
         },
         "additionalProperties": false

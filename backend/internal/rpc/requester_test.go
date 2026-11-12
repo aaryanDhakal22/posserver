@@ -117,3 +117,63 @@ func TestDispatchInbound(t *testing.T) {
 		t.Fatal("unknown type should not be handled")
 	}
 }
+
+// FailType fails the pending requests of one type for one scope at once
+// (the agent's stream is gone), leaving other types and scopes waiting; a
+// reply that arrives afterwards finds no waiter and is counted as late, not
+// dispatched as an inbound message.
+func TestFailTypeAndLateReply(t *testing.T) {
+	r, pub := newReq(1)
+	pub.published = make(chan Envelope, 4)
+	sc, other := scope(), scope()
+	errs := make(chan error, 3)
+	ask := func(s sseBroker.Scope, typ string) {
+		go func() {
+			_, err := r.Request(context.Background(), s, typ, nil, 3*time.Second)
+			errs <- err
+		}()
+	}
+	ask(sc, "terminal.relay")
+	relay := <-pub.published
+	ask(sc, MsgPing)
+	ping := <-pub.published
+	ask(other, "terminal.relay")
+	otherRelay := <-pub.published
+
+	if n := r.FailType(sc, "terminal.relay"); n != 1 {
+		t.Fatalf("failed %d requests, want 1", n)
+	}
+	select {
+	case err := <-errs:
+		if !errors.Is(err, ErrStreamLost) {
+			t.Fatalf("the relayed call: %v, want ErrStreamLost", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the relayed call was not failed at once")
+	}
+	if n := r.FailType(sc, "terminal.relay"); n != 0 {
+		t.Fatalf("failing again: %d", n)
+	}
+	// The ping of the same scope and the other scope's relay still get their answers.
+	if !r.Deliver(sc, Envelope{Type: MsgPing + ".reply", ID: ping.ID}) || !r.Deliver(other, Envelope{Type: "terminal.relay.reply", ID: otherRelay.ID}) {
+		t.Fatal("other requests lost their waiters")
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("other request: %v", err)
+		}
+	}
+	// The failed call's reply arrives late: no waiter, not an inbound type, no error.
+	late := Envelope{Type: "terminal.relay.reply", ID: relay.ID, Payload: json.RawMessage(`{"status":201}`)}
+	wait := time.Now().Add(time.Second)
+	for r.Deliver(sc, late) && time.Now().Before(wait) { // the waiter is removed when Request returns
+		time.Sleep(5 * time.Millisecond)
+	}
+	if r.Deliver(sc, late) {
+		t.Fatal("a late reply still found a waiter")
+	}
+	reply, handled, err := r.DispatchInbound(context.Background(), sc, late)
+	if handled || err != nil || reply.ID != "" {
+		t.Fatalf("a late reply: handled %v err %v reply %+v", handled, err, reply)
+	}
+}

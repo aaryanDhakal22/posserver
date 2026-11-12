@@ -67,3 +67,13 @@ func (r *ChannelOrderRepository) List(ctx context.Context, channelID uuid.UUID, 
 	}
 	return out, nil
 }
+
+// HoldRefSaved reports whether a saved order already holds this processor
+// payment (M-5: the racer that lost a duplicate got the same payment from the
+// processor's idempotency key; refunding it would void the saved order's).
+func (r *ChannelOrderRepository) HoldRefSaved(ctx context.Context, gateway, ref string) (bool, error) {
+	var ok bool
+	err := r.pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM card_holds WHERE gateway = $1 AND payment_ref = $2)
+		OR EXISTS (SELECT 1 FROM channel_orders WHERE payment->>'ref' = $2 AND payment->>'gateway' = $1)`, gateway, ref).Scan(&ok)
+	return ok, err
+}

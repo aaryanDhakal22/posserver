@@ -13,6 +13,8 @@ package menuview
 import (
 	"time"
 
+	"quiccpos/main/internal/domain/menu"
+
 	"github.com/google/uuid"
 )
 
@@ -53,6 +55,9 @@ type Rules struct {
 	Round string `json:"round"`
 	// HiddenCategories are bank category ids this view leaves out.
 	HiddenCategories []uuid.UUID `json:"hidden_categories"`
+	// Menus are the bank menus this view shows (empty = every menu): the
+	// counter view shows only the Counter menu (TERMINAL-PLAN 0d).
+	Menus []uuid.UUID `json:"menus,omitempty"`
 	// RequirePhoto puts web items without a photo on the needs-attention
 	// list (they still show).
 	RequirePhoto bool `json:"require_photo"`
@@ -66,8 +71,10 @@ type View struct {
 	Kind       Kind      `json:"kind"`
 	Name       string    `json:"name"`
 	Rules      Rules     `json:"rules"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	// HasLayout: a counter view with a counter layout (GET …/views/:id/layout).
+	HasLayout bool      `json:"has_layout"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Entry kinds.
@@ -115,4 +122,60 @@ type Extra struct {
 	Labels     map[string]string `json:"labels,omitempty"`
 	VendorName string            `json:"vendor_name,omitempty"`
 	VendorSize string            `json:"vendor_size,omitempty"`
+}
+
+// CounterOnlyMenus are the bank menus only a counter terminal sells: a
+// counter view's Menus rule names the menu, and no web or operator view
+// shows it (its own Menus rule leaves it out, or every one of the menu's
+// categories is in its HiddenCategories). Online orders never route to their
+// items (menuApp.RouteItems). Vendor views are maps, not menus: they don't
+// count.
+func CounterOnlyMenus(bank *menu.Bank, views []View) map[uuid.UUID]bool {
+	out := map[uuid.UUID]bool{}
+	for _, v := range views {
+		if v.Kind == KindCounter {
+			for _, id := range v.Rules.Menus {
+				out[id] = true
+			}
+		}
+	}
+	if len(out) == 0 {
+		return out
+	}
+	for _, m := range bank.Menus {
+		if !out[m.ID] {
+			continue
+		}
+		for _, v := range views {
+			if (v.Kind == KindWeb || v.Kind == KindOperator) && showsMenu(v.Rules, m) {
+				delete(out, m.ID)
+				break
+			}
+		}
+	}
+	// A named menu that's gone from the bank stays out: it has no items.
+	return out
+}
+
+// showsMenu: does a view with these rules show any of the menu's categories?
+func showsMenu(r Rules, m menu.BankMenu) bool {
+	if len(r.Menus) > 0 {
+		in := false
+		for _, id := range r.Menus {
+			in = in || id == m.ID
+		}
+		if !in {
+			return false
+		}
+	}
+	hidden := map[uuid.UUID]bool{}
+	for _, id := range r.HiddenCategories {
+		hidden[id] = true
+	}
+	for _, c := range m.Categories {
+		if !hidden[c.ID] {
+			return true
+		}
+	}
+	return len(m.Categories) == 0
 }

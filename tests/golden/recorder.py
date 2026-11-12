@@ -11,6 +11,9 @@ scenario against the same main gives the same transcript:
   - RFC 3339 timestamps → <time>,
   - API tokens (q…_<secret>) → q…_<token>, bcrypt hashes → <bcrypt>,
     W3C traceparents → <traceparent>,
+  - secret-bearing fields (…_token, …_key, …_secret, password, authorization,
+    otlp_headers, …) → <secret> (mask_secrets; tests/test_golden_no_secrets.py
+    fails a transcript that still holds one),
   - per-step masks (JSON keys whose value is time- or load-dependent).
 
 Bodies are compared as the raw bytes main sent, after normalisation (JSON key
@@ -43,6 +46,30 @@ _TIME = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d
 _TRACE = re.compile(r"\b00-[0-9a-f]{32}-[0-9a-f]{16}-0[0-9a-f]\b")
 _BCRYPT = re.compile(r"\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}")
 _TOKEN = re.compile(r"\b(q[a-z]{2,5})_[A-Za-z0-9_\-]{6,}")  # keys and their shown prefixes
+# Secrets (2026-11-12: a live OTLP ingest token sat in a recorded link answer).
+# Whatever the key is called in a body — plain JSON or JSON inside a JSON
+# string — a secret-bearing field's value becomes <secret>, unless it is empty
+# or already a placeholder (a q…_<token>, <bcrypt>, a per-step <masked>). So
+# no transcript can hold a real value, whatever the recording main was given.
+_SECRET_KEY = (r"(?:[A-Za-z0-9_]*_)?(?:token|key|secret|password|passwd|authkey|auth_key|credential|credentials)"
+               r"|authorization|otlp_headers|otlp_endpoint|[A-Za-z0-9_]*_headers")
+_SECRET_FIELD = re.compile(r'"(' + _SECRET_KEY + r')":"((?:[^"\\]|\\.)+)"', re.IGNORECASE)
+_SECRET_FIELD_ESC = re.compile(r'\\"(' + _SECRET_KEY + r')\\":\\"((?:[^"\\]|\\[^"])+?)\\"', re.IGNORECASE)
+_PLACEHOLDER = re.compile(r"(?:<[^<>]*>|\\u003c[^<>]*\\u003e|q[a-z]{2,5}_<token>)\Z")
+SECRET = "<secret>"
+
+
+def mask_secrets(text: str) -> str:
+    """text with every secret-bearing JSON field's value replaced by <secret>."""
+    def plain(m: re.Match) -> str:
+        return m.group(0) if _PLACEHOLDER.match(m.group(2)) else f'"{m.group(1)}":"{SECRET}"'
+
+    def escaped(m: re.Match) -> str:
+        return m.group(0) if _PLACEHOLDER.match(m.group(2)) else f'\\"{m.group(1)}\\":\\"{SECRET}\\"'
+
+    return _SECRET_FIELD_ESC.sub(escaped, _SECRET_FIELD.sub(plain, text))
+
+
 # Echo's request id / trace headers and the like never go into a step.
 _KEEP_HEADERS = ("content-type", "location", "cache-control", "content-disposition", "www-authenticate")
 
@@ -113,7 +140,7 @@ class Rec:
             text = _TIME.sub("<time>", text)
             text = _BCRYPT.sub("<bcrypt>", text)
             text = _TRACE.sub("<traceparent>", text)
-            return _TOKEN.sub(lambda m: f"{m.group(1)}_<token>", text)
+            return mask_secrets(_TOKEN.sub(lambda m: f"{m.group(1)}_<token>", text))
 
         out = []
         for st in self.steps:
@@ -181,13 +208,29 @@ def compare(want: list[dict], got: list[dict]) -> list[str]:
             try:
                 lost = _lost(_loads(w["body"]), _loads(g["body"]), "")
             except ValueError:
-                lost = ["(not JSON) body changed"]
+                lost = _lost_csv(w, g)
             if lost:
                 problems.append(f"{where}: fields changed or gone\n  " + "\n  ".join(lost[:20]))
         elif w["body"] != g["body"]:
             diff = difflib.unified_diff(_pretty(w["body"]), _pretty(g["body"]), "reference", "now", lineterm="", n=2)
             problems.append(f"{where}: body\n" + "\n".join(list(diff)[:40]))
     return problems
+
+
+def _lost_csv(w: dict, g: dict) -> list[str]:
+    """A CSV body (main's own Store › Menu export) in additive mode: the same
+    rows, each keeping the reference's columns unchanged; new columns may only
+    be added at the end (the 2026-11-12 no_kitchen_ticket column)."""
+    if "text/csv" not in str(w.get("headers", {}).get("content-type", "")):
+        return ["(not JSON) body changed"]
+    old, new = w["body"].splitlines(), g["body"].splitlines()
+    if len(old) != len(new):
+        return [f"(csv) {len(old)} rows → {len(new)}"]
+    lost = []
+    for i, (a, b) in enumerate(zip(old, new)):
+        if not (b == a or b.startswith(a + ",")):
+            lost.append(f"(csv) row {i}: {a!r} → {b!r}")
+    return lost
 
 
 _BARE = re.compile(r'(?<=[:\[,])(<[^<>"]+>)(?=[,}\]])')

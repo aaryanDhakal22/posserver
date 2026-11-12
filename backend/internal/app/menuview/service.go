@@ -67,6 +67,9 @@ type Repo interface {
 	DeleteEntry(ctx context.Context, id uuid.UUID) (bool, error)
 	CachedBuild(ctx context.Context, viewID uuid.UUID) (json.RawMessage, int64, bool, error)
 	SaveBuild(ctx context.Context, viewID uuid.UUID, version int64, build json.RawMessage) error
+	Layout(ctx context.Context, viewID uuid.UUID) (*menuview.Layout, error)
+	SetLayout(ctx context.Context, viewID uuid.UUID, l *menuview.Layout) error
+	DealNames(ctx context.Context, locationID uuid.UUID) (map[string]string, error)
 }
 
 // Unmatched lists vendor names recent orders carried that nothing routed
@@ -82,10 +85,18 @@ type Service struct {
 	// mem holds each view's latest build (by menu version) in this process.
 	mu  sync.Mutex
 	mem map[uuid.UUID]built
+	// counterOnly caches each location's counter-only items by menu version.
+	counterOnly map[uuid.UUID]counterOnlyAt
+}
+
+type counterOnlyAt struct {
+	version int64
+	items   map[uuid.UUID]bool
 }
 
 func NewService(repo Repo, unmatched Unmatched, lg zerolog.Logger) *Service {
-	return &Service{repo: repo, unmatched: unmatched, logger: lg.With().Str("module", "menuview-service").Logger(), mem: map[uuid.UUID]built{}}
+	return &Service{repo: repo, unmatched: unmatched, logger: lg.With().Str("module", "menuview-service").Logger(), mem: map[uuid.UUID]built{},
+		counterOnly: map[uuid.UUID]counterOnlyAt{}}
 }
 
 // --- the bank --------------------------------------------------------------------
@@ -388,14 +399,38 @@ func (s *Service) entry(ctx context.Context, locationID, id uuid.UUID) (*menuvie
 }
 
 func (s *Service) validEntry(ctx context.Context, v *menuview.View, e *menuview.Entry) error {
+	if err := entryShape(v.Kind, e); err != nil {
+		return err
+	}
+	bank, err := s.repo.LoadBank(ctx, v.LocationID)
+	if err != nil {
+		return err
+	}
+	return entryRefs(bank, e)
+}
+
+// ValidEntry checks an entry of a view of kind k against a bank and trims its
+// names (the bank import checks every entry against the bank it is writing).
+func ValidEntry(bank *menuDom.Bank, k menuview.Kind, e *menuview.Entry) error {
+	if err := entryShape(k, e); err != nil {
+		return err
+	}
+	return entryRefs(bank, e)
+}
+
+// ValidRules checks (and defaults) a view's rules.
+func ValidRules(r *menuview.Rules) error { return validRules(r) }
+
+// entryShape checks an entry's kind, anchors and prices (no bank needed).
+func entryShape(k menuview.Kind, e *menuview.Entry) error {
 	bad := func(msg string) error { return fmt.Errorf("%w: %s", ErrBadEntry, msg) }
 	switch e.Kind {
 	case menuview.EntryItem, menuview.EntryMerge, menuview.EntryAugment:
-		if v.Kind == menuview.KindVendor {
+		if k == menuview.KindVendor {
 			return bad("a vendor view only maps names (kind map)")
 		}
 	case menuview.EntryMap:
-		if v.Kind != menuview.KindVendor {
+		if k != menuview.KindVendor {
 			return bad("only a vendor view maps names")
 		}
 	default:
@@ -420,10 +455,13 @@ func (s *Service) validEntry(ctx context.Context, v *menuview.View, e *menuview.
 			return ErrBadPrice
 		}
 	}
-	bank, err := s.repo.LoadBank(ctx, v.LocationID)
-	if err != nil {
-		return err
-	}
+	return nil
+}
+
+// entryRefs checks that an entry's items and sizes are the bank's, and trims
+// its names.
+func entryRefs(bank *menuDom.Bank, e *menuview.Entry) error {
+	bad := func(msg string) error { return fmt.Errorf("%w: %s", ErrBadEntry, msg) }
 	for _, id := range e.Anchor.ItemIDs {
 		if _, _, ok := bank.Item(id); !ok {
 			return bad("anchor " + id.String() + " is not an item of this store")
@@ -583,7 +621,11 @@ func (s *Service) Compile(ctx context.Context, v *menuview.View) (menuview.Build
 			}
 		}
 	}
-	return menuview.Compile(bank, *v, entries, unmatched), nil
+	b := menuview.Compile(bank, *v, entries, unmatched)
+	if err := s.resolveLayout(ctx, v, bank, &b); err != nil {
+		return menuview.Build{}, err
+	}
+	return b, nil
 }
 
 // --- vendor routing --------------------------------------------------------------
@@ -610,4 +652,50 @@ func (s *Service) VendorMaps(ctx context.Context, locationID uuid.UUID) (map[str
 		}
 	}
 	return out, nil
+}
+
+// CounterOnlyItems are the bank items of the location's counter-only menus
+// (menuview.CounterOnlyMenus), cached by menu version. The online caster's
+// routing never matches them (menuApp.CounterOnly).
+func (s *Service) CounterOnlyItems(ctx context.Context, locationID uuid.UUID) (map[uuid.UUID]bool, error) {
+	ver, err := s.repo.Version(ctx, locationID)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	c, ok := s.counterOnly[locationID]
+	s.mu.Unlock()
+	if ok && c.version == ver.Version {
+		return c.items, nil
+	}
+	views, err := s.repo.ListViews(ctx, locationID)
+	if err != nil {
+		return nil, err
+	}
+	items := map[uuid.UUID]bool{}
+	hasCounterMenus := false
+	for _, v := range views {
+		hasCounterMenus = hasCounterMenus || (v.Kind == menuview.KindCounter && len(v.Rules.Menus) > 0)
+	}
+	if hasCounterMenus {
+		bank, err := s.repo.LoadBank(ctx, locationID)
+		if err != nil {
+			return nil, err
+		}
+		menus := menuview.CounterOnlyMenus(bank, views)
+		for _, m := range bank.Menus {
+			if !menus[m.ID] {
+				continue
+			}
+			for _, cat := range m.Categories {
+				for _, it := range cat.Items {
+					items[it.ID] = true
+				}
+			}
+		}
+	}
+	s.mu.Lock()
+	s.counterOnly[locationID] = counterOnlyAt{version: ver.Version, items: items}
+	s.mu.Unlock()
+	return items, nil
 }

@@ -55,6 +55,10 @@ type PaymentSummary struct {
 	AmountCents int64  `json:"amount_cents"`
 	Last4       string `json:"last4,omitempty"` // last 4 of card number; "" for non-card
 	AuthCode    string `json:"auth_code,omitempty"`
+	// TipCents: the card tip taken with it (a counter card payment's pre-tip,
+	// a tip added afterwards on a $0 row); absent when none. Never part of
+	// the order's money. Cash tips are kept out (the owner, 2026-11-12).
+	TipCents int64 `json:"tip_cents,omitempty"`
 }
 
 type MoneyDTO struct {
@@ -70,6 +74,8 @@ type FeeDTO struct {
 	Type   string `json:"type"`
 	Label  string `json:"label,omitempty"`
 	Amount int64  `json:"amount_cents"`
+	// DriverCents: the driver's share of a delivery fee (absent = no split).
+	DriverCents int64 `json:"driver_cents,omitempty"`
 }
 
 type DiscountDTO struct {
@@ -113,6 +119,14 @@ type LineItemDTO struct {
 	LineTotal int64         `json:"line_total_cents"`
 	Notes     string        `json:"notes,omitempty"`
 	Children  []LineItemDTO `json:"children,omitempty"`
+	// Half and half (modifier children): "" (whole) | first | second, and
+	// add | only | no | specialty. Absent on older and vendor orders.
+	Portion string `json:"portion,omitempty"`
+	Mode    string `json:"mode,omitempty"`
+	// Coupon: the coupon a top-level line was sold in and which of the
+	// order's coupons it is (1-based). Absent when in none (golden-safe).
+	Coupon   string `json:"coupon,omitempty"`
+	CouponNo int    `json:"coupon_no,omitempty"`
 	// Kitchen routing (top-level items): the matched menu item, the station
 	// printer to print on, and how it was matched (matched|unmatched|unassigned).
 	MenuItemID string `json:"menu_item_id,omitempty"`
@@ -180,6 +194,7 @@ func toPaymentSummariesDTO(payments []Payment) []PaymentSummary {
 			AmountCents: int64(p.Amount),
 			Last4:       p.Last4,
 			AuthCode:    p.AuthCode,
+			TipCents:    int64(p.Tip),
 		})
 	}
 	return out
@@ -188,7 +203,7 @@ func toPaymentSummariesDTO(payments []Payment) []PaymentSummary {
 func toMoneyDTO(m MoneyBreakdown) MoneyDTO {
 	fees := make([]FeeDTO, 0, len(m.Fees))
 	for _, f := range m.Fees {
-		fees = append(fees, FeeDTO{Type: f.Type, Label: f.Label, Amount: int64(f.Amount)})
+		fees = append(fees, FeeDTO{Type: f.Type, Label: f.Label, Amount: int64(f.Amount), DriverCents: int64(f.DriverCents)})
 	}
 	discounts := make([]DiscountDTO, 0, len(m.Discounts))
 	for _, d := range m.Discounts {
@@ -246,6 +261,10 @@ func toItemsDTO(items []LineItem) []LineItemDTO {
 			LineTotal: int64(it.LineTotal),
 			Notes:     it.Notes,
 			Children:  toItemsDTO(it.Children),
+			Portion:   it.Portion,
+			Mode:      it.Mode,
+			Coupon:    it.Coupon,
+			CouponNo:  it.CouponNo,
 			Routing:   string(it.Routing),
 		}
 		if it.MenuItemID != nil {

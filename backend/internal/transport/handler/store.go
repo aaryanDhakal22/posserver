@@ -86,7 +86,7 @@ func (h *StoreHandler) SessionLogin(c *echo.Context) error {
 	tenant, err := h.svc.AuthenticateTenant(ctx, req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, tenancyApp.ErrInvalidCredentials) {
-			h.logins.failed(req.Username)
+			h.logins.failedFrom(c, req.Username)
 			return c.JSON(http.StatusUnauthorized, errResp("invalid username or password"))
 		}
 		h.logger.Error().Err(err).Msg("session login failed")
@@ -103,7 +103,14 @@ func (h *StoreHandler) SessionLogin(c *echo.Context) error {
 		h.logger.Error().Err(err).Msg("session login: location lookup failed")
 		return c.JSON(http.StatusInternalServerError, errResp("login failed"))
 	}
-	h.signer.Issue(c.Response(), c.Request(), tenant.ID, loc.ID)
+	// The cookie carries the store's session epoch: rotating the password
+	// ends every session issued before it (M8).
+	st, err := h.svc.SessionState(ctx, tenant.ID)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("session login: session state lookup failed")
+		return c.JSON(http.StatusInternalServerError, errResp("login failed"))
+	}
+	h.signer.Issue(c.Response(), c.Request(), tenant.ID, loc.ID, st.Epoch)
 	return c.JSON(http.StatusOK, map[string]any{
 		"tenant_id":   tenant.ID.String(),
 		"location_id": loc.ID.String(),
@@ -186,7 +193,7 @@ func (h *StoreHandler) MeUpdateLocation(c *echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
 	}
-	l, err := h.svc.UpdateLocation(ctx, tenancy.UpdateLocationParams{
+	p := tenancy.UpdateLocationParams{
 		ID:             lid,
 		Name:           req.Name,
 		Timezone:       req.Timezone,
@@ -195,7 +202,15 @@ func (h *StoreHandler) MeUpdateLocation(c *echo.Context) error {
 		AddressLine1:   req.AddressLine1,
 		AddressLine2:   req.AddressLine2,
 		Config:         req.Config,
-	})
+	}
+	// The manager may only save alert phones that are this store's (400
+	// device_not_allowed otherwise); an admin's open-as-store session saves
+	// like the admin PATCH.
+	update := h.svc.UpdateLocationAsManager
+	if appMiddleware.StoreImpersonatorFromContext(ctx) != "" {
+		update = h.svc.UpdateLocation
+	}
+	l, err := update(ctx, p)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, locationErr(err))
 	}
@@ -221,22 +236,32 @@ func (h *StoreHandler) MeListPrinters(c *echo.Context) error {
 	return c.JSON(http.StatusOK, out)
 }
 
-// POST /store/v1/me/printers {name, ip, mac?} — mac when the manager adds a
-// printer the Pi found on the network (the Pi follows it by MAC).
+// POST /store/v1/me/printers {name, ip, mac?, print_columns?} — mac when the
+// manager adds a printer the Pi found on the network (the Pi follows it by
+// MAC); print_columns 48 (default) | 42 | 32.
 func (h *StoreHandler) MeCreatePrinter(c *echo.Context) error {
 	ctx := c.Request().Context()
 	tid, lid, _ := meScope(c)
 	var req struct {
-		Name string `json:"name"`
-		IP   string `json:"ip"`
-		MAC  string `json:"mac"`
+		Name         string `json:"name"`
+		IP           string `json:"ip"`
+		MAC          string `json:"mac"`
+		PrintColumns *int   `json:"print_columns"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
 	}
+	if req.PrintColumns != nil && !tenancy.ValidPrintColumns(*req.PrintColumns) {
+		return c.JSON(http.StatusBadRequest, errResp(printColumnsMsg))
+	}
 	p, err := h.svc.AddPrinter(ctx, lid, req.Name, req.IP, req.MAC)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, errResp(err.Error()))
+	}
+	if req.PrintColumns != nil && *req.PrintColumns != p.PrintColumns {
+		if p, err = h.svc.SetPrinterColumns(ctx, lid, p.ID, *req.PrintColumns); err != nil {
+			return c.JSON(http.StatusInternalServerError, errResp(err.Error()))
+		}
 	}
 	h.cfgPub.Publish(ctx, tid, lid)
 	return c.JSON(http.StatusCreated, toPrinterJSON(*p))
@@ -262,13 +287,28 @@ func (h *StoreHandler) MeUpdatePrinter(c *echo.Context) error {
 		// flag can only move (false is ignored) — a location with printers
 		// always has exactly one receipt printer.
 		IsReceipt *bool `json:"is_receipt"`
+		// PrintColumns: the printer's print width, 48 | 42 | 32 font-A
+		// characters (the Pi lays every slip out for it). A body with only
+		// print_columns (no name / ip) changes just the width.
+		PrintColumns *int `json:"print_columns"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
 	}
-	p, err := h.svc.UpdatePrinter(ctx, id, req.Name, req.IP)
-	if err != nil {
-		return c.JSON(http.StatusBadRequest, errResp(err.Error()))
+	if req.PrintColumns != nil && !tenancy.ValidPrintColumns(*req.PrintColumns) {
+		return c.JSON(http.StatusBadRequest, errResp(printColumnsMsg))
+	}
+	var p *tenancy.Printer
+	widthOnly := req.Name == "" && req.IP == "" && req.PrintColumns != nil
+	if !widthOnly {
+		if p, err = h.svc.UpdatePrinter(ctx, id, req.Name, req.IP); err != nil {
+			return c.JSON(http.StatusBadRequest, errResp(err.Error()))
+		}
+	}
+	if req.PrintColumns != nil && (widthOnly || *req.PrintColumns != p.PrintColumns) {
+		if p, err = h.svc.SetPrinterColumns(ctx, lid, id, *req.PrintColumns); err != nil {
+			return c.JSON(http.StatusInternalServerError, errResp(err.Error()))
+		}
 	}
 	if req.IsReceipt != nil && *req.IsReceipt {
 		if p, err = h.svc.SetReceiptPrinter(ctx, lid, id); err != nil {
@@ -278,6 +318,9 @@ func (h *StoreHandler) MeUpdatePrinter(c *echo.Context) error {
 	h.cfgPub.Publish(ctx, tid, lid)
 	return c.JSON(http.StatusOK, toPrinterJSON(*p))
 }
+
+// printColumnsMsg: the 400 for a print width the Pi can't lay slips out for.
+const printColumnsMsg = "print_columns must be 48 (80 mm), 42 (a 72 mm print area) or 32 (58 mm)"
 
 // DELETE /store/v1/me/printers/:id
 func (h *StoreHandler) MeDeletePrinter(c *echo.Context) error {
@@ -461,7 +504,11 @@ func (h *StoreHandler) GetStoreConfig(c *echo.Context) error {
 	}
 	out := storeConfigJSON{Location: toLocationJSON(*loc), Printers: make([]printerJSON, 0, len(printers))}
 	for _, p := range printers {
-		out.Printers = append(out.Printers, toPrinterJSON(p))
+		pj := toPrinterJSON(p)
+		if wirePrintColumns(p.PrintColumns) == 0 {
+			pj.PrintColumns = nil // the default 48 stays out (golden: older agents read this)
+		}
+		out.Printers = append(out.Printers, pj)
 	}
 	return c.JSON(http.StatusOK, out)
 }
