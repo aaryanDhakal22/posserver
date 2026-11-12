@@ -19,7 +19,9 @@ export interface BuildGroup {
 }
 export interface Menu { categories: { items: BuildItem[] }[]; modifier_groups: BuildGroup[] }
 /** no_tax: the item isn't taxed (tax_bps 0 = the store rate); open_price: the line carries its own price_cents (the counter only). */
-export interface ItemFacts { category_id: string; tax_bps: number; half_base?: string; no_tax?: boolean; open_price?: boolean }
+export interface ItemFacts { category_id: string; tax_bps: number; half_base?: string; no_tax?: boolean; open_price?: boolean; family?: string }
+/** A modifier option's family and its class (regular: a coupon may make it free; premium / unpriced: never). */
+export interface OptionFacts { family?: string; class?: string }
 export interface Settings {
   tax_bps: number; service_fee_cents: number; service_fee_bps: number;
   delivery_fee_cents: number; free_delivery_over_cents: number | null; delivery_min_cents: number;
@@ -31,12 +33,16 @@ export interface Settings {
 }
 export interface Eligible { items: string[] | null; categories: string[] | null; sizes: string[] | null }
 export interface Slot { label: string; eligible: Eligible; included_options: number }
+/** A coupon part: qty items of one of these item families (at one of these sizes, when any), each with N cheapest regular mods free. */
+export interface Part { label: string; families: string[] | null; sizes?: string[] | null; qty: number; regular_mods_included: number }
 export interface Schedule { days: string[] | null; start: string; end: string }
 export interface Deal {
   id: string; kind: 'bundle' | 'mix' | 'nth' | 'code' | 'free_item' | string; name: string; description?: string; active: boolean;
   fulfil: string; schedule: Schedule | null;
   price_cents?: number; slots?: Slot[]; eligible?: Eligible | null; qty?: number; each_cents?: number; n?: number; pct?: number;
   code?: string; amount_cents?: number; first_order_only?: boolean; min_subtotal_cents?: number;
+  /** coupon (+ price_cents): the card's lines and its parts. */
+  card?: string[] | null; parts?: Part[] | null;
 }
 export interface Context {
   menu: Menu; items: Record<string, ItemFacts>; settings: Settings; deals: Deal[] | null; timezone: string;
@@ -49,6 +55,8 @@ export interface Context {
   counter?: boolean;
   /** An allow_multiple group's option at most this many times on the same portion + mode (0 = no cap; the Pi's topping_max_count). */
   max_repeat?: number;
+  /** Modifier option id → its family + class (coupons); an option not here is in no family (never free). */
+  options?: Record<string, OptionFacts> | null;
 }
 /** portion: whole ('' too) | first | second (older carts: left = first, right = second); mode: add ('' too) | only | no. */
 export interface Pick { group_id: string; option_id: string; portion?: string; mode?: string }
@@ -61,13 +69,28 @@ export interface Line extends Selection { qty?: number; note?: string; deal_id?:
 export interface Cart {
   type: string; payment?: string; lines: Line[] | null; code?: string;
   tip_cents?: number | null; tip_pct?: number | null; first_order?: boolean | null;
+  /** Applied coupons: a coupon deal and the cart line units it takes (one index per unit). */
+  coupons?: CartCoupon[] | null;
 }
+export interface CartCoupon { id: string; lines: number[] | null }
 export interface QuoteLine {
   index: number; name: string; mods: string[]; qty: number; unit_cents: number; total_cents: number; regular_cents: number | null; deal_id: string;
   /** A price change: the item's own price the line's price_cents replaced. */
   list_cents?: number;
   /** A custom line. */
   custom?: boolean;
+  /** The line's total once its units in coupons are priced in them (only lines with a unit in a coupon). */
+  coupon_cents?: number;
+}
+export interface CouponUnit {
+  line: number; part: number; carrier: boolean; item_cents: number; mods_cents: number; free_mods: string[]; unit_cents: number; regular_cents: number;
+}
+export interface AppliedCoupon {
+  index: number; id: string; name: string; card: string[]; price_cents: number; lines: number[];
+  regular_cents: number; total_cents: number; saved_cents: number; units: CouponUnit[];
+}
+export interface CouponOffer {
+  id: string; name: string; card: string[]; price_cents: number; lines: number[]; regular_cents: number; total_cents: number; saved_cents: number;
 }
 export interface Discount { type: string; deal_id: string; label: string; amount_cents: number }
 export interface Issue { code: string; message: string; line: number | null }
@@ -77,6 +100,9 @@ export interface Quote {
   errors: Issue[]; warnings: string[]; nudges: string[];
   /** Warnings about a line, with its index (the counter's missed required group); each message is in warnings too. */
   line_warnings?: Issue[];
+  /** The cart's coupons that apply; the live coupons the units not in a coupon fully fit, best savings first (both absent when none). */
+  coupons?: AppliedCoupon[];
+  coupon_offers?: CouponOffer[];
 }
 
 /** amount × bps / 10000, half up (half away from zero below zero). */
@@ -142,6 +168,8 @@ interface Priced {
   soft?: Issue[];
   /** A price change: the price the line's own replaced. */
   list?: number;
+  /** Charged picks (price > 0) for coupons, in pick order. */
+  cmods?: { price: number; option: string; label: string }[];
 }
 
 /** An open price's ceiling ($10,000). */
@@ -378,7 +406,10 @@ class Engine {
         for (const op of o.prices ?? []) if (p.size !== '' && op.size_id === p.size) price = op.price_cents;
         if (mode === 'no') price = 0;
         else if (por !== '' && halfPrice) price = Math.floor((price + 1) / 2); // half the whole-pie price, rounded up
-        if (price > 0) extras.push(price);
+        if (price > 0) {
+          extras.push(price);
+          (p.cmods ??= []).push({ price, option: pk.option_id, label });
+        }
         if (mode === 'only') {
           if (por === '') only[1] = only[2] = true;
           else only[por === 'second' ? 2 : 1] = true;
@@ -424,7 +455,210 @@ class Engine {
     p.unit = base + p.extras;
     return p;
   }
+
+  couponLine(p: Priced, qty: number): CLine {
+    const c: CLine = {
+      ...noLine(), ok: true, qty, unit: p.unit, base: p.base, halfUp: p.halfUp, item: p.bankItem, category: this.category(p.bankItem),
+      size: p.size, family: this.ctx.items?.[p.bankItem]?.family ?? ''
+    };
+    for (const m of p.cmods ?? []) c.mods.push({ price: m.price, cls: this.ctx.options?.[m.option]?.class ?? '', label: m.label });
+    return c;
+  }
+  /** Applies the cart's coupons (one that is ended, not on now or doesn't fit as asked is left out: a warning on the counter, an error elsewhere), sets coupon_cents, lists the offers; returns what the applied ones save. */
+  coupons(q: Quote, cart: Cart, clines: CLine[], at: Date, issue: (code: string, message: string, line: number | null) => void): number {
+    const ctx = this.ctx;
+    const deals = ctx.deals ?? [];
+    const type = cart.type ?? '';
+    const problem = (code: string, message: string) => {
+      if (ctx.counter) {
+        if (!q.warnings.includes(message)) q.warnings.push(message);
+        return;
+      }
+      issue(code, message, null);
+    };
+    let off = 0;
+    (cart.coupons ?? []).forEach((cc, ci) => {
+      let d: Deal | undefined;
+      for (const x of deals) if (x.id === cc.id && x.kind === 'coupon') d = x;
+      if (!d || !d.active) {
+        problem('coupon_ended', 'A coupon in the order has ended.');
+        return;
+      }
+      if (!live(d, ctx.timezone, at, type)) {
+        problem('coupon_unavailable', `${d.name} isn't available right now.`);
+        return;
+      }
+      const lines = cc.lines ?? [];
+      const taken = new Map<number, number>();
+      let bad = false, busy = false;
+      for (const li of lines) {
+        if (!Number.isInteger(li) || li < 0 || li >= clines.length || !clines[li].ok || clines[li].family === '') {
+          bad = true;
+          break;
+        }
+        const n = (taken.get(li) ?? 0) + 1;
+        taken.set(li, n);
+        if (clines[li].used + n > clines[li].qty) busy = true;
+      }
+      if (bad) {
+        problem('coupon_fit', `${d.name}: a line in it can't be in a coupon.`);
+        return;
+      }
+      if (busy) {
+        problem('coupon_fit', `${d.name}: a line in it is already in another coupon.`);
+        return;
+      }
+      const cand = [...lines].sort((a, b) => clines[b].unit - clines[a].unit || a - b);
+      const f = fit(d, cand, clines);
+      if (!f || cand.length !== f.units.length) {
+        problem('coupon_fit', `${d.name} doesn't fit the order.`);
+        return;
+      }
+      if (f.saved <= 0) {
+        problem('coupon_fit', `${d.name} doesn't save anything on this order.`);
+        return;
+      }
+      for (const u of f.units) {
+        const c = clines[u.line];
+        c.used++;
+        c.taxCut += u.regular_cents - u.unit_cents;
+        c.couponCents += u.unit_cents;
+      }
+      (q.coupons ??= []).push({
+        index: ci, id: d.id, name: d.name, card: cardOf(d), price_cents: d.price_cents ?? 0, lines: f.lines,
+        regular_cents: f.regular, total_cents: f.total, saved_cents: f.saved, units: f.units
+      });
+      q.discounts.push({ type: 'coupon', deal_id: d.id, label: d.name, amount_cents: f.saved });
+      off += f.saved;
+    });
+    clines.forEach((c, i) => {
+      if (c.used > 0 && i < q.lines.length) q.lines[i].coupon_cents = (c.qty - c.used) * c.unit + c.couponCents;
+    });
+    // Offers: the units not in a coupon, priciest first (a tie: line order).
+    const free: number[] = [];
+    clines.forEach((c, li) => {
+      if (!c.ok || c.family === '') return;
+      for (let k = c.used; k < c.qty && k < c.used + MAX_COUPON_SLOTS; k++) free.push(li);
+    });
+    free.sort((a, b) => clines[b].unit - clines[a].unit);
+    const offers: CouponOffer[] = [];
+    for (const d of deals) {
+      if (d.kind !== 'coupon' || !live(d, ctx.timezone, at, type)) continue;
+      const f = fit(d, free, clines);
+      if (!f || f.saved <= 0) continue;
+      offers.push({
+        id: d.id, name: d.name, card: cardOf(d), price_cents: d.price_cents ?? 0, lines: f.lines,
+        regular_cents: f.regular, total_cents: f.total, saved_cents: f.saved
+      });
+    }
+    offers.sort((a, b) => b.saved_cents - a.saved_cents);
+    if (offers.length) q.coupon_offers = offers;
+    return off;
+  }
 }
+
+// Coupons (the owner's Centurion pass, 2026-11-12; contract/main.md "Families + coupons"): parts of families × qty
+// at one price; applies only when its units fill every part; the highest-priced item carries the price, the others
+// $0.00; on each unit the part's N cheapest regular mods are free. Keep in step with coupons.go.
+
+/** The units one coupon takes at most (8 parts × 10). */
+export const MAX_COUPON_SLOTS = 80;
+
+/** A cart item line as coupons and the automatic deals see it. */
+interface CLine {
+  ok: boolean; qty: number; used: number; unit: number; base: number; halfUp: number;
+  item: string; category: string; size: string; family: string;
+  mods: { price: number; cls: string; label: string }[];
+  taxCut: number; couponCents: number;
+}
+
+const noLine = (): CLine => ({
+  ok: false, qty: 0, used: 0, unit: 0, base: 0, halfUp: 0, item: '', category: '', size: '', family: '', mods: [], taxCut: 0, couponCents: 0
+});
+
+/** One unit of the line on a part with n free regular mods: the n cheapest regular ones free (ties: the first picked), the rest charged, a half and half upcharge on top. */
+function unitIn(c: CLine, n: number): { mods: number; free: string[] } {
+  const regular: number[] = [];
+  c.mods.forEach((m, k) => {
+    if (m.cls === 'regular') regular.push(k);
+  });
+  regular.sort((a, b) => c.mods[a].price - c.mods[b].price);
+  const free = new Set<number>();
+  for (let k = 0; k < n && k < regular.length; k++) free.add(regular[k]);
+  let mods = 0;
+  const labels: string[] = [];
+  c.mods.forEach((m, k) => {
+    if (free.has(k)) labels.push(m.label);
+    else mods += m.price;
+  });
+  if (c.halfUp > 0) mods += c.halfUp;
+  return { mods, free: labels };
+}
+
+function fitsPart(c: CLine, pt: Part): boolean {
+  const sizes = pt.sizes ?? [];
+  return c.ok && c.family !== '' && (pt.families ?? []).includes(c.family) && (sizes.length === 0 || (c.size !== '' && sizes.includes(c.size)));
+}
+
+interface CouponFit { units: CouponUnit[]; lines: number[]; regular: number; total: number; saved: number }
+
+/** Matches a coupon's parts to units (cand: one line index per unit, preferred first) so every part is filled (Kuhn's augmenting paths, slots in part order), then prices it. */
+function fit(d: Deal, cand: number[], clines: CLine[]): CouponFit | null {
+  const parts = d.parts ?? [];
+  const slots: number[] = [];
+  parts.forEach((pt, k) => {
+    for (let j = 0; j < Math.trunc(pt.qty ?? 0); j++) slots.push(k);
+  });
+  if (slots.length === 0 || slots.length > MAX_COUPON_SLOTS || cand.length < slots.length) return null;
+  const owner: number[] = cand.map(() => -1);
+  const tryAt = (s: number, seen: boolean[]): boolean => {
+    // A free unit first: keep the natural order.
+    for (let u = 0; u < cand.length; u++) {
+      if (owner[u] < 0 && fitsPart(clines[cand[u]], parts[slots[s]])) {
+        owner[u] = s;
+        return true;
+      }
+    }
+    for (let u = 0; u < cand.length; u++) {
+      if (seen[u] || !fitsPart(clines[cand[u]], parts[slots[s]])) continue;
+      seen[u] = true;
+      if (owner[u] < 0 || tryAt(owner[u], seen)) {
+        owner[u] = s;
+        return true;
+      }
+    }
+    return false;
+  };
+  for (let s = 0; s < slots.length; s++) if (!tryAt(s, cand.map(() => false))) return null;
+  const bySlot: number[] = slots.map(() => 0);
+  owner.forEach((s, u) => {
+    if (s >= 0) bySlot[s] = cand[u];
+  });
+  // The carrier: the highest-priced item (a tie: the first line, then the first slot).
+  let carrier = 0;
+  for (let s = 1; s < slots.length; s++) {
+    const a = clines[bySlot[s]], b = clines[bySlot[carrier]];
+    if (a.base > b.base || (a.base === b.base && bySlot[s] < bySlot[carrier])) carrier = s;
+  }
+  const f: CouponFit = { units: [], lines: [], regular: 0, total: 0, saved: 0 };
+  slots.forEach((k, s) => {
+    const li = bySlot[s];
+    const { mods, free } = unitIn(clines[li], Math.trunc(parts[k].regular_mods_included ?? 0));
+    const item = s === carrier ? (d.price_cents ?? 0) : 0;
+    const u: CouponUnit = {
+      line: li, part: k, carrier: s === carrier, item_cents: item, mods_cents: mods, free_mods: free, unit_cents: item + mods, regular_cents: clines[li].unit
+    };
+    f.units.push(u);
+    f.lines.push(li);
+    f.regular += u.regular_cents;
+    f.total += u.unit_cents;
+  });
+  f.lines.sort((a, b) => a - b);
+  f.saved = f.regular - f.total;
+  return f;
+}
+
+const cardOf = (d: Deal): string[] => [...(d.card ?? [])];
 
 /** Prices a cart at `at`. */
 export function price(ctx: Context, cart: Cart, at: Date): Quote {
@@ -449,9 +683,12 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
     if (lw.some((x) => x.code === is.code && x.message === is.message && x.line === line)) return;
     lw.push({ code: is.code, message: is.message, line });
   };
-  const units: Unit[] = [];
   const lineTax: { total: number; rate: number }[] = [];
   let hasBundle = false;
+  // Item lines a coupon may take (by cart line index) and where each line's entry in lineTax is.
+  const nLines = (cart.lines ?? []).length;
+  const clines: CLine[] = Array.from({ length: nLines }, () => noLine());
+  const taxAt: number[] = Array.from({ length: nLines }, () => -1);
 
   (cart.lines ?? []).forEach((line, i) => {
     let qty = Math.trunc(line.qty ?? 0);
@@ -483,9 +720,10 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
       const ql: QuoteLine = { index: i, name: p.name, mods, qty, unit_cents: p.unit, total_cents: p.unit * qty, regular_cents: null, deal_id: '' };
       if (p.list != null) ql.list_cents = p.list;
       q.lines.push(ql);
+      taxAt[i] = lineTax.length;
       lineTax.push({ total: p.unit * qty, rate: e.rate(p.rateItem) });
-      // A price-changed line is left out of the automatic deals: the cashier's price is the line's price.
-      if (p.bankItem && p.issues.length === 0 && p.list == null) for (let k = 0; k < qty; k++) units.push({ price: p.unit, item: p.bankItem, category: e.category(p.bankItem), size: p.size });
+      // A price-changed line is left out of the automatic deals and coupons: the cashier's price is the line's price.
+      if (p.bankItem && p.issues.length === 0 && p.list == null) clines[i] = e.couponLine(p, qty);
       return;
     }
     hasBundle = true;
@@ -525,6 +763,16 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
   for (const l of q.lines) q.subtotal_cents += l.total_cents;
   const sub = q.subtotal_cents;
 
+  // Coupons: the cashier's, then the offers on the units left.
+  const couponOff = e.coupons(q, cart, clines, at, issue);
+  clines.forEach((c, i) => {
+    if (c.taxCut !== 0 && taxAt[i] >= 0) lineTax[taxAt[i]].total -= c.taxCut;
+  });
+  const food = sub - couponOff;
+  // The units left for the automatic deals (a coupon's units take none).
+  const units: Unit[] = [];
+  for (const c of clines) for (let k = c.used; c.ok && k < c.qty; k++) units.push({ price: c.unit, item: c.item, category: c.category, size: c.size });
+
   // Automatic deals.
   const autos: Discount[] = [];
   for (const d of deals) {
@@ -545,8 +793,8 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
     } else if (d.kind === 'free_item') {
       if (el.length === 0) continue;
       const min = d.min_subtotal_cents ?? 0;
-      if (sub >= min) amount = Math.min(...el.map((u) => u.price));
-      else nudge(`Add ${money(min - sub)} more for ${d.name}.`);
+      if (food >= min) amount = Math.min(...el.map((u) => u.price));
+      else nudge(`Add ${money(min - food)} more for ${d.name}.`);
     }
     if (amount > 0) autos.push({ type: 'deal', deal_id: d.id, label: d.name, amount_cents: amount });
   }
@@ -558,12 +806,12 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
     let d: Deal | undefined;
     for (const x of deals) if (x.kind === 'code' && (x.code ?? '').trim().toUpperCase() === c) d = x;
     if (!d || !live(d, ctx.timezone, at, type)) issue('code_invalid', `Code ${c} isn't valid right now.`, null);
-    else if (sub < (d.min_subtotal_cents ?? 0)) issue('code_minimum', `${c} needs ${money(d.min_subtotal_cents ?? 0)} or more.`, null);
+    else if (food < (d.min_subtotal_cents ?? 0)) issue('code_minimum', `${c} needs ${money(d.min_subtotal_cents ?? 0)} or more.`, null);
     else if (d.first_order_only && cart.first_order === false) issue('code_first_order', `${c} is for a first order only.`, null);
     else {
       let amt = d.amount_cents ?? 0;
-      if ((d.pct ?? 0) > 0) amt = pct(sub, (d.pct ?? 0) * 100);
-      if (amt > sub) amt = sub;
+      if ((d.pct ?? 0) > 0) amt = pct(food, (d.pct ?? 0) * 100);
+      if (amt > food) amt = food;
       code = { type: 'code', deal_id: d.id, label: 'Code ' + c, amount_cents: amt };
     }
   }
@@ -588,7 +836,7 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
     for (const a of autos) q.discounts.push({ ...a });
     if (code) q.discounts.push({ ...code });
   } else if (st.stacking === 'single') {
-    if (hasBundle) {
+    if (hasBundle || (q.coupons ?? []).length > 0) {
       if (code) issue('code_not_combinable', "Codes don't combine with deals.", null);
     } else pickOne();
   } else pickOne();
@@ -627,12 +875,12 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
   const byRate = new Map<number, number>();
   for (const lt of lineTax) byRate.set(lt.rate, (byRate.get(lt.rate) ?? 0) + lt.total);
   const rates = [...byRate.keys()].sort((a, b) => a - b);
-  const off = sub - after;
+  const off = sub - after - couponOff;
   let spread = 0;
   rates.forEach((r, k) => {
     const gross = byRate.get(r)!;
     let share = 0;
-    if (sub > 0) share = k === rates.length - 1 ? off - spread : Math.floor((off * gross) / sub);
+    if (food > 0) share = k === rates.length - 1 ? off - spread : Math.floor((off * gross) / food);
     spread += share;
     q.tax_cents += pct(gross - share, r);
   });
