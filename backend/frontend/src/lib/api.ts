@@ -864,9 +864,9 @@ export interface TerminalSettings {
 }
 /** The owner's defaults (main's staff.DefaultSettings): a field main doesn't send yet shows these. */
 export const TERMINAL_DEFAULTS: TerminalSettings = {
-  cashier_refund_cents: 0, cashier_discount_pct: 10, auto_lock_minutes: 5, counter_start: 1, receipt_auto_done_seconds: 15,
+  cashier_refund_cents: 0, cashier_discount_pct: 20, auto_lock_minutes: 5, counter_start: 1, receipt_auto_done_seconds: 15,
   auto_close_batch_at: '04:00', default_tab: 'info', show_history: false, button_font: 'barlow', cashier_price_drop_pct: 20,
   click_sound: false, prices_on_buttons: false, out_of_area_margin_mi: 1, name_on_paid_counter: false, card_tips: false,
-  card_tip_percents: [15, 18, 20], employee_meal_pct: 50, topping_max_count: 3,
+  card_tip_percents: [15, 18, 20], employee_meal_pct: 20, topping_max_count: 3,
   cashier_payout_cents: 2000, default_pickup_minutes: 15, area_codes: ['410', '443', '667'], driver_claim_after_minutes: 45
 };

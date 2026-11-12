@@ -119,25 +119,35 @@ func ValidAreaCode(c string) bool {
 	return len(c) == 3 && c[0] >= '2' && c[0] <= '9' && c[1] >= '0' && c[1] <= '9' && c[2] >= '0' && c[2] <= '9'
 }
 
+// The defaults the owner set on 2026-11-12 (they were 10 % and 50 %;
+// migration 00039 moved stores that still held those). Auto-lock 5 min and
+// the cashier price drop 20 % were already the defaults.
+const (
+	DefaultCashierDiscountPct = 20
+	DefaultEmployeeMealPct    = 20
+)
+
 // DefaultAutoCloseBatchAt is the batch auto-close time (the owner: on by
 // default at 4:00 am).
 const DefaultAutoCloseBatchAt = "04:00"
 
-// DefaultSettings: refunds are a manager's (TERMINAL-PLAN "Refunds: manager
-// only"), a cashier discounts up to 10 %, the terminal locks after 5 idle
-// minutes, counter numbers start at 1, the receipt screen closes after 15 s;
-// the app lands on Info with History hidden, Barlow buttons without prices
-// or clicks, a cashier lowers a price up to 20 %, deliveries up to 1 mile
-// past the radius go, no name on a paid counter order, no card tips (15 /
-// 18 / 20 % when on), the employee meal is 50 % off, a topping goes on up
-// to 3 times (tap again = 2×, 3×), a cashier pays out up
+// DefaultSettings are every store's defaults (the owner, 2026-11-12: "everything
+// here is default, not just for one store"): refunds are a manager's
+// (TERMINAL-PLAN "Refunds: manager only"), a cashier discounts up to 20 %,
+// the terminal locks after 5 idle minutes, counter numbers start at 1, the
+// receipt screen closes after 15 s; the app lands on Info with History
+// hidden, Barlow buttons without prices or clicks, a cashier lowers a price
+// up to 20 %, deliveries up to 1 mile past the radius go, no name on a paid
+// counter order, no card tips (15 / 18 / 20 % when on), the employee meal is
+// 20 % off, a topping goes on up to 3 times (tap again = 2×, 3×), a cashier
+// pays out up
 // to $20 from the drawer, a pickup is quoted 15 minutes, the area codes are
 // 410 / 443 / 667, drivers may claim a delivery nobody took after 45 minutes.
 func DefaultSettings() Settings {
-	return Settings{CashierRefundCents: 0, CashierDiscountPct: 10, AutoLockMinutes: 5, CounterStart: 1, ReceiptAutoDoneSeconds: 15,
+	return Settings{CashierRefundCents: 0, CashierDiscountPct: DefaultCashierDiscountPct, AutoLockMinutes: 5, CounterStart: 1, ReceiptAutoDoneSeconds: 15,
 		AutoCloseBatchAt: DefaultAutoCloseBatchAt,
 		DefaultTab:       "info", ButtonFont: "barlow", CashierPriceDropPct: 20, OutOfAreaMarginMi: 1,
-		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: 50, ToppingMaxCount: 3,
+		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: DefaultEmployeeMealPct, ToppingMaxCount: 3,
 		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes(),
 		DriverClaimAfterMinutes: 45}
 }

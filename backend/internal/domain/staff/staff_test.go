@@ -95,11 +95,25 @@ func TestAutoCloseBatchAt(t *testing.T) {
 	}
 }
 
+// The owner's defaults for every store (2026-11-12): auto-lock 5 min, a
+// cashier discounts up to 20 %, lowers a price up to 20 %, the employee
+// meal is 20 % off.
+func TestOwnerDefaults(t *testing.T) {
+	d := DefaultSettings()
+	got := [4]int{d.AutoLockMinutes, d.CashierDiscountPct, d.CashierPriceDropPct, d.EmployeeMealPct}
+	if got != [4]int{5, 20, 20, 20} {
+		t.Fatalf("lock, discount, price drop, meal = %v", got)
+	}
+	if e := RoleDefaults(RoleCashier, d); *e.DiscountPct != 20 || *e.RefundCents != 0 {
+		t.Fatalf("cashier role defaults: %+v", e)
+	}
+}
+
 func TestTerminalAppDefaults(t *testing.T) {
 	d := DefaultSettings()
 	if d.DefaultTab != "info" || d.ShowHistory || d.ButtonFont != "barlow" || d.CashierPriceDropPct != 20 || d.ClickSound ||
 		d.PricesOnButtons || d.OutOfAreaMarginMi != 1 || d.NameOnPaidCounter || d.CardTips ||
-		!reflect.DeepEqual(d.CardTipPercents, []int{15, 18, 20}) || d.EmployeeMealPct != 50 {
+		!reflect.DeepEqual(d.CardTipPercents, []int{15, 18, 20}) || d.EmployeeMealPct != 20 {
 		t.Fatalf("defaults: %+v", d)
 	}
 	for _, tab := range DefaultTabs {

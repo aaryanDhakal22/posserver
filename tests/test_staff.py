@@ -52,7 +52,7 @@ def test_staff_crud_and_pins(mgr) -> None:
     assert sam["first_name"] == "Sam" and sam["role"] == "cashier" and sam["active"] is True
     assert "pin" not in json.dumps(sam).replace('"pin_', ""), "the PIN never comes back"
     assert "pin_hash" not in sam
-    assert sam["limits"] == {} and sam["effective_limits"] == {"refund_cents": 0, "discount_pct": 10}
+    assert sam["limits"] == {} and sam["effective_limits"] == {"refund_cents": 0, "discount_pct": 20}
 
     # PIN rules.
     assert _code(mgr.post(STAFF, json={"first_name": "Ann", "role": "cashier", "pin": "1234"}, timeout=10), 409) == "pin_taken"
@@ -99,7 +99,7 @@ def test_staff_crud_and_pins(mgr) -> None:
 
 APP_DEFAULTS = {"default_tab": "info", "show_history": False, "button_font": "barlow", "cashier_price_drop_pct": 20,
                 "click_sound": False, "prices_on_buttons": False, "out_of_area_margin_mi": 1, "name_on_paid_counter": False,
-                "card_tips": False, "card_tip_percents": [15, 18, 20], "employee_meal_pct": 50,
+                "card_tips": False, "card_tip_percents": [15, 18, 20], "employee_meal_pct": 20,
                 # terminal Stage 2
                 "cashier_payout_cents": 2000, "default_pickup_minutes": 15, "area_codes": ["410", "443", "667"]}
 
@@ -110,7 +110,7 @@ def _known(got: dict, want: dict) -> dict:
 
 
 def test_terminal_settings(mgr) -> None:
-    first = {"cashier_refund_cents": 0, "cashier_discount_pct": 10, "auto_lock_minutes": 5, "counter_start": 1,
+    first = {"cashier_refund_cents": 0, "cashier_discount_pct": 20, "auto_lock_minutes": 5, "counter_start": 1,
              "receipt_auto_done_seconds": 15, "auto_close_batch_at": "04:00", **APP_DEFAULTS}
     assert _known(_ok(mgr.get(SETTINGS, timeout=5)), first) == first
     want = {"cashier_refund_cents": 2000, "cashier_discount_pct": 15, "auto_lock_minutes": 3, "counter_start": 100,
@@ -206,7 +206,7 @@ def test_terminal_config_for_the_pi(store, mgr) -> None:
         (eve,) = cfg["staff"]
         assert eve["id"] == p["id"] and eve["role"] == "cashier" and eve["first_name"] == "Eve"
         assert eve["pin_hash"].startswith("$2a$08$") and len(eve["pin_hash"]) == 60
-        assert eve["effective_limits"] == {"refund_cents": 0, "discount_pct": 10}
+        assert eve["effective_limits"] == {"refund_cents": 0, "discount_pct": 20}
 
         # A settings save is a change too.
         st = _ok(mgr.get(SETTINGS, timeout=5))
@@ -246,3 +246,13 @@ def test_another_stores_staff(make_store) -> None:
     assert _code(mb.delete(f"{STAFF}/{p['id']}", timeout=5), 404) == "not_found"
     assert [x["first_name"] for x in _ok(mb.get(STAFF, timeout=5))] == ["Gus"]
     assert [x["first_name"] for x in _config(a.key)["staff"]] == ["Fay"]
+
+
+def test_owner_defaults_for_every_store(store, mgr) -> None:
+    """The owner's defaults (2026-11-12, every store): auto-lock 5 min, a cashier discounts up to 20 % and lowers a
+    price up to 20 %, the employee meal is 20 % off; a delivery costs $4 = $1 store + $3 driver. The Pi gets them."""
+    owner = {"auto_lock_minutes": 5, "cashier_discount_pct": 20, "cashier_price_drop_pct": 20, "employee_meal_pct": 20}
+    assert _known(_ok(mgr.get(SETTINGS, timeout=5)), owner) == owner
+    assert _known(_config(store.key)["settings"], owner) == owner
+    fees = _ok(mgr.get(f"{STORE_V1}/me/pricing", timeout=5))["store"]["fees"]
+    assert (fees["delivery_fee_cents"], fees["delivery_driver_cents"]) == (400, 300)
