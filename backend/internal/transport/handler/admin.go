@@ -336,6 +336,7 @@ type orderSummaryJSON struct {
 	Status        string    `json:"status"`
 	CustomerName  string    `json:"customer_name"`
 	TotalCents    int64     `json:"total_cents"`
+	TipCents      int64     `json:"tip_cents,omitempty"` // Σ the payments' tips (never in total_cents); absent = none (goldens)
 	ReceivedAt    time.Time `json:"received_at"`
 }
 
@@ -362,7 +363,7 @@ func (h *AdminHandler) ListOrders(c *echo.Context) error {
 		out = append(out, orderSummaryJSON{
 			ID: s.ID, TenantID: s.TenantID, LocationID: s.LocationID,
 			Source: s.Source, SourceEventID: s.SourceEventID, Status: s.Status,
-			CustomerName: s.CustomerName, TotalCents: s.TotalCents, ReceivedAt: s.ReceivedAt,
+			CustomerName: s.CustomerName, TotalCents: s.TotalCents, TipCents: s.TipCents, ReceivedAt: s.ReceivedAt,
 		})
 	}
 	return c.JSON(http.StatusOK, out)

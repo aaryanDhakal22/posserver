@@ -308,7 +308,8 @@ func (r *OrderRepository) DeleteByID(ctx context.Context, id order.ID) error {
 // registration for the raw query. Admin-only — no scope filter.
 func (r *OrderRepository) ListSummaries(ctx context.Context, f order.ListFilter) ([]order.Summary, error) {
 	sql := `SELECT id::text, tenant_id::text, location_id::text, source, source_event_id,
-	               status, customer_display_name, total_cents, received_at
+	               status, customer_display_name, total_cents, received_at,
+	               (SELECT COALESCE(sum(p.tip_cents), 0)::bigint FROM payments p WHERE p.order_id = orders.id)
 	        FROM orders WHERE 1=1`
 	args := []any{}
 	if f.TenantID != "" {
@@ -336,7 +337,7 @@ func (r *OrderRepository) ListSummaries(ctx context.Context, f order.ListFilter)
 	for rows.Next() {
 		var s order.Summary
 		if err := rows.Scan(&s.ID, &s.TenantID, &s.LocationID, &s.Source, &s.SourceEventID,
-			&s.Status, &s.CustomerName, &s.TotalCents, &s.ReceivedAt); err != nil {
+			&s.Status, &s.CustomerName, &s.TotalCents, &s.ReceivedAt, &s.TipCents); err != nil {
 			return nil, fmt.Errorf("scan order summary: %w", err)
 		}
 		out = append(out, s)
@@ -567,6 +568,7 @@ func (r *OrderRepository) assemble(ctx context.Context, q *models.Queries, row m
 			Last4:      p.Last4,
 			AuthCode:   p.AuthCode,
 			CapturedAt: captured,
+			Tip:        order.Money(p.TipCents),
 		})
 	}
 

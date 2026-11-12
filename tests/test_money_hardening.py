@@ -25,7 +25,7 @@ from datetime import datetime, timedelta, timezone
 
 import requests
 
-from conftest import ADMIN_V1, API_V1, STORE_V1, store_key
+from conftest import ADMIN_V1, API_V1, STORE_V1, store_key, wait_order
 
 ME = f"{STORE_V1}/me"
 
@@ -382,3 +382,52 @@ def test_channel_with_orders_is_kept(admin, store) -> None:
     r = admin.delete(f"{ADMIN_V1}/channels/{cid}", timeout=5)
     assert r.status_code == 409 and r.json()["code"] == "channel_in_use", r.text
     assert o["id"]
+
+
+
+def test_tips_of_our_own_orders(store, admin, publish) -> None:
+    """main keeps the tips of the Pi's own orders (the owner's flow-audit follow-up, 2026-11-12): a card payment's
+    pre-tip and a tip added to it afterwards ride on its payment (`tip_cents`), a driver's cash tip at the door
+    arrives as order.tip {kind: door} (absolute) and is kept as the order's one `door_tip` payment. The order read
+    lists each payment's tip and the admin list adds them up; main's Z check counts the card tips (the Pi's card
+    tender holds them) and never the door tip (the driver keeps it)."""
+    mgr = store.manager_session()
+    oid = _place(store.key, total=1777, batch=8)
+    card = _pay(oid, 1777, "manual_card", tip_cents=300, last4="4242", ref=f"sq-{uuid.uuid4().hex[:10]}", batch_id=8)
+    later = _pay(oid, 0, "manual_card", tip_cents=200, ref=card["payment"]["id"], batch_id=8)
+    door = {"event_id": str(uuid.uuid4()), "type": "order.tip", "order_id": oid, "tip_cents": 300, "kind": "door", "at": _now()}
+    assert _send(store.key, [card, later, door]) == {card["event_id"]: "applied", later["event_id"]: "applied",
+                                                     door["event_id"]: "applied"}
+    # The door tip is absolute: a corrected one replaces it; the same event again is a duplicate.
+    door2 = {**door, "event_id": str(uuid.uuid4()), "tip_cents": 400, "at": _now(1)}
+    assert _send(store.key, [door2]) == {door2["event_id"]: "applied"}
+    assert _send(store.key, [door2]) == {door2["event_id"]: "duplicate"}
+
+    o = _ok(requests.get(f"{API_V1}/orders/{oid}", headers=store_key(store.key), timeout=5))
+    pays = sorted((p["method"], p["amount_cents"], p.get("tip_cents", 0)) for p in o["payments"])
+    assert pays == [("door_tip", 0, 400), ("manual_card", 0, 200), ("manual_card", 1777, 300)], pays
+    assert o["money"]["total_cents"] == 1777 and o["money"]["tip_cents"] == 0  # tips never in the order's total
+    rows = _ok(admin.get(f"{ADMIN_V1}/orders", params={"tenant_id": store.tenant_id}, timeout=5))
+    (row,) = [r for r in rows if r["id"] == oid]
+    assert row["tip_cents"] == 900 and row["total_cents"] == 1777
+
+    # The Z check: the Pi's manual-card tender nets amount + tips (2277); the door tip is in no tender.
+    z = {"id": str(uuid.uuid4()), "batch_id": 8, "business_date": "2026-11-12", "tenders": [
+        {"tender": "manual_card", "count": 2, "collected_cents": 1777, "refunded_cents": 0, "tips_cents": 500, "net_cents": 2277}],
+        "reconcile": {"difference_cents": 0}, "sales": {"total_cents": 1777}}
+    ev = {"event_id": str(uuid.uuid4()), "type": "z.report", "at": _now(), "report": z}
+    assert _send(store.key, [ev]) == {ev["event_id"]: "applied"}
+    got = _ok(mgr.get(f"{ME}/reports/z/{z['id']}", timeout=5))
+    assert got["flagged"] is False and got["main_difference_cents"] == 0, got
+    assert got["main_check"] == [{"tender": "manual_card", "pi_cents": 2277, "main_cents": 2277}]
+
+    # Only a counter order takes a door tip (a vendor order: invalid, vendor tips aren't synced yet); an unknown
+    # order is not_found; a negative tip is invalid.
+    vendor = store.order()
+    publish(vendor)
+    vid = wait_order(store.key, vendor["order_id"])["id"]
+    bad = [{**door, "event_id": str(uuid.uuid4()), "order_id": vid},
+           {**door, "event_id": str(uuid.uuid4()), "order_id": str(uuid.uuid4())},
+           {**door, "event_id": str(uuid.uuid4()), "tip_cents": -1}]
+    res = _send(store.key, bad)
+    assert [res[b["event_id"]] for b in bad] == ["invalid", "not_found", "invalid"]

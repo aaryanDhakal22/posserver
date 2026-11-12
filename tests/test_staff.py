@@ -6,7 +6,8 @@
     limits over them; turning someone back on needs a PIN
   * the terminal settings (/store/v1/me/terminal/settings), defaults + ranges
   * the Pi's GET /store/v1/agent/terminal-config: active staff with bcrypt
-    hashes, a version every change bumps, ETag → 304, agent keys only
+    hashes, switched-off staff with active false and no hash, a version every
+    change bumps, ETag → 304, agent keys only
   * every change pushes the command terminal.changed {version} to the Pi
   * another store's person is a 404
 """
@@ -229,8 +230,14 @@ def test_terminal_config_for_the_pi(store, mgr) -> None:
     assert etag == f'"t{cfg["version"]}"'
     assert requests.get(CONFIG, headers={**store_key(store.key), "If-None-Match": etag}, timeout=5).status_code == 304
 
-    # An inactive person's hash leaves the Pi.
+    assert eve["active"] is True
+
+    # Switched off: still listed (the Pi ends the session as `deactivated`, agent §2.10u), active false, and the
+    # hash never leaves main. Deleted: gone from the list (the Pi says `removed`).
     _ok(mgr.patch(f"{STAFF}/{p['id']}", json={"active": False}, timeout=10))
+    (off,) = _config(store.key)["staff"]
+    assert off["id"] == p["id"] and off["active"] is False and off["pin_hash"] == "", off
+    _ok(mgr.delete(f"{STAFF}/{p['id']}", timeout=10), 204)
     assert _config(store.key)["staff"] == []
 
 

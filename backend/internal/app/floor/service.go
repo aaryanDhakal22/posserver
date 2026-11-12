@@ -63,7 +63,8 @@ type event struct {
 	TipCents *int64 `json:"tip_cents"`
 	// order.status cancelled by hand (weborder stage 3): customer_asked | couldnt_deliver | other
 	Reason string `json:"reason"`
-	// order.void: "void" (default) or "waste" (made already; the owner, 2026-11-12)
+	// order.void: "void" (default) or "waste" (made already; the owner, 2026-11-12);
+	// order.tip: "door" = a driver's cash tip at the door on a counter order
 	Kind string `json:"kind"`
 	// order.void kind waste: the store's waste reason the cashier picked
 	WasteReason string `json:"waste_reason"`
@@ -112,6 +113,8 @@ type CounterOrders interface {
 	CreateCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, co *order.CounterOrder, agentStatus []byte, batchID *int64) (string, []order.MoneyFlag, error)
 	AddCounterPayment(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, p order.CheckedPayment) (string, []order.MoneyFlag, error)
 	ChangeCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, o *order.Order, at time.Time, flags []order.MoneyFlag) (string, []order.MoneyFlag, error)
+	// SetDoorTip keeps a counter order's door tip (absolute; order.tip kind door).
+	SetDoorTip(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, cents int64, at time.Time) (string, error)
 }
 
 // StaffLimits tells a refunder's role and refund limit (the staff service):
@@ -146,6 +149,7 @@ type Service struct {
 	journal   Journal
 	customers Customers
 	onPlaced  func(ctx context.Context, o *order.Order)
+	onMoved   func(ctx context.Context, before, after *order.Order)
 	orders    OrderLoader
 	repo      order.FloorRepository
 	runs      DeliveryRunStore
@@ -197,9 +201,20 @@ func (s *Service) OnDayClose(d DayClose) { s.dayClose = d }
 // locates a counter delivery).
 func (s *Service) OnCounterPlaced(f func(ctx context.Context, o *order.Order)) { s.onPlaced = f }
 
+// OnCounterMoved is told after an order.changed was applied to a delivery
+// (the geo worker locates a new address again): before = the order as main
+// had it (nil when it couldn't be read), after = the changed order.
+func (s *Service) OnCounterMoved(f func(ctx context.Context, before, after *order.Order)) {
+	s.onMoved = f
+}
+
 // FlagPageEvery: at most one "money flagged" page per store in this window
 // (every flag is still logged, counted and kept in money_flags).
 const FlagPageEvery = time.Hour
+
+// TipKindDoor is order.tip's kind for a driver's cash tip at the door on a
+// counter order (absent = ADD TIP on a website card order).
+const TipKindDoor = "door"
 
 // MaxTipCents bounds an added tip absolutely ($1,000); the store's own cap
 // (the ordering setting tip_max_cents, default $50, M-20) is the card
@@ -292,6 +307,18 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 		return res, err
 	case "order.tip":
 		oid, err := uuid.Parse(ev.OrderID)
+		if ev.Kind == TipKindDoor {
+			// A cash tip a driver got at the door on a counter order (the Pi's door tip, 2026-11-12):
+			// kept on main's payments as the driver's, never charged, never in the Z check.
+			if s.counter == nil || err != nil || ev.TipCents == nil || *ev.TipCents < 0 || *ev.TipCents > MaxTipCents {
+				return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
+			}
+			res, err := s.counter.SetDoorTip(ctx, sc, eid, ev.Type, oid, *ev.TipCents, ev.At)
+			if err == nil && res == order.FloorApplied {
+				s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Int64("tip_cents", *ev.TipCents).Msg("door tip recorded")
+			}
+			return res, err
+		}
 		if s.holds == nil || err != nil || ev.TipCents == nil || *ev.TipCents < 0 || *ev.TipCents > MaxTipCents {
 			return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 		}

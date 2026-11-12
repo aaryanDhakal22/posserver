@@ -207,6 +207,14 @@ func (f *fakeDB) ResetOrderGeoForChoice(_ context.Context, a models.ResetOrderGe
 	return nil
 }
 
+func (f *fakeDB) RelocateOrderGeo(_ context.Context, a models.RelocateOrderGeoParams) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.orderGeo[fromPg(a.OrderID)] = &models.OrderGeo{OrderID: a.OrderID, TenantID: a.TenantID, LocationID: a.LocationID,
+		State: StatePending, NextTryAt: ts(f.now()), CreatedAt: ts(f.now()), UpdatedAt: f.stamp()}
+	return nil
+}
+
 func (f *fakeDB) ResetOrderGeoForPin(_ context.Context, id pgtype.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()

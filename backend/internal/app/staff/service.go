@@ -67,6 +67,10 @@ type ConfigPerson struct {
 	Limits          staff.Limits    `json:"limits"`
 	EffectiveLimits staff.Effective `json:"effective_limits"`
 	UpdatedAt       time.Time       `json:"updated_at"`
+	// Active false = switched off in main (contract §2.5zb): listed with no
+	// PIN hash so the Pi ends their session with reason `deactivated`; a
+	// person deleted is simply absent (`removed`).
+	Active bool `json:"active"`
 }
 
 // Config is GET /store/v1/agent/terminal-config.
@@ -125,8 +129,9 @@ func (s *Service) RefundLimit(ctx context.Context, locationID, staffID uuid.UUID
 	return "", nil, false, nil
 }
 
-// Config is what the store's Pi pulls: the settings and the active staff
-// with their PIN hashes.
+// Config is what the store's Pi pulls: the settings and the staff, the
+// active ones with their PIN hashes, the switched-off ones with active false
+// and no hash (the Pi tells `deactivated` from `removed`, agent §2.10u).
 func (s *Service) Config(ctx context.Context, locationID uuid.UUID) (Config, error) {
 	people, err := s.repo.List(ctx, locationID)
 	if err != nil {
@@ -138,11 +143,12 @@ func (s *Service) Config(ctx context.Context, locationID uuid.UUID) (Config, err
 	}
 	c := Config{Version: v, Settings: st, Staff: []ConfigPerson{}}
 	for _, p := range people {
+		cp := ConfigPerson{ID: p.ID, FirstName: p.FirstName, LastName: p.LastName, Role: p.Role,
+			PinHash: p.PinHash, Limits: p.Limits, EffectiveLimits: staff.EffectiveLimits(p, st), UpdatedAt: p.UpdatedAt, Active: p.Active}
 		if !p.Active {
-			continue
+			cp.PinHash = "" // an inactive person's hash never leaves main
 		}
-		c.Staff = append(c.Staff, ConfigPerson{ID: p.ID, FirstName: p.FirstName, LastName: p.LastName, Role: p.Role,
-			PinHash: p.PinHash, Limits: p.Limits, EffectiveLimits: staff.EffectiveLimits(p, st), UpdatedAt: p.UpdatedAt})
+		c.Staff = append(c.Staff, cp)
 	}
 	return c, nil
 }

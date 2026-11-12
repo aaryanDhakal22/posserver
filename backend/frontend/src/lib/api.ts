@@ -432,6 +432,8 @@ export interface StoreOrder {
   customer: { display_name?: string };
   fulfillment: { type: string };
   money: { total_cents: number };
+  /** The order's payments; tip_cents = the tip taken with one (never in the total). */
+  payments?: { method: string; amount_cents: number; tip_cents?: number }[];
   received_at: string;
   kitchen_order_number?: number;
   estimated_ready_at?: string;

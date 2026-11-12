@@ -50,6 +50,9 @@ type Summary struct {
 	CustomerName  string
 	TotalCents    int64
 	ReceivedAt    time.Time
+	// TipCents: Σ its payments' tip_cents (counter tips, tips added
+	// afterwards, a driver's door tip, a captured website card's tip).
+	TipCents int64
 }
 
 // ListFilter narrows the admin cross-tenant order listing. Empty TenantID /

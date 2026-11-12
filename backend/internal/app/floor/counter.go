@@ -185,6 +185,14 @@ func (s *Service) applyChanged(ctx context.Context, sc order.Scope, eid uuid.UUI
 	if err != nil {
 		return s.invalid(ctx, sc, eid, ev, err)
 	}
+	// The order as it was, for the geo worker (a delivery's new address is
+	// located again). Only for a delivery: nothing to locate otherwise.
+	var before *order.Order
+	if s.onMoved != nil && s.orders != nil && co.Order.Fulfillment().Type == order.FulfillmentDelivery {
+		if b, gerr := s.orders.GetByID(ctx, sc, order.ID(oid)); gerr == nil {
+			before = b
+		}
+	}
 	res, flags, err := s.counter.ChangeCounterOrder(ctx, sc, eid, ev.Type, oid, co.Order, ev.At, co.Flags)
 	if err != nil {
 		return "", err
@@ -193,6 +201,9 @@ func (s *Service) applyChanged(ctx context.Context, sc order.Scope, eid uuid.UUI
 		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Int("lines", len(co.Order.Items())).
 			Int64("total_cents", int64(co.Order.Money().Total)).Msg("counter order changed")
 		s.flagged(ctx, sc, eid, ev.Type, oid.String(), flags)
+		if s.onMoved != nil && co.Order.Fulfillment().Type == order.FulfillmentDelivery {
+			s.onMoved(ctx, before, co.Order)
+		}
 	}
 	return res, nil
 }

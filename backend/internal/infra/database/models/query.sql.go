@@ -3824,7 +3824,7 @@ func (q *Queries) GetOrdersPageInScope(ctx context.Context, arg GetOrdersPageInS
 }
 
 const getPaymentsByOrderID = `-- name: GetPaymentsByOrderID :many
-SELECT id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code
+SELECT id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code, tip_cents
 FROM payments WHERE order_id = $1
 `
 
@@ -3838,6 +3838,7 @@ type GetPaymentsByOrderIDRow struct {
 	Last4       string             `json:"last4"`
 	CapturedAt  pgtype.Timestamptz `json:"captured_at"`
 	AuthCode    string             `json:"auth_code"`
+	TipCents    int64              `json:"tip_cents"`
 }
 
 func (q *Queries) GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID) ([]GetPaymentsByOrderIDRow, error) {
@@ -3859,6 +3860,7 @@ func (q *Queries) GetPaymentsByOrderID(ctx context.Context, orderID pgtype.UUID)
 			&i.Last4,
 			&i.CapturedAt,
 			&i.AuthCode,
+			&i.TipCents,
 		); err != nil {
 			return nil, err
 		}
@@ -8492,6 +8494,29 @@ type ResetOrderGeoForChoiceParams struct {
 // already saved; re-work the order and push it with the confirmed address.
 func (q *Queries) ResetOrderGeoForChoice(ctx context.Context, arg ResetOrderGeoForChoiceParams) error {
 	_, err := q.db.Exec(ctx, resetOrderGeoForChoice, arg.ConfirmedAddress, arg.OrderID)
+	return err
+}
+
+const relocateOrderGeo = `-- name: RelocateOrderGeo :exec
+INSERT INTO order_geo (order_id, tenant_id, location_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (order_id) DO UPDATE SET state = 'pending', lat = NULL, lng = NULL, quality = '',
+    distance_m = 0, duration_s = 0, polyline = '', outside_area = false, store_to_s = NULL, to_store_s = NULL,
+    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, created_at = now(), updated_at = now(),
+    candidates = NULL, confirmed_address = NULL, confirmed = false, corrected = false, note = ''
+`
+
+type RelocateOrderGeoParams struct {
+	OrderID    pgtype.UUID `json:"order_id"`
+	TenantID   pgtype.UUID `json:"tenant_id"`
+	LocationID pgtype.UUID `json:"location_id"`
+}
+
+// A delivery's address changed after it was placed (the Pi's order.changed,
+// or a takeout moved to a delivery): work it again from scratch, as at
+// intake. created_at restarts so the retry window counts from the change.
+func (q *Queries) RelocateOrderGeo(ctx context.Context, arg RelocateOrderGeoParams) error {
+	_, err := q.db.Exec(ctx, relocateOrderGeo, arg.OrderID, arg.TenantID, arg.LocationID)
 	return err
 }
 

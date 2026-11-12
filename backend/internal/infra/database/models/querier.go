@@ -420,6 +420,10 @@ type Querier interface {
 	// Staff picked a candidate (geo.choose): the pinned geo_cache entry is
 	// already saved; re-work the order and push it with the confirmed address.
 	ResetOrderGeoForChoice(ctx context.Context, arg ResetOrderGeoForChoiceParams) error
+	// A delivery's address changed after it was placed (the Pi's order.changed,
+	// or a takeout moved to a delivery): work it again from scratch, as at
+	// intake. created_at restarts so the retry window counts from the change.
+	RelocateOrderGeo(ctx context.Context, arg RelocateOrderGeoParams) error
 	ResetOrderGeoForPin(ctx context.Context, orderID pgtype.UUID) error
 	// The daily restock: every 86'd item of the location without a later
 	// out_until comes back.

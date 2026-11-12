@@ -421,7 +421,7 @@ FROM line_items WHERE order_id = $1
 ORDER BY parent_id NULLS FIRST, position;
 
 -- name: GetPaymentsByOrderID :many
-SELECT id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code
+SELECT id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code, tip_cents
 FROM payments WHERE order_id = $1;
 
 -- name: GetStatusEventsByOrderID :many
@@ -1103,6 +1103,17 @@ UPDATE order_geo SET next_try_at = @next_try_at WHERE order_id = @order_id;
 UPDATE order_geo SET next_try_at = now()
 WHERE tenant_id = @tenant_id AND location_id = @location_id
   AND pushed_at IS NULL AND state <> 'pending';
+
+-- name: RelocateOrderGeo :exec
+-- A delivery's address changed after it was placed (the Pi's order.changed,
+-- or a takeout moved to a delivery): work it again from scratch, as at
+-- intake. created_at restarts so the retry window counts from the change.
+INSERT INTO order_geo (order_id, tenant_id, location_id)
+VALUES (@order_id, @tenant_id, @location_id)
+ON CONFLICT (order_id) DO UPDATE SET state = 'pending', lat = NULL, lng = NULL, quality = '',
+    distance_m = 0, duration_s = 0, polyline = '', outside_area = false, store_to_s = NULL, to_store_s = NULL,
+    attempts = 0, next_try_at = now(), last_error = '', pushed_at = NULL, created_at = now(), updated_at = now(),
+    candidates = NULL, confirmed_address = NULL, confirmed = false, corrected = false, note = '';
 
 -- name: ResetOrderGeoForPin :exec
 UPDATE order_geo SET state = 'pending', attempts = 0, next_try_at = now(),

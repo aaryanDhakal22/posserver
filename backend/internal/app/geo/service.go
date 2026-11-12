@@ -60,6 +60,7 @@ type Queries interface {
 	WakeLocationOrderGeo(ctx context.Context, arg models.WakeLocationOrderGeoParams) (int64, error)
 	ResetOrderGeoForPin(ctx context.Context, orderID pgtype.UUID) error
 	ResetOrderGeoForChoice(ctx context.Context, arg models.ResetOrderGeoForChoiceParams) error
+	RelocateOrderGeo(ctx context.Context, arg models.RelocateOrderGeoParams) error
 	RequeueLocationOrderGeo(ctx context.Context, arg models.RequeueLocationOrderGeoParams) (int64, error)
 	ListOpenLocatedDeliveries(ctx context.Context, arg models.ListOpenLocatedDeliveriesParams) ([]models.ListOpenLocatedDeliveriesRow, error)
 	ListOrderGeoByIDs(ctx context.Context, arg models.ListOrderGeoByIDsParams) ([]models.ListOrderGeoByIDsRow, error)
@@ -193,6 +194,47 @@ func (s *Service) OnOrderCreated(ctx context.Context, o *order.Order) {
 		return
 	}
 	s.poke()
+}
+
+// OnOrderMoved is told after a counter order's fulfillment changed (the
+// Pi's order.changed, floor service hook; before = the order as it was, nil
+// when unknown). A delivery whose street address is new — a takeout moved to
+// a delivery, or the customer gave another address — is worked again from
+// scratch, exactly as at intake (Census → Nominatim, OSRM drive times) and
+// pushed to the Pi as order.geo, so its map, drive time, pools and AUTO see
+// the new address. The same address (only line2 / notes moved), a pickup,
+// or a delivery moved back to a pickup changes nothing. Never fails the
+// event: an error is logged.
+func (s *Service) OnOrderMoved(ctx context.Context, before, after *order.Order) {
+	if after == nil || after.Fulfillment().Type != order.FulfillmentDelivery || !AddressMoved(before, after) {
+		return
+	}
+	id := uuid.UUID(after.ID())
+	if err := s.q.RelocateOrderGeo(ctx, models.RelocateOrderGeoParams{
+		OrderID: pgUUID(id), TenantID: pgUUID(uuid.UUID(after.TenantID())), LocationID: pgUUID(uuid.UUID(after.LocationID())),
+	}); err != nil {
+		s.logger.Warn().Ctx(ctx).Err(err).Str("order_id", id.String()).Msg("geo: relocate after an address change failed")
+		return
+	}
+	s.logger.Info().Ctx(ctx).Str("order_id", id.String()).Msg("geo: delivery address changed, locating it again")
+	s.poke()
+}
+
+// AddressMoved: does after deliver somewhere before didn't (another geo_cache
+// key: street, town, state, zip)? A delivery that was not one before always
+// moved; before nil (unknown) counts as moved.
+func AddressMoved(before, after *order.Order) bool {
+	if before == nil || before.Fulfillment().Type != order.FulfillmentDelivery {
+		return true
+	}
+	key := func(o *order.Order) string {
+		a := o.Fulfillment().Address
+		if a == nil {
+			return ""
+		}
+		return NormalizeKey(Address{Line1: a.Line1, City: a.City, State: a.State, Zip: a.PostalCode})
+	}
+	return key(before) != key(after)
 }
 
 // WakeLocation re-pushes everything a (re)connected agent has not acked

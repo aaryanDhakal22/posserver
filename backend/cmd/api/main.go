@@ -372,6 +372,7 @@ func main() {
 	dayCloseService.SetMeters(&meters) // CM-14: drawers' over / short, Z differences
 	floorService.OnDayClose(dayCloseService)
 	floorService.OnCounterPlaced(geoService.OnOrderCreated)
+	floorService.OnCounterMoved(geoService.OnOrderMoved) // a delivery's new address is located again
 	safego.Loop(ctx, "staff.watch_menus", func(ctx context.Context) { staffService.WatchMenus(ctx, menuBankRepo, broker) })
 	// Quibase's online-ordering controls through the Pi (weborder stage 3): pause + sold out.
 	onlineCtl := onlinectl.NewService(storeStatusService, repositories.NewStockRepository(pool), lgr)

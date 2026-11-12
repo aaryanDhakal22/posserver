@@ -6,6 +6,8 @@
   // and drivers; the agent syncs them here).
   let { orders, empty = 'No orders yet.' }: { orders: StoreOrder[]; empty?: string } = $props();
   const typeLabel = (t: string) => (t ? t[0].toUpperCase() + t.slice(1).replaceAll('_', ' ') : '—');
+  // Tips ride on the payments (a counter tip, a tip added afterwards, a driver's door tip), never in the total.
+  const tipsOf = (o: StoreOrder) => (o.payments ?? []).reduce((n, p) => n + (p.tip_cents ?? 0), 0);
 </script>
 
 <div class="overflow-x-auto">
@@ -25,7 +27,10 @@
           <td><StatusBadge order={o} /></td>
           <td class="mono">{hhmm(o.estimated_ready_at) || '—'}</td>
           <td>{o.driver_name || '—'}</td>
-          <td class="mono text-right">{dollars(o.money?.total_cents)}</td>
+          <td class="mono text-right">
+            {dollars(o.money?.total_cents)}
+            {#if tipsOf(o) > 0}<div class="text-xs text-text2">+ {dollars(tipsOf(o))} tip</div>{/if}
+          </td>
         </tr>
       {:else}
         <tr><td colspan="8" class="text-muted text-center !py-8">{empty}</td></tr>
