@@ -215,7 +215,8 @@ func (r *TenancyRepository) DeleteTenantCascade(ctx context.Context, id uuid.UUI
 		{"outbox_events", func() error { return q.DeleteTenantOutboxEvents(ctx, pid) }},
 		{"money_flags", exec(`DELETE FROM money_flags WHERE tenant_id = $1`)},
 		{"card_holds", exec(`DELETE FROM card_holds WHERE tenant_id = $1`)},
-		{"payments", exec(`DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE tenant_id = $1)`)},
+		{"payments", exec(`DELETE FROM payments WHERE order_id IN (SELECT id FROM orders WHERE tenant_id = $1)
+			OR (order_id IS NULL AND location_id IN (SELECT id FROM locations WHERE tenant_id = $1))`)}, // 00047: general refunds
 		{"channel_orders", exec(`DELETE FROM channel_orders WHERE tenant_id = $1`)},
 		{"order_placements", exec(`DELETE FROM order_placements WHERE tenant_id = $1`)},
 		{"order_money_changes", exec(`DELETE FROM order_money_changes WHERE tenant_id = $1`)},
@@ -250,7 +251,8 @@ func (r *TenancyRepository) TenantMoneyRecords(ctx context.Context, id uuid.UUID
 	var m tenancy.MoneyRecords
 	err := r.pool.QueryRow(ctx, `SELECT
 		(SELECT count(*) FROM payments p JOIN orders o ON o.id = p.order_id WHERE o.tenant_id = $1
-			AND p.status IN ('captured', 'refunded', 'authorized')),
+			AND p.status IN ('captured', 'refunded', 'authorized'))
+		+ (SELECT count(*) FROM payments WHERE order_id IS NULL AND location_id IN (SELECT id FROM locations WHERE tenant_id = $1)),
 		(SELECT count(*) FROM card_holds WHERE tenant_id = $1),
 		(SELECT count(*) FROM drawer_sessions WHERE tenant_id = $1),
 		(SELECT count(*) FROM z_reports WHERE tenant_id = $1),

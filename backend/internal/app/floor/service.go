@@ -335,6 +335,8 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 		return s.applyPlaced(ctx, sc, eid, ev)
 	case "order.payment":
 		return s.applyPayment(ctx, sc, eid, ev)
+	case EventGeneralRefund:
+		return s.applyGeneralRefund(ctx, sc, eid, ev)
 	case "order.void":
 		return s.applyVoid(ctx, sc, eid, ev)
 	case "order.changed":

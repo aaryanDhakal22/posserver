@@ -176,7 +176,7 @@ CREATE INDEX idx_line_items_parent_id ON line_items(parent_id);
 
 CREATE TABLE payments (
     id            uuid        PRIMARY KEY,
-    order_id      uuid        NOT NULL REFERENCES orders(id) ON DELETE RESTRICT, -- 00043
+    order_id      uuid        REFERENCES orders(id) ON DELETE RESTRICT, -- 00043; NULL = a general refund (00047)
     processor     text        NOT NULL,
     status        text        NOT NULL,
     amount_cents  bigint      NOT NULL,
@@ -198,6 +198,10 @@ CREATE TABLE payments (
     batch_id      bigint,
     approved_by   text        NOT NULL DEFAULT '',
     flags         text[]      NOT NULL DEFAULT '{}',
+    -- 00047: a general refund's reason (cash back with no order).
+    reason        text        NOT NULL DEFAULT '',
+    CONSTRAINT payments_unlinked_ck CHECK (order_id IS NOT NULL
+        OR (origin = 'counter' AND status = 'refunded' AND location_id IS NOT NULL)),
     CONSTRAINT payments_status_ck CHECK (status IN ('pending', 'authorized', 'captured', 'failed', 'refunded', 'voided')),
     CONSTRAINT payments_tip_ck CHECK (tip_cents >= 0),
     CONSTRAINT payments_refund_sign_ck CHECK ((status = 'refunded') = (amount_cents < 0))
@@ -205,6 +209,7 @@ CREATE TABLE payments (
 CREATE INDEX idx_payments_order_id ON payments(order_id);
 CREATE UNIQUE INDEX payments_client_key_uq ON payments (location_id, client_key) WHERE client_key <> '';
 CREATE INDEX idx_payments_refund_of ON payments (refund_of) WHERE refund_of IS NOT NULL;
+CREATE INDEX idx_payments_unlinked ON payments (location_id, batch_id) WHERE order_id IS NULL;
 CREATE INDEX idx_payments_counter_batch ON payments (location_id, batch_id) WHERE origin = 'counter';
 CREATE UNIQUE INDEX payments_counter_ref_uq ON payments (location_id, processor, token)
     WHERE origin = 'counter' AND token <> '' AND amount_cents > 0;
