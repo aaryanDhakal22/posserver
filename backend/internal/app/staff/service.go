@@ -46,6 +46,20 @@ type Service struct {
 	repo   Repo
 	push   Pusher
 	logger zerolog.Logger
+	// onChanged hears every staff / settings write (the call center ends the
+	// sessions of people switched off, deleted or changed).
+	onChanged []func(ctx context.Context, tenantID, locationID uuid.UUID)
+}
+
+// OnChanged registers a listener for staff / terminal-settings writes.
+func (s *Service) OnChanged(fn func(ctx context.Context, tenantID, locationID uuid.UUID)) {
+	s.onChanged = append(s.onChanged, fn)
+}
+
+// People is the store's staff as stored (with PIN hashes): main's own PIN
+// checks (the call center's sign-in).
+func (s *Service) People(ctx context.Context, locationID uuid.UUID) ([]staff.Person, error) {
+	return s.repo.List(ctx, locationID)
 }
 
 func NewService(repo Repo, push Pusher, lg zerolog.Logger) *Service {
@@ -166,8 +180,11 @@ func (s *Service) Config(ctx context.Context, locationID uuid.UUID) (Config, err
 	for _, p := range people {
 		cp := ConfigPerson{ID: p.ID, FirstName: p.FirstName, LastName: p.LastName, Role: p.Role,
 			PinHash: p.PinHash, Limits: p.Limits, EffectiveLimits: staff.EffectiveLimits(p, st), UpdatedAt: p.UpdatedAt, Active: p.Active}
-		if !p.Active {
-			cp.PinHash = "" // an inactive person's hash never leaves main
+		if !p.Active || p.Role == staff.RoleCallcenter {
+			// An inactive person's hash never leaves main; nor does a
+			// call-center agent's: main checks that PIN itself, the Pi never
+			// does (so no Pi, old or new, can log one in at a store terminal).
+			cp.PinHash = ""
 		}
 		c.Staff = append(c.Staff, cp)
 	}
@@ -224,6 +241,9 @@ func (s *Service) Create(ctx context.Context, tenantID, locationID uuid.UUID, in
 	}
 	if !staff.ValidPin(in.Pin) {
 		return View{}, staff.ErrBadPin
+	}
+	if !staff.ValidPinFor(in.Role, in.Pin) {
+		return View{}, staff.ErrBadCallcenterPin
 	}
 	limits := staff.Limits{}
 	if in.Limits != nil {
@@ -314,7 +334,15 @@ func (s *Service) Update(ctx context.Context, tenantID, locationID, id uuid.UUID
 			if !staff.ValidRole(*ch.Role) {
 				return staff.ErrBadRole
 			}
+			// Becoming a call-center agent needs a (4-digit) PIN with it: the
+			// saved hash can't say how long the old one was.
+			if *ch.Role == staff.RoleCallcenter && p.Role != staff.RoleCallcenter && ch.Pin == nil {
+				return staff.ErrPinRequired
+			}
 			p.Role = *ch.Role
+		}
+		if ch.Pin != nil && !staff.ValidPinFor(p.Role, *ch.Pin) {
+			return staff.ErrBadCallcenterPin
 		}
 		if ch.Limits != nil {
 			if err := ch.Limits.Validate(); err != nil {
@@ -362,6 +390,9 @@ func (s *Service) ResetPin(ctx context.Context, tenantID, locationID, id uuid.UU
 		if !ok {
 			return staff.ErrNotFound
 		}
+		if !staff.ValidPinFor(p.Role, pin) {
+			return staff.ErrBadCallcenterPin
+		}
 		if p.Active && pinTaken(people, pin, p.ID) {
 			return staff.ErrPinTaken
 		}
@@ -406,6 +437,9 @@ func (s *Service) SaveSettings(ctx context.Context, tenantID, locationID uuid.UU
 
 // changed tells the store's Pi (fire-and-forget; it also pulls at connect).
 func (s *Service) changed(ctx context.Context, tenantID, locationID uuid.UUID, version int64) {
+	for _, fn := range s.onChanged {
+		fn(ctx, tenantID, locationID)
+	}
 	if s.push == nil {
 		return
 	}

@@ -36,6 +36,7 @@ import (
 
 	authAppSvc "quiccpos/main/internal/app/auth"
 	"quiccpos/main/internal/app/bankimport"
+	callcenterApp "quiccpos/main/internal/app/callcenter"
 	cardholdApp "quiccpos/main/internal/app/cardhold"
 	channelApp "quiccpos/main/internal/app/channel"
 	"quiccpos/main/internal/app/customers"
@@ -442,6 +443,11 @@ func main() {
 	// Send to phone (agent contract 2.10z): the Square app on a cashier's phone.
 	requester.RegisterInbound(squarepay.MsgPosConfig, squareService.HandlePosConfig)
 	requester.RegisterInbound(squarepay.MsgPosLookup, squareService.HandlePosLookup)
+	// The call center's remote terminal (CALLCENTER-PLAN.md): device tokens, PIN
+	// sessions for role callcenter, the relay to the store's Pi (terminal.relay)
+	// and the Pi's terminal events back (terminal.events).
+	callcenterService := callcenterApp.NewService(repositories.NewCallcenterRepository(pool), staffService, storeStatusService,
+		broker, requester, broker, squareService, tenancyService.GetLocation, lgr)
 	requester.RegisterInbound(squarepay.MsgPosFakeCharge, squareService.HandlePosFakeCharge)
 	// Square on the counter terminal (agent contract §2.10r): the reader's
 	// sign-in, a typed card's payment, a refund of either.
@@ -586,6 +592,7 @@ func main() {
 		AppEnv:            cfg.AppConfig.AppEnv,
 		DevNotices:        devNotices,
 		Staff:             staffService,
+		Callcenter:        callcenterService,
 		DayClose:          dayCloseService,
 		Audit:             repositories.NewAuditRepository(pool),
 	})

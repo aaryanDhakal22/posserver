@@ -26,6 +26,7 @@ import (
 
 	"quiccpos/main/internal/app/agentsync"
 	"quiccpos/main/internal/app/bankimport"
+	callcenterApp "quiccpos/main/internal/app/callcenter"
 	cardholdApp "quiccpos/main/internal/app/cardhold"
 	channelApp "quiccpos/main/internal/app/channel"
 	"quiccpos/main/internal/app/customers"
@@ -77,6 +78,8 @@ const (
 	storeUIPath = "/store"
 	// channelPrefix is main 3.0's channel API (the ports).
 	channelPrefix = "/channel/v1"
+	// callcenterPrefix is the call center's remote terminal (CALLCENTER-PLAN.md).
+	callcenterPrefix = "/callcenter/v1"
 )
 
 type RouterDeps struct {
@@ -165,6 +168,9 @@ type RouterDeps struct {
 	OptionFlags *optionflags.Service
 	// DayClose backs the Pi's drawer sessions + Z reports (terminal Stage 2).
 	DayClose *daycloseApp.Service
+	// Callcenter backs the call center's remote terminal (/callcenter/v1,
+	// CALLCENTER-PLAN.md): device tokens, PIN sessions, the relay to the Pi.
+	Callcenter *callcenterApp.Service
 	// Audit writes main's row per admin / manager write and reads the audit
 	// log (baseline 2026-11-12); nil = no app rows, no audit routes' data.
 	Audit *repositories.AuditRepository
@@ -271,6 +277,11 @@ func routeTable(d RouterDeps) []routeDef {
 	auditH := handler.NewAuditHandler(d.Audit, d.Logger)
 	staffH := handler.NewStaffHandler(d.Staff, d.MenuViewService, d.Pricing, d.MenuService, d.Logger)
 	dayCloseH := handler.NewDayCloseHandler(d.DayClose, d.Logger)
+	var ccAudit appMiddleware.AuditWriter
+	if d.Audit != nil {
+		ccAudit = d.Audit
+	}
+	ccH := handler.NewCallcenterHandler(d.Callcenter, d.TenancyService, ccAudit, d.Logger)
 	if d.Kitchen != nil {
 		statusH.SetKitchen(d.Kitchen)
 	}
@@ -507,6 +518,24 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", storePrefix+"/me/pause", "store-session", "Take orders again", statusH.MeResume, storeSession),
 		def("POST", storePrefix+"/me/hours-exceptions", "store-session", "Set a date closed or its own hours {date, closed, hours, note}", statusH.MeSetException, storeSession),
 		def("DELETE", storePrefix+"/me/hours-exceptions/:id", "store-session", "Remove a date exception", statusH.MeDeleteException, storeSession),
+		// The call center's remote terminal (CALLCENTER-PLAN.md, contract §2.5zh).
+		// Its web app's server calls these with the device token (Bearer qccd_…).
+		def("POST", callcenterPrefix+"/login", "none", "The store's login opens the call-center app on a browser {username, password, device_name?} -> {device_token (long-lived, revocable in Store › Staff), device, store} | 401 invalid_credentials | 429", ccH.Login),
+		def("POST", callcenterPrefix+"/logout", "callcenter-device", "Forget this browser: its device token is revoked", ccH.Logout),
+		def("GET", callcenterPrefix+"/me", "callcenter-device", "The store for the call center: {store, open, closed_reason, next_open_at, hours, pi {online}, settings {idle_lock_minutes}, square|null, device, session|null}", ccH.Me),
+		def("POST", callcenterPrefix+"/session", "callcenter-device", "An agent signs in with their 4-digit PIN {pin} (role callcenter only) -> {staff, role, limits, settings, expires_at} | 400 bad_pin | 401 wrong_pin | 403 wrong_role | 429 too_many_attempts", ccH.SessionStart),
+		def("GET", callcenterPrefix+"/session", "callcenter-device", "Who is signed in on this browser {staff|null, role?, limits?, settings, expires_at?}", ccH.SessionGet),
+		def("PUT", callcenterPrefix+"/session", "callcenter-device", "Keep-alive: the agent is active -> 204 | 401 login_required", ccH.SessionTouch),
+		def("DELETE", callcenterPrefix+"/session", "callcenter-device", "Lock: the agent's session ends -> 204", ccH.SessionEnd),
+		def("GET", callcenterPrefix+"/events", "callcenter-device", "SSE: the Pi's terminal events for this store under their own names + hello / store {pi_online, open} / session.ended", ccH.Events),
+		def("GET", callcenterPrefix+"/pi/*", "callcenter-session", "Relay to the store's Pi: /api/terminal/<path> for the call center's allowlist (same bodies and statuses) | 403 not_allowed_for_callcenter | 409 store_closed | 503 store_offline", ccH.Relay, channelGzip),
+		def("POST", callcenterPrefix+"/pi/*", "callcenter-session", "Relay (see GET)", ccH.Relay, channelGzip),
+		def("PUT", callcenterPrefix+"/pi/*", "callcenter-session", "Relay (see GET)", ccH.Relay),
+		def("PATCH", callcenterPrefix+"/pi/*", "callcenter-session", "Relay (see GET)", ccH.Relay),
+		def("DELETE", callcenterPrefix+"/pi/*", "callcenter-session", "Relay (see GET)", ccH.Relay),
+		def("GET", storePrefix+"/me/callcenter/devices", "store-session", "The call center's browsers (device tokens): [{id, name, created_at, last_seen_at, staff_id?, staff_name?, revoked_at?}]", ccH.MeDevices, storeSession),
+		def("DELETE", storePrefix+"/me/callcenter/devices/:id", "store-session", "Revoke a call-center browser", ccH.MeRevokeDevice, storeSession),
+		def("GET", storePrefix+"/me/reports/callcenter", "store-session", "Orders + sales per call-center agent per store-local day ?from=&to= (YYYY-MM-DD, default today, <= 92 days) -> {from, to, timezone, rows, totals}", ccH.MeReport, storeSession),
 		// Pricing + deals (main 3.0).
 		def("GET", storePrefix+"/me/staff", "store-session", "The counter terminal's staff (never the PIN)", staffH.MeList, storeSession),
 		def("POST", storePrefix+"/me/staff", "store-session", "Add a person {first_name, last_name, role, pin, limits?}", staffH.MeCreate, storeSession),

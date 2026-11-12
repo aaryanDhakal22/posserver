@@ -613,3 +613,19 @@ func (s *Service) Webhook(ctx context.Context, ev Event, onPayment func(context.
 	}
 	return nil
 }
+
+// WebCard is what Square's Web Payments card field needs in a browser: the
+// environment, the application id and the store's Square location. Three
+// public values, never a token. ok = false: Square is off here, the store
+// isn't connected or picked no location (no card entry: the call-center app
+// then offers Send unpaid only).
+func (s *Service) WebCard(ctx context.Context, locationID uuid.UUID) (env, appID, squareLocationID string, ok bool) {
+	if s == nil || !s.Enabled() {
+		return "", "", "", false
+	}
+	c, err := s.repo.Get(ctx, locationID)
+	if err != nil || c.Status != "connected" || c.SquareLocationID == "" {
+		return "", "", "", false
+	}
+	return s.cfg.Env, s.cfg.AppID, c.SquareLocationID, true
+}

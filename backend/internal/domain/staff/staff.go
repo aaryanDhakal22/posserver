@@ -24,6 +24,10 @@ const (
 	RoleCashier = "cashier"
 	RoleManager = "manager"
 	RoleDriver  = "driver"
+	// RoleCallcenter is a call-center agent (CALLCENTER-PLAN.md): their PIN
+	// works only in the call-center app (/callcenter/v1), never on a store
+	// terminal; no refunds, no discounts.
+	RoleCallcenter = "callcenter"
 )
 
 // Limits are refund / discount ceilings. A nil field = not set (an override
@@ -108,7 +112,15 @@ type Settings struct {
 	// nobody finishes in Square within this long expires (a late tap is still
 	// recorded). 0 in a stored body = the default. Edited on Store › Staff.
 	PhoneChargeTimeoutSeconds int `json:"phone_charge_timeout_seconds"`
+
+	// CallcenterIdleLockMinutes: the call-center app asks for the PIN again
+	// after this long idle, and main ends the agent's session (the owner's X,
+	// default 15).
+	CallcenterIdleLockMinutes int `json:"callcenter_idle_lock_minutes"`
 }
+
+// DefaultCallcenterIdleLock is the call center's idle lock (minutes).
+const DefaultCallcenterIdleLock = 15
 
 // Send to phone's timeout: default and bounds (seconds).
 const (
@@ -197,7 +209,8 @@ func DefaultSettings() Settings {
 		DefaultTab:       "info", ButtonFont: "barlow", CashierPriceDropPct: 20, OutOfAreaMarginMi: 1,
 		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: DefaultEmployeeMealPct, ToppingMaxCount: 3,
 		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes(), DrawerStartCents: 10000,
-		WasteReasons: DefaultWasteReasons(), VoidReasons: DefaultVoidReasons(), PhoneChargeTimeoutSeconds: DefaultPhoneChargeTimeoutS}
+		WasteReasons: DefaultWasteReasons(), VoidReasons: DefaultVoidReasons(), PhoneChargeTimeoutSeconds: DefaultPhoneChargeTimeoutS,
+		CallcenterIdleLockMinutes: DefaultCallcenterIdleLock}
 }
 
 // Ranges.
@@ -216,15 +229,17 @@ const (
 )
 
 var (
-	ErrBadPin      = errors.New("the PIN must be 2–4 digits")
-	ErrBadName     = errors.New("first name 1–40 characters, last name up to 40")
-	ErrBadRole     = errors.New("role must be cashier, manager or driver")
-	ErrBadLimits   = errors.New("refund 0–1,000,000 cents, discount 0–100 %")
-	ErrBadSettings = errors.New("bad terminal settings")
-	ErrPinTaken    = errors.New("another active person already has that PIN")
-	ErrTooMany     = errors.New("too many staff (200 per store)")
-	ErrNotFound    = errors.New("staff not found in this store")
-	ErrPinRequired = errors.New("turning someone back on needs a new PIN")
+	ErrBadPin  = errors.New("the PIN must be 2–4 digits")
+	ErrBadName = errors.New("first name 1–40 characters, last name up to 40")
+	ErrBadRole = errors.New("role must be cashier, manager, driver or callcenter")
+	// ErrBadCallcenterPin wraps ErrBadPin: a call-center agent's PIN is 4 digits.
+	ErrBadCallcenterPin = fmt.Errorf("%w (a call-center agent's PIN is exactly 4 digits)", ErrBadPin)
+	ErrBadLimits        = errors.New("refund 0–1,000,000 cents, discount 0–100 %")
+	ErrBadSettings      = errors.New("bad terminal settings")
+	ErrPinTaken         = errors.New("another active person already has that PIN")
+	ErrTooMany          = errors.New("too many staff (200 per store)")
+	ErrNotFound         = errors.New("staff not found in this store")
+	ErrPinRequired      = errors.New("turning someone back on needs a new PIN")
 )
 
 // ValidPin: 2–4 ASCII digits.
@@ -241,7 +256,17 @@ func ValidPin(pin string) bool {
 }
 
 // ValidRole reports whether r is a role.
-func ValidRole(r string) bool { return r == RoleCashier || r == RoleManager || r == RoleDriver }
+func ValidRole(r string) bool {
+	return r == RoleCashier || r == RoleManager || r == RoleDriver || r == RoleCallcenter
+}
+
+// ValidPinFor: a call-center agent's PIN is exactly 4 digits, everyone else's 2-4.
+func ValidPinFor(role, pin string) bool {
+	if role == RoleCallcenter {
+		return len(pin) == 4 && ValidPin(pin)
+	}
+	return ValidPin(pin)
+}
 
 // NormName trims a name and checks its length (required: the first name).
 func NormName(s string, required bool) (string, error) {
@@ -274,6 +299,8 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: auto_lock_minutes must be 1–%d", ErrBadSettings, MaxAutoLock)
 	case s.CounterStart < 1 || s.CounterStart > MaxCounterStart:
 		return fmt.Errorf("%w: counter_start must be 1–%d", ErrBadSettings, MaxCounterStart)
+	case s.CallcenterIdleLockMinutes != 0 && (s.CallcenterIdleLockMinutes < 1 || s.CallcenterIdleLockMinutes > MaxAutoLock):
+		return fmt.Errorf("%w: callcenter_idle_lock_minutes must be 1–%d", ErrBadSettings, MaxAutoLock)
 	case s.PhoneChargeTimeoutSeconds != 0 && (s.PhoneChargeTimeoutSeconds < MinPhoneChargeTimeoutS || s.PhoneChargeTimeoutSeconds > MaxPhoneChargeTimeoutS):
 		return fmt.Errorf("%w: phone_charge_timeout_seconds must be %d–%d", ErrBadSettings, MinPhoneChargeTimeoutS, MaxPhoneChargeTimeoutS)
 	case s.ReceiptAutoDoneSeconds < 0 || s.ReceiptAutoDoneSeconds > MaxReceiptDoneS:
@@ -358,6 +385,9 @@ func (s *Settings) Normalize() {
 	if s.PhoneChargeTimeoutSeconds == 0 {
 		s.PhoneChargeTimeoutSeconds = DefaultPhoneChargeTimeoutS
 	}
+	if s.CallcenterIdleLockMinutes == 0 {
+		s.CallcenterIdleLockMinutes = DefaultCallcenterIdleLock
+	}
 }
 
 // normalizeReasons: nil = the defaults; else trimmed, blanks and repeats (any
@@ -407,8 +437,8 @@ func RoleDefaults(role string, s Settings) Effective {
 // contract/money-rules.json E07: it never applied them).
 func EffectiveLimits(p Person, s Settings) Effective {
 	e := RoleDefaults(p.Role, s)
-	if p.Role == RoleManager {
-		return e
+	if p.Role == RoleManager || p.Role == RoleCallcenter {
+		return e // a call-center agent: always 0 / 0, their own limits ignored
 	}
 	if p.Limits.RefundCents != nil {
 		v := *p.Limits.RefundCents

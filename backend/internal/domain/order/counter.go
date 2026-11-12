@@ -50,6 +50,11 @@ type CounterSnapshot struct {
 	Snapshot
 	StaffID  string `json:"staff_id"`
 	DeviceID string `json:"device_id"`
+	// DeviceKind / TakenBy: an order the call center placed through the Pi's
+	// call-center device ("callcenter", "Call center - Cara S."), kept in
+	// source_metadata for the per-agent report; empty for a store terminal.
+	DeviceKind string `json:"device_kind"`
+	TakenBy    string `json:"taken_by"`
 	// Payments as the Pi records them (Snapshot.Payments is the summary
 	// shape; a counter snapshot carries the full payment).
 	CounterPayments []CounterPayment `json:"payments"`
@@ -379,6 +384,12 @@ func NewCounterOrder(sc Scope, s CounterSnapshot, raw []byte) (*CounterOrder, er
 	}
 	if s.DeviceID != "" {
 		meta["device_id"] = s.DeviceID
+	}
+	if s.DeviceKind != "" && len(s.DeviceKind) <= 32 {
+		meta["device_kind"] = s.DeviceKind
+	}
+	if s.TakenBy != "" && len(s.TakenBy) <= 120 {
+		meta["taken_by"] = s.TakenBy
 	}
 	if cid, err := uuid.Parse(s.CustomerID); err == nil {
 		meta["customer_id"] = cid.String()

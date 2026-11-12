@@ -55,7 +55,14 @@ func AuditActor(ctx context.Context) (auditconn.Actor, bool) {
 	case ctx.Value(adminKeyT{}) != nil:
 		a.Kind = "admin"
 	default:
-		if op, ok := OperatorFromContext(ctx); ok {
+		if cc, ok := CallcenterFromContext(ctx); ok {
+			// a call-center browser; the agent signed in on it rides in the name
+			a.Kind, a.ID, a.Name = "callcenter", cc.DeviceID, cc.DeviceName
+			if cc.StaffName != "" {
+				a.Name = cc.DeviceName + " / " + cc.StaffName
+			}
+			a.TenantID, a.LocationID = cc.TenantID, cc.LocationID
+		} else if op, ok := OperatorFromContext(ctx); ok {
 			a.Kind, a.ID, a.Name = "operator", op.OperatorID.String(), op.Username
 		} else if ch, ok := ChannelFromContext(ctx); ok {
 			a.Kind, a.ID, a.Name = "channel", ch.ID.String(), ch.Name
