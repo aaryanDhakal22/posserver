@@ -4,7 +4,7 @@
   * stored as an unlinked counter refund (no order, the Pi's batch, the reason)
   * idempotent like order.payment: the same id / client_key + body = duplicate,
     another body = conflict (kept in the flags, nothing stored)
-  * a cashier's general refund over her limit with nobody approving: flagged
+  * a manager every time: a non-manager's general refund nobody approved is flagged (refund_needs_manager)
   * main's Z check counts it with the batch's cash (the Pi's cash net is less
     the general refund): a Z that has it matches, one that misses it doesn't
   * a store with only a general refund still counts as holding money (S-1)
@@ -69,17 +69,23 @@ def test_general_refund_stored_idempotent_and_in_the_z_check(store) -> None:
     assert "z_mismatch" in _codes(mgr, "z:8")
 
 
-def test_general_refund_over_the_cashiers_limit_is_flagged(store) -> None:
+def test_a_general_refund_nobody_approved_is_flagged(store) -> None:
+    """A manager every time (the owner, 2026-11-12): a cashier's general refund with no approval is stored and
+    flagged refund_needs_manager (whatever the amount; over her limit also over_staff_limit); a manager's own
+    or an approved one is clean."""
     mgr = store.manager_session()
     cashier = _ok(mgr.post(f"{ME}/staff", json={"first_name": "Cara", "role": "cashier", "pin": "4822"}, timeout=10), 201)
-    small = _general(2000, staff_id=cashier["id"])                          # the $20 default: fine
-    big = _general(2500, staff_id=cashier["id"])                            # over it, nobody approved
-    approved = _general(9000, staff_id=cashier["id"], approved_by="mgr-1")  # a manager allowed it
-    assert set(_send(store.key, [small, big, approved]).values()) == {"applied"}
+    boss = _ok(mgr.post(f"{ME}/staff", json={"first_name": "Mia", "role": "manager", "pin": "4823"}, timeout=10), 201)
+    small = _general(500, staff_id=cashier["id"])                          # nobody approved
+    big = _general(2500, staff_id=cashier["id"])                            # nobody approved, over her limit
+    approved = _general(9000, staff_id=cashier["id"], approved_by=boss["id"])
+    own = _general(700, staff_id=boss["id"])                                # a manager's own
+    assert set(_send(store.key, [small, big, approved, own]).values()) == {"applied"}
     sub = lambda e: f"refund:{e['payment']['id']}"  # noqa: E731
-    assert _codes(mgr, sub(small)) == set()
-    assert "over_staff_limit" in _codes(mgr, sub(big))
+    assert _codes(mgr, sub(small)) == {"refund_needs_manager"}
+    assert {"refund_needs_manager", "over_staff_limit"} <= _codes(mgr, sub(big))
     assert _codes(mgr, sub(approved)) == set()
+    assert _codes(mgr, sub(own)) == set()
 
 
 def test_a_real_store_with_only_a_general_refund_holds_money(admin, make_store) -> None:

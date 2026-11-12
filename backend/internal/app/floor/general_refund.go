@@ -24,8 +24,9 @@ type GeneralRefunds interface {
 
 // applyGeneralRefund: {payment (a negative amount, method cash), reason,
 // batch_id} → an unlinked counter refund. Stored and flagged, never refused
-// for its money (M-2); invalid only when it can't be stored (not a refund,
-// a bad id, an unknown method).
+// for its money (M-2): refund_needs_manager when a non-manager gave it with
+// nobody approving (a manager every time, the owner 2026-11-12); invalid only
+// when it can't be stored (not a refund, a bad id, an unknown method).
 func (s *Service) applyGeneralRefund(ctx context.Context, sc order.Scope, eid uuid.UUID, ev event) (string, error) {
 	repo, ok := s.counter.(GeneralRefunds)
 	if s.counter == nil || !ok || len(ev.Payment) == 0 {
@@ -53,6 +54,13 @@ func (s *Service) applyGeneralRefund(ctx context.Context, sc order.Scope, eid uu
 		reason = string([]rune(reason)[:staff.MaxReasonLen])
 	}
 	s.refundLimit(ctx, sc, &cp)
+	// The owner, 2026-11-12: a general refund needs a manager every time. One a
+	// non-manager gave with nobody approving is stored and flagged.
+	if cp.ApprovedBy == "" && cp.StaffID != nil && s.staff != nil {
+		if role, _, found, err := s.staff.RefundLimit(ctx, uuid.UUID(sc.LocationID), *cp.StaffID); err == nil && found && role != staff.RoleManager {
+			cp.Flags = append(cp.Flags, order.MoneyFlag{Code: order.FlagRefundNeedsManager, Detail: map[string]any{"role": role, "general": true}})
+		}
+	}
 	res, flags, err := repo.AddGeneralRefund(ctx, sc, eid, ev.Type, cp, reason)
 	if err != nil {
 		return "", err
