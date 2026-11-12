@@ -141,13 +141,13 @@ test('coupons: add one by family on the Deals tab, the test cart fits it, saved 
   await dlg.getByRole('button', { name: 'Add a part' }).click();
   await dlg.getByLabel('Part 2', { exact: true }).fill('Side');
   await dlg.getByTestId('coupon-part').nth(1).getByRole('button', { name: 'Sides', exact: true }).click();
-  // The test cart: a pizza alone doesn't fit; + fries it does (11.99 + 3.99 − 10.00 = 5.98).
+  // The test cart: a pizza alone doesn't fit; + fries it does (the pizza carries $10.00, the fries $0.00).
   await dlg.getByLabel('Add an item to the test cart').selectOption({ label: 'Cheese Pizza' });
   await dlg.getByRole('button', { name: 'Add', exact: true }).click();
   await expect(dlg.getByTestId('coupon-fit')).toHaveText('The cart doesn’t fit this coupon yet.');
   await dlg.getByLabel('Add an item to the test cart').selectOption({ label: 'Fries' });
   await dlg.getByRole('button', { name: 'Add', exact: true }).click();
-  await expect(dlg.getByTestId('coupon-fit')).toHaveText('The cart fits: saves $5.98');
+  await expect(dlg.getByTestId('coupon-fit')).toHaveText('The cart fits: these items come to $10.00');
   await shot(page, info, 'coupon-dialog');
   await dlg.getByRole('button', { name: 'Save deal' }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);

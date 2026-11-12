@@ -225,6 +225,23 @@ def test_families_editor(mgr, make_store) -> None:
     assert mgr.delete(f"{FAMS}/{sauce['id']}", timeout=5).status_code == 404
 
 
+def test_bank_document_upcharge_over(mgr) -> None:
+    """A part's upcharge_over (its base families) is named in the document and stored as family ids."""
+    doc = _doc()
+    combo = _by_name(doc["deals"], COMBO["name"])
+    combo["parts"][0] = {**combo["parts"][0], "families": ["Hot Subs", "Pizza"], "upcharge_over": ["Hot Subs"]}
+    _apply(mgr, doc)
+    fam = {f["name"]: f for f in _listing(mgr)["families"]}
+    stored = _by_name(_ok(mgr.get(f"{ME}/deals", timeout=10)), COMBO["name"])
+    assert stored["parts"][0]["upcharge_over"] == [fam["Hot Subs"]["id"]]
+    ex = _ok(mgr.get(EXPORT, timeout=10))
+    assert _by_name(ex["deals"], COMBO["name"])["parts"][0]["upcharge_over"] == ["Hot Subs"]
+    assert _apply(mgr, ex)["changes"] == []
+    combo["parts"][0]["upcharge_over"] = ["No Such Family"]
+    r = mgr.post(APPLY, json=doc, timeout=30)
+    assert r.status_code in (400, 422) and "upcharge_over" in r.text, r.text
+
+
 def test_coupon_deals_api(mgr, make_store) -> None:
     _apply(mgr, _doc())
     fam = {f["name"]: f for f in _listing(mgr)["families"]}
@@ -237,14 +254,22 @@ def test_coupon_deals_api(mgr, make_store) -> None:
                   {"parts": [{**base["parts"][0], "qty": 0}]}, {"parts": [{**base["parts"][0], "qty": 11}]},
                   {"parts": [{**base["parts"][0], "families": []}]},
                   {"parts": [{**base["parts"][0], "families": [fam["Pizza Topping"]["id"]]}]},  # a mod family
-                  {"parts": [{**base["parts"][0], "sizes": ["00000000-0000-0000-0000-000000000001"]}]}):
+                  {"parts": [{**base["parts"][0], "sizes": ["00000000-0000-0000-0000-000000000001"]}]},
+                  {"parts": [{**base["parts"][0], "upcharge_over": [fam["Can Soda"]["id"]]}]}):  # not one of the part's families
         r = mgr.post(f"{ME}/deals", json={**base, "name": "Bad", **patch}, timeout=5)
         assert r.status_code == 400, (patch, r.text)
     other = make_store()
     with other.manager_session() as om:
         r = om.post(f"{ME}/deals", json={**base, "name": "Theirs"}, timeout=5)
         assert r.status_code == 400  # another store's families
-    _ok(mgr.delete(f"{ME}/deals/{d['id']}", timeout=5), 204)
+    # upcharge_over: some of the part's families (all of them = none).
+    part = {**base["parts"][0], "families": [fam["Fries"]["id"], fam["Can Soda"]["id"]], "upcharge_over": [fam["Fries"]["id"]]}
+    up = _ok(mgr.post(f"{ME}/deals", json={**base, "name": "Upcharge", "parts": [part]}, timeout=5), 201)
+    assert up["parts"][0]["upcharge_over"] == [fam["Fries"]["id"]]
+    every = _ok(mgr.post(f"{ME}/deals", json={**base, "name": "Every", "parts": [{**part, "upcharge_over": part["families"]}]}, timeout=5), 201)
+    assert "upcharge_over" not in every["parts"][0]
+    for x in (d, up, every):
+        _ok(mgr.delete(f"{ME}/deals/{x['id']}", timeout=5), 204)
 
 
 def test_counter_pricing_and_quote(admin, store, mgr) -> None:
@@ -285,19 +310,23 @@ def test_counter_pricing_and_quote(admin, store, mgr) -> None:
                  {"group_id": tops, "option_id": opts["Steak"]["id"]}]}]
     q = check(requests.post(f"{CH_V1}/quote", json={"type": "pickup", "lines": lines}, headers=hdr, timeout=10), "quote")
     offers = {o["name"]: o for o in q["coupon_offers"]}
-    assert offers[COMBO["name"]]["lines"] == [0, 1, 2] and offers[COMBO["name"]]["saved_cents"] == 899 + 399 + 150 - 1049
+    off = {n: o["regular_cents"] - o["total_cents"] for n, o in offers.items()}
+    assert offers[COMBO["name"]]["lines"] == [0, 1, 2] and off[COMBO["name"]] == 899 + 399 + 150 - 1049
+    assert all("saved_cents" not in o for o in q["coupon_offers"])
     # Pizza 1299 + pep 200 + olives 150 + steak 350 = 1999; in the coupon 1200 + 200 + 350 (olives, the cheaper regular one, free).
-    assert offers[PIZZA_DEAL["name"]]["saved_cents"] == 1999 - 1750
+    assert off[PIZZA_DEAL["name"]] == 1999 - 1750
     assert [o["name"] for o in q["coupon_offers"]] == [PIZZA_DEAL["name"], COMBO["name"]] or \
-        q["coupon_offers"][0]["saved_cents"] >= q["coupon_offers"][1]["saved_cents"]
+        off[q["coupon_offers"][0]["name"]] >= off[q["coupon_offers"][1]["name"]]
     cart = {"type": "pickup", "lines": lines, "coupons": [{"id": o["id"], "lines": o["lines"]} for o in q["coupon_offers"]]}
     q = check(requests.post(f"{CH_V1}/quote", json=cart, headers=hdr, timeout=10), "quote")
     assert q["errors"] == [] and "coupon_offers" not in q
     applied = {c["name"]: c for c in q["coupons"]}
     pz = applied[PIZZA_DEAL["name"]]["units"][0]
     assert pz["carrier"] and pz["item_cents"] == 1200 and pz["free_mods"] == ["Olives"] and pz["mods_cents"] == 550
-    assert [x["coupon_cents"] for x in q["lines"]] == [1049, 0, 150, 1750]
-    assert sum(d["amount_cents"] for d in q["discounts"] if d["type"] == "coupon") == q["saved_cents"]
+    # A coupon re-prices its lines (the owner, 2026-11-12): the lines as sold, the subtotal their sum, no discount.
+    assert [x["total_cents"] for x in q["lines"]] == [1049, 0, 150, 1750]
+    assert q["subtotal_cents"] == 1049 + 150 + 1750 and q["discounts"] == [] and q["saved_cents"] == 0
+    assert all("coupon_cents" not in x for x in q["lines"]) and all("saved_cents" not in c for c in q["coupons"])
 
     # The web doesn't get the counter's coupons: asked for there, it has ended.
     web = _ok(admin.post(f"{ADMIN_V1}/channels", json={"location_id": store.location_id, "kind": "web", "name": "Web"}, timeout=5), 201)["key"]

@@ -170,6 +170,13 @@ func (a *applier) couponPart(path string, p *pricing.Part) error {
 		}
 		p.Families[i] = id.String()
 	}
+	for i, n := range p.UpchargeOver {
+		id, ok := a.fams[famKey(menu.FamilyItem, n)]
+		if !ok {
+			return bad(fmt.Sprintf("%s.upcharge_over[%d]", path, i), "unknown item family %q", n)
+		}
+		p.UpchargeOver[i] = id.String()
+	}
 	for i, n := range p.Sizes {
 		id, err := a.sizeID(fmt.Sprintf("%s.sizes[%d]", path, i), n)
 		if err != nil {

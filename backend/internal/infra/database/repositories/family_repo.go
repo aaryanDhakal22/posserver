@@ -268,6 +268,19 @@ func (r *FamilyRepository) Merge(ctx context.Context, locationID, from, into uui
 					}
 				}
 				d.Parts[i].Families = fams
+				base := []string{}
+				for _, f := range d.Parts[i].UpchargeOver {
+					if f == from.String() {
+						f = into.String()
+					}
+					if !contains(base, f) {
+						base = append(base, f)
+					}
+				}
+				if len(base) == 0 {
+					base = nil
+				}
+				d.Parts[i].UpchargeOver = base
 			}
 			d.Deal.ID = d.ID
 			def, err := json.Marshal(d.Deal)

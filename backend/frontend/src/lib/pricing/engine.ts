@@ -33,8 +33,12 @@ export interface Settings {
 }
 export interface Eligible { items: string[] | null; categories: string[] | null; sizes: string[] | null }
 export interface Slot { label: string; eligible: Eligible; included_options: number }
-/** A coupon part: qty items of one of these item families (at one of these sizes, when any), each with N cheapest regular mods free. */
-export interface Part { label: string; families: string[] | null; sizes?: string[] | null; qty: number; regular_mods_included: number }
+/** A coupon part: qty items of one of these item families (at one of these sizes, when any), each with N cheapest regular mods free.
+ *  upcharge_over: some of its families, the base: a unit of another of its families pays its own price over the cheapest base item at its size
+ *  (none at its size: the unit doesn't fit). */
+export interface Part {
+  label: string; families: string[] | null; sizes?: string[] | null; qty: number; regular_mods_included: number; upcharge_over?: string[] | null;
+}
 export interface Schedule { days: string[] | null; start: string; end: string }
 export interface Deal {
   id: string; kind: 'bundle' | 'mix' | 'nth' | 'code' | 'free_item' | string; name: string; description?: string; active: boolean;
@@ -65,7 +69,10 @@ export interface Half { item_id: string; half: number }
 /** price_cents: an open-price item's price (0–MAX_OPEN_PRICE_CENTS); on any other item a price change, taken only with price_overrides (it replaces the item's price at its size, half and half: the pizza's; options still add). */
 export interface Selection { item_id: string; choice_id?: string; size_id?: string; options?: Pick[] | null; halves?: Half[] | null; price_cents?: number | null }
 /** custom (the counter only): a free line, name (1–60 characters, blank = "Open item") at price_cents (0–999,999), the store's tax rate, no deals. */
-export interface Line extends Selection { qty?: number; note?: string; deal_id?: string; picks?: Selection[] | null; custom?: boolean; name?: string }
+/** keep_price: price_cents is the Pi's kept price (price_overrides only), not a price change: the line stays in coupons and the automatic deals. */
+export interface Line extends Selection {
+  qty?: number; note?: string; deal_id?: string; picks?: Selection[] | null; custom?: boolean; name?: string; keep_price?: boolean;
+}
 export interface Cart {
   type: string; payment?: string; lines: Line[] | null; code?: string;
   tip_cents?: number | null; tip_pct?: number | null; first_order?: boolean | null;
@@ -73,24 +80,26 @@ export interface Cart {
   coupons?: CartCoupon[] | null;
 }
 export interface CartCoupon { id: string; lines: number[] | null }
+/** unit_cents: the item's own price (with its options); total_cents: the line as sold (a coupon's units at their coupon prices). */
 export interface QuoteLine {
   index: number; name: string; mods: string[]; qty: number; unit_cents: number; total_cents: number; regular_cents: number | null; deal_id: string;
   /** A price change: the item's own price the line's price_cents replaced. */
   list_cents?: number;
   /** A custom line. */
   custom?: boolean;
-  /** The line's total once its units in coupons are priced in them (only lines with a unit in a coupon). */
-  coupon_cents?: number;
 }
+/** item_cents: the coupon price on the carrier (0 on the others) + upcharge_cents (its part's upcharge_over, absent when none). */
 export interface CouponUnit {
-  line: number; part: number; carrier: boolean; item_cents: number; mods_cents: number; free_mods: string[]; unit_cents: number; regular_cents: number;
+  line: number; part: number; carrier: boolean; item_cents: number; upcharge_cents?: number; mods_cents: number; free_mods: string[];
+  unit_cents: number; regular_cents: number;
 }
+/** A coupon re-prices its lines: never a discount (regular_cents is never shown as a saving). */
 export interface AppliedCoupon {
   index: number; id: string; name: string; card: string[]; price_cents: number; lines: number[];
-  regular_cents: number; total_cents: number; saved_cents: number; units: CouponUnit[];
+  regular_cents: number; total_cents: number; units: CouponUnit[];
 }
 export interface CouponOffer {
-  id: string; name: string; card: string[]; price_cents: number; lines: number[]; regular_cents: number; total_cents: number; saved_cents: number;
+  id: string; name: string; card: string[]; price_cents: number; lines: number[]; regular_cents: number; total_cents: number;
 }
 export interface Discount { type: string; deal_id: string; label: string; amount_cents: number }
 export interface Issue { code: string; message: string; line: number | null }
@@ -100,7 +109,7 @@ export interface Quote {
   errors: Issue[]; warnings: string[]; nudges: string[];
   /** Warnings about a line, with its index (the counter's missed required group); each message is in warnings too. */
   line_warnings?: Issue[];
-  /** The cart's coupons that apply; the live coupons the units not in a coupon fully fit, best savings first (both absent when none). */
+  /** The cart's coupons that apply (they re-price their lines); the live coupons the units not in a coupon fully fit, the most off the units' own prices first (both absent when none). */
   coupons?: AppliedCoupon[];
   coupon_offers?: CouponOffer[];
 }
@@ -212,6 +221,7 @@ interface HalfPizza { key: string; price: number; plain: number }
 class Engine {
   items = new Map<string, BuildItem>();
   groups = new Map<string, BuildGroup>();
+  cheap = new Map<string, number | null>(); // coupons' base prices (family set + size)
   ctx: Context;
   constructor(ctx: Context) {
     this.ctx = ctx;
@@ -464,8 +474,97 @@ class Engine {
     for (const m of p.cmods ?? []) c.mods.push({ price: m.price, cls: this.ctx.options?.[m.option]?.class ?? '', label: m.label });
     return c;
   }
-  /** Applies the cart's coupons (one that is ended, not on now or doesn't fit as asked is left out: a warning on the counter, an error elsewhere), sets coupon_cents, lists the offers; returns what the applied ones save. */
-  coupons(q: Quote, cart: Cart, clines: CLine[], at: Date, issue: (code: string, message: string, line: number | null) => void): number {
+  /** The lowest price, at a size, of an item of one of the families on this menu (a merged item's choices count; sold out ones too); null = none has that size. */
+  cheapest(fams: string[], size: string): number | null {
+    const key = size + '|' + fams.join(',');
+    if (this.cheap.has(key)) return this.cheap.get(key) as number | null;
+    let best: number | null = null;
+    const take = (bank: string, pr: number | null) => {
+      const f = this.ctx.items?.[bank];
+      if (pr == null || !f || !f.family || !fams.includes(f.family)) return;
+      if (best == null || pr < best) best = pr;
+    };
+    for (const c of this.ctx.menu.categories ?? []) {
+      for (const it of c.items ?? []) {
+        take(it.id, sizePrice(it, size));
+        for (const ch of it.choices ?? []) take(ch.item_id, sizePrice({ ...it, price_cents: ch.price_cents, sizes: ch.sizes ?? [] }, size));
+      }
+    }
+    this.cheap.set(key, best);
+    return best;
+  }
+  /** What a unit pays over the coupon on a part: its own price over the cheapest of the part's base families at its size (never below 0); 0 without a base or in it; null = no base item has its size (it doesn't fit). */
+  upcharge(c: CLine, pt: Part): number | null {
+    const base = pt.upcharge_over ?? [];
+    if (base.length === 0 || base.includes(c.family)) return 0;
+    const low = this.cheapest(base, c.size);
+    if (low == null) return null;
+    return Math.max(c.base - low, 0);
+  }
+  fitsPart(c: CLine, pt: Part): boolean {
+    const sizes = pt.sizes ?? [];
+    if (!c.ok || c.family === '' || !(pt.families ?? []).includes(c.family) || (sizes.length !== 0 && (c.size === '' || !sizes.includes(c.size)))) return false;
+    return this.upcharge(c, pt) != null;
+  }
+  /** Matches a coupon's parts to units (cand: one line index per unit, preferred first) so every part is filled (Kuhn's augmenting paths, slots in part order), then prices it. */
+  fit(d: Deal, cand: number[], clines: CLine[]): CouponFit | null {
+    const parts = d.parts ?? [];
+    const slots: number[] = [];
+    parts.forEach((pt, k) => {
+      for (let j = 0; j < Math.trunc(pt.qty ?? 0); j++) slots.push(k);
+    });
+    if (slots.length === 0 || slots.length > MAX_COUPON_SLOTS || cand.length < slots.length) return null;
+    const owner: number[] = cand.map(() => -1);
+    const tryAt = (s: number, seen: boolean[]): boolean => {
+      // A free unit first: keep the natural order.
+      for (let u = 0; u < cand.length; u++) {
+        if (owner[u] < 0 && this.fitsPart(clines[cand[u]], parts[slots[s]])) {
+          owner[u] = s;
+          return true;
+        }
+      }
+      for (let u = 0; u < cand.length; u++) {
+        if (seen[u] || !this.fitsPart(clines[cand[u]], parts[slots[s]])) continue;
+        seen[u] = true;
+        if (owner[u] < 0 || tryAt(owner[u], seen)) {
+          owner[u] = s;
+          return true;
+        }
+      }
+      return false;
+    };
+    for (let s = 0; s < slots.length; s++) if (!tryAt(s, cand.map(() => false))) return null;
+    const bySlot: number[] = slots.map(() => 0);
+    owner.forEach((s, u) => {
+      if (s >= 0) bySlot[s] = cand[u];
+    });
+    // The carrier: the highest-priced item (a tie: the first line, then the first slot).
+    let carrier = 0;
+    for (let s = 1; s < slots.length; s++) {
+      const a = clines[bySlot[s]], b = clines[bySlot[carrier]];
+      if (a.base > b.base || (a.base === b.base && bySlot[s] < bySlot[carrier])) carrier = s;
+    }
+    const f: CouponFit = { units: [], lines: [], regular: 0, total: 0, saved: 0 };
+    slots.forEach((k, s) => {
+      const li = bySlot[s];
+      const { mods, free } = unitIn(clines[li], Math.trunc(parts[k].regular_mods_included ?? 0));
+      const up = this.upcharge(clines[li], parts[k]) ?? 0;
+      const item = up + (s === carrier ? (d.price_cents ?? 0) : 0);
+      const u: CouponUnit = {
+        line: li, part: k, carrier: s === carrier, item_cents: item, mods_cents: mods, free_mods: free, unit_cents: item + mods, regular_cents: clines[li].unit
+      };
+      if (up !== 0) u.upcharge_cents = up;
+      f.units.push(u);
+      f.lines.push(li);
+      f.regular += u.regular_cents;
+      f.total += u.unit_cents;
+    });
+    f.lines.sort((a, b) => a - b);
+    f.saved = f.regular - f.total;
+    return f;
+  }
+  /** Applies the cart's coupons (one that is ended, not on now or doesn't fit as asked is left out: a warning on the counter, an error elsewhere), re-prices each touched line (total_cents: the units left at the line's own price + its coupon units' prices: never a discount), lists the offers. */
+  coupons(q: Quote, cart: Cart, clines: CLine[], at: Date, issue: (code: string, message: string, line: number | null) => void): void {
     const ctx = this.ctx;
     const deals = ctx.deals ?? [];
     const type = cart.type ?? '';
@@ -476,7 +575,6 @@ class Engine {
       }
       issue(code, message, null);
     };
-    let off = 0;
     (cart.coupons ?? []).forEach((cc, ci) => {
       let d: Deal | undefined;
       for (const x of deals) if (x.id === cc.id && x.kind === 'coupon') d = x;
@@ -509,13 +607,13 @@ class Engine {
         return;
       }
       const cand = [...lines].sort((a, b) => clines[b].unit - clines[a].unit || a - b);
-      const f = fit(d, cand, clines);
+      const f = this.fit(d, cand, clines);
       if (!f || cand.length !== f.units.length) {
         problem('coupon_fit', `${d.name} doesn't fit the order.`);
         return;
       }
       if (f.saved <= 0) {
-        problem('coupon_fit', `${d.name} doesn't save anything on this order.`);
+        problem('coupon_fit', `${d.name} costs more than its items on this order.`);
         return;
       }
       for (const u of f.units) {
@@ -526,13 +624,11 @@ class Engine {
       }
       (q.coupons ??= []).push({
         index: ci, id: d.id, name: d.name, card: cardOf(d), price_cents: d.price_cents ?? 0, lines: f.lines,
-        regular_cents: f.regular, total_cents: f.total, saved_cents: f.saved, units: f.units
+        regular_cents: f.regular, total_cents: f.total, units: f.units
       });
-      q.discounts.push({ type: 'coupon', deal_id: d.id, label: d.name, amount_cents: f.saved });
-      off += f.saved;
     });
     clines.forEach((c, i) => {
-      if (c.used > 0 && i < q.lines.length) q.lines[i].coupon_cents = (c.qty - c.used) * c.unit + c.couponCents;
+      if (c.used > 0 && i < q.lines.length) q.lines[i].total_cents = (c.qty - c.used) * c.unit + c.couponCents;
     });
     // Offers: the units not in a coupon, priciest first (a tie: line order).
     const free: number[] = [];
@@ -544,22 +640,21 @@ class Engine {
     const offers: CouponOffer[] = [];
     for (const d of deals) {
       if (d.kind !== 'coupon' || !live(d, ctx.timezone, at, type)) continue;
-      const f = fit(d, free, clines);
+      const f = this.fit(d, free, clines);
       if (!f || f.saved <= 0) continue;
-      offers.push({
-        id: d.id, name: d.name, card: cardOf(d), price_cents: d.price_cents ?? 0, lines: f.lines,
-        regular_cents: f.regular, total_cents: f.total, saved_cents: f.saved
-      });
+      offers.push({ id: d.id, name: d.name, card: cardOf(d), price_cents: d.price_cents ?? 0, lines: f.lines, regular_cents: f.regular, total_cents: f.total });
     }
-    offers.sort((a, b) => b.saved_cents - a.saved_cents);
+    // The cheapest order first (the most off the units' own prices; a tie: the deal order).
+    offers.sort((a, b) => b.regular_cents - b.total_cents - (a.regular_cents - a.total_cents));
     if (offers.length) q.coupon_offers = offers;
-    return off;
   }
 }
 
 // Coupons (the owner's Centurion pass, 2026-11-12; contract/main.md "Families + coupons"): parts of families × qty
 // at one price; applies only when its units fill every part; the highest-priced item carries the price, the others
-// $0.00; on each unit the part's N cheapest regular mods are free. Keep in step with coupons.go.
+// $0.00; on each unit the part's N cheapest regular mods are free; a part's upcharge_over base: a unit of another of
+// its families pays its price over the cheapest base item at its size. A coupon re-prices its lines (total_cents):
+// never a discount, no saving shown (the owner, 2026-11-12). Keep in step with coupons.go.
 
 /** The units one coupon takes at most (8 parts × 10). */
 export const MAX_COUPON_SLOTS = 80;
@@ -595,68 +690,7 @@ function unitIn(c: CLine, n: number): { mods: number; free: string[] } {
   return { mods, free: labels };
 }
 
-function fitsPart(c: CLine, pt: Part): boolean {
-  const sizes = pt.sizes ?? [];
-  return c.ok && c.family !== '' && (pt.families ?? []).includes(c.family) && (sizes.length === 0 || (c.size !== '' && sizes.includes(c.size)));
-}
-
 interface CouponFit { units: CouponUnit[]; lines: number[]; regular: number; total: number; saved: number }
-
-/** Matches a coupon's parts to units (cand: one line index per unit, preferred first) so every part is filled (Kuhn's augmenting paths, slots in part order), then prices it. */
-function fit(d: Deal, cand: number[], clines: CLine[]): CouponFit | null {
-  const parts = d.parts ?? [];
-  const slots: number[] = [];
-  parts.forEach((pt, k) => {
-    for (let j = 0; j < Math.trunc(pt.qty ?? 0); j++) slots.push(k);
-  });
-  if (slots.length === 0 || slots.length > MAX_COUPON_SLOTS || cand.length < slots.length) return null;
-  const owner: number[] = cand.map(() => -1);
-  const tryAt = (s: number, seen: boolean[]): boolean => {
-    // A free unit first: keep the natural order.
-    for (let u = 0; u < cand.length; u++) {
-      if (owner[u] < 0 && fitsPart(clines[cand[u]], parts[slots[s]])) {
-        owner[u] = s;
-        return true;
-      }
-    }
-    for (let u = 0; u < cand.length; u++) {
-      if (seen[u] || !fitsPart(clines[cand[u]], parts[slots[s]])) continue;
-      seen[u] = true;
-      if (owner[u] < 0 || tryAt(owner[u], seen)) {
-        owner[u] = s;
-        return true;
-      }
-    }
-    return false;
-  };
-  for (let s = 0; s < slots.length; s++) if (!tryAt(s, cand.map(() => false))) return null;
-  const bySlot: number[] = slots.map(() => 0);
-  owner.forEach((s, u) => {
-    if (s >= 0) bySlot[s] = cand[u];
-  });
-  // The carrier: the highest-priced item (a tie: the first line, then the first slot).
-  let carrier = 0;
-  for (let s = 1; s < slots.length; s++) {
-    const a = clines[bySlot[s]], b = clines[bySlot[carrier]];
-    if (a.base > b.base || (a.base === b.base && bySlot[s] < bySlot[carrier])) carrier = s;
-  }
-  const f: CouponFit = { units: [], lines: [], regular: 0, total: 0, saved: 0 };
-  slots.forEach((k, s) => {
-    const li = bySlot[s];
-    const { mods, free } = unitIn(clines[li], Math.trunc(parts[k].regular_mods_included ?? 0));
-    const item = s === carrier ? (d.price_cents ?? 0) : 0;
-    const u: CouponUnit = {
-      line: li, part: k, carrier: s === carrier, item_cents: item, mods_cents: mods, free_mods: free, unit_cents: item + mods, regular_cents: clines[li].unit
-    };
-    f.units.push(u);
-    f.lines.push(li);
-    f.regular += u.regular_cents;
-    f.total += u.unit_cents;
-  });
-  f.lines.sort((a, b) => a - b);
-  f.saved = f.regular - f.total;
-  return f;
-}
 
 const cardOf = (d: Deal): string[] => [...(d.card ?? [])];
 
@@ -722,8 +756,8 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
       q.lines.push(ql);
       taxAt[i] = lineTax.length;
       lineTax.push({ total: p.unit * qty, rate: e.rate(p.rateItem) });
-      // A price-changed line is left out of the automatic deals and coupons: the cashier's price is the line's price.
-      if (p.bankItem && p.issues.length === 0 && p.list == null) clines[i] = e.couponLine(p, qty);
+      // A price-changed line is left out of the automatic deals and coupons: the cashier's price is the line's price. A kept price (the Pi's) stays in them.
+      if (p.bankItem && p.issues.length === 0 && (p.list == null || (line.keep_price && ctx.price_overrides))) clines[i] = e.couponLine(p, qty);
       return;
     }
     hasBundle = true;
@@ -760,15 +794,15 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
     lineTax.push({ total: u * qty, rate: e.rate(rateItem) });
   });
   if (q.lines.length === 0) issue('empty', 'Your order is empty.', null);
-  for (const l of q.lines) q.subtotal_cents += l.total_cents;
-  const sub = q.subtotal_cents;
 
-  // Coupons: the cashier's, then the offers on the units left.
-  const couponOff = e.coupons(q, cart, clines, at, issue);
+  // Coupons: the cashier's (they re-price their lines: not a discount), then the offers on the units left.
+  e.coupons(q, cart, clines, at, issue);
   clines.forEach((c, i) => {
     if (c.taxCut !== 0 && taxAt[i] >= 0) lineTax[taxAt[i]].total -= c.taxCut;
   });
-  const food = sub - couponOff;
+  for (const l of q.lines) q.subtotal_cents += l.total_cents;
+  const sub = q.subtotal_cents;
+  const food = sub;
   // The units left for the automatic deals (a coupon's units take none).
   const units: Unit[] = [];
   for (const c of clines) for (let k = c.used; c.ok && k < c.qty; k++) units.push({ price: c.unit, item: c.item, category: c.category, size: c.size });
@@ -875,7 +909,7 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
   const byRate = new Map<number, number>();
   for (const lt of lineTax) byRate.set(lt.rate, (byRate.get(lt.rate) ?? 0) + lt.total);
   const rates = [...byRate.keys()].sort((a, b) => a - b);
-  const off = sub - after - couponOff;
+  const off = sub - after;
   let spread = 0;
   rates.forEach((r, k) => {
     const gross = byRate.get(r)!;

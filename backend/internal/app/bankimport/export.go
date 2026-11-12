@@ -69,6 +69,10 @@ func export(ctx context.Context, tx bankdoc.Tx) (*bankdoc.Document, error) {
 		for _, o := range opts {
 			inStock := o.InStock
 			do := bankdoc.Option{Name: o.Name, PriceCents: o.PriceDeltaCents, InStock: &inStock, IsDefault: o.IsDefault, KitchenName: o.KitchenName}
+			if o.ShowOnDriverTicket { // written only when on, so older documents re-apply as no-ops
+				on := true
+				do.ShowOnDriverTicket = &on
+			}
 			if len(o.Prices) > 0 {
 				do.Prices = map[string]int64{}
 				for _, p := range o.Prices {
@@ -189,6 +193,9 @@ func export(ctx context.Context, tx bankdoc.Tx) (*bankdoc.Document, error) {
 			p := &d.Parts[i]
 			for j, id := range p.Families {
 				p.Families[j] = nameOr(famName, id)
+			}
+			for j, id := range p.UpchargeOver {
+				p.UpchargeOver[j] = nameOr(famName, id)
 			}
 			for j, id := range p.Sizes {
 				if u, err := uuid.Parse(id); err == nil && size[u] != "" {

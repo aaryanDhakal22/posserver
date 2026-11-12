@@ -341,6 +341,15 @@ export interface ModifierGroup {
 export interface ModifierOption {
   id: string; tenant_id: string; location_id: string; group_id: string;
   name: string; price_delta_cents: number; in_stock: boolean; position: number;
+  /** Print on the delivery (driver) ticket even at $0 (00046). */
+  show_on_driver_ticket?: boolean;
+  /** Its mod family is regular: a coupon's free toppings can include it. */
+  counts_for_coupons?: boolean;
+}
+/** PUT …/options/:id/coupons — an option's switches after the change. */
+export interface OptionFlags {
+  option_id: string; show_on_driver_ticket: boolean; counts_for_coupons: boolean;
+  family_id: string | null; family_name?: string;
 }
 export interface ItemGroupLink { group: ModifierGroup; attach_position: number; }
 
@@ -749,8 +758,9 @@ export interface PricingStore {
 export interface PricingKind { fees: PricingFees | null; tips: PricingTips | null; card_fee: { mode: string; bps: number } | null }
 export interface PricingBody { store: PricingStore; kinds: Record<string, PricingKind> }
 export type DealKind = 'bundle' | 'mix' | 'nth' | 'code' | 'free_item' | 'coupon';
-/** A coupon part: qty items of one of these item families (at one of these sizes, when any), the N cheapest regular mods free on each. */
-export interface CouponPart { label: string; families: string[]; sizes?: string[]; qty: number; regular_mods_included: number }
+/** A coupon part: qty items of one of these item families (at one of these sizes, when any), the N cheapest regular mods free on each;
+ *  upcharge_over: its base families (a unit of another of its families pays its price over the cheapest base item at its size). */
+export interface CouponPart { label: string; families: string[]; sizes?: string[]; qty: number; regular_mods_included: number; upcharge_over?: string[] }
 export interface DealEligible { items: string[]; categories: string[]; sizes: string[] }
 export interface StoreDeal {
   id: string; kind: DealKind; name: string; description: string; active: boolean; fulfil: string;

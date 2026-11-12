@@ -622,7 +622,31 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 			continue
 		}
 		if l.DealID == "" {
-			lines = append(lines, lineOf(pricing.Resolve(*pctx, l.Selection, 0), qty, strings.TrimSpace(l.Note), len(lines)))
+			// A coupon re-prices its units (never a discount): one order line
+			// per price the cart line sold at (pricing.SoldGroups).
+			r := pricing.Resolve(*pctx, l.Selection, 0)
+			for _, g := range pricing.SoldGroups(q, i, qty) {
+				if g.Coupon < 0 {
+					lines = append(lines, lineOf(r, g.Qty, strings.TrimSpace(l.Note), len(lines)))
+					continue
+				}
+				rc := r
+				rc.Options = pricing.FreeOptions(r.Options, g.FreeMods)
+				// The coupon's name rides the note (as a combo's does): the
+				// order wire has no coupon field.
+				note := "Coupon: " + g.Name
+				if n := strings.TrimSpace(l.Note); n != "" {
+					note += " · " + n
+				}
+				b := lineOf(rc, g.Qty, note, len(lines))
+				var mods order.Money
+				for _, c := range b.item.Children {
+					mods += c.UnitPrice
+				}
+				b.item.UnitPrice = order.Money(g.UnitCents) - mods
+				b.item.LineTotal = order.Money(g.UnitCents * int64(g.Qty))
+				lines = append(lines, b)
+			}
 			continue
 		}
 		var deal *pricing.Deal

@@ -3131,10 +3131,12 @@
             "type": "integer"
           },
           "unit_cents": {
-            "type": "integer"
+            "type": "integer",
+            "description": "The item's own price (with its options)"
           },
           "total_cents": {
-            "type": "integer"
+            "type": "integer",
+            "description": "The line as sold: its units in a coupon at their coupon prices (a coupon re-prices its lines, never a discount); the subtotal is the sum of the lines"
           },
           "regular_cents": {
             "type": [
@@ -3149,10 +3151,6 @@
           "custom": {
             "type": "boolean",
             "description": "A custom line (absent otherwise)"
-          },
-          "coupon_cents": {
-            "type": "integer",
-            "description": "The line's total once its units in coupons are priced in them (absent when none is)"
           }
         },
         "additionalProperties": false
@@ -3170,8 +3168,7 @@
             "enum": [
               "deal",
               "code",
-              "cash",
-              "coupon"
+              "cash"
             ]
           },
           "deal_id": {
@@ -3303,7 +3300,6 @@
                 "lines",
                 "regular_cents",
                 "total_cents",
-                "saved_cents",
                 "units"
               ],
               "properties": {
@@ -3332,12 +3328,10 @@
                   }
                 },
                 "regular_cents": {
-                  "type": "integer"
+                  "type": "integer",
+                  "description": "The units at their own prices (never shown as a saving)"
                 },
                 "total_cents": {
-                  "type": "integer"
-                },
-                "saved_cents": {
                   "type": "integer"
                 },
                 "units": {
@@ -3365,7 +3359,12 @@
                         "type": "boolean"
                       },
                       "item_cents": {
-                        "type": "integer"
+                        "type": "integer",
+                        "description": "The coupon price on the carrier (0 on the others) + upcharge_cents"
+                      },
+                      "upcharge_cents": {
+                        "type": "integer",
+                        "description": "Its part's upcharge_over: its price over the cheapest base item at its size (absent when none)"
                       },
                       "mods_cents": {
                         "type": "integer"
@@ -3389,7 +3388,7 @@
               },
               "additionalProperties": false
             },
-            "description": "The cart's coupons that apply (absent when none)"
+            "description": "The cart's coupons that apply (absent when none): they re-price their lines (each line's total_cents), never a discount"
           },
           "coupon_offers": {
             "type": "array",
@@ -3402,8 +3401,7 @@
                 "price_cents",
                 "lines",
                 "regular_cents",
-                "total_cents",
-                "saved_cents"
+                "total_cents"
               ],
               "properties": {
                 "id": {
@@ -3432,14 +3430,11 @@
                 },
                 "total_cents": {
                   "type": "integer"
-                },
-                "saved_cents": {
-                  "type": "integer"
                 }
               },
               "additionalProperties": false
             },
-            "description": "Live coupons the units not in a coupon fully fit, best savings first (absent when none)"
+            "description": "Live coupons the units not in a coupon fully fit, the most off the units' own prices first (absent when none)"
           }
         },
         "additionalProperties": false
@@ -3640,6 +3635,13 @@
                 },
                 "regular_mods_included": {
                   "type": "integer"
+                },
+                "upcharge_over": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Some of its families, the base: a unit of another of its families pays its own price over the cheapest base item at its size (none at that size: it doesn't fit)"
                 }
               },
               "additionalProperties": false
