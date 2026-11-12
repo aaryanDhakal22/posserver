@@ -94,13 +94,14 @@
     e instanceof ApiError && e.code === 'pin_taken'
       ? 'Someone else here already uses that PIN. Pick a different one.'
       : e instanceof ApiError && e.code === 'bad_pin'
-        ? 'A PIN is 2 to 4 digits (4 for a call-center agent).'
+        ? 'A PIN is 2 to 4 digits (exactly 4 for a manager or a call-center agent).'
         : e instanceof ApiError && e.code === 'pin_required'
           ? 'Give them a new PIN.'
           : '';
   /** The PIN pair's problem, or '' when it's fine. */
   function checkPin(pin: string, confirm: string, role = ''): string {
     if (role === 'callcenter' && !/^\d{4}$/.test(pin)) return 'A call-center agent’s PIN is exactly 4 digits.';
+    if (role === 'manager' && !/^\d{4}$/.test(pin)) return 'A manager’s PIN is exactly 4 digits.';
     if (!PIN_RE.test(pin)) return 'A PIN is 2 to 4 digits.';
     if (pin !== confirm) return 'The two PINs don’t match.';
     return '';

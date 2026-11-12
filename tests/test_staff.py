@@ -65,8 +65,16 @@ def test_staff_crud_and_pins(mgr) -> None:
                                        "limits": {"discount_pct": 101}}, timeout=10), 400) == "bad_limits"
     assert _code(mgr.post(STAFF, json={"first_name": "Ann", "role": "cashier", "pin": "77", "nope": 1}, timeout=10), 400) == "bad_request"
 
-    ann = _ok(mgr.post(STAFF, json={"first_name": "Ann", "role": "manager", "pin": "77",
+    # A manager's PIN is exactly 4 digits (the store security round, 2026-11-12; the Pi refuses a shorter one).
+    for pin in ("77", "777"):
+        r = mgr.post(STAFF, json={"first_name": "Ann", "role": "manager", "pin": pin}, timeout=10)
+        assert _code(r, 400) == "bad_pin" and "4 digits" in r.json()["error"], r.text
+    ann = _ok(mgr.post(STAFF, json={"first_name": "Ann", "role": "manager", "pin": "7711",
                                     "limits": {"refund_cents": 5000}}, timeout=10), 201)
+    assert _code(mgr.post(f"{STAFF}/{ann['id']}/pin", json={"pin": "771"}, timeout=10), 400) == "bad_pin"
+    assert _code(mgr.patch(f"{STAFF}/{ann['id']}", json={"pin": "71"}, timeout=10), 400) == "bad_pin"
+    # A PIN sent with a change to manager is a manager's PIN (4 digits).
+    assert _code(mgr.patch(f"{STAFF}/{sam['id']}", json={"role": "manager", "pin": "123"}, timeout=10), 400) == "bad_pin"
     # A manager is unlimited, their own limits kept but never applied (the Pi's rule; contract/money-rules.json E07).
     assert ann["limits"] == {"refund_cents": 5000}
     assert ann["effective_limits"] == {"refund_cents": None, "discount_pct": None}, "a manager is always unlimited"
@@ -78,7 +86,7 @@ def test_staff_crud_and_pins(mgr) -> None:
     assert sam["effective_limits"] == {"refund_cents": 0, "discount_pct": 0}
 
     # Reset a PIN: not to a colleague's.
-    assert _code(mgr.post(f"{STAFF}/{sam['id']}/pin", json={"pin": "77"}, timeout=10), 409) == "pin_taken"
+    assert _code(mgr.post(f"{STAFF}/{sam['id']}/pin", json={"pin": "7711"}, timeout=10), 409) == "pin_taken"
     _ok(mgr.post(f"{STAFF}/{sam['id']}/pin", json={"pin": "4321"}, timeout=10), 204)
     # The old PIN is free now.
     bob = _ok(mgr.post(STAFF, json={"first_name": "Bob", "role": "cashier", "pin": "1234"}, timeout=10), 201)

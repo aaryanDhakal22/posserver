@@ -79,9 +79,12 @@ test('staff: add with a confirmed PIN, PIN conflicts in words, own limits, chang
   expect(list[0].effective_limits).toEqual({ refund_cents: 2000, discount_pct: 20 });
   expect(JSON.stringify(list[0])).not.toContain('1234'); // the PIN is never sent back
 
-  // A one-digit PIN is refused in the page.
+  // A manager's PIN is exactly 4 digits (the store security round): a shorter one is refused in the page.
   await addPerson(page, 'Dan', 'Lee', 'Manager', '1');
-  await expect(page.getByRole('dialog').getByRole('alert')).toHaveText('A PIN is 2 to 4 digits.');
+  await expect(page.getByRole('dialog').getByRole('alert')).toHaveText('A manager’s PIN is exactly 4 digits.');
+  await fillPins(page, '987');
+  await page.getByRole('dialog').getByRole('button', { name: 'Add person' }).click();
+  await expect(page.getByRole('dialog').getByRole('alert')).toHaveText('A manager’s PIN is exactly 4 digits.');
   // Same PIN as an active colleague → said in words, on the PIN.
   await fillPins(page, '1234');
   await page.getByRole('dialog').getByRole('button', { name: 'Add person' }).click();

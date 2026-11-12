@@ -243,7 +243,7 @@ func (s *Service) Create(ctx context.Context, tenantID, locationID uuid.UUID, in
 		return View{}, staff.ErrBadPin
 	}
 	if !staff.ValidPinFor(in.Role, in.Pin) {
-		return View{}, staff.ErrBadCallcenterPin
+		return View{}, staff.PinError(in.Role)
 	}
 	limits := staff.Limits{}
 	if in.Limits != nil {
@@ -339,10 +339,14 @@ func (s *Service) Update(ctx context.Context, tenantID, locationID, id uuid.UUID
 			if *ch.Role == staff.RoleCallcenter && p.Role != staff.RoleCallcenter && ch.Pin == nil {
 				return staff.ErrPinRequired
 			}
+			// Becoming a manager keeps the saved PIN (the Staff page's edit
+			// dialog has no PIN boxes): the hash can't say how long it is,
+			// so the Pi refuses a manager whose PIN isn't 4 digits at the
+			// PIN pad, with the words to set a new one here.
 			p.Role = *ch.Role
 		}
 		if ch.Pin != nil && !staff.ValidPinFor(p.Role, *ch.Pin) {
-			return staff.ErrBadCallcenterPin
+			return staff.PinError(p.Role)
 		}
 		if ch.Limits != nil {
 			if err := ch.Limits.Validate(); err != nil {
@@ -391,7 +395,7 @@ func (s *Service) ResetPin(ctx context.Context, tenantID, locationID, id uuid.UU
 			return staff.ErrNotFound
 		}
 		if !staff.ValidPinFor(p.Role, pin) {
-			return staff.ErrBadCallcenterPin
+			return staff.PinError(p.Role)
 		}
 		if p.Active && pinTaken(people, pin, p.ID) {
 			return staff.ErrPinTaken

@@ -234,12 +234,15 @@ var (
 	ErrBadRole = errors.New("role must be cashier, manager, driver or callcenter")
 	// ErrBadCallcenterPin wraps ErrBadPin: a call-center agent's PIN is 4 digits.
 	ErrBadCallcenterPin = fmt.Errorf("%w (a call-center agent's PIN is exactly 4 digits)", ErrBadPin)
-	ErrBadLimits        = errors.New("refund 0–1,000,000 cents, discount 0–100 %")
-	ErrBadSettings      = errors.New("bad terminal settings")
-	ErrPinTaken         = errors.New("another active person already has that PIN")
-	ErrTooMany          = errors.New("too many staff (200 per store)")
-	ErrNotFound         = errors.New("staff not found in this store")
-	ErrPinRequired      = errors.New("turning someone back on needs a new PIN")
+	// ErrBadManagerPin wraps ErrBadPin: a manager's PIN is exactly 4 digits
+	// (the store security round, 2026-11-12: the Pi refuses a shorter one).
+	ErrBadManagerPin = fmt.Errorf("%w (a manager's PIN is exactly 4 digits)", ErrBadPin)
+	ErrBadLimits     = errors.New("refund 0–1,000,000 cents, discount 0–100 %")
+	ErrBadSettings   = errors.New("bad terminal settings")
+	ErrPinTaken      = errors.New("another active person already has that PIN")
+	ErrTooMany       = errors.New("too many staff (200 per store)")
+	ErrNotFound      = errors.New("staff not found in this store")
+	ErrPinRequired   = errors.New("turning someone back on needs a new PIN")
 )
 
 // ValidPin: 2–4 ASCII digits.
@@ -260,12 +263,21 @@ func ValidRole(r string) bool {
 	return r == RoleCashier || r == RoleManager || r == RoleDriver || r == RoleCallcenter
 }
 
-// ValidPinFor: a call-center agent's PIN is exactly 4 digits, everyone else's 2-4.
+// ValidPinFor: a manager's and a call-center agent's PIN is exactly 4
+// digits, a cashier's or a driver's 2-4.
 func ValidPinFor(role, pin string) bool {
-	if role == RoleCallcenter {
+	if role == RoleCallcenter || role == RoleManager {
 		return len(pin) == 4 && ValidPin(pin)
 	}
 	return ValidPin(pin)
+}
+
+// PinError is what a PIN that ValidPinFor refused for role answers.
+func PinError(role string) error {
+	if role == RoleManager {
+		return ErrBadManagerPin
+	}
+	return ErrBadCallcenterPin
 }
 
 // NormName trims a name and checks its length (required: the first name).
