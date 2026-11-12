@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"quiccpos/main/internal/observability"
+	"quiccpos/main/internal/shared/safego"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -67,8 +68,8 @@ type ScopeWaker interface {
 }
 
 // subscriberBuffer is each stream's queue. Generous so a reconnect backlog or a
-// burst never overflows it; an overflow still isn't a loss (the frame's order
-// stays unacked and is re-sent), just a delay.
+// burst never overflows it; an overflow closes that stream (Publish) so the
+// agent reconnects and catches up — never a silently dropped frame.
 const subscriberBuffer = 256
 
 type Broker struct {
@@ -137,7 +138,7 @@ func (b *Broker) SubscribeAs(ctx context.Context, scope Scope, deviceID uuid.UUI
 		}
 	}
 	for _, fn := range b.onSubscribe {
-		go fn(scope)
+		safego.Go(context.WithoutCancel(ctx), "sse.on_subscribe", func(context.Context) { fn(scope) })
 	}
 
 	return ch, func() {
@@ -233,7 +234,7 @@ func (b *Broker) Publish(ctx context.Context, scope Scope, frame Frame) int {
 	)
 	defer span.End()
 
-	delivered := 0
+	delivered, cut := 0, 0
 	b.mu.Lock()
 	set := b.clients[scope]
 	subs := len(set)
@@ -242,10 +243,22 @@ func (b *Broker) Publish(ctx context.Context, scope Scope, frame Frame) int {
 		case ch <- frame:
 			delivered++
 		default:
-			b.logger.Warn().Ctx(ctx).Msg("SSE subscriber channel full; dropping payload for them")
+			// A stream whose queue is full is too slow (or stalled): dropping
+			// the frame would lose a command or store_config for good. Cut the
+			// stream instead (its handler returns, the agent reconnects and
+			// catches up: unacked orders are re-sent, the handshake carries
+			// the store_config) — HARDENING-PLAN R-3.
+			dev := b.devices[ch]
+			b.removeLocked(scope, ch)
+			cut++
+			b.logger.Warn().Ctx(ctx).Str("device_id", dev.String()).Str("sse_event", frame.Event).
+				Msg("SSE subscriber too slow (queue full); stream closed so it reconnects")
 		}
 	}
 	b.mu.Unlock()
+	if cut > 0 {
+		span.SetAttributes(attribute.Int("sse.cut", cut))
+	}
 
 	span.SetAttributes(
 		attribute.Int("sse.subscribers", subs),

@@ -19,11 +19,15 @@ import (
 	operatorDom "quiccpos/main/internal/domain/operator"
 	siteDom "quiccpos/main/internal/domain/site"
 	"quiccpos/main/internal/domain/tenancy"
+	"quiccpos/main/internal/shared/touch"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
 )
+
+// touches bounds the last-used stamps (one per id per minute, 5 s each).
+var touches = touch.New(touch.Every)
 
 // KeyPrefix starts every channel key.
 const KeyPrefix = "qch_"
@@ -223,7 +227,7 @@ func (s *Service) Authenticate(ctx context.Context, key string) (*channelDom.Cha
 	if err != nil {
 		return nil, fmt.Errorf("channel lookup: %w", err)
 	}
-	go func(id uuid.UUID) { _ = s.repo.Touch(context.Background(), id) }(c.ID)
+	touches.Do(c.ID, func(ctx context.Context) error { return s.repo.Touch(ctx, c.ID) })
 	return c, nil
 }
 

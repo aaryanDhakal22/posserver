@@ -18,6 +18,7 @@ import (
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
 	"quiccpos/main/internal/shared/ratelimit"
+	"quiccpos/main/internal/shared/safego"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -199,6 +200,7 @@ func (s *Service) OnOrderCreated(ctx context.Context, o *order.Order) {
 // ConnectDelay, off the caller's path.
 func (s *Service) WakeLocation(scope sseBroker.Scope) {
 	go func() {
+		defer safego.Guard(context.Background(), "geo.wake_location")
 		time.Sleep(s.ConnectDelay)
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -268,6 +270,7 @@ func (s *Service) Run(ctx context.Context) {
 			}
 			wg.Add(1)
 			go func() {
+				defer safego.Guard(ctx, "geo.job")
 				defer wg.Done()
 				defer func() {
 					<-s.sem
@@ -908,6 +911,7 @@ func (s *Service) GeocodeStore(ctx context.Context, locationID uuid.UUID) error 
 // GeocodeStoreAsync is GeocodeStore off the request path (location save).
 func (s *Service) GeocodeStoreAsync(locationID uuid.UUID) {
 	go func() {
+		defer safego.Guard(context.Background(), "geo.store_geocode")
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := s.GeocodeStore(ctx, locationID); err != nil {

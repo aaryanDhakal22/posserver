@@ -18,6 +18,7 @@ import (
 	"quiccpos/main/internal/domain/tenancy"
 	"quiccpos/main/internal/infra/database/repositories"
 	"quiccpos/main/internal/infra/mail"
+	"quiccpos/main/internal/shared/safego"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -332,6 +333,7 @@ func (s *Service) NotPlaced(ctx context.Context, locationID uuid.UUID, to, name,
 	}
 	ctx = context.WithoutCancel(ctx)
 	go func() {
+		defer safego.Guard(ctx, "receipts.not_placed")
 		loc, err := s.locs.GetLocation(ctx, locationID)
 		if err != nil {
 			s.logger.Warn().Err(err).Msg("not-placed email: location gone")

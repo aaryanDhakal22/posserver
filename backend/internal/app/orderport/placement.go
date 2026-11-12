@@ -480,12 +480,9 @@ func (s *Service) page(ctx context.Context, locationID uuid.UUID, kind, title, m
 // notNotify tells the customer (email) and the owner (a page) that an order
 // wasn't placed. charged=false: nothing was ever held.
 func (s *Service) notNotify(ctx context.Context, ch channelDom.Channel, req Request, why string, _ bool) {
-	who := req.Customer.Name
-	if who == "" {
-		who = "a customer"
-	}
+	// No customer name in a page (L-4): the order's key finds it.
 	s.page(ctx, ch.LocationID, notify.KindOrderNotPlaced, "Online order NOT placed",
-		fmt.Sprintf("%s's %s order (%s) wasn't placed: %s. They weren't charged and were told.", who, ch.Name, req.ClientOrderID, why))
+		fmt.Sprintf("A %s order (%s) wasn't placed: %s. The customer wasn't charged and was told.", ch.Name, req.ClientOrderID, why))
 	if s.pl.mailer != nil && req.Customer.Email != "" {
 		s.pl.mailer.NotPlaced(context.WithoutCancel(ctx), ch.LocationID, req.Customer.Email, req.Customer.Name, why)
 	}

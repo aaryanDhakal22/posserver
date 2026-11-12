@@ -33,7 +33,10 @@ func (f *FakeCodes) Send(_ context.Context, to, channel string) error {
 	f.codes[to] = code
 	f.sent[to] = append(f.sent[to], channel)
 	f.mu.Unlock()
-	f.logger.Info().Str("to", to).Str("channel", channel).Str("code", code).Msg("FAKE sign-in code (not sent)")
+	// Dev / staging only (CodesFromEnv refuses fake in prod). The phone is
+	// masked (L-4: lines reach Loki with their fields); tests read the code
+	// through the dev-only /admin/v1/dev/signin-code route.
+	f.logger.Info().Str("to_last4", last4(to)).Str("channel", channel).Str("code", code).Msg("FAKE sign-in code (not sent)")
 	return nil
 }
 
@@ -52,4 +55,11 @@ func (f *FakeCodes) Last(to string) (string, []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.codes[to], append([]string(nil), f.sent[to]...)
+}
+
+func last4(s string) string {
+	if len(s) <= 4 {
+		return s
+	}
+	return s[len(s)-4:]
 }

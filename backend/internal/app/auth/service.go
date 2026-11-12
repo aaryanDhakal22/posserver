@@ -6,9 +6,13 @@ import (
 	"encoding/hex"
 
 	domainAuth "quiccpos/main/internal/domain/auth"
+	"quiccpos/main/internal/shared/touch"
 
 	"github.com/rs/zerolog"
 )
+
+// touches bounds the last-used stamps (one per id per minute, 5 s each).
+var touches = touch.New(touch.Every)
 
 // Service resolves a raw bearer key to a Device by hashing + lookup. Last-used
 // timestamp is updated fire-and-forget after a successful lookup; failure to
@@ -43,10 +47,12 @@ func (s *Service) Authenticate(ctx context.Context, rawKey string) (*domainAuth.
 	// Fire-and-forget: last_used_at is a UX nicety, not a correctness signal.
 	// Detached context so request cancellation doesn't kill the touch.
 	id := dev.ID
-	go func() {
-		if err := s.repo.Touch(context.Background(), id); err != nil {
+	touches.Do(id, func(ctx context.Context) error {
+		err := s.repo.Touch(ctx, id)
+		if err != nil {
 			s.logger.Debug().Err(err).Str("device_id", id.String()).Msg("touch failed")
 		}
-	}()
+		return err
+	})
 	return dev, nil
 }

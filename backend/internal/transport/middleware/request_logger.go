@@ -10,7 +10,7 @@ import (
 )
 
 // RequestLogger attaches a request-scoped zerolog logger to the context and
-// logs request start/end with method, path, status, and duration. When the
+// logs request start (debug) / end with method, path, status, and duration. When the
 // incoming request already has a span attached (via the OTEL middleware),
 // trace_id and span_id are copied onto the logger so every log line is
 // correlatable in Grafana.
@@ -42,7 +42,7 @@ func RequestLogger(logger *zerolog.Logger) echo.MiddlewareFunc {
 			ctx := reqLog.WithContext(req.Context())
 			c.SetRequest(req.WithContext(ctx))
 
-			reqLog.Info().Msg("request started")
+			reqLog.Debug().Msg("request started")
 
 			err := next(c)
 
@@ -54,6 +54,11 @@ func RequestLogger(logger *zerolog.Logger) echo.MiddlewareFunc {
 				logFn = reqLog.Error()
 			}
 
+			if err != nil {
+				// The handler's error text (a panic is logged with its stack
+				// by Recover, which runs inside this middleware).
+				logFn = logFn.Err(err)
+			}
 			logFn.
 				Int("status", status).
 				Int64("duration_ms", durationMs).

@@ -30,7 +30,7 @@ func NewSQSClient(ctx context.Context, cfg *config.Config, logger zerolog.Logger
 	sqsLogger.Debug().Msg("Loading AWS Config")
 	newCfg, err := awscfg.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
-		sqsLogger.Fatal().Err(err).Msg("Failed to load AWS config")
+		sqsLogger.Error().Err(err).Msg("Failed to load AWS config")
 		return nil, err
 	}
 

@@ -13,11 +13,15 @@ import (
 	authSvc "quiccpos/main/internal/app/auth"
 	"quiccpos/main/internal/domain/site"
 	"quiccpos/main/internal/domain/tenancy"
+	"quiccpos/main/internal/shared/touch"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
 )
+
+// touches bounds the last-used stamps (one per id per minute, 5 s each).
+var touches = touch.New(touch.Every)
 
 var (
 	ErrNotFound     = errors.New("not found")
@@ -133,7 +137,7 @@ func (s *Service) Authenticate(ctx context.Context, key string) (site.PlatformKe
 	if err != nil {
 		return k, err
 	}
-	go func(id uuid.UUID) { _ = s.repo.TouchKey(context.Background(), id) }(k.ID)
+	touches.Do(k.ID, func(ctx context.Context) error { return s.repo.TouchKey(ctx, k.ID) })
 	return k, nil
 }
 

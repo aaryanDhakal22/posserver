@@ -22,7 +22,9 @@ import (
 	"quiccpos/main/internal/observability"
 	"quiccpos/main/internal/rpc"
 	"quiccpos/main/internal/shared/config"
+	"quiccpos/main/internal/shared/dbpool"
 	"quiccpos/main/internal/shared/logger"
+	"quiccpos/main/internal/shared/safego"
 	"quiccpos/main/internal/transport"
 	"quiccpos/main/internal/transport/handler"
 	"quiccpos/main/internal/transport/session"
@@ -124,6 +126,15 @@ func main() {
 
 	lgr := logger.NewLogger(cfg.LogConfig.Level, cfg.LogConfig.Output, cfg.LogConfig.Style, cfg.OTELConfig.ServiceName)
 	mainLogger := lgr.With().Str("module", "main").Logger()
+	// Every goroutine below runs through safego: a panic is logged with its
+	// stack and counted (main.panics), and a loop starts again (F-2).
+	safego.SetLogger(lgr)
+
+	// PPROF_ADDR (off by default): net/http/pprof on its own loopback-only
+	// server, reached over SSH (R-1). A non-loopback address is refused.
+	if _, err := observability.StartPprof(ctx, os.Getenv("PPROF_ADDR"), mainLogger); err != nil {
+		mainLogger.Error().Err(err).Msg("pprof not started")
+	}
 
 	dsn := fmt.Sprintf(
 		"host=%s port=%s user=%s password=%s dbname=%s sslmode=disable",
@@ -145,6 +156,11 @@ func main() {
 		mainLogger.Fatal().Err(err).Msg("Failed to parse DB config")
 	}
 	poolConfig.ConnConfig.Tracer = otelpgx.NewTracer()
+	// R-4: pool cap + statement / idle-in-transaction timeouts (DB_MAX_CONNS,
+	// DB_STATEMENT_TIMEOUT, DB_IDLE_TX_TIMEOUT).
+	if err := dbpool.Apply(poolConfig, os.Getenv); err != nil {
+		mainLogger.Fatal().Err(err).Msg("Bad database pool setting")
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
@@ -217,7 +233,7 @@ func main() {
 	}
 	dispatcher := dispatch.New(outboxRepo, allHandlers, lgr, dispatch.WithHooks(hooks))
 	broker.SetWaker(dispatcher)
-	go dispatcher.Run(ctx)
+	safego.Loop(ctx, "outbox.dispatcher", dispatcher.Run)
 
 	if err := observability.RegisterPendingDispatch(meters, outboxRepo, handlerNames); err != nil {
 		mainLogger.Warn().Err(err).Msg("Failed to register outbox.events.pending gauge")
@@ -284,8 +300,8 @@ func main() {
 	requester.RegisterInbound(rpc.MsgPrinterAdd, agentSync.HandlePrinterAdd)
 	storeConfigPub := handler.NewStoreConfigPublisher(broker, tenancyService, lgr)
 	agentSync.OnPrintersChanged(storeConfigPub.Publish)
-	go agentSync.RunRedeliver(ctx)
-	go agentSync.RunOfflinePager(ctx)
+	safego.Loop(ctx, "agentsync.redeliver", agentSync.RunRedeliver)
+	safego.Loop(ctx, "agentsync.offline_pager", agentSync.RunOfflinePager)
 
 	// Tablet diagnostics: reports arrive via the Pi (RPC diag.report) or
 	// straight from the tablet (report key). Pages go to the OWNER only — a
@@ -313,9 +329,9 @@ func main() {
 		notifier = append(notifier, devNotices)
 	}
 	trackingService.Wire(svc, tenancyService, notifier)
-	go trackingService.RunMaintenance(ctx)
+	safego.Loop(ctx, "tracking.maintenance", trackingService.RunMaintenance)
 	requester.RegisterInbound(diagApp.MsgDiagReport, diagService.HandleRPC)
-	go diagService.RunPrune(ctx)
+	safego.Loop(ctx, "diag.prune", diagService.RunPrune)
 
 	// Delivery maps (2.0.9): delivery orders are geocoded + routed in the
 	// background after ingest and pushed to the agent as RPC order.geo; a
@@ -336,12 +352,12 @@ func main() {
 	requester.RegisterInbound(rpc.MsgLocationRadius, geoService.HandleRadius)
 	floorService.OnDeliveryRun(repositories.NewDeliveryRunStore(pool))
 	mainLogger.Info().Str("geo_providers", geoService.Providers().Name()).Msg("geo worker configured")
-	go geoService.Run(ctx)
+	safego.Loop(ctx, "geo.worker", geoService.Run)
 
 	// Store status (3.0): ordering settings, pause, hours exceptions, the
 	// delivery check, and 86'd items back at each location's reset hour.
 	storeStatusService := storestatusApp.NewService(repositories.NewStoreStatusRepository(pool), tenancyService, geoService, lgr)
-	go storeStatusService.RunRestock(ctx)
+	safego.Loop(ctx, "storestatus.restock", storeStatusService.RunRestock)
 	// The counter terminal (TERMINAL-PLAN 0d): staff + terminal settings, the
 	// Pi's counter orders / payments / voids / journal, menu.changed pushes.
 	staffService := staffApp.NewService(repositories.NewStaffRepository(pool), broker, lgr)
@@ -350,7 +366,7 @@ func main() {
 	dayCloseService := daycloseApp.NewService(repositories.NewDayCloseRepository(pool), repositories.NoRows, lgr)
 	floorService.OnDayClose(dayCloseService)
 	floorService.OnCounterPlaced(geoService.OnOrderCreated)
-	go staffService.WatchMenus(ctx, menuBankRepo, broker)
+	safego.Loop(ctx, "staff.watch_menus", func(ctx context.Context) { staffService.WatchMenus(ctx, menuBankRepo, broker) })
 	// Quibase's online-ordering controls through the Pi (weborder stage 3): pause + sold out.
 	onlineCtl := onlinectl.NewService(storeStatusService, repositories.NewStockRepository(pool), lgr)
 	requester.RegisterInbound(onlinectl.MsgOnlineStatus, onlineCtl.HandleStatus)
@@ -378,27 +394,27 @@ func main() {
 	squareService.SetNotifier(notifier)
 	if squareService.Enabled() {
 		gateways[payment.MethodCard] = squareService.CardRouter(testCard)
-		go squareService.RunRefresh(ctx)
+		safego.Loop(ctx, "square.refresh", squareService.RunRefresh)
 	}
 	cardHolds := cardholdApp.NewService(squareRepo, map[string]payment.Holder{squarepay.GatewayName: squareService.Gateway()}, repo, lgr)
 	cardHolds.SetNotifier(notifier)
-	go cardHolds.Run(ctx)
+	safego.Loop(ctx, "cardhold.worker", cardHolds.Run)
 	floorService.OnCardHolds(cardHolds)
 	// Website customer accounts (weborder stage 2): phone + code sign-in.
 	signinCodes, fakeCodes := customers.CodesFromEnv(cfg.AppConfig.AppEnv, lgr)
 	customerService := customers.NewService(repositories.NewCustomerRepository(pool), signinCodes, lgr)
 	customerService.SetCardRemover(squareService)
-	go customerService.RunPrune(ctx)
+	safego.Loop(ctx, "customers.prune", customerService.RunPrune)
 	// The counter's customers (terminal 1d): customer.upsert from the Pi, and
 	// customers.changed to a store's Pi when its customers change.
 	customerRepo := repositories.NewCustomerRepository(pool)
 	floorService.OnCustomers(customerService)
-	go customerService.WatchChanges(ctx, customerRepo, broker, broker)
+	safego.Loop(ctx, "customers.watch_changes", func(ctx context.Context) { customerService.WatchChanges(ctx, customerRepo, broker, broker) })
 	orderPortService := orderport.NewService(pricingService, storeStatusService, menuViewService, menuService, svc,
 		repositories.NewChannelOrderRepository(pool), gateways, lgr)
 	orderPortService.SetNotifier(notifier) // a failed refund pages the owner
 	orderPortService.SetAccounts(customerService)
-	go geoService.BackfillStores(ctx)
+	safego.Go(ctx, "geo.backfill_stores", geoService.BackfillStores)
 
 	operatorRepo := repositories.NewOperatorRepository(pool, lgr)
 	operatorService := operatorApp.NewService(operatorRepo, tenancyService, lgr)
@@ -421,7 +437,7 @@ func main() {
 	receiptService := receipts.NewService(repositories.NewReceiptRepository(pool), repo, tenancyService,
 		repositories.NewChannelOrderRepository(pool), receipts.StoreFuncs{Host: siteService.PrimaryHost, Reply: customerService.ReplyEmail},
 		squareRepo, mailSender, mailFrom, lgr)
-	go receiptService.Run(ctx)
+	safego.Loop(ctx, "receipts.worker", receiptService.Run)
 	// Placements (DURABILITY-PLAN.md): the key before any money moves, the
 	// work detached from the request, the sweeper, kitchen_offline.
 	// The card nonce a placement keeps while in flight is sealed with
@@ -434,7 +450,7 @@ func main() {
 	orderPortService.SetSweeper(channelService, customerService)
 	orderPortService.SetMailer(receiptService)
 	orderPortService.SetMeters(&meters)
-	go orderPortService.Run(ctx)
+	safego.Loop(ctx, "orderport.sweeper", orderPortService.Run)
 	cardHolds.OnAmountChanged(receiptService.QueueFinal)
 	floorService.OnCancelled(receiptService.QueueFinal)
 
@@ -455,7 +471,7 @@ func main() {
 	}
 
 	sqsConsumer := sqsconsumer.NewConsumer(sqsClient, cfg.SQSConfig.QueueURL, casters, svc, lgr, meters)
-	go sqsConsumer.Start(ctx)
+	safego.Loop(ctx, "sqs.consumer", sqsConsumer.Start)
 
 	// Store-manager session signer. Secret is stable (Doppler-managed) so
 	// sessions survive a blue-green swap; Secure cookies only outside dev.

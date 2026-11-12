@@ -37,12 +37,14 @@ func NewLogger(level string, output io.Writer, style string, serviceName string)
 
 	zerolog.SetGlobalLevel(logLevel)
 	log.Logger = log.Output(writer)
-	base := zerolog.New(writer).With().Timestamp().Logger()
 
 	if serviceName == "" {
-		return base
+		return zerolog.New(writer).With().Timestamp().Logger()
 	}
-	return observability.Wire(base, serviceName)
+	// Every line still goes to writer; the OTLP bridge also ships it with all
+	// of its fields (observability.Wire).
+	bridged, traceHook := observability.Wire(writer, serviceName)
+	return zerolog.New(bridged).With().Timestamp().Logger().Hook(traceHook)
 }
 
 func TempLogger() zerolog.Logger {
