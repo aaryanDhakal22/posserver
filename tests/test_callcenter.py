@@ -313,7 +313,7 @@ def test_failed_logins_are_limited_and_clipped(store) -> None:
     """5 failed per username → 429; what the caller typed is clipped in the audit row (M9)."""
     mgr = _mgr(store)
     _set_cc_login(store, mgr)
-    long_user = "x" * 500 + store.tag
+    long_user = store.tag + "x" * 500  # the tag first: it survives the clip and finds our row
     r = requests.post(f"{CC}/login", json={"username": long_user, "password": "nope"},
                       headers={"X-Request-ID": "r" * 500}, timeout=5)
     assert r.status_code == 401, r.text
@@ -325,9 +325,10 @@ def test_failed_logins_are_limited_and_clipped(store) -> None:
     # The manager's own login isn't touched by it.
     assert _mgr(store).get(f"{STORE_V1}/me/staff", timeout=5).status_code == 200
     def clipped():
-        rows = store.admin.get(f"{ADMIN_V1}/audit?limit=200", timeout=5).json()["entries"]
+        # entity "callcenter" = the call center's own app rows (a parallel gate writes many others)
+        rows = store.admin.get(f"{ADMIN_V1}/audit?entity=callcenter&limit=200", timeout=5).json()["entries"]
         return [e for e in rows if e["action"] == "callcenter.login.failed"
-                and str(((e.get("detail") or {}).get("params") or {}).get("username", "")).startswith("xxxx")]
+                and str(((e.get("detail") or {}).get("params") or {}).get("username", "")).startswith(store.tag)]
 
     mine = wait_until(clipped, timeout=5)
     assert mine, "no audit row for the failed login"
