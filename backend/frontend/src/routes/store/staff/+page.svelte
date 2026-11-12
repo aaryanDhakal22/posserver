@@ -304,7 +304,7 @@
     autoClose: boolean; autoCloseAt: string; defaultTab: string; showHistory: boolean; font: string;
     priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean; toppingMax: string;
     cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string; drawerStart: string;
-    wasteReasons: string;
+    wasteReasons: string; voidReasons: string;
   };
   type TextKey = { [K in keyof SettingsForm]: SettingsForm[K] extends string ? K : never }[keyof SettingsForm];
   let saved = $state<TerminalSettings | null>(null);
@@ -328,7 +328,8 @@
       meal: String(s.employee_meal_pct), payout: centsInput(s.cashier_payout_cents),
       pickupMinutes: String(s.default_pickup_minutes), areaCodes: (s.area_codes ?? []).join(', '),
       drawerStart: centsInput(s.drawer_start_cents),
-      wasteReasons: (s.waste_reasons ?? []).join('\n')
+      wasteReasons: (s.waste_reasons ?? []).join('\n'),
+      voidReasons: (s.void_reasons ?? []).join('\n')
     };
   }
   function useSaved(s: TerminalSettings) {
@@ -369,13 +370,19 @@
     const codes = [...new Set(f.areaCodes.split(',').map((x) => x.trim()).filter(Boolean))];
     if (codes.length < 1 || codes.length > 20 || codes.some((c) => !/^[2-9]\d\d$/.test(c)))
       throw new FieldError('areaCodes', 'Area codes: 1 to 20 three-digit codes, separated by commas.');
-    const seenWaste = new Set<string>();
-    const waste = f.wasteReasons
-      .split('\n')
-      .map((x) => x.trim().replace(/\s+/g, ' '))
-      .filter((x) => x && !seenWaste.has(x.toLowerCase()) && seenWaste.add(x.toLowerCase()));
+    const reasons = (text: string) => {
+      const seen = new Set<string>();
+      return text
+        .split('\n')
+        .map((x) => x.trim().replace(/\s+/g, ' '))
+        .filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()));
+    };
+    const waste = reasons(f.wasteReasons);
     if (waste.length < 1 || waste.length > 20 || waste.some((x) => x.length > 40))
       throw new FieldError('wasteReasons', 'Waste reasons: 1 to 20 reasons, one per line, up to 40 characters each.');
+    const voids = reasons(f.voidReasons);
+    if (voids.length < 1 || voids.length > 20 || voids.some((x) => x.length > 40))
+      throw new FieldError('voidReasons', 'Void reasons: 1 to 20 reasons, one per line, up to 40 characters each.');
     return {
       cashier_refund_cents: money(f, 'refund', 'Refunds up to', 1_000_000),
       cashier_discount_pct: int(f, 'discount', 'Discounts up to', 0, 100),
@@ -399,7 +406,8 @@
       drawer_start_cents: money(f, 'drawerStart', 'Cash left in each drawer at opening', 1_000_000),
       default_pickup_minutes: int(f, 'pickupMinutes', 'Pickups are ready in', 0, 240),
       area_codes: codes,
-      waste_reasons: waste
+      waste_reasons: waste,
+      void_reasons: voids
     };
   }
 
@@ -723,6 +731,18 @@
                   aria-invalid={sErrField === 'wasteReasons' || undefined}
                 ></textarea>
                 <p class="help">One per line. A cashier picks one to void an order that was already made (it goes on the report; nothing prints). Default: {D.waste_reasons.join(', ')}.</p>
+              </div>
+              <div class="nf wide">
+                <label class="lbl" for="ts-voidReasons">Void reasons</label>
+                <textarea
+                  id="ts-voidReasons"
+                  class="field"
+                  rows="4"
+                  autocomplete="off"
+                  bind:value={sf.voidReasons}
+                  aria-invalid={sErrField === 'voidReasons' || undefined}
+                ></textarea>
+                <p class="help">One per line. A cashier picks one to void a sent order (the kitchen gets a void ticket); nobody types a reason, so keep an "Other". Default: {D.void_reasons.join(', ')}.</p>
               </div>
             </div>
             <div class="switches">

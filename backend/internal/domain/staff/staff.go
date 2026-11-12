@@ -96,6 +96,17 @@ type Settings struct {
 	// a "void waste" (made already, never picked up …; nothing prints, the
 	// reason goes on the report). X: edited on Store › Staff.
 	WasteReasons []string `json:"waste_reasons"`
+
+	// VoidReasons (the owner, 2026-11-12, round 2): the reasons a cashier
+	// picks to void an order that was sent (the kitchen gets a void ticket).
+	// Picked, never typed; the terminal adds no "Other" of its own, so keep
+	// one in the list. X: edited on Store › Staff.
+	VoidReasons []string `json:"void_reasons"`
+}
+
+// DefaultVoidReasons are the owner's defaults (2026-11-12).
+func DefaultVoidReasons() []string {
+	return []string{"Customer cancelled", "Wrong order", "Duplicate", "Took too long", "Other"}
 }
 
 // DefaultWasteReasons are the owner's (2026-11-12).
@@ -173,7 +184,7 @@ func DefaultSettings() Settings {
 		DefaultTab:       "info", ButtonFont: "barlow", CashierPriceDropPct: 20, OutOfAreaMarginMi: 1,
 		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: DefaultEmployeeMealPct, ToppingMaxCount: 3,
 		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes(), DrawerStartCents: 10000,
-		WasteReasons: DefaultWasteReasons()}
+		WasteReasons: DefaultWasteReasons(), VoidReasons: DefaultVoidReasons()}
 }
 
 // Ranges.
@@ -278,10 +289,17 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: area_codes needs 1–%d codes", ErrBadSettings, MaxAreaCodes)
 	case len(s.WasteReasons) < 1 || len(s.WasteReasons) > MaxWasteReasons:
 		return fmt.Errorf("%w: waste_reasons needs 1–%d reasons", ErrBadSettings, MaxWasteReasons)
+	case len(s.VoidReasons) < 1 || len(s.VoidReasons) > MaxWasteReasons:
+		return fmt.Errorf("%w: void_reasons needs 1–%d reasons", ErrBadSettings, MaxWasteReasons)
 	}
 	for _, r := range s.WasteReasons {
 		if r == "" || utf8.RuneCountInString(r) > MaxWasteReasonLen {
 			return fmt.Errorf("%w: a waste reason is 1–%d characters", ErrBadSettings, MaxWasteReasonLen)
+		}
+	}
+	for _, r := range s.VoidReasons {
+		if r == "" || utf8.RuneCountInString(r) > MaxWasteReasonLen {
+			return fmt.Errorf("%w: a void reason is 1–%d characters", ErrBadSettings, MaxWasteReasonLen)
 		}
 	}
 	for _, c := range s.AreaCodes {
@@ -320,22 +338,27 @@ func (s *Settings) Normalize() {
 		s.AreaCodes = codes
 	}
 	s.OutOfAreaMarginMi = math.Round(s.OutOfAreaMarginMi*10) / 10
-	if s.WasteReasons == nil {
-		s.WasteReasons = DefaultWasteReasons()
-	} else {
-		// Trimmed, blanks and repeats (any case) dropped, order kept.
-		seen := map[string]bool{}
-		out := make([]string, 0, len(s.WasteReasons))
-		for _, r := range s.WasteReasons {
-			r = strings.Join(strings.Fields(r), " ")
-			if r == "" || seen[strings.ToLower(r)] {
-				continue
-			}
-			seen[strings.ToLower(r)] = true
-			out = append(out, r)
-		}
-		s.WasteReasons = out
+	s.WasteReasons = normalizeReasons(s.WasteReasons, DefaultWasteReasons)
+	s.VoidReasons = normalizeReasons(s.VoidReasons, DefaultVoidReasons)
+}
+
+// normalizeReasons: nil = the defaults; else trimmed, blanks and repeats (any
+// case) dropped, order kept (the waste and the void reasons).
+func normalizeReasons(list []string, defaults func() []string) []string {
+	if list == nil {
+		return defaults()
 	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(list))
+	for _, r := range list {
+		r = strings.Join(strings.Fields(r), " ")
+		if r == "" || seen[strings.ToLower(r)] {
+			continue
+		}
+		seen[strings.ToLower(r)] = true
+		out = append(out, r)
+	}
+	return out
 }
 
 // ValidHHMM: "" or a 24-hour "HH:MM".

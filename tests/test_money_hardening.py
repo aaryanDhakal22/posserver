@@ -15,7 +15,7 @@ silently rewrites the store's money.
     the batch's Z is flagged; a void can be a waste with the store's reason
   * a real store with money is never deleted (409, retire it); retired =
     devices revoked; whoami says device_revoked / unknown_key (F-4)
-  * the store's terminal settings carry waste_reasons
+  * the store's terminal settings carry waste_reasons and void_reasons
 """
 
 from __future__ import annotations
@@ -282,6 +282,21 @@ def test_waste_reasons_setting(store) -> None:
     assert mgr.put(f"{ME}/terminal/settings", json={"waste_reasons": []}, timeout=5).status_code == 400
     cfg = _ok(requests.get(f"{STORE_V1}/agent/terminal-config", headers=store_key(store.key), timeout=5))
     assert cfg["settings"]["waste_reasons"] == ["Cold", "Dropped"]
+
+
+def test_void_reasons_setting(store) -> None:
+    """The owner's void reasons (2026-11-12, round 2): picked on the terminal, never typed; X = this setting."""
+    mgr = store.manager_session()
+    s = _ok(mgr.get(f"{ME}/terminal/settings", timeout=5))
+    s = s.get("settings", s)
+    assert s["void_reasons"] == ["Customer cancelled", "Wrong order", "Duplicate", "Took too long", "Other"]
+    saved = _ok(mgr.put(f"{ME}/terminal/settings", json={"void_reasons": [" Changed  mind ", "changed mind", "Other"]}, timeout=5))
+    saved = saved.get("settings", saved)
+    assert saved["void_reasons"] == ["Changed mind", "Other"]
+    assert saved["waste_reasons"] == s["waste_reasons"]  # left out = kept
+    assert mgr.put(f"{ME}/terminal/settings", json={"void_reasons": []}, timeout=5).status_code == 400
+    cfg = _ok(requests.get(f"{STORE_V1}/agent/terminal-config", headers=store_key(store.key), timeout=5))
+    assert cfg["settings"]["void_reasons"] == ["Changed mind", "Other"]
 
 
 def test_a_real_store_with_money_is_never_deleted(admin, make_store) -> None:

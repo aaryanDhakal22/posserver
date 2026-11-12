@@ -217,3 +217,33 @@ func TestWasteReasons(t *testing.T) {
 		t.Fatalf("nil = the defaults: %q", nilList.WasteReasons)
 	}
 }
+
+// The owner's void reasons (2026-11-12, round 2): picked, never typed;
+// defaults with "Other", normalised and bounded like the waste reasons.
+func TestVoidReasons(t *testing.T) {
+	s := DefaultSettings()
+	if strings.Join(s.VoidReasons, "|") != "Customer cancelled|Wrong order|Duplicate|Took too long|Other" {
+		t.Fatalf("defaults: %q", s.VoidReasons)
+	}
+	s.VoidReasons = []string{"  Changed   mind ", "", "changed mind", "Other"}
+	s.Normalize()
+	if strings.Join(s.VoidReasons, "|") != "Changed mind|Other" {
+		t.Fatalf("normalised: %q", s.VoidReasons)
+	}
+	if err := s.Validate(); err != nil {
+		t.Fatalf("valid: %v", err)
+	}
+	s.VoidReasons = []string{}
+	if err := s.Validate(); err == nil {
+		t.Fatal("an empty list is refused")
+	}
+	s.VoidReasons = []string{strings.Repeat("x", MaxWasteReasonLen+1)}
+	if err := s.Validate(); err == nil {
+		t.Fatal("a reason too long is refused")
+	}
+	var old Settings
+	old.Normalize() // a row saved before the field existed
+	if len(old.VoidReasons) != 5 {
+		t.Fatalf("nil = the defaults: %q", old.VoidReasons)
+	}
+}
