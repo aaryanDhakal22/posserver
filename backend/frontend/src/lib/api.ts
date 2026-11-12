@@ -350,14 +350,31 @@ export interface MenuSize { id: string; location_id: string; name: string; short
 export interface ItemSize { size_id: string; price_cents: number; kitchen_name?: string; position?: number; }
 export interface OptionPrice { size_id: string; price_cents: number; }
 /** GET /me/menu/bank — the bank as views compile from it. */
-export interface BankItem extends Item { kitchen_name: string; sku: string; sizes: ItemSize[]; group_ids: string[]; }
-export interface BankOption extends ModifierOption { is_default: boolean; kitchen_name: string; prices: OptionPrice[]; }
+export interface BankItem extends Item { kitchen_name: string; sku: string; sizes: ItemSize[]; group_ids: string[]; family_id?: string | null; }
+export interface BankOption extends ModifierOption { is_default: boolean; kitchen_name: string; prices: OptionPrice[]; family_id?: string | null; }
 export interface BankGroup extends ModifierGroup { portions: boolean; options: BankOption[]; }
 export interface Bank {
   location_id: string; version: number; sizes: MenuSize[];
   menus: (Menu & { categories: (Category & { items: BankItem[] })[] })[];
   groups: Record<string, BankGroup>;
+  families?: MenuFamily[];
 }
+
+// --- Families (00045): item / mod families; a mod family's class decides what a coupon may make free ---
+export type FamilyKind = 'item' | 'mod';
+export type FamilyClass = '' | 'regular' | 'premium' | 'unpriced';
+export interface MenuFamily { id: string; location_id: string; kind: FamilyKind; name: string; class: FamilyClass; position: number }
+export interface FamilyRow extends MenuFamily { items: number; options: number }
+export interface FamiliesListing {
+  families: FamilyRow[];
+  items: { id: string; name: string; category: string; family_id: string | null }[];
+  options: { id: string; name: string; group: string; group_id: string; price_cents: number; family_id: string | null }[];
+}
+export const FAMILY_CLASSES: { value: FamilyClass; label: string; help: string }[] = [
+  { value: 'regular', label: 'Regular', help: 'A coupon may make these free (e.g. pizza toppings at the normal price)' },
+  { value: 'premium', label: 'Premium', help: 'Never free in a coupon (steak, grilled chicken, add-ons)' },
+  { value: 'unpriced', label: 'Unpriced', help: 'No price: halves, choices, notes, "no X"' }
+];
 export type ViewKind = 'web' | 'operator' | 'counter' | 'vendor';
 export interface ViewRules { markup_bps: number; round: 'none' | 'ceil_99'; hidden_categories: string[]; require_photo: boolean; }
 export interface MenuView {
@@ -731,7 +748,9 @@ export interface PricingStore {
 }
 export interface PricingKind { fees: PricingFees | null; tips: PricingTips | null; card_fee: { mode: string; bps: number } | null }
 export interface PricingBody { store: PricingStore; kinds: Record<string, PricingKind> }
-export type DealKind = 'bundle' | 'mix' | 'nth' | 'code' | 'free_item';
+export type DealKind = 'bundle' | 'mix' | 'nth' | 'code' | 'free_item' | 'coupon';
+/** A coupon part: qty items of one of these item families (at one of these sizes, when any), the N cheapest regular mods free on each. */
+export interface CouponPart { label: string; families: string[]; sizes?: string[]; qty: number; regular_mods_included: number }
 export interface DealEligible { items: string[]; categories: string[]; sizes: string[] }
 export interface StoreDeal {
   id: string; kind: DealKind; name: string; description: string; active: boolean; fulfil: string;
@@ -739,6 +758,7 @@ export interface StoreDeal {
   price_cents?: number; slots?: { label: string; eligible: DealEligible; included_options: number }[];
   eligible?: DealEligible | null; qty?: number; each_cents?: number; n?: number; pct?: number;
   code?: string; amount_cents?: number; first_order_only?: boolean; min_subtotal_cents?: number;
+  card?: string[]; parts?: CouponPart[];
   channel_kinds: string[]; position?: number;
 }
 export const DEAL_KINDS: { kind: DealKind; label: string; help: string }[] = [
@@ -746,7 +766,8 @@ export const DEAL_KINDS: { kind: DealKind; label: string; help: string }[] = [
   { kind: 'mix', label: 'Mix & match', help: 'Any N of these for $X each (e.g. any 2 pizzas $10 each)' },
   { kind: 'nth', label: 'Every Nth', help: 'Every Nth one is % off (e.g. 2nd wings half off)' },
   { kind: 'code', label: 'Promo code', help: 'A code customers type for % or $ off' },
-  { kind: 'free_item', label: 'Free item', help: 'One of these free once the order reaches $Y' }
+  { kind: 'free_item', label: 'Free item', help: 'One of these free once the order reaches $Y' },
+  { kind: 'coupon', label: 'Coupon', help: 'The cashier applies it when the order has every part (by family): the priciest item carries the price, the rest $0; N regular toppings free' }
 ];
 export const CHANNEL_KIND_LABELS: Record<string, string> = { web: 'Website', operator: 'Call center', counter: 'Counter', vendor: 'Vendor' };
 
