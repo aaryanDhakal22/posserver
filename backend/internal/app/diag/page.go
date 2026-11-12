@@ -57,9 +57,13 @@ func FormatPage(store string, r *Report, via, tabletName string) (title, message
 	if tabletName == "" {
 		tabletName = "unnamed"
 	}
-	parts := []string{"Tablet: " + tabletName}
+	device, app := "Tablet", "Quibase"
+	if r.DeviceKind == DeviceTerminal {
+		device, app = "Terminal", "Centurion"
+	}
+	parts := []string{device + ": " + tabletName}
 	if r.AppVersion != "" {
-		parts = append(parts, "Quibase "+r.AppVersion)
+		parts = append(parts, app+" "+r.AppVersion)
 	}
 	if r.AgentVersion != "" {
 		parts = append(parts, "Pi "+r.AgentVersion)

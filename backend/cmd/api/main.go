@@ -398,6 +398,9 @@ func main() {
 		lgr.Fatal().Err(err).Msg("square setup")
 	}
 	squareService.SetNotifier(notifier)
+	// The counter terminal's setup test charge ($1, no order) is refunded
+	// through the Pi: RPC square.test_refund (TERMINAL-SETUP-PLAN, owner Q3).
+	requester.RegisterInbound(squarepay.MsgSquareTestRefund, squareService.HandleTestRefund)
 	if squareService.Enabled() {
 		gateways[payment.MethodCard] = squareService.CardRouter(testCard)
 		safego.Loop(ctx, "square.refresh", squareService.RunRefresh)

@@ -268,6 +268,7 @@ func (s *Service) page(ctx context.Context, scope sseBroker.Scope, r *Report, vi
 type rpcBody struct {
 	TabletID   string          `json:"tablet_id"`
 	TabletName string          `json:"tablet_name"`
+	DeviceKind string          `json:"device_kind"` // terminal | tablet (absent = tablet: an older Pi)
 	Report     json.RawMessage `json:"report"`
 	Pi         json.RawMessage `json:"pi"`
 }
@@ -295,6 +296,9 @@ func (s *Service) HandleRPC(ctx context.Context, scope sseBroker.Scope, payload 
 			return nil, fmt.Errorf("%w: diag.report pi must be an object", rpc.ErrBadPayload)
 		}
 		r.MergePi(pi)
+	}
+	if b.DeviceKind != "" { // the Pi knows the key's kind: it wins over the report
+		r.SetDeviceKind(b.DeviceKind)
 	}
 	id, dup, err := s.Store(ctx, scope, r, ViaPi, b.TabletID, b.TabletName)
 	var rl *RateLimitError
