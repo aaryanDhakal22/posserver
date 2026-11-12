@@ -3911,6 +3911,29 @@
           "code": {
             "type": "string"
           },
+          "coupons": {
+            "type": "array",
+            "description": "Applied coupons (the quote's coupon_offers sent back): a coupon deal and the cart line units it takes (one index per unit); one that doesn't apply as asked is a cart problem (422 cart_invalid), as in the quote",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "lines"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "lines": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
           "tip_cents": {
             "type": [
               "integer",

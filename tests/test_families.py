@@ -347,3 +347,46 @@ def test_csv_family_column(mgr) -> None:
     assert _by_name(got["items"], "Coke Can")["family_id"] == _by_name(got["families"], "Can Soda")["id"]  # blank keeps
     out = mgr.get(f"{MENU}/export.csv", timeout=10).text
     assert out.splitlines()[0].endswith(",family") and ",Water,1.00,,,no,Bottled Water" in out, out
+
+
+def test_coupons_on_the_web_and_call_center(admin, store, mgr) -> None:
+    """The owner (2026-11-12): coupons work everywhere. A coupon switched on for web + operator is
+    offered and applied in those channels' quotes the same way as the counter (it re-prices its
+    lines), and an order sent with `coupons` is priced with them; a coupon that doesn't fit as sent
+    refuses the order (cart_invalid)."""
+    import secrets
+
+    doc = _doc()
+    for d in doc["deals"]:
+        d["channel_kinds"] = ["counter", "web", "operator"]
+    _apply(mgr, doc)
+    store.online()  # main refuses channel orders while the store's Pi has no live stream
+    body = _ok(requests.get(COUNTER_MENU, headers=store_key(store.key), timeout=10))
+    items = {i["name"]: i for c in body["build"]["categories"] for i in c["items"]}
+    sizes = {z["name"]: z["id"] for z in body["build"]["sizes"]}
+    lines = [{"item_id": items["Cheesesteak"]["id"], "size_id": sizes["8\""], "qty": 1},
+             {"item_id": items["French Fries"]["id"], "qty": 1},
+             {"item_id": items["Coke Can"]["id"], "qty": 1}]
+    for kind in ("web", "operator"):
+        key = _ok(admin.post(f"{ADMIN_V1}/channels", json={"location_id": store.location_id, "kind": kind, "name": kind}, timeout=5), 201)["key"]
+        hdr = {"Authorization": f"Bearer {key}"}
+        q = check(requests.post(f"{CH_V1}/quote", json={"type": "pickup", "lines": lines}, headers=hdr, timeout=10), "quote")
+        [offer] = [o for o in q["coupon_offers"] if o["name"] == COMBO["name"]]
+        coupons = [{"id": offer["id"], "lines": offer["lines"]}]
+        q = check(requests.post(f"{CH_V1}/quote", json={"type": "pickup", "lines": lines, "coupons": coupons}, headers=hdr, timeout=10), "quote")
+        assert q["errors"] == [] and [x["total_cents"] for x in q["lines"]] == [1099, 0, 0]
+        assert q["subtotal_cents"] == 1099 and q["discounts"] == []
+        if kind != "operator":  # a new web channel takes cards only; the order path is the same for both
+            continue
+        order = {"client_order_id": "cp-" + secrets.token_hex(6), "type": "pickup", "lines": lines, "coupons": coupons,
+                 "payment": {"method": "cash"}, "customer": {"name": "Ada Lovelace", "phone": "(410) 555-0101"},
+                 "expected_total_cents": q["total_cents"]}
+        r = requests.post(f"{CH_V1}/orders", json=order, headers=hdr, timeout=15)
+        o = check(r, "placeOrder")
+        assert r.status_code == 201, r.text
+        assert o["money"]["subtotal_cents"] == 1099 and o["money"]["total_cents"] == q["total_cents"]
+        # A coupon that doesn't fit as sent (a line it can't take): the order is refused, nothing placed.
+        bad = dict(order, client_order_id="cp-" + secrets.token_hex(6), coupons=[{"id": offer["id"], "lines": [0, 0, 1]}],
+                   expected_total_cents=None)
+        r = requests.post(f"{CH_V1}/orders", json=bad, headers=hdr, timeout=15)
+        assert r.status_code == 422 and r.json()["code"] == "cart_invalid", r.text

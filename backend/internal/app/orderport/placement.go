@@ -740,7 +740,7 @@ func (s *Service) DevOrphan(ctx context.Context, channelID uuid.UUID, req Reques
 		return "", err
 	}
 	q := pricing.Price(*pctx, pricing.Cart{Type: req.Type, Payment: req.Payment.Method, Lines: req.Lines, Code: req.Code,
-		TipCents: req.TipCents, TipPct: req.TipPct, FirstOrder: req.FirstOrder}, s.now())
+		TipCents: req.TipCents, TipPct: req.TipPct, FirstOrder: req.FirstOrder, Coupons: req.Coupons}, s.now())
 	charge, cerr := s.chargeFor(ctx, ch, req, q)
 	if cerr != nil {
 		return "", cerr

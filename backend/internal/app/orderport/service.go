@@ -117,10 +117,14 @@ type Request struct {
 	Type          string         `json:"type"` // pickup | delivery
 	Lines         []pricing.Line `json:"lines"`
 	Code          string         `json:"code"`
-	TipCents      *int64         `json:"tip_cents"`
-	TipPct        *int           `json:"tip_pct"`
-	FirstOrder    *bool          `json:"first_order"`
-	Payment       struct {
+	// Coupons the customer applied (the quote's coupon_offers sent back):
+	// each a coupon deal and the cart line units it takes. A coupon that
+	// doesn't apply as asked is an error, like in the quote.
+	Coupons    []pricing.CartCoupon `json:"coupons,omitempty"`
+	TipCents   *int64               `json:"tip_cents"`
+	TipPct     *int                 `json:"tip_pct"`
+	FirstOrder *bool                `json:"first_order"`
+	Payment    struct {
 		Method            string `json:"method"` // cash | card
 		Token             string `json:"token"`
 		VerificationToken string `json:"verification_token"` // the buyer's 3-D Secure answer (Square verifyBuyer)
@@ -336,7 +340,7 @@ func (s *Service) work(ctx context.Context, ch channelDom.Channel, req Request, 
 		return parked("retry", tryAgain, err)
 	}
 	cart := pricing.Cart{Type: req.Type, Payment: req.Payment.Method, Lines: req.Lines, Code: req.Code, TipCents: req.TipCents,
-		TipPct: req.TipPct, FirstOrder: req.FirstOrder}
+		TipPct: req.TipPct, FirstOrder: req.FirstOrder, Coupons: req.Coupons}
 	q := pricing.Price(*pctx, cart, s.now())
 	if resume && (len(q.Errors) > 0 || q.TotalCents != pl.ChargeCents) {
 		// The menu moved since the card call: don't save a different order.
