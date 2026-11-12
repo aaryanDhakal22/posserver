@@ -30,6 +30,7 @@
           <td class="mono text-right">
             {dollars(o.money?.total_cents)}
             {#if tipsOf(o) > 0}<div class="text-xs text-text2">+ {dollars(tipsOf(o))} tip</div>{/if}
+            {#if (o.source_metadata?.refund_owed_cents ?? 0) > 0}<div class="text-xs text-warn" title="Changed after it was paid online: refund the customer in the vendor's site / Square">{dollars(o.source_metadata?.refund_owed_cents ?? 0)} refund owed</div>{/if}
           </td>
         </tr>
       {:else}

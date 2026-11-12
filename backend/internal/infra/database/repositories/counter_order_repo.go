@@ -122,7 +122,7 @@ func storeCounterPayment(ctx context.Context, tx pgx.Tx, sc order.Scope, eventID
 
 	// What main checks (it flags, it doesn't refuse): the counter's rules,
 	// as the Pi enforces them (order.PaymentFlags, contract/money-rules.json).
-	ro := order.RuleOrder{Total: o.total, Cancelled: o.status == string(order.StatusCancelled)}
+	ro := order.RuleOrder{Total: o.total, Cancelled: o.status == string(order.StatusCancelled), Earlier: p.EarlierDay}
 	rows, err := tx.Query(ctx, `SELECT processor, amount_cents, tip_cents, approved_by, staff_id
 		FROM payments WHERE order_id = $1 AND status IN ('captured', 'refunded')`, orderID)
 	if err != nil {
@@ -352,7 +352,11 @@ func (r *OrderRepository) AddCounterPayment(ctx context.Context, sc order.Scope,
 // its before / after in order_money_changes; a change after its batch's Z is
 // applied and flagged (a carried-over order may change in a later batch).
 func (r *OrderRepository) ChangeCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID,
-	o *order.Order, at time.Time, flags []order.MoneyFlag) (string, []order.MoneyFlag, error) {
+	o *order.Order, at time.Time, flags []order.MoneyFlag, extra order.ChangeExtra) (string, []order.MoneyFlag, error) {
+	want := extra.Source
+	if want == "" {
+		want = order.SourceCounter
+	}
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return "", nil, fmt.Errorf("begin tx: %w", err)
@@ -377,7 +381,9 @@ func (r *OrderRepository) ChangeCounterOrder(ctx context.Context, sc order.Scope
 		result = order.FloorNotFound
 	case err != nil:
 		return "", nil, fmt.Errorf("get order: %w", err)
-	case source != string(order.SourceCounter), status == string(order.StatusCancelled):
+	case source != string(want), status == string(order.StatusCancelled):
+		// A counter change of a counter order, an online / website change
+		// of an order from that same channel (agent 2.10aa); never across.
 		result = order.FloorInvalid
 	case changedAt != nil && !at.IsZero() && at.Before(*changedAt):
 		result = order.FloorStale // an older change after a newer one: the newer one stands
@@ -440,6 +446,9 @@ func (r *OrderRepository) ChangeCounterOrder(ctx context.Context, sc order.Scope
 		if err := insertMoneyFlags(ctx, tx, sc, eventID, typ, "order:"+orderID.String(), flags); err != nil {
 			return "", nil, err
 		}
+		if err := keepRefundOwed(ctx, tx, sc, eventID, typ, orderID, extra); err != nil {
+			return "", nil, err
+		}
 	} else {
 		flags = nil
 	}
@@ -447,4 +456,31 @@ func (r *OrderRepository) ChangeCounterOrder(ctx context.Context, sc order.Scope
 		return "", nil, fmt.Errorf("commit: %w", err)
 	}
 	return result, flags, nil
+}
+
+// keepRefundOwed notes what an order owes its customer back after a change
+// (agent 2.10aa: an online / website order changed below what it arrived
+// paid with): the whole in source_metadata.refund_owed_cents (every read of
+// the order shows it), this change's part as a refund_owed money flag (Store
+// > Reports > Flags). A note for the manager, never a payment: no money
+// moved. Not returned with the event's flags (nothing to page about).
+func keepRefundOwed(ctx context.Context, tx pgx.Tx, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, extra order.ChangeExtra) error {
+	if extra.RefundOwedCents != nil {
+		owed := max(*extra.RefundOwedCents, 0)
+		if _, err := tx.Exec(ctx, `UPDATE orders SET source_metadata = COALESCE(source_metadata, '{}'::jsonb) || jsonb_build_object('refund_owed_cents', $2::bigint)
+			WHERE id = $1`, orderID, owed); err != nil {
+			return fmt.Errorf("refund owed: %w", err)
+		}
+	}
+	if extra.RefundDue == nil {
+		return nil
+	}
+	detail := make(map[string]any, len(extra.RefundDue)+1)
+	for k, v := range extra.RefundDue {
+		detail[k] = v
+	}
+	if extra.RefundOwedCents != nil {
+		detail["order_owed_cents"] = max(*extra.RefundOwedCents, 0)
+	}
+	return insertMoneyFlags(ctx, tx, sc, eventID, typ, "order:"+orderID.String(), []order.MoneyFlag{{Code: order.FlagRefundOwed, Detail: detail}})
 }

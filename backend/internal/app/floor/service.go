@@ -77,8 +77,14 @@ type event struct {
 	// order.payment's payment, order.void's staff, journal.entries' entries.
 	Snapshot json.RawMessage `json:"snapshot"`
 	Payment  json.RawMessage `json:"payment"`
-	StaffID  string          `json:"staff_id"`
-	Entries  json.RawMessage `json:"entries"`
+	// order.changed of an online / website order (agent 2.10aa): what it
+	// owes its customer back now, and this change's part (null = none).
+	RefundOwedCents *int64          `json:"refund_owed_cents"`
+	RefundDue       json.RawMessage `json:"refund_due"`
+	// order.payment: a refund on an earlier day's order (agent 2.10aa).
+	EarlierDay bool            `json:"earlier_day"`
+	StaffID    string          `json:"staff_id"`
+	Entries    json.RawMessage `json:"entries"`
 	// customer.upsert (terminal 1d): the customer + which fields it sets.
 	Customer json.RawMessage `json:"customer"`
 	Set      []string        `json:"set"`
@@ -112,7 +118,7 @@ type DeliveryRunStore interface {
 type CounterOrders interface {
 	CreateCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, co *order.CounterOrder, agentStatus []byte, batchID *int64) (string, []order.MoneyFlag, error)
 	AddCounterPayment(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, p order.CheckedPayment) (string, []order.MoneyFlag, error)
-	ChangeCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, o *order.Order, at time.Time, flags []order.MoneyFlag) (string, []order.MoneyFlag, error)
+	ChangeCounterOrder(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, o *order.Order, at time.Time, flags []order.MoneyFlag, extra order.ChangeExtra) (string, []order.MoneyFlag, error)
 }
 
 // StaffLimits tells who the store's people are for the money rules (the

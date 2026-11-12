@@ -165,3 +165,63 @@ func TestMoneyReconcilesFor(t *testing.T) {
 		}
 	}
 }
+
+// agent 2.10aa: an online / website order the store edited comes back as
+// order.changed with its own source; main checks its lines and money like a
+// counter order's and leaves its channel fields (status, payments) alone.
+func TestNewChangedOrderOnline(t *testing.T) {
+	sc := Scope{TenantID: TenantID(uuid.New()), LocationID: LocationID(uuid.New())}
+	for _, src := range []string{"online", "web"} {
+		s := counterSnap()
+		s.Source, s.Status, s.SourceEventID = src, "received", "vendor-123"
+		s.Fulfillment = FulfillmentDTO{Type: "delivery", Address: &AddressDTO{Line1: "1 Test St", City: "Towson"}}
+		s.CounterPayments = []CounterPayment{{ID: "not-even-a-uuid", Method: "online"}} // ignored for a channel order
+		s.PlacedAt = time.Time{}
+		s.ReceivedAt = time.Now()
+		s.Notes = string(make([]byte, MaxCounterText+50))
+		co, got, err := NewChangedOrder(sc, s, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", src, err)
+		}
+		if string(got) != src || len(co.Payments) != 0 || co.Order.Money().Total != 1060 || len(co.Order.Items()) != 1 {
+			t.Errorf("%s: source %q payments %d money %+v", src, got, len(co.Payments), co.Order.Money())
+		}
+		if a := co.Order.Fulfillment().Address; a == nil || a.Line1 != "1 Test St" {
+			t.Errorf("%s: address %+v", src, a)
+		}
+	}
+	// A counter snapshot is checked exactly as order.placed's.
+	s := counterSnap()
+	s.Status = "scheduled"
+	if _, _, err := NewChangedOrder(sc, s, nil); !errors.Is(err, ErrBadCounterOrder) {
+		t.Errorf("counter checks skipped: %v", err)
+	}
+	co, got, err := NewChangedOrder(sc, counterSnap(), nil)
+	if err != nil || got != SourceCounter || len(co.Payments) != 1 {
+		t.Errorf("counter: %v %q", err, got)
+	}
+	// The channel order's lines are still checked.
+	s = counterSnap()
+	s.Source = "online"
+	s.Items[0].Quantity = 0
+	if _, _, err := NewChangedOrder(sc, s, nil); !errors.Is(err, ErrBadCounterOrder) {
+		t.Errorf("bad line passed: %v", err)
+	}
+}
+
+// Tips are card only (money-rules tips): cash_tip on a cash / comp tip,
+// also a tip added afterwards (an amount-0 payment); never on a refund.
+func TestPaymentFlagsCashTip(t *testing.T) {
+	cashier := RefunderOf("cashier", new(int64(2000)))
+	codes := func(o RuleOrder, p CheckedPayment) []string { return codesOf(PaymentFlags(o, p, cashier)) }
+	if f := codes(RuleOrder{Total: 1500}, CheckedPayment{Method: "cash", Amount: 1500, Tip: 300}); len(f) != 1 || f[0] != FlagCashTip {
+		t.Errorf("cash tip: %v", f)
+	}
+	if f := codes(RuleOrder{Total: 1500}, CheckedPayment{Method: "card", Amount: 1500, Tip: 300}); len(f) != 0 {
+		t.Errorf("card tip: %v", f)
+	}
+	o := RuleOrder{Total: 1500, Prior: []PriorPayment{{Method: "cash", Amount: 1500, Tip: 300, By: cashier}}}
+	if f := codes(o, CheckedPayment{Method: "cash", Amount: -1800}); len(f) != 0 {
+		t.Errorf("an old cash tip refunded: %v", f)
+	}
+}

@@ -438,6 +438,9 @@ export interface StoreOrder {
   kitchen_order_number?: number;
   estimated_ready_at?: string;
   driver_name?: string;
+  /** refund_owed_cents: an online / website order changed below what it arrived paid with owes its customer
+   * that much back (agent 2.10aa): a note for the manager (refund it in the vendor's site / Square), not a payment. */
+  source_metadata?: { refund_owed_cents?: number; [k: string]: unknown };
 }
 /** A recent vendor item name that doesn't reach a kitchen printer. */
 export interface MenuImportResult {

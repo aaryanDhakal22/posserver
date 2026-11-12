@@ -41,6 +41,8 @@ type ruleCase struct {
 		Payments []rulePay `json:"payments"`
 	} `json:"order"`
 	Refund         rulePay   `json:"refund"`
+	Payment        rulePay   `json:"payment"`
+	TipAfter       bool      `json:"tip_after"`
 	Main           *[]string `json:"main"`
 	MainIfApproved []string  `json:"main_if_approved"`
 }
@@ -50,6 +52,7 @@ type ruleTable struct {
 	Refunds        []ruleCase            `json:"refunds"`
 	GeneralRefunds []ruleCase            `json:"general_refunds"`
 	Comps          []ruleCase            `json:"comps"`
+	Tips           []ruleCase            `json:"tips"`
 }
 
 func loadRules(t *testing.T) ruleTable {
@@ -119,7 +122,7 @@ func TestMoneyRules(t *testing.T) {
 	}
 	t.Run("refunds", func(t *testing.T) {
 		for _, c := range tab.Refunds {
-			o := RuleOrder{}
+			o := RuleOrder{Earlier: c.Order.Batch == "older"}
 			for _, p := range c.Order.Payments {
 				a, tip := wire(p)
 				x := PriorPayment{Method: p.Tender, Amount: a, Tip: tip, By: Who(people, staffOf(p.By))}
@@ -145,6 +148,24 @@ func TestMoneyRules(t *testing.T) {
 			check(t, c, func(approvedBy string) []MoneyFlag {
 				p := CheckedPayment{Method: "cash", Amount: Money(-c.Cents), StaffID: staffOf(c.By), ApprovedBy: approvedBy}
 				return GeneralRefundFlags(p, Who(people, p.StaffID))
+			})
+		}
+	})
+	t.Run("tips", func(t *testing.T) {
+		if len(tab.Tips) == 0 {
+			t.Fatal("the table has no tips section")
+		}
+		for _, c := range tab.Tips {
+			check(t, c, func(approvedBy string) []MoneyFlag {
+				p := CheckedPayment{Method: c.Payment.Tender, Amount: Money(c.Payment.Cents), Tip: Money(c.Payment.Tip),
+					StaffID: staffOf(c.By), ApprovedBy: approvedBy}
+				o := RuleOrder{Total: c.Payment.Cents}
+				if c.TipAfter {
+					// The Pi's tip afterwards: an amount-0 payment with the tip, on the tipped payment's tender.
+					o.Prior = []PriorPayment{{Method: c.Payment.Tender, Amount: c.Payment.Cents, By: Who(people, staffOf(c.By))}}
+					p.Amount = 0
+				}
+				return PaymentFlags(o, p, Who(people, p.StaffID))
 			})
 		}
 	})

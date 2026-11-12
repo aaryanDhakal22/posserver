@@ -15,6 +15,12 @@ import "github.com/google/uuid"
 // manager comps freely, the owner 2026-11-12).
 const FlagCompNeedsManager = "comp_needs_manager"
 
+// FlagCashTip: a tip on a payment that isn't a card (cash, a comp): tips are
+// card only (the owner, 2026-11-12, money-rules.json tips T01-T09). The Pi
+// refuses it (400 tip_card_only, 409 not_tippable afterwards); one that
+// arrives anyway is stored as sent and flagged, whoever took it.
+const FlagCashTip = "cash_tip"
+
 // Refunder is who took or gave a counter payment, as main's staff table
 // says. Known false = no such person at the store (no staff_id, or they are
 // gone): main can't tell who it was, so it raises no permission flag for
@@ -60,6 +66,10 @@ type RuleOrder struct {
 	Total     int64
 	Cancelled bool
 	Prior     []PriorPayment
+	// Earlier: the payment is a refund on an earlier day's order (the Pi's
+	// order.payment `earlier_day`, agent 2.10aa): a manager's to give
+	// (money-rules.json R24, R25, R33-R36).
+	Earlier bool
 }
 
 // PaymentFlags are the flags main stores on a counter payment (order.payment,
@@ -67,10 +77,12 @@ type RuleOrder struct {
 // repository checks itself. by = who took / gave it.
 //
 // A payment: order_cancelled, overpaid; a driver's comp nobody approved:
-// comp_needs_manager. A refund (negative): more back than the order holds →
+// comp_needs_manager; a tip on a cash / comp payment (or a tip added
+// afterwards to one): cash_tip, for anyone. A refund (negative): more back than the order holds →
 // refund_exceeds_paid alone (the Pi refuses it: refund_too_big); more comp
 // back than was comped → refund_exceeds_tender (refused too); else, when
-// nobody approved it and a person with limits gave it — card →
+// nobody approved it and a person with limits gave it — an earlier day's
+// order → refund_needs_manager (the Pi's refund_earlier_day), card →
 // refund_needs_manager (the Pi's card_refund), cash past the order's cash →
 // refund_exceeds_tender (cash_for_card), cash past the person's limit
 // counting every earlier refund on the order no manager approved and no
@@ -94,6 +106,9 @@ func PaymentFlags(o RuleOrder, p CheckedPayment, by Refunder) []MoneyFlag {
 		}
 	}
 	limited := by.Known && !by.Unlimited && p.ApprovedBy == ""
+	if tip > 0 && amount >= 0 && !IsCardMethod(p.Method) {
+		flags = append(flags, MoneyFlag{Code: FlagCashTip, Detail: map[string]any{"method": p.Method, "tip_cents": tip}})
+	}
 	if amount >= 0 {
 		if amount > 0 && o.Cancelled {
 			flags = append(flags, MoneyFlag{Code: FlagOrderCancelled})
@@ -118,6 +133,10 @@ func PaymentFlags(o RuleOrder, p CheckedPayment, by Refunder) []MoneyFlag {
 		return flags
 	case !limited:
 		return flags
+	case o.Earlier:
+		// One answer whatever the tender or amount (the Pi's single
+		// refund_earlier_day): a manager should have approved it.
+		return append(flags, MoneyFlag{Code: FlagRefundNeedsManager, Detail: map[string]any{"role": by.Role, "method": p.Method, "earlier_day": true}})
 	case IsCardMethod(p.Method):
 		return append(flags, MoneyFlag{Code: FlagRefundNeedsManager, Detail: map[string]any{"role": by.Role, "method": p.Method}})
 	case tenderNet-back < 0:

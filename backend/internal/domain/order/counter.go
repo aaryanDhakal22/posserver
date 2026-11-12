@@ -76,6 +76,10 @@ type CounterPayment struct {
 	RefundOf   string `json:"refund_of"`
 	ApprovedBy string `json:"approved_by"`
 	BatchID    *int64 `json:"batch_id"`
+	// EarlierDay (agent 2.10aa): a refund on an earlier day's order (not
+	// carried), stored in the Pi's open batch. Also read from the
+	// order.payment event itself.
+	EarlierDay bool `json:"earlier_day"`
 }
 
 // MoneyFlag is a problem main found in money it stored anyway (M-2 / M-7 /
@@ -106,7 +110,58 @@ const (
 	FlagZUnbalanced         = "z_unbalanced"          // the Pi's own Z doesn't balance
 	FlagChangedAfterZ       = "changed_after_z"       // order.changed after its batch's Z
 	FlagDrawerRecount       = "drawer_recount"        // a closed drawer closed again with other numbers
+	// FlagRefundOwed: an online / website order the store changed after it
+	// arrived paid owes the customer money back (agent 2.10aa): a note for the
+	// manager, who refunds it in the vendor's site / Square. No money moved.
+	FlagRefundOwed = "refund_owed"
 )
+
+// ChangeExtra is what an order.changed brings besides the order (agent
+// contract §2.10aa, main §2.5zb).
+type ChangeExtra struct {
+	// Source: the order's source as the Pi holds it ("" = counter). A
+	// non-counter source (online: the vendor, web: the website) changes an
+	// order main got from that channel; main's order must have the same.
+	Source Source
+	// RefundOwedCents: what the order owes its customer back now (nil = the
+	// Pi didn't say: an older Pi or a counter order); kept in
+	// source_metadata.refund_owed_cents.
+	RefundOwedCents *int64
+	// RefundDue: this change's part ({cents, total_owed_cents, lines,
+	// reference, source, number, staff_name, device_name, at}); nil = none.
+	RefundDue map[string]any
+}
+
+// NewChangedOrder builds the order an order.changed carries: a counter
+// order's exactly as NewCounterOrder (source counter or empty); an online /
+// website order's (agent 2.10aa: the store edits them like its own) with
+// the same checks on its lines and money, but the channel's own fields left
+// out: its status, its source, its payments (the terminals' payments on it
+// come as order.payment; the channel's payment is never touched) and a
+// vendor note past MaxCounterText (cut, not refused).
+func NewChangedOrder(sc Scope, s CounterSnapshot, raw []byte) (*CounterOrder, Source, error) {
+	src := Source(strings.TrimSpace(s.Source))
+	if src == "" || src == SourceCounter {
+		co, err := NewCounterOrder(sc, s, raw)
+		return co, SourceCounter, err
+	}
+	c := s
+	c.Source, c.Status, c.CounterPayments = "", "", nil
+	if utf8.RuneCountInString(c.Notes) > MaxCounterText {
+		c.Notes = string([]rune(c.Notes)[:MaxCounterText])
+	}
+	if utf8.RuneCountInString(c.SourceEventID) > 200 {
+		c.SourceEventID = ""
+	}
+	if c.PlacedAt.IsZero() {
+		c.PlacedAt = c.ReceivedAt
+	}
+	if c.PlacedAt.IsZero() {
+		c.PlacedAt = time.Now().UTC()
+	}
+	co, err := NewCounterOrder(sc, c, raw)
+	return co, src, err
+}
 
 // CheckedPayment is a validated CounterPayment.
 type CheckedPayment struct {
@@ -125,6 +180,8 @@ type CheckedPayment struct {
 	RefundOf   *uuid.UUID
 	ApprovedBy string
 	BatchID    *int64
+	// EarlierDay: a refund on an earlier day's order (RuleOrder.Earlier).
+	EarlierDay bool
 	// Flags found by Check (the repo adds its own). By = who took / gave it
 	// and People = the store's staff (for the refunds before it), both from
 	// main's staff table: PaymentFlags reads them (money_rules.go).
@@ -204,7 +261,7 @@ func (p CounterPayment) Check() (CheckedPayment, error) {
 	}
 	return CheckedPayment{ID: id, Method: p.Method, Status: st, Amount: Money(p.AmountCents), Tip: Money(p.TipCents),
 		Last4: p.Last4, AuthCode: p.AuthCode, Ref: p.Ref, At: at, StaffID: staffID,
-		ClientKey: strings.TrimSpace(p.ClientKey), RefundOf: refundOf, ApprovedBy: p.ApprovedBy, BatchID: p.BatchID, Flags: flags}, nil
+		ClientKey: strings.TrimSpace(p.ClientKey), RefundOf: refundOf, ApprovedBy: p.ApprovedBy, BatchID: p.BatchID, EarlierDay: p.EarlierDay, Flags: flags}, nil
 }
 
 // CounterOrder is a counter snapshot made into an order (+ its payments and

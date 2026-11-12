@@ -81,6 +81,7 @@ func (s *Service) applyPayment(ctx context.Context, sc order.Scope, eid uuid.UUI
 	if cp.BatchID == nil {
 		cp.BatchID = ev.BatchID
 	}
+	cp.EarlierDay = cp.EarlierDay || ev.EarlierDay
 	s.who(ctx, sc, &cp)
 	res, flags, err := s.counter.AddCounterPayment(ctx, sc, eid, ev.Type, oid, cp)
 	if err != nil {
@@ -168,7 +169,11 @@ func (s *Service) applyVoid(ctx context.Context, sc order.Scope, eid uuid.UUID, 
 
 // applyChanged replaces a counter order's lines and money with the Pi's
 // changed snapshot (a kitchen change after SEND, agent contract §2.10d):
-// checked like order.placed's; payments, status and number stay.
+// checked like order.placed's; payments, status and number stay. An online /
+// website order the store edited (agent 2.10aa: online orders = called-in
+// orders) changes the same way, keeps its source and its channel payment
+// (a web order's card hold is never touched: the manager refunds by hand),
+// and notes what it owes the customer back (refund_owed_cents, refund_due).
 func (s *Service) applyChanged(ctx context.Context, sc order.Scope, eid uuid.UUID, ev event) (string, error) {
 	oid, err := uuid.Parse(ev.OrderID)
 	if s.counter == nil || err != nil || len(ev.Snapshot) == 0 {
@@ -181,9 +186,18 @@ func (s *Service) applyChanged(ctx context.Context, sc order.Scope, eid uuid.UUI
 	if snap.ID != ev.OrderID {
 		return s.invalid(ctx, sc, eid, ev, errors.New("order_id differs from the snapshot's id"))
 	}
-	co, err := order.NewCounterOrder(sc, snap, ev.Snapshot)
+	co, src, err := order.NewChangedOrder(sc, snap, ev.Snapshot)
 	if err != nil {
 		return s.invalid(ctx, sc, eid, ev, err)
+	}
+	extra := order.ChangeExtra{RefundOwedCents: ev.RefundOwedCents}
+	if src != order.SourceCounter {
+		extra.Source = src
+	}
+	if len(ev.RefundDue) > 0 && string(ev.RefundDue) != "null" {
+		if err := json.Unmarshal(ev.RefundDue, &extra.RefundDue); err != nil {
+			return s.invalid(ctx, sc, eid, ev, fmt.Errorf("refund_due: %w", err))
+		}
 	}
 	// The order as it was, for the geo worker (a delivery's new address is
 	// located again). Only for a delivery: nothing to locate otherwise.
@@ -193,13 +207,17 @@ func (s *Service) applyChanged(ctx context.Context, sc order.Scope, eid uuid.UUI
 			before = b
 		}
 	}
-	res, flags, err := s.counter.ChangeCounterOrder(ctx, sc, eid, ev.Type, oid, co.Order, ev.At, co.Flags)
+	res, flags, err := s.counter.ChangeCounterOrder(ctx, sc, eid, ev.Type, oid, co.Order, ev.At, co.Flags, extra)
 	if err != nil {
 		return "", err
 	}
 	if res == order.FloorApplied {
-		s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Int("lines", len(co.Order.Items())).
-			Int64("total_cents", int64(co.Order.Money().Total)).Msg("counter order changed")
+		e := s.logger.Info().Ctx(ctx).Str("order_id", oid.String()).Str("source", string(src)).Int("lines", len(co.Order.Items())).
+			Int64("total_cents", int64(co.Order.Money().Total))
+		if extra.RefundOwedCents != nil {
+			e = e.Int64("refund_owed_cents", *extra.RefundOwedCents)
+		}
+		e.Msg("order changed by the store")
 		s.flagged(ctx, sc, eid, ev.Type, oid.String(), flags)
 		if s.onMoved != nil && co.Order.Fulfillment().Type == order.FulfillmentDelivery {
 			s.onMoved(ctx, before, co.Order)
