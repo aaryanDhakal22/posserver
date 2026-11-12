@@ -73,5 +73,9 @@ func TestGlobalMax(t *testing.T) {
 		if got := GlobalMax(30); got != c.want {
 			t.Errorf("LOGIN_GLOBAL_MAX=%q: got %d, want %d", c.env, got, c.want)
 		}
+		t.Setenv("LOGIN_IP_MAX", c.env)
+		if got := IPMax(30); got != c.want {
+			t.Errorf("LOGIN_IP_MAX=%q: got %d, want %d", c.env, got, c.want)
+		}
 	}
 }

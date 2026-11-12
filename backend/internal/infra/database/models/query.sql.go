@@ -9798,7 +9798,7 @@ func (q *Queries) SetStoreRestocked(ctx context.Context, arg SetStoreRestockedPa
 }
 
 const setTenantCredentials = `-- name: SetTenantCredentials :exec
-UPDATE tenants SET username = $2, password_hash = $3 WHERE id = $1
+UPDATE tenants SET username = $2, password_hash = $3, session_epoch = session_epoch + 1 WHERE id = $1
 `
 
 type SetTenantCredentialsParams struct {
@@ -9807,7 +9807,9 @@ type SetTenantCredentialsParams struct {
 	PasswordHash pgtype.Text `json:"password_hash"`
 }
 
-// Set/rotate a tenant's store-manager login (username + already-hashed password).
+// Set/rotate a tenant's store-manager login (username + already-hashed
+// password). Every manager session issued before it ends (session_epoch, M8;
+// read / rehashed by plain SQL in repositories/tenancy_repo.go).
 func (q *Queries) SetTenantCredentials(ctx context.Context, arg SetTenantCredentialsParams) error {
 	_, err := q.db.Exec(ctx, setTenantCredentials, arg.ID, arg.Username, arg.PasswordHash)
 	return err

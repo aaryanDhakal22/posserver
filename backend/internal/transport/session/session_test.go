@@ -26,7 +26,7 @@ func TestIssueVerifyRoundtrip(t *testing.T) {
 	tid, lid := uuid.New(), uuid.New()
 
 	rec := httptest.NewRecorder()
-	s.Issue(rec, nil, tid, lid)
+	s.Issue(rec, nil, tid, lid, 0)
 	ck := rec.Result().Cookies()[0]
 	if ck.Name != CookieName || !ck.HttpOnly || ck.Path != "/store" {
 		t.Fatalf("unexpected cookie attrs: %+v", ck)
@@ -46,7 +46,7 @@ func TestIssueVerifyRoundtrip(t *testing.T) {
 func TestVerifyRejectsTamper(t *testing.T) {
 	s := mustSigner(t)
 	rec := httptest.NewRecorder()
-	s.Issue(rec, nil, uuid.New(), uuid.New())
+	s.Issue(rec, nil, uuid.New(), uuid.New(), 0)
 	ck := rec.Result().Cookies()[0]
 	// Flip the last sig char to a guaranteed-different one (a fixed "0" was a
 	// no-op whenever the sig already ended in "0" — ~1/64 flake).
@@ -68,7 +68,7 @@ func TestVerifyRejectsWrongSecret(t *testing.T) {
 	a := mustSigner(t)
 	b, _ := New("a-totally-different-secret-16b+++", false)
 	rec := httptest.NewRecorder()
-	a.Issue(rec, nil, uuid.New(), uuid.New())
+	a.Issue(rec, nil, uuid.New(), uuid.New(), 0)
 	ck := rec.Result().Cookies()[0]
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -89,13 +89,13 @@ func TestSecureFlag(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/store/v1/session", nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
-	s.Issue(rec, req, uuid.New(), uuid.New())
+	s.Issue(rec, req, uuid.New(), uuid.New(), 0)
 	if !rec.Result().Cookies()[0].Secure {
 		t.Fatal("expected Secure cookie when secure=true over HTTPS")
 	}
 	// Plain HTTP (staging on the LAN): a Secure cookie would be dropped.
 	rec = httptest.NewRecorder()
-	s.Issue(rec, httptest.NewRequest("POST", "/store/v1/session", nil), uuid.New(), uuid.New())
+	s.Issue(rec, httptest.NewRequest("POST", "/store/v1/session", nil), uuid.New(), uuid.New(), 0)
 	if rec.Result().Cookies()[0].Secure {
 		t.Fatal("expected no Secure flag over plain HTTP")
 	}
@@ -114,7 +114,7 @@ func TestIssueAsRoundtripAndTTL(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	before := time.Now()
-	if err := s.IssueAs(rec, nil, tid, lid, "admin"); err != nil {
+	if err := s.IssueAs(rec, nil, tid, lid, "admin", 0); err != nil {
 		t.Fatalf("IssueAs: %v", err)
 	}
 	ck := rec.Result().Cookies()[0]
@@ -139,7 +139,7 @@ func TestIssueAsRoundtripAndTTL(t *testing.T) {
 func TestIssuePlainHasNoImpersonator(t *testing.T) {
 	s := mustSigner(t)
 	rec := httptest.NewRecorder()
-	s.Issue(rec, nil, uuid.New(), uuid.New())
+	s.Issue(rec, nil, uuid.New(), uuid.New(), 0)
 	ck := rec.Result().Cookies()[0]
 	if ck.MaxAge != int((12 * time.Hour).Seconds()) {
 		t.Fatalf("MaxAge = %d, want 12h", ck.MaxAge)
@@ -175,7 +175,7 @@ func TestVerifyRejectsTamperedImpersonatedCookie(t *testing.T) {
 	s := mustSigner(t)
 	tid, lid := uuid.New(), uuid.New()
 	rec := httptest.NewRecorder()
-	if err := s.IssueAs(rec, nil, tid, lid, "admin"); err != nil {
+	if err := s.IssueAs(rec, nil, tid, lid, "admin", 0); err != nil {
 		t.Fatal(err)
 	}
 	ck := rec.Result().Cookies()[0]
@@ -209,11 +209,84 @@ func TestIssueAsRejectsBadLabel(t *testing.T) {
 	s := mustSigner(t)
 	for _, by := range []string{"", "ad|min"} {
 		rec := httptest.NewRecorder()
-		if err := s.IssueAs(rec, nil, uuid.New(), uuid.New(), by); err == nil {
+		if err := s.IssueAs(rec, nil, uuid.New(), uuid.New(), by, 0); err == nil {
 			t.Fatalf("IssueAs accepted label %q", by)
 		}
 		if len(rec.Result().Cookies()) != 0 {
 			t.Fatalf("IssueAs(%q) set a cookie despite the error", by)
+		}
+	}
+}
+
+// The store's session epoch (M8) rides in the signed payload: 0 keeps the
+// older cookie forms byte for byte (an older main still reads them), above 0
+// adds the 5th field, for a manager's own and an impersonated session.
+func TestEpochRoundtripAndOldForms(t *testing.T) {
+	s := mustSigner(t)
+	tid, lid := uuid.New(), uuid.New()
+	payload := func(ck *http.Cookie) string {
+		raw, err := base64.RawURLEncoding.DecodeString(ck.Value[:strings.LastIndexByte(ck.Value, '.')])
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	verify := func(ck *http.Cookie) Claims {
+		req := httptest.NewRequest(http.MethodGet, "/store/v1/session", nil)
+		req.AddCookie(ck)
+		c, ok := s.Verify(req)
+		if !ok {
+			t.Fatalf("Verify failed for %q", payload(ck))
+		}
+		return c
+	}
+
+	rec := httptest.NewRecorder()
+	s.Issue(rec, nil, tid, lid, 0)
+	ck := rec.Result().Cookies()[0]
+	if n := strings.Count(payload(ck), "|"); n != 2 {
+		t.Fatalf("epoch 0 must keep the 3-field form, got %q", payload(ck))
+	}
+	if c := verify(ck); c.Epoch != 0 || c.ImpersonatedBy != "" {
+		t.Fatalf("claims = %+v", c)
+	}
+
+	rec = httptest.NewRecorder()
+	s.Issue(rec, nil, tid, lid, 7)
+	ck = rec.Result().Cookies()[0]
+	if c := verify(ck); c.Epoch != 7 || c.ImpersonatedBy != "" || c.TenantID != tid || c.LocationID != lid {
+		t.Fatalf("claims = %+v (payload %q)", c, payload(ck))
+	}
+
+	rec = httptest.NewRecorder()
+	if err := s.IssueAs(rec, nil, tid, lid, "admin", 3); err != nil {
+		t.Fatal(err)
+	}
+	if c := verify(rec.Result().Cookies()[0]); c.Epoch != 3 || c.ImpersonatedBy != "admin" {
+		t.Fatalf("claims = %+v", c)
+	}
+
+	// The epoch is signed: changing it breaks the cookie.
+	rec = httptest.NewRecorder()
+	s.Issue(rec, nil, tid, lid, 1)
+	ck = rec.Result().Cookies()[0]
+	forged := base64.RawURLEncoding.EncodeToString([]byte(strings.TrimSuffix(payload(ck), "1")+"2")) + ck.Value[strings.LastIndexByte(ck.Value, '.'):]
+	req := httptest.NewRequest(http.MethodGet, "/store/v1/session", nil)
+	req.AddCookie(&http.Cookie{Name: CookieName, Value: forged})
+	if _, ok := s.Verify(req); ok {
+		t.Fatal("a cookie with a changed epoch verified")
+	}
+	// A 5-field payload with a junk or zero epoch is refused even when signed.
+	for _, raw := range []string{
+		tid.String() + "|" + lid.String() + "|" + strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10) + "||0",
+		tid.String() + "|" + lid.String() + "|" + strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10) + "||x",
+		tid.String() + "|" + lid.String() + "|" + strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10) + "||1|extra",
+	} {
+		p := base64.RawURLEncoding.EncodeToString([]byte(raw))
+		req := httptest.NewRequest(http.MethodGet, "/store/v1/session", nil)
+		req.AddCookie(&http.Cookie{Name: CookieName, Value: p + "." + s.mac(p)})
+		if _, ok := s.Verify(req); ok {
+			t.Fatalf("payload %q verified", raw)
 		}
 	}
 }

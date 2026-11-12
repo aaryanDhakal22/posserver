@@ -52,7 +52,7 @@ func (s *Service) HandleChoose(ctx context.Context, scope sseBroker.Scope, paylo
 		}
 		c := cands[idx]
 		addr, ok := orderAddress(o.FulfillmentAddress)
-		if err := s.q.UpsertGeoCachePinned(ctx, models.UpsertGeoCachePinnedParams{AddressKey: cacheKey(id, addr, ok), Lat: c.Lat, Lng: c.Lng}); err != nil {
+		if err := s.q.UpsertGeoCachePinned(ctx, models.UpsertGeoCachePinnedParams{AddressKey: PinCacheKey(scope.TenantID, cacheKey(id, addr, ok)), Lat: c.Lat, Lng: c.Lng}); err != nil {
 			return nil, err
 		}
 		conf, _ := json.Marshal(c.Confirmed())

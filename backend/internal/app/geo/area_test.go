@@ -425,8 +425,11 @@ func TestSearchOnlineOrderMergesProvidersNearTheStore(t *testing.T) {
 	if p.State != StateLocated || p.Quality != QualityPinned || !p.Confirmed || p.ConfirmedAddress == nil || p.ConfirmedAddress.Line1 != "1613 Wadsworth Way" {
 		t.Errorf("chosen = %+v", p)
 	}
-	if c := h.db.cache[keyOf("1 Main St")]; !c.Pinned || c.Lat != wadsworth.Lat {
+	if c := h.db.cache[PinCacheKey(h.scope.TenantID, keyOf("1 Main St"))]; !c.Pinned || c.Lat != wadsworth.Lat {
 		t.Errorf("pin cache = %+v", c)
+	}
+	if c := h.db.cache[keyOf("1 Main St")]; c.Pinned {
+		t.Errorf("the pin landed on the shared key, where other stores read it: %+v", c)
 	}
 }
 

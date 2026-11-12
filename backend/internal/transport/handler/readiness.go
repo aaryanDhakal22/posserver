@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -27,15 +28,31 @@ type ReadinessHandler struct {
 	sqs      *sqs.Client
 	queueURL string
 	logger   zerolog.Logger
+
+	// The probe is open to anyone, and each run costs a Postgres ping and an
+	// AWS call (security review): the last answer is reused for cache. probe
+	// and now are the checks and the clock (swapped in tests).
+	cache time.Duration
+	probe func(ctx context.Context) (db, sqs error)
+	now   func() time.Time
+	mu    sync.Mutex
+	last  *readinessResponse
+	at    time.Time
 }
 
-func NewReadinessHandler(pool *pgxpool.Pool, sqsClient *sqs.Client, queueURL string, logger zerolog.Logger) *ReadinessHandler {
-	return &ReadinessHandler{
+// NewReadinessHandler builds the probe; cache is how long an answer is
+// reused (READY_CACHE_SECONDS; 0 = every request checks).
+func NewReadinessHandler(pool *pgxpool.Pool, sqsClient *sqs.Client, queueURL string, cache time.Duration, logger zerolog.Logger) *ReadinessHandler {
+	h := &ReadinessHandler{
 		pool:     pool,
 		sqs:      sqsClient,
 		queueURL: queueURL,
+		cache:    cache,
+		now:      time.Now,
 		logger:   logger.With().Str("module", "ready-handler").Logger(),
 	}
+	h.probe = h.probeDeps
+	return h
 }
 
 type readinessCheck struct {
@@ -51,49 +68,74 @@ type readinessResponse struct {
 }
 
 // GET /api/v1/ready — overall 200 if both checks pass; 503 if either fails.
-// The body always carries the per-check detail so an operator can see which
-// one is broken without checking logs.
+// The body says which check is broken, never why: the driver's error text
+// (hosts, ARNs, account ids) goes to the log only. An answer is reused for
+// the cache window, so a flood of probes is one check, not one per request.
 func (h *ReadinessHandler) Check(c *echo.Context) error {
-	ctx, cancel := context.WithTimeout(c.Request().Context(), 1500*time.Millisecond)
-	defer cancel()
-
-	resp := readinessResponse{
-		DB:  h.checkDB(ctx),
-		SQS: h.checkSQS(ctx),
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.last == nil || h.cache <= 0 || h.now().Sub(h.at) >= h.cache {
+		// Detached from the caller: a probe that hangs up early must not
+		// leave a half-done answer in the cache.
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request().Context()), 1500*time.Millisecond)
+		resp := h.run(ctx)
+		cancel()
+		h.last, h.at = &resp, h.now()
 	}
-	resp.Ready = resp.DB.OK && resp.SQS.OK
-
 	status := http.StatusOK
-	if !resp.Ready {
+	if !h.last.Ready {
 		status = http.StatusServiceUnavailable
-		h.logger.Warn().Ctx(c.Request().Context()).
-			Bool("db_ok", resp.DB.OK).Bool("sqs_ok", resp.SQS.OK).
-			Str("db_err", resp.DB.Err).Str("sqs_err", resp.SQS.Err).
-			Msg("readiness check failed")
 	}
-	return c.JSON(status, resp)
+	return c.JSON(status, h.last)
 }
 
-func (h *ReadinessHandler) checkDB(ctx context.Context) readinessCheck {
+// readinessUnavailable is all a caller learns about a failed check.
+const readinessUnavailable = "unavailable"
+
+func (h *ReadinessHandler) run(ctx context.Context) readinessResponse {
 	start := time.Now()
-	ctx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
-	defer cancel()
-	if err := h.pool.Ping(ctx); err != nil {
-		return readinessCheck{OK: false, Err: err.Error(), MS: time.Since(start).Milliseconds()}
+	dbErr, sqsErr := h.probe(ctx)
+	ms := time.Since(start).Milliseconds()
+	check := func(err error) readinessCheck {
+		if err != nil {
+			return readinessCheck{OK: false, Err: readinessUnavailable, MS: ms}
+		}
+		return readinessCheck{OK: true, MS: ms}
 	}
-	return readinessCheck{OK: true, MS: time.Since(start).Milliseconds()}
+	resp := readinessResponse{DB: check(dbErr), SQS: check(sqsErr)}
+	resp.Ready = resp.DB.OK && resp.SQS.OK
+	if !resp.Ready {
+		ev := h.logger.Warn().Ctx(ctx).Bool("db_ok", resp.DB.OK).Bool("sqs_ok", resp.SQS.OK)
+		if dbErr != nil {
+			ev = ev.Str("db_err", dbErr.Error())
+		}
+		if sqsErr != nil {
+			ev = ev.Str("sqs_err", sqsErr.Error())
+		}
+		ev.Msg("readiness check failed")
+	}
+	return resp
 }
 
-func (h *ReadinessHandler) checkSQS(ctx context.Context) readinessCheck {
-	start := time.Now()
-	ctx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
-	defer cancel()
-	_, err := h.sqs.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
-		QueueUrl:       aws.String(h.queueURL),
-		AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameApproximateNumberOfMessages},
-	})
-	if err != nil {
-		return readinessCheck{OK: false, Err: err.Error(), MS: time.Since(start).Milliseconds()}
-	}
-	return readinessCheck{OK: true, MS: time.Since(start).Milliseconds()}
+// probeDeps pings Postgres and pokes SQS side by side, each bounded to 750 ms.
+func (h *ReadinessHandler) probeDeps(ctx context.Context) (dbErr, sqsErr error) {
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+		defer cancel()
+		dbErr = h.pool.Ping(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(ctx, 750*time.Millisecond)
+		defer cancel()
+		_, sqsErr = h.sqs.GetQueueAttributes(ctx, &sqs.GetQueueAttributesInput{
+			QueueUrl:       aws.String(h.queueURL),
+			AttributeNames: []sqstypes.QueueAttributeName{sqstypes.QueueAttributeNameApproximateNumberOfMessages},
+		})
+	}()
+	wg.Wait()
+	return dbErr, sqsErr
 }

@@ -148,6 +148,7 @@ class Store:
         _CREATED_TENANTS.add(self.tenant_id)
         self.location_id: str = r.json()["location"]["id"]
         self._key: dict | None = None
+        self._login: tuple[str, str] | None = None
         self._stream = None
 
     # -- device key (the agent's credential) --
@@ -178,10 +179,14 @@ class Store:
 
     # -- browser manager session (cookie) --
     def manager_session(self) -> requests.Session:
-        username, password = f"mgr{self.tag}", secrets.token_urlsafe(10)
-        r = self.admin.patch(f"{ADMIN_V1}/tenants/{self.tenant_id}/credentials",
-                             json={"username": username, "password": password}, timeout=5)
-        assert r.status_code == 204, r.text
+        # One login per store: a new password would end the sessions handed out
+        # before (main ends manager sessions when the password is rotated, M8).
+        if self._login is None:
+            self._login = (f"mgr{self.tag}", secrets.token_urlsafe(10))
+            r = self.admin.patch(f"{ADMIN_V1}/tenants/{self.tenant_id}/credentials",
+                                 json={"username": self._login[0], "password": self._login[1]}, timeout=5)
+            assert r.status_code == 204, r.text
+        username, password = self._login
         s = requests.Session()
         r = s.post(f"{STORE_V1}/session", json={"username": username, "password": password}, timeout=5)
         assert r.status_code == 200, r.text

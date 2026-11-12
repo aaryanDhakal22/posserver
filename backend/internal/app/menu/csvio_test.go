@@ -3,6 +3,7 @@ package menuApp
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"errors"
 	"strings"
 	"testing"
@@ -472,5 +473,54 @@ func TestImportCSVFamily(t *testing.T) {
 	}
 	if _, err := ParseMenuCSV(strings.NewReader("category,item,family\nX,Y," + strings.Repeat("f", 61) + "\n")); !IsCSVError(err) {
 		t.Fatalf("long family: %v", err)
+	}
+}
+
+// Formula injection: a name that starts with = + - @ leaves the export with
+// an apostrophe in front (a spreadsheet shows it as text, not a formula), and
+// an exported file still re-imports to the very same names.
+func TestExportCSVNeutralisesFormulas(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _ := newImportSvc(t, "Pizza")
+	tid, lid := uuid.New(), uuid.New()
+	in := "menu,category,item,price,printer,description\n" +
+		"Main,=Deals,\"=HYPERLINK(\"\"http://evil.example\"\",\"\"Click\"\")\",5.00,Pizza,+1 topping\n" +
+		"Main,=Deals,@SUM(A1:A9),6.00,Pizza,-10% today\n" +
+		"Main,=Deals,Plain Pizza,7.00,Pizza,2-for-1 = a deal\n"
+	if _, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, in), false, false); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := svc.ExportCSV(ctx, lid, &buf); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := csv.NewReader(strings.NewReader(buf.String())).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rec := range recs[1:] {
+		for i, cell := range rec {
+			if cell != "" && strings.ContainsRune("=+-@\t\r", rune(cell[0])) {
+				t.Errorf("exported cell %d starts a formula: %q", i, cell)
+			}
+		}
+	}
+	out := buf.String()
+	for _, want := range []string{"'=Deals", "'=HYPERLINK(", "'@SUM(A1:A9)", "'+1 topping", "'-10% today", "Plain Pizza,7.00,Pizza,2-for-1 = a deal"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("export lacks %q:\n%s", want, out)
+		}
+	}
+	// Round trip: nothing changes, so the names came back without the apostrophe.
+	rt, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, out), false, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rt.Changes) != 0 {
+		t.Errorf("round trip changed: %v", rt.Changes)
+	}
+	rows := mustParse(t, out)
+	if rows[0].Category != "=Deals" || !strings.HasPrefix(rows[0].Item, "=HYPERLINK(") || rows[1].Item != "@SUM(A1:A9)" || rows[1].Description != "-10% today" {
+		t.Errorf("parsed back = %+v", rows[:2])
 	}
 }

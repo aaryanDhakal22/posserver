@@ -28,6 +28,10 @@ func (r *usernameRepo) CreateTenant(_ context.Context, p tenancy.CreateTenantPar
 	return t, &tenancy.Location{ID: uuid.New(), TenantID: t.ID}, nil
 }
 
+func (r *usernameRepo) TenantLogin(context.Context, uuid.UUID) (string, string, error) {
+	return "", "", nil
+}
+
 func (r *usernameRepo) SetTenantCredentials(context.Context, uuid.UUID, string, string) error {
 	r.credsSet = true
 	return r.err

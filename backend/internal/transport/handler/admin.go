@@ -289,7 +289,12 @@ func (h *AdminHandler) OpenStoreSession(c *echo.Context) error {
 		h.logger.Error().Ctx(ctx).Err(err).Str("tenant_id", id.String()).Msg("open store session: location lookup failed")
 		return c.JSON(http.StatusInternalServerError, errResp("location lookup failed"))
 	}
-	if err := h.signer.IssueAs(c.Response(), c.Request(), t.ID, loc.ID, impersonatorAdmin); err != nil {
+	st, err := h.svc.SessionState(ctx, t.ID)
+	if err != nil {
+		h.logger.Error().Ctx(ctx).Err(err).Str("tenant_id", id.String()).Msg("open store session: session state lookup failed")
+		return c.JSON(http.StatusInternalServerError, errResp("could not open store session"))
+	}
+	if err := h.signer.IssueAs(c.Response(), c.Request(), t.ID, loc.ID, impersonatorAdmin, st.Epoch); err != nil {
 		h.logger.Error().Ctx(ctx).Err(err).Msg("open store session: issue failed")
 		return c.JSON(http.StatusInternalServerError, errResp("could not open store session"))
 	}

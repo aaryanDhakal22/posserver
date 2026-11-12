@@ -23,6 +23,7 @@ import (
 	"path"
 	floorApp "quiccpos/main/internal/app/floor"
 	"strings"
+	"time"
 
 	"quiccpos/main/internal/app/agentsync"
 	"quiccpos/main/internal/app/bankimport"
@@ -155,8 +156,11 @@ type RouterDeps struct {
 	Geo *geoApp.Service
 	// AlertSender sends the store owner's test alert (main's owner pager).
 	AlertSender handler.AlertSender
-	// AppEnv gates dev-only routes (the geo test-provider override).
+	// AppEnv gates dev-only routes (the geo test-provider override, the open
+	// route list).
 	AppEnv string
+	// ReadyCache: how long /api/v1/ready reuses its last answer (0 = never).
+	ReadyCache time.Duration
 	// DevNotices records owner notices on dev (GET /admin/v1/dev/notices).
 	DevNotices *notify.Recorder
 	// Staff backs the counter terminal's staff + terminal settings (TERMINAL-PLAN 0d).
@@ -214,12 +218,22 @@ func AddRoutes(e *echo.Echo, d RouterDeps) {
 	for _, r := range defs {
 		infos = append(infos, r.RouteInfo)
 	}
-	infos = append(infos, RouteInfo{"GET", "/__routes", "none", "This route list (method/path/auth/description)"})
-	e.GET("/__routes", func(c *echo.Context) error {
+	// The route list is a map of the whole surface: open on dev only.
+	// Elsewhere it answers like a path that doesn't exist unless the admin
+	// key comes with it (the console's routes screen sends it).
+	infos = append(infos, RouteInfo{"GET", "/__routes", "none", "This route list (method/path/auth/description); open on dev, 404 elsewhere without the admin key"})
+	e.GET("/__routes", routeListHandler(d.AppEnv, d.AdminAPIKey, d.Version, infos))
+}
+
+func routeListHandler(appEnv, adminKey, version string, infos []RouteInfo) echo.HandlerFunc {
+	return func(c *echo.Context) error {
+		if appEnv != "dev" && !appMiddleware.IsAdminRequest(c.Request(), adminKey) {
+			return echo.ErrNotFound
+		}
 		return c.JSON(http.StatusOK, map[string]any{
-			"module": "main", "version": d.Version, "routes": infos,
+			"module": "main", "version": version, "routes": infos,
 		})
-	})
+	}
 }
 
 // routeTable is the single source of truth. Add / rename / re-gate a route HERE.
@@ -227,7 +241,13 @@ func routeTable(d RouterDeps) []routeDef {
 	device := appMiddleware.APIKeyAuth(d.AuthService, d.Meters)
 	agentOnly := appMiddleware.RequireDeviceKind(tenancyApp.DeviceKindAgent)
 	admin := appMiddleware.AdminAuth(d.AdminAPIKey)
-	storeSession := appMiddleware.StoreSessionAuth(d.SessionSigner)
+	// The store's session epoch + retired flag are read on every manager
+	// request (M8); nil only in tests that build routes without tenancy.
+	var sessionState appMiddleware.StoreSessionState
+	if d.TenancyService != nil {
+		sessionState = d.TenancyService.SessionState
+	}
+	storeSession := appMiddleware.StoreSessionAuth(d.SessionSigner, sessionState)
 	if d.Audit != nil {
 		// every admin / manager write leaves main's audit row (the database's
 		// triggers add the rows it changed)
@@ -293,7 +313,7 @@ func routeTable(d RouterDeps) []routeDef {
 		trackingH.SetSiteAuth(d.ChannelService.AuthenticateSite)
 	}
 	trackingH.SetDev(d.AppEnv)
-	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.Logger)
+	readiness := handler.NewReadinessHandler(d.Pool, d.SQS, d.QueueURL, d.ReadyCache, d.Logger)
 	appRelH := handler.NewAppReleaseHandler(d.Pool, d.Logger)
 	agentLinkH := handler.NewAgentLinkHandler(d.AgentSync, d.Logger)
 	kitchenH := handler.NewKitchenStatusHandler(d.TenancyService.ListLocations, d.Kitchen, d.Logger)

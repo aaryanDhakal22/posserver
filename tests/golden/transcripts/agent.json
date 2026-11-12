@@ -23,7 +23,7 @@
    "content-type": "application/json"
   },
   "cookies": [],
-  "body": "{\"api_key\":\"qpos_<token>\",\"device_id\":\"<uuid#1>\",\"tenant\":{\"id\":\"<uuid#2>\",\"slug\":\"t-<tag>\",\"name\":\"<tag> Test Pizza\"},\"location\":{\"id\":\"<uuid#3>\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\"},\"manager\":{\"username\":\"mgr<tag>\",\"password_hash\":\"<bcrypt>\"},\"secrets\":{\"otlp_endpoint\":\"https://otlp.quiccpos.com\",\"otlp_headers\":\"Authorization=Bearer 6e666771cd63fbc975d99f453d28f0cadcd502cce396f8d6e226d6e79ad14682\"},\"revoked_agents\":null}\n",
+  "body": "{\"api_key\":\"qpos_<token>\",\"device_id\":\"<uuid#1>\",\"tenant\":{\"id\":\"<uuid#2>\",\"slug\":\"t-<tag>\",\"name\":\"<tag> Test Pizza\"},\"location\":{\"id\":\"<uuid#3>\",\"name\":\"<tag> Test Pizza\",\"timezone\":\"America/New_York\"},\"manager\":{\"username\":\"mgr<tag>\",\"password_hash\":\"<bcrypt>\"},\"secrets\":{\"otlp_endpoint\":\"<secret>\",\"otlp_headers\":\"<secret>\"},\"revoked_agents\":null}\n",
   "mask": [],
   "compare": "exact"
  },

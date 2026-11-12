@@ -81,6 +81,15 @@ type TenantAuth struct {
 	PasswordHash string
 }
 
+// SessionState is what a store-manager session is checked against on every
+// request (security review M8): Epoch goes up when the store's password is
+// rotated, so a cookie issued before carries an older one; Retired = the
+// store was taken out of use.
+type SessionState struct {
+	Epoch   int64
+	Retired bool
+}
+
 type Repository interface {
 	// CreateTenant persists a tenant together with its single location (one
 	// tenant = one restaurant = one location), in one transaction.
@@ -100,7 +109,20 @@ type Repository interface {
 	GetTenantAuthByUsername(ctx context.Context, username string) (*TenantAuth, error)
 	// SetTenantCredentials sets/rotates a tenant's login (passwordHash already
 	// hashed). A username held by another tenant returns ErrUsernameTaken.
+	// It also ends every manager session issued before it (the store's session
+	// epoch goes up by one).
 	SetTenantCredentials(ctx context.Context, id uuid.UUID, username, passwordHash string) error
+	// TenantLogin is a tenant's saved login ("" , "" when none is set).
+	TenantLogin(ctx context.Context, id uuid.UUID) (username, passwordHash string, err error)
+	// SetTenantUsername renames the login and keeps the password (sessions
+	// stay). A username held by another tenant returns ErrUsernameTaken.
+	SetTenantUsername(ctx context.Context, id uuid.UUID, username string) error
+	// RehashTenantPassword stores the same password under a stronger hash: no
+	// rotation, sessions stay.
+	RehashTenantPassword(ctx context.Context, id uuid.UUID, passwordHash string) error
+	// TenantSession is the state a manager session cookie is checked against.
+	// pgx.ErrNoRows when the tenant is gone.
+	TenantSession(ctx context.Context, id uuid.UUID) (SessionState, error)
 	ListTenants(ctx context.Context) ([]Tenant, error)
 	UpdateTenantConfig(ctx context.Context, id uuid.UUID, cfg Config) (*Tenant, error)
 

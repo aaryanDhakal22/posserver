@@ -27,6 +27,7 @@ import (
 	"quiccpos/main/internal/shared/logger"
 	"quiccpos/main/internal/shared/safego"
 	"quiccpos/main/internal/transport"
+	"quiccpos/main/internal/transport/clientip"
 	"quiccpos/main/internal/transport/handler"
 	appMiddleware "quiccpos/main/internal/transport/middleware"
 	"quiccpos/main/internal/transport/session"
@@ -297,6 +298,7 @@ func main() {
 	pager.SetEndpoint(pushoverURL)
 	// The admin's phones only (drivers + the store owner share the account).
 	adminDevices := tenancyDomain.SplitDevices(agentSecrets.PushoverAdminDevices)
+	tenancyService.SetReservedDevices(adminDevices) // no store's manager may save one of ours as an owner phone
 	pager.SetDevices(adminDevices)
 	agentSync := agentsync.New(pool, repo, repo, broker, tenancyService, agentSecrets, pager, lgr)
 	if v, err := time.ParseDuration(os.Getenv("ORDER_REDELIVER_AFTER")); err == nil && v > 0 {
@@ -545,8 +547,16 @@ func main() {
 	}
 
 	e := echo.New()
+	// Whose address a request comes from (M3): main is behind Traefik, so the
+	// peer is the proxy; forwarding headers are believed from trusted proxies only.
+	ipExtractor, err := clientip.FromEnv(cfg.AppConfig.TrustedProxyCIDRs, cfg.AppConfig.CloudflareCIDRs)
+	if err != nil {
+		lgr.Fatal().Err(err).Msg("bad trusted proxy configuration")
+	}
+	e.IPExtractor = ipExtractor
 	tLogger := lgr.With().Str("module", "transport").Logger()
 	transport.AddDefaultMiddlewares(e, cfg.OTELConfig.ServiceName, &tLogger)
+	transport.AddSecurityMiddlewares(e, cfg.AppConfig.AppEnv, cfg.AppConfig.HSTSMaxAge)
 	transport.AddRoutes(e, transport.RouterDeps{
 		Service:           svc,
 		AuthService:       authService,
@@ -591,6 +601,7 @@ func main() {
 		Geo:               geoService,
 		AlertSender:       ownerPager,
 		AppEnv:            cfg.AppConfig.AppEnv,
+		ReadyCache:        time.Duration(cfg.AppConfig.ReadyCacheSeconds) * time.Second,
 		DevNotices:        devNotices,
 		Staff:             staffService,
 		Callcenter:        callcenterService,

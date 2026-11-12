@@ -77,6 +77,15 @@ func NormalizeOwnerDevices(cfg Config) error {
 		return err
 	}
 	cfg[OwnerDevicesKey] = norm
+	if raw, present := cfg[AllowedDevicesKey]; present && raw != nil {
+		s, ok := raw.(string)
+		if !ok {
+			return &BadDeviceError{Name: fmt.Sprint(raw)}
+		}
+		if cfg[AllowedDevicesKey], err = NormalizeDevices(s); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -84,4 +93,69 @@ func NormalizeOwnerDevices(cfg Config) error {
 func OwnerDevices(cfg Config) []string {
 	s, _ := cfg[OwnerDevicesKey].(string)
 	return SplitDevices(s)
+}
+
+// AllowedDevicesKey is an admin-set list in a location config: when it has
+// names, the store's manager may only pick the owner's alert phones from it.
+// A manager can never change it (PATCH /store/v1/me/location keeps the saved
+// value); the admin PATCH can.
+const AllowedDevicesKey = "pushover_allowed_devices"
+
+// AllowedDevices reads the admin's allow-list from a location config.
+func AllowedDevices(cfg Config) []string {
+	s, _ := cfg[AllowedDevicesKey].(string)
+	return SplitDevices(s)
+}
+
+// DeviceNotAllowedError is a device name this store's manager may not save:
+// it is another store's phone, one of QuiccPOS's own, or not on the store's
+// allow-list. Every store's alerts go out through one Pushover account, so
+// a device name is the only thing that says whose phone rings (security
+// review: a manager could type another store's device name and page it).
+type DeviceNotAllowedError struct{ Name string }
+
+func (e *DeviceNotAllowedError) Error() string {
+	return fmt.Sprintf("%q isn't one of this store's phones. Ask QuiccPOS to add it.", e.Name)
+}
+
+// CheckManagerDevices decides whether a manager may save cfg's owner devices
+// for a store whose saved config is cur. others = every other store's config,
+// reserved = QuiccPOS's own device names. A name already saved for the store
+// always stays allowed (so an unrelated save never fails); a new one must be
+// on the store's allow-list when it has one, and may never be a reserved name
+// or one another store uses or is allowed. Names compare without case, as
+// Pushover does. cfg's allow-list is set back to the saved one.
+func CheckManagerDevices(cfg, cur Config, others []Config, reserved []string) error {
+	if cfg == nil {
+		return nil
+	}
+	if v, ok := cur[AllowedDevicesKey]; ok {
+		cfg[AllowedDevicesKey] = v
+	} else {
+		delete(cfg, AllowedDevicesKey)
+	}
+	raw, _ := cfg[OwnerDevicesKey].(string) // a non-string is NormalizeOwnerDevices' bad_device
+	set := func(names []string) map[string]bool {
+		m := make(map[string]bool, len(names))
+		for _, n := range names {
+			m[strings.ToLower(n)] = true
+		}
+		return m
+	}
+	saved, allowed, taken := set(OwnerDevices(cur)), set(AllowedDevices(cur)), set(reserved)
+	for _, o := range others {
+		for _, n := range append(OwnerDevices(o), AllowedDevices(o)...) {
+			taken[strings.ToLower(n)] = true
+		}
+	}
+	for _, d := range SplitDevices(raw) {
+		k := strings.ToLower(d)
+		if saved[k] {
+			continue
+		}
+		if (len(allowed) > 0 && !allowed[k]) || (taken[k] && !allowed[k]) {
+			return &DeviceNotAllowedError{Name: d}
+		}
+	}
+	return nil
 }

@@ -16,6 +16,14 @@
 // impersonator label, "<tenant_id>|<location_id>|<exp unix>|<by>" — and gets a
 // shorter TTL. A plain manager cookie keeps the 3-field form, so cookies issued
 // before the 4th field existed still verify.
+//
+// The store's session epoch (security review M8) is a 5th field,
+// "<tenant_id>|<location_id>|<exp unix>|<by or empty>|<epoch>", written only
+// when the epoch is above 0: a store whose password was never rotated since
+// the epoch exists keeps the older forms (which read as epoch 0), so cookies
+// from before stay valid and an older main (a rollback) still reads them.
+// Rotating the password adds one to the store's epoch (tenants.session_epoch);
+// StoreSessionAuth refuses a cookie whose epoch is not the store's.
 package session
 
 import (
@@ -53,6 +61,9 @@ type Claims struct {
 	// ImpersonatedBy is the impersonator label ("admin") of an open-as-store
 	// session; "" for a manager's own login.
 	ImpersonatedBy string
+	// Epoch is the store's session epoch when the cookie was issued (0 for a
+	// cookie from before epochs, or a store never rotated since).
+	Epoch int64
 }
 
 // Signer issues + verifies session cookies. `secure` sets the cookie's Secure
@@ -80,7 +91,10 @@ func (s *Signer) mac(payload string) string {
 
 func (s *Signer) encode(c Claims) string {
 	raw := c.TenantID.String() + "|" + c.LocationID.String() + "|" + strconv.FormatInt(c.Exp, 10)
-	if c.ImpersonatedBy != "" {
+	switch {
+	case c.Epoch > 0:
+		raw += "|" + c.ImpersonatedBy + "|" + strconv.FormatInt(c.Epoch, 10)
+	case c.ImpersonatedBy != "":
 		raw += "|" + c.ImpersonatedBy
 	}
 	payload := base64.RawURLEncoding.EncodeToString([]byte(raw))
@@ -100,14 +114,23 @@ func (s *Signer) decode(value string) (Claims, bool) {
 	if err != nil {
 		return Claims{}, false
 	}
-	// 3 parts = a manager's own session; 4 = impersonated (4th must be non-empty).
+	// 3 parts = a manager's own session; 4 = impersonated (4th must be
+	// non-empty); 5 = either, with the store's session epoch (> 0).
 	parts := strings.Split(string(raw), "|")
-	if len(parts) != 3 && len(parts) != 4 {
+	if len(parts) < 3 || len(parts) > 5 {
 		return Claims{}, false
 	}
 	var by string
-	if len(parts) == 4 {
+	var epoch int64
+	switch len(parts) {
+	case 4:
 		if by = parts[3]; by == "" {
+			return Claims{}, false
+		}
+	case 5:
+		by = parts[3]
+		var err error
+		if epoch, err = strconv.ParseInt(parts[4], 10, 64); err != nil || epoch <= 0 {
 			return Claims{}, false
 		}
 	}
@@ -117,7 +140,7 @@ func (s *Signer) decode(value string) (Claims, bool) {
 	if err1 != nil || err2 != nil || err3 != nil {
 		return Claims{}, false
 	}
-	return Claims{TenantID: tid, LocationID: lid, Exp: exp, ImpersonatedBy: by}, true
+	return Claims{TenantID: tid, LocationID: lid, Exp: exp, ImpersonatedBy: by, Epoch: epoch}, true
 }
 
 // secureFor reports whether the cookie for this request gets the Secure flag.
@@ -132,9 +155,10 @@ func (s *Signer) secureFor(r *http.Request) bool {
 	return strings.EqualFold(strings.TrimSpace(proto), "https")
 }
 
-// Issue writes a fresh session cookie scoping the browser to (tenantID, locationID).
-func (s *Signer) Issue(w http.ResponseWriter, r *http.Request, tenantID, locationID uuid.UUID) {
-	s.issue(w, r, Claims{TenantID: tenantID, LocationID: locationID}, ttl)
+// Issue writes a fresh session cookie scoping the browser to (tenantID,
+// locationID), stamped with the store's current session epoch.
+func (s *Signer) Issue(w http.ResponseWriter, r *http.Request, tenantID, locationID uuid.UUID, epoch int64) {
+	s.issue(w, r, Claims{TenantID: tenantID, LocationID: locationID, Epoch: epoch}, ttl)
 }
 
 // ErrBadImpersonator rejects an IssueAs label that can't round-trip the cookie.
@@ -144,11 +168,11 @@ var ErrBadImpersonator = errors.New("impersonator label must be non-empty and co
 // scope as Issue, stamped with who opened it (`by`, e.g. "admin") and limited
 // to ImpersonateTTL. The caller audits the issue; the stamp lets every request
 // on the session be traced back to it.
-func (s *Signer) IssueAs(w http.ResponseWriter, r *http.Request, tenantID, locationID uuid.UUID, by string) error {
+func (s *Signer) IssueAs(w http.ResponseWriter, r *http.Request, tenantID, locationID uuid.UUID, by string, epoch int64) error {
 	if by == "" || strings.ContainsRune(by, '|') {
 		return ErrBadImpersonator
 	}
-	s.issue(w, r, Claims{TenantID: tenantID, LocationID: locationID, ImpersonatedBy: by}, ImpersonateTTL)
+	s.issue(w, r, Claims{TenantID: tenantID, LocationID: locationID, ImpersonatedBy: by, Epoch: epoch}, ImpersonateTTL)
 	return nil
 }
 

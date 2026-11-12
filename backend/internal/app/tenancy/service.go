@@ -40,6 +40,8 @@ type Service struct {
 	repo         tenancy.Repository
 	logger       zerolog.Logger
 	onDeviceGone func(id uuid.UUID)
+	// reservedDevices: QuiccPOS's own Pushover device names (SetReservedDevices).
+	reservedDevices []string
 }
 
 func NewService(repo tenancy.Repository, lg zerolog.Logger) *Service {
@@ -159,7 +161,10 @@ func (s *Service) SetTenantStoreID(ctx context.Context, id uuid.UUID, storeID *i
 	return s.repo.SetTenantStoreID(ctx, id, storeID)
 }
 
-// SetTenantCredentials sets/rotates a tenant's store-manager login. Hashes the
+// SetTenantCredentials sets/rotates a tenant's store-manager login. A new
+// password ends every manager session issued before it (the store's session
+// epoch, M8); the same password again (with or without a new username) does
+// not. Hashes the
 // password with the same scheme as auth (HashKey). Both fields are required.
 func (s *Service) SetTenantCredentials(ctx context.Context, id uuid.UUID, username, password string) error {
 	username = strings.TrimSpace(username)
@@ -171,6 +176,16 @@ func (s *Service) SetTenantCredentials(ctx context.Context, id uuid.UUID, userna
 	}
 	if err := validUsername(username); err != nil {
 		return err
+	}
+	// The same password again (a rename, or a tool re-applying the login it
+	// set before) is not a rotation: the hash and the sessions stay.
+	if curUser, curHash, err := s.repo.TenantLogin(ctx, id); err == nil && curHash != "" {
+		if ok, needsRehash := authSvc.VerifyPassword(password, curHash); ok && !needsRehash {
+			if curUser == username {
+				return nil
+			}
+			return s.repo.SetTenantUsername(ctx, id, username)
+		}
 	}
 	h, err := authSvc.HashPassword(password)
 	if err != nil {
@@ -201,12 +216,27 @@ func (s *Service) AuthenticateTenant(ctx context.Context, username, password str
 		// Legacy SHA-256 hash: upgrade to bcrypt now that we know the password.
 		// Best-effort — a failure here must not fail the login.
 		if h, err := authSvc.HashPassword(password); err == nil {
-			if err := s.repo.SetTenantCredentials(ctx, auth.TenantID, username, h); err != nil {
+			if err := s.repo.RehashTenantPassword(ctx, auth.TenantID, h); err != nil {
 				s.logger.Warn().Err(err).Str("tenant_id", auth.TenantID.String()).Msg("password rehash to bcrypt failed")
 			}
 		}
 	}
-	return s.repo.GetTenantByID(ctx, auth.TenantID)
+	t, err := s.repo.GetTenantByID(ctx, auth.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	if t.RetiredAt != nil {
+		// A retired store keeps its records but nobody logs into it (M8): not
+		// the manager's browser, not a Pi linking with the manager login.
+		return nil, ErrInvalidCredentials
+	}
+	return t, nil
+}
+
+// SessionState is what a manager session cookie is checked against (the
+// store's session epoch, whether it is retired). pgx.ErrNoRows = no such store.
+func (s *Service) SessionState(ctx context.Context, tenantID uuid.UUID) (tenancy.SessionState, error) {
+	return s.repo.TenantSession(ctx, tenantID)
 }
 
 // PrimaryLocation returns the tenant's first location (creation order). Today a
@@ -424,6 +454,39 @@ func (s *Service) UpdateLocation(ctx context.Context, p tenancy.UpdateLocationPa
 		return nil, err
 	}
 	return s.repo.UpdateLocation(ctx, p)
+}
+
+// SetReservedDevices names QuiccPOS's own Pushover devices (the admin's):
+// no store's manager may save one as an owner phone.
+func (s *Service) SetReservedDevices(names []string) { s.reservedDevices = names }
+
+// UpdateLocationAsManager is UpdateLocation for the store's own manager
+// (PATCH /store/v1/me/location): the owner's alert phones may only be names
+// the store already has, names on its admin-set allow-list, or new names no
+// other store uses (tenancy.CheckManagerDevices); the allow-list itself
+// stays as saved. The admin's PATCH (UpdateLocation) is not limited.
+func (s *Service) UpdateLocationAsManager(ctx context.Context, p tenancy.UpdateLocationParams) (*tenancy.Location, error) {
+	cur, err := s.repo.GetLocationByID(ctx, p.ID)
+	if err != nil {
+		return nil, err
+	}
+	all, err := s.repo.ListAllLocations(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list locations: %w", err)
+	}
+	others := make([]tenancy.Config, 0, len(all))
+	for _, l := range all {
+		if l.ID != p.ID {
+			others = append(others, l.Config)
+		}
+	}
+	if p.Config == nil {
+		p.Config = tenancy.Config{}
+	}
+	if err := tenancy.CheckManagerDevices(p.Config, cur.Config, others, s.reservedDevices); err != nil {
+		return nil, err
+	}
+	return s.UpdateLocation(ctx, p)
 }
 
 // SetLocationPin places the store pin by hand (a manager dragged it to the

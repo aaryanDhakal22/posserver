@@ -97,11 +97,11 @@ func runLive(t *testing.T, h *PrinterStatusHandler, tid, lid uuid.UUID) map[stri
 		t.Fatal(err)
 	}
 	issued := httptest.NewRecorder()
-	signer.Issue(issued, nil, tid, lid)
+	signer.Issue(issued, nil, tid, lid, 0)
 	req := httptest.NewRequest(http.MethodGet, "/store/v1/me/printers/live", nil)
 	req.AddCookie(issued.Result().Cookies()[0])
 	rec := httptest.NewRecorder()
-	if err := appMiddleware.StoreSessionAuth(signer)(h.MeGetLive)(echo.New().NewContext(req, rec)); err != nil {
+	if err := appMiddleware.StoreSessionAuth(signer, nil)(h.MeGetLive)(echo.New().NewContext(req, rec)); err != nil {
 		t.Fatal(err)
 	}
 	if rec.Code != http.StatusOK {

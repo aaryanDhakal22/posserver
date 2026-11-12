@@ -14,16 +14,23 @@ import (
 	"time"
 )
 
-// GlobalMax is the global failed-login ceiling (link, manager session,
-// operator login): def, or LOGIN_GLOBAL_MAX when that is a positive integer.
-// Only the dev compose sets it — the pytest suites fail logins on purpose and
-// run back to back, faster than the 10-minute window forgets them.
-func GlobalMax(def int) int {
-	if n, err := strconv.Atoi(os.Getenv("LOGIN_GLOBAL_MAX")); err == nil && n > 0 {
+// envMax is def, or the env var when that is a positive integer.
+func envMax(name string, def int) int {
+	if n, err := strconv.Atoi(os.Getenv(name)); err == nil && n > 0 {
 		return n
 	}
 	return def
 }
+
+// GlobalMax is the global failed-login safety valve (link, manager session,
+// operator login): def, or LOGIN_GLOBAL_MAX when that is a positive integer.
+func GlobalMax(def int) int { return envMax("LOGIN_GLOBAL_MAX", def) }
+
+// IPMax is the failed-login ceiling per client address: def, or LOGIN_IP_MAX
+// when that is a positive integer. The dev compose raises both: the pytest
+// suites fail logins on purpose, from one machine, faster than the
+// 10-minute window forgets them.
+func IPMax(def int) int { return envMax("LOGIN_IP_MAX", def) }
 
 // maxKeys bounds memory under key spraying (random usernames): past it, Add
 // first drops every expired entry.
@@ -90,6 +97,13 @@ func (w *Window) RetryAfterN(key string, max int) time.Duration {
 	}
 	// The (len-max)th oldest hit has to age out before there is room.
 	return hits[len(hits)-max].Add(w.window).Sub(now)
+}
+
+// Count is how many events key has in the window.
+func (w *Window) Count(key string) int {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return len(w.prune(key, w.now()))
 }
 
 // Add records one event for key.

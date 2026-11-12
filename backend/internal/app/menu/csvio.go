@@ -57,6 +57,37 @@ const MaxImportRows = 5000
 
 var exportHeader = []string{"menu", "category", "item", "price", "printer", "description", "no_kitchen_ticket", "family"}
 
+// Formula injection (security review): a spreadsheet runs a cell that starts
+// with = + - or @ (also after a tab or carriage return) as a formula, and a
+// menu name is text somebody else typed (an imported bank, a manager of the
+// store). csvSafe puts an apostrophe in front of such a cell on export, the
+// spreadsheet's own "this is text" mark; csvPlain takes it off again on
+// import, so an exported file still re-imports to the same names.
+func csvFormulaStart(s string) bool {
+	if s == "" {
+		return false
+	}
+	switch s[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return true
+	}
+	return false
+}
+
+func csvSafe(s string) string {
+	if csvFormulaStart(s) {
+		return "'" + s
+	}
+	return s
+}
+
+func csvPlain(s string) string {
+	if strings.HasPrefix(s, "'") && csvFormulaStart(s[1:]) {
+		return s[1:]
+	}
+	return s
+}
+
 // CSVRow is one parsed import row. Has* report a non-blank cell.
 type CSVRow struct {
 	Line                     int
@@ -118,7 +149,7 @@ func ParseMenuCSV(r io.Reader) ([]CSVRow, error) {
 		if !ok || i >= len(rec) {
 			return "", false
 		}
-		v := strings.TrimSpace(rec[i])
+		v := csvPlain(strings.TrimSpace(rec[i]))
 		return v, v != ""
 	}
 
@@ -683,7 +714,7 @@ func (s *Service) ExportCSV(ctx context.Context, locationID uuid.UUID, w io.Writ
 				if f, ok := itemFam[it.ID]; ok {
 					family = famName[f]
 				}
-				if err := cw.Write([]string{m.Name, c.Name, it.Name, formatPrice(it.PriceCents), printer, it.Description, noKitchen, family}); err != nil {
+				if err := cw.Write([]string{csvSafe(m.Name), csvSafe(c.Name), csvSafe(it.Name), formatPrice(it.PriceCents), csvSafe(printer), csvSafe(it.Description), noKitchen, csvSafe(family)}); err != nil {
 					return err
 				}
 			}

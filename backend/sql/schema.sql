@@ -2751,3 +2751,10 @@ GRANT SELECT ON public.callcenter_logins TO quicc_readonly;
 ALTER TABLE public.callcenter_devices ADD COLUMN pin_failed_at timestamp with time zone;
 DROP TRIGGER audit_callcenter_devices ON public.callcenter_devices;
 CREATE TRIGGER audit_callcenter_devices AFTER INSERT OR DELETE OR UPDATE ON public.callcenter_devices FOR EACH ROW EXECUTE FUNCTION public.audit_row('mask=token_hash', 'ignore=last_seen_at,session_seen_at,pin_fails,pin_locked_until,pin_failed_at');
+
+-- 00006_tenant_session_epoch: manager sessions end when the store's password is
+-- rotated (the cookie carries the epoch; SetTenantCredentials adds one).
+ALTER TABLE public.tenants ADD COLUMN session_epoch bigint DEFAULT 0 NOT NULL;
+
+-- 00007_geo_pins_per_store: data only (pinned geo_cache rows move from the shared
+-- address key to 'pin|<tenant_id>|<key>'); no schema change.

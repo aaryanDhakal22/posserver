@@ -139,6 +139,44 @@ func (r *TenancyRepository) SetTenantCredentials(ctx context.Context, id uuid.UU
 	return nil
 }
 
+// TenantLogin is a tenant's saved login ("", "" when none is set).
+func (r *TenancyRepository) TenantLogin(ctx context.Context, id uuid.UUID) (username, passwordHash string, err error) {
+	err = r.pool.QueryRow(ctx, `SELECT COALESCE(username, ''), COALESCE(password_hash, '') FROM tenants WHERE id = $1`, id).Scan(&username, &passwordHash)
+	return username, passwordHash, err
+}
+
+// SetTenantUsername renames the login; the password and the store's session
+// epoch stay (nobody is logged out).
+func (r *TenancyRepository) SetTenantUsername(ctx context.Context, id uuid.UUID, username string) error {
+	if _, err := r.pool.Exec(ctx, `UPDATE tenants SET username = $2 WHERE id = $1`, id, username); err != nil {
+		if isUsernameViolation(err) {
+			return tenancy.ErrUsernameTaken
+		}
+		return fmt.Errorf("set tenant username: %w", err)
+	}
+	return nil
+}
+
+// RehashTenantPassword stores the same password under a stronger hash (the
+// legacy SHA-256 -> bcrypt upgrade at login): not a rotation, so the store's
+// session epoch stays and nobody is logged out. Plain SQL: the models package
+// is hand-kept (a full sqlc generate drifts other files).
+func (r *TenancyRepository) RehashTenantPassword(ctx context.Context, id uuid.UUID, passwordHash string) error {
+	if _, err := r.pool.Exec(ctx, `UPDATE tenants SET password_hash = $2 WHERE id = $1`, id, passwordHash); err != nil {
+		return fmt.Errorf("rehash tenant password: %w", err)
+	}
+	return nil
+}
+
+// TenantSession is what a manager session cookie is checked against: the
+// store's session epoch (SetTenantCredentials adds one) and whether the
+// store is retired. pgx.ErrNoRows when the tenant is gone.
+func (r *TenancyRepository) TenantSession(ctx context.Context, id uuid.UUID) (tenancy.SessionState, error) {
+	var st tenancy.SessionState
+	err := r.pool.QueryRow(ctx, `SELECT session_epoch, retired_at IS NOT NULL FROM tenants WHERE id = $1`, id).Scan(&st.Epoch, &st.Retired)
+	return st, err
+}
+
 func (r *TenancyRepository) GetTenantAuthByUsername(ctx context.Context, username string) (*tenancy.TenantAuth, error) {
 	q := models.New(r.pool)
 	row, err := q.GetTenantAuthByUsername(ctx, pgtype.Text{String: username, Valid: true})

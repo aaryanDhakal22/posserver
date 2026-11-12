@@ -390,7 +390,7 @@ type located struct {
 
 // locateIn is what one locate works from.
 type locateIn struct {
-	// tenantID: metric label only (store).
+	// tenantID: the store whose pins are read (PinCacheKey), and the metric label.
 	tenantID uuid.UUID
 	// locationID scopes the area retry: its box and its cache entries (2.2.2).
 	locationID uuid.UUID
@@ -819,7 +819,7 @@ func (s *Service) HandlePin(ctx context.Context, scope sseBroker.Scope, payload 
 		return nil, err
 	}
 	addr, ok := orderAddress(o.FulfillmentAddress)
-	if err := q.UpsertGeoCachePinned(ctx, models.UpsertGeoCachePinnedParams{AddressKey: cacheKey(id, addr, ok), Lat: *b.Lat, Lng: *b.Lng}); err != nil {
+	if err := q.UpsertGeoCachePinned(ctx, models.UpsertGeoCachePinnedParams{AddressKey: PinCacheKey(scope.TenantID, cacheKey(id, addr, ok)), Lat: *b.Lat, Lng: *b.Lng}); err != nil {
 		return nil, err
 	}
 	if _, err := q.InsertOrderGeo(ctx, models.InsertOrderGeoParams{OrderID: pgUUID(id), TenantID: pgUUID(scope.TenantID), LocationID: pgUUID(scope.LocationID)}); err != nil {

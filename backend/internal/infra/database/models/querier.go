@@ -504,7 +504,9 @@ type Querier interface {
 	SetSquareLocation(ctx context.Context, arg SetSquareLocationParams) (int64, error)
 	SetStorePause(ctx context.Context, arg SetStorePauseParams) (StoreOrdering, error)
 	SetStoreRestocked(ctx context.Context, arg SetStoreRestockedParams) error
-	// Set/rotate a tenant's store-manager login (username + already-hashed password).
+	// Set/rotate a tenant's store-manager login (username + already-hashed
+	// password). Every manager session issued before it ends (session_epoch, M8;
+	// read / rehashed by plain SQL in repositories/tenancy_repo.go).
 	SetTenantCredentials(ctx context.Context, arg SetTenantCredentialsParams) error
 	// Set/clear (NULL) a tenant's vendor store_id. Unique when present.
 	SetTenantStoreID(ctx context.Context, arg SetTenantStoreIDParams) (Tenant, error)

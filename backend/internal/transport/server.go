@@ -2,6 +2,7 @@ package transport
 
 import (
 	"context"
+	"io/fs"
 	"net/http"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/rs/zerolog"
 
 	appMiddleware "quiccpos/main/internal/transport/middleware"
+	"quiccpos/main/internal/transport/session"
+	"quiccpos/main/internal/transport/webapp"
 )
 
 // streams ends the SSE streams when the server shuts down (F-15): the
@@ -84,4 +87,21 @@ func AddDefaultMiddlewares(e *echo.Echo, serviceName string, logger *zerolog.Log
 	e.Use(appMiddleware.Recover(logger))
 	e.Use(streams.Middleware())
 	e.Use(appMiddleware.BodyLimit(appMiddleware.DefaultBodyLimit, BodyLimits))
+}
+
+// AddSecurityMiddlewares installs the response security headers and the
+// cross-site guard for cookie-authenticated writes (security review,
+// hardening). The SPA's Content-Security-Policy is built from the embedded
+// index.html, so it follows whatever the UI build produced.
+func AddSecurityMiddlewares(e *echo.Echo, appEnv string, hstsMaxAge int) {
+	dev := appEnv == "dev"
+	var index []byte
+	if webapp.Built() {
+		index, _ = fs.ReadFile(webapp.FS(), "index.html")
+	}
+	e.Use(appMiddleware.SecurityHeaders(appMiddleware.SecurityConfig{
+		AppCSP:     appMiddleware.AppCSP(index, dev),
+		HSTSMaxAge: hstsMaxAge,
+	}))
+	e.Use(appMiddleware.CrossSiteGuard(session.CookieName, storePrefix+"/session", dev))
 }

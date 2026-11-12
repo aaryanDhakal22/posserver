@@ -80,9 +80,11 @@ services:
       SES_REGION:
       SES_ENDPOINT:
       ORDER_REDELIVER_AFTER:
-      # Dev only: the pytest suites fail logins on purpose and run back to back;
-      # the global failed-login ceiling (30 per 10 min elsewhere) would trip.
-      LOGIN_GLOBAL_MAX: "1000"
+      # Dev only: the pytest suites fail logins on purpose, from one machine, and
+      # run back to back; the failed-login ceilings (20 per address, 600 in all
+      # per 10 min elsewhere) would trip.
+      LOGIN_GLOBAL_MAX: "100000"
+      LOGIN_IP_MAX: "100000"
       # Dev only: the browser suites open tracking pages from one machine (staging/prod keep 120/min).
       TRACK_PUBLIC_PER_MIN: "100000"
       OTEL_EXPORTER_OTLP_ENDPOINT:

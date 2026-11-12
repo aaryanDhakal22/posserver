@@ -86,7 +86,7 @@ func (h *StoreHandler) SessionLogin(c *echo.Context) error {
 	tenant, err := h.svc.AuthenticateTenant(ctx, req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, tenancyApp.ErrInvalidCredentials) {
-			h.logins.failed(req.Username)
+			h.logins.failedFrom(c, req.Username)
 			return c.JSON(http.StatusUnauthorized, errResp("invalid username or password"))
 		}
 		h.logger.Error().Err(err).Msg("session login failed")
@@ -103,7 +103,14 @@ func (h *StoreHandler) SessionLogin(c *echo.Context) error {
 		h.logger.Error().Err(err).Msg("session login: location lookup failed")
 		return c.JSON(http.StatusInternalServerError, errResp("login failed"))
 	}
-	h.signer.Issue(c.Response(), c.Request(), tenant.ID, loc.ID)
+	// The cookie carries the store's session epoch: rotating the password
+	// ends every session issued before it (M8).
+	st, err := h.svc.SessionState(ctx, tenant.ID)
+	if err != nil {
+		h.logger.Error().Err(err).Msg("session login: session state lookup failed")
+		return c.JSON(http.StatusInternalServerError, errResp("login failed"))
+	}
+	h.signer.Issue(c.Response(), c.Request(), tenant.ID, loc.ID, st.Epoch)
 	return c.JSON(http.StatusOK, map[string]any{
 		"tenant_id":   tenant.ID.String(),
 		"location_id": loc.ID.String(),
@@ -186,7 +193,7 @@ func (h *StoreHandler) MeUpdateLocation(c *echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
 	}
-	l, err := h.svc.UpdateLocation(ctx, tenancy.UpdateLocationParams{
+	p := tenancy.UpdateLocationParams{
 		ID:             lid,
 		Name:           req.Name,
 		Timezone:       req.Timezone,
@@ -195,7 +202,15 @@ func (h *StoreHandler) MeUpdateLocation(c *echo.Context) error {
 		AddressLine1:   req.AddressLine1,
 		AddressLine2:   req.AddressLine2,
 		Config:         req.Config,
-	})
+	}
+	// The manager may only save alert phones that are this store's (400
+	// device_not_allowed otherwise); an admin's open-as-store session saves
+	// like the admin PATCH.
+	update := h.svc.UpdateLocationAsManager
+	if appMiddleware.StoreImpersonatorFromContext(ctx) != "" {
+		update = h.svc.UpdateLocation
+	}
+	l, err := update(ctx, p)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, locationErr(err))
 	}

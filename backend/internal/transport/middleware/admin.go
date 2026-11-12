@@ -33,6 +33,13 @@ func AdminAuth(expected string) echo.MiddlewareFunc {
 	}
 }
 
+// IsAdminRequest reports whether r carries the admin key (either header
+// form), for routes that are open on dev and admin-only elsewhere.
+func IsAdminRequest(r *http.Request, expected string) bool {
+	got := bearerOrHeader(r.Header.Get("Authorization"), r.Header.Get("X-Admin-Key"))
+	return expected != "" && got != "" && subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
+}
+
 func bearerOrHeader(authz, xAdmin string) string {
 	if xAdmin != "" {
 		return xAdmin

@@ -106,7 +106,7 @@ type Service struct {
 	offMu     sync.Mutex
 	offSince  map[uuid.UUID]time.Time // location → first seen offline
 	offPaged  map[uuid.UUID]bool
-	linkLimit *ratelimit.Window // failed link attempts
+	linkLimit *ratelimit.LoginGuard // failed link attempts
 	// printersChanged pushes a fresh store_config after the agent changed
 	// the printers (OnPrintersChanged); nil = no push.
 	printersChanged func(ctx context.Context, tenantID, locationID uuid.UUID)
@@ -127,7 +127,7 @@ func New(pool *pgxpool.Pool, orders OrderLoader, drivers DriverMirror, broker Br
 		OfflineAfter:   2 * time.Minute,
 		offSince:       map[uuid.UUID]time.Time{},
 		offPaged:       map[uuid.UUID]bool{},
-		linkLimit:      ratelimit.New(5, 10*time.Minute),
+		linkLimit:      ratelimit.NewLoginGuard(),
 	}
 	s.redelivered, _ = m.Int64Counter("orders.redelivered", metric.WithDescription("Orders re-sent to an agent that had not acked them"))
 	s.acked, _ = m.Int64Counter("orders.agent_acked", metric.WithDescription("Orders acknowledged by an agent"))

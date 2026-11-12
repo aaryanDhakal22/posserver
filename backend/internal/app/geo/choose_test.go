@@ -43,8 +43,11 @@ func TestOnlineOrderCheckThenChoose(t *testing.T) {
 		t.Fatalf("chosen push = %+v", p)
 	}
 	key := NormalizeKey(Address{Line1: "100 Main St", State: "MD"})
-	if c := h.db.cache[key]; !c.Pinned || c.Lat != 38.9774 {
+	if c := h.db.cache[PinCacheKey(h.scope.TenantID, key)]; !c.Pinned || c.Lat != 38.9774 {
 		t.Errorf("cache = %+v", c)
+	}
+	if _, shared := h.db.cache[key]; shared {
+		t.Error("the choice was pinned under the shared key, where other stores read it")
 	}
 	if g := h.db.orderGeo[id]; g.Candidates != nil || decodeConfirmed(g.ConfirmedAddress) == nil {
 		t.Errorf("order_geo after choose = %+v", g)
@@ -116,6 +119,17 @@ func TestConfirmedOnlyOnPinAndChoosePushes(t *testing.T) {
 		h.drain()
 		if p := onlyPush(t, h, o2); p.Confirmed || p.Quality != QualityPinned {
 			t.Errorf("pinned cache hit = %+v", p)
+		}
+		// The pin is this store's: another store looking the same address up
+		// gets the geocoder's point, not where this store's staff put the pin.
+		key := NormalizeKey(Address{Line1: "5 Oak St", City: "Towson", State: "MD", Zip: "21286"})
+		mine, _, err := h.svc.cached(ctx, locateIn{tenantID: h.scope.TenantID, locationID: h.scope.LocationID, key: key})
+		if err != nil || !mine.Pinned || mine.Lat != 39.3960 {
+			t.Fatalf("this store's lookup = %+v, %v; want its pin", mine, err)
+		}
+		theirs, _, err := h.svc.cached(ctx, locateIn{tenantID: uuid.New(), locationID: uuid.New(), key: key})
+		if err != nil || theirs.Pinned || theirs.Lat != 39.3950 {
+			t.Fatalf("another store's lookup = %+v, %v; want the shared geocode (39.3950), never this store's pin", theirs, err)
 		}
 	})
 

@@ -59,6 +59,20 @@ services:
       ADMIN_API_KEY: ${ADMIN_API_KEY}
       # Must be identical across blue + green so manager sessions survive a swap.
       SESSION_SECRET: ${SESSION_SECRET}
+      # Security (2026-11-12). Whose address a request comes from: forwarding
+      # headers (X-Forwarded-For, Cloudflare's CF-Connecting-IP) are believed
+      # only from these proxies; unset = loopback + the private ranges (Traefik
+      # on this box / Docker network) and Cloudflare's published ranges.
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      CLOUDFLARE_CIDRS: ${CLOUDFLARE_CIDRS:-}
+      # Failed logins per 10 min: per client address (default 20) and the
+      # global safety valve (default 600). Unset = the defaults.
+      LOGIN_IP_MAX: ${LOGIN_IP_MAX:-}
+      LOGIN_GLOBAL_MAX: ${LOGIN_GLOBAL_MAX:-}
+      # Strict-Transport-Security max-age in seconds on https answers (default
+      # one year, 0 = off); how long /api/v1/ready reuses its answer (default 5 s).
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-}
+      READY_CACHE_SECONDS: ${READY_CACHE_SECONDS:-}
       # Handed to a freshly linked agent (Pi set up / replaced) + main's own pages.
       AGENT_SECRET_PUSHOVER_APP_TOKEN: ${AGENT_SECRET_PUSHOVER_APP_TOKEN:-}
       AGENT_SECRET_PUSHOVER_USER_KEY: ${AGENT_SECRET_PUSHOVER_USER_KEY:-}
@@ -150,6 +164,20 @@ services:
       ADMIN_API_KEY: ${ADMIN_API_KEY}
       # Must be identical across blue + green so manager sessions survive a swap.
       SESSION_SECRET: ${SESSION_SECRET}
+      # Security (2026-11-12). Whose address a request comes from: forwarding
+      # headers (X-Forwarded-For, Cloudflare's CF-Connecting-IP) are believed
+      # only from these proxies; unset = loopback + the private ranges (Traefik
+      # on this box / Docker network) and Cloudflare's published ranges.
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:-}
+      CLOUDFLARE_CIDRS: ${CLOUDFLARE_CIDRS:-}
+      # Failed logins per 10 min: per client address (default 20) and the
+      # global safety valve (default 600). Unset = the defaults.
+      LOGIN_IP_MAX: ${LOGIN_IP_MAX:-}
+      LOGIN_GLOBAL_MAX: ${LOGIN_GLOBAL_MAX:-}
+      # Strict-Transport-Security max-age in seconds on https answers (default
+      # one year, 0 = off); how long /api/v1/ready reuses its answer (default 5 s).
+      HSTS_MAX_AGE: ${HSTS_MAX_AGE:-}
+      READY_CACHE_SECONDS: ${READY_CACHE_SECONDS:-}
       # Handed to a freshly linked agent (Pi set up / replaced) + main's own pages.
       AGENT_SECRET_PUSHOVER_APP_TOKEN: ${AGENT_SECRET_PUSHOVER_APP_TOKEN:-}
       AGENT_SECRET_PUSHOVER_USER_KEY: ${AGENT_SECRET_PUSHOVER_USER_KEY:-}

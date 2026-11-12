@@ -131,7 +131,7 @@ func (h *CallcenterHandler) Login(c *echo.Context) error {
 	tid, lid, err := h.svc.CheckLogin(ctx, req.Username, req.Password)
 	if err != nil {
 		if errors.Is(err, callcenterApp.ErrInvalidCredentials) {
-			h.logins.failed(req.Username)
+			h.logins.failedFrom(c, req.Username)
 			h.note(c, nil, "callcenter.login.failed", http.StatusUnauthorized, map[string]string{"username": clip(strings.TrimSpace(req.Username), 64)})
 			return ccErr(c, http.StatusUnauthorized, "invalid_credentials", "Wrong call-center login or password.")
 		}

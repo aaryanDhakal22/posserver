@@ -18,8 +18,10 @@ SELECT id, slug, name, config, username, password_hash, created_at, store_id, te
 SELECT id, password_hash FROM tenants WHERE username = $1;
 
 -- name: SetTenantCredentials :exec
--- Set/rotate a tenant's store-manager login (username + already-hashed password).
-UPDATE tenants SET username = $2, password_hash = $3 WHERE id = $1;
+-- Set/rotate a tenant's store-manager login (username + already-hashed
+-- password). Every manager session issued before it ends (session_epoch, M8;
+-- read / rehashed by plain SQL in repositories/tenancy_repo.go).
+UPDATE tenants SET username = $2, password_hash = $3, session_epoch = session_epoch + 1 WHERE id = $1;
 
 -- name: ListTenants :many
 SELECT id, slug, name, config, username, password_hash, created_at, store_id, test_store, retired_at FROM tenants ORDER BY created_at ASC;
@@ -1036,6 +1038,8 @@ ON CONFLICT (address_key) DO UPDATE SET
 WHERE geo_cache.pinned = false;
 
 -- name: UpsertGeoCachePinned :exec
+-- A pin a store's staff set. The key is the store's own ('pin|<tenant>|<key>',
+-- app/geo PinCacheKey, migration 00007): never the shared address key.
 INSERT INTO geo_cache (address_key, lat, lng, quality, source, pinned, updated_at)
 VALUES ($1, $2, $3, 'pinned', 'pin', true, now())
 ON CONFLICT (address_key) DO UPDATE SET
