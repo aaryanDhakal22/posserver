@@ -119,6 +119,10 @@ type LineItemDTO struct {
 	// add | only | no | specialty. Absent on older and vendor orders.
 	Portion string `json:"portion,omitempty"`
 	Mode    string `json:"mode,omitempty"`
+	// Coupon: the coupon a top-level line was sold in and which of the
+	// order's coupons it is (1-based). Absent when in none (golden-safe).
+	Coupon   string `json:"coupon,omitempty"`
+	CouponNo int    `json:"coupon_no,omitempty"`
 	// Kitchen routing (top-level items): the matched menu item, the station
 	// printer to print on, and how it was matched (matched|unmatched|unassigned).
 	MenuItemID string `json:"menu_item_id,omitempty"`
@@ -254,6 +258,8 @@ func toItemsDTO(items []LineItem) []LineItemDTO {
 			Children:  toItemsDTO(it.Children),
 			Portion:   it.Portion,
 			Mode:      it.Mode,
+			Coupon:    it.Coupon,
+			CouponNo:  it.CouponNo,
 			Routing:   string(it.Routing),
 		}
 		if it.MenuItemID != nil {

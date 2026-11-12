@@ -63,7 +63,8 @@ export interface Context {
   options?: Record<string, OptionFacts> | null;
 }
 /** portion: whole ('' too) | first | second (older carts: left = first, right = second); mode: add ('' too) | only | no. */
-export interface Pick { group_id: string; option_id: string; portion?: string; mode?: string }
+/** price_cents: a kept option price (price_overrides only, the Pi's kept line): the pick as it was rung (0–MAX_OPEN_PRICE_CENTS; a NO stays free). */
+export interface Pick { group_id: string; option_id: string; portion?: string; mode?: string; price_cents?: number | null }
 /** A specialty pizza (a menu item) on half 1 or 2, priced at the line's size. */
 export interface Half { item_id: string; half: number }
 /** price_cents: an open-price item's price (0–MAX_OPEN_PRICE_CENTS); on any other item a price change, taken only with price_overrides (it replaces the item's price at its size, half and half: the pizza's; options still add). */
@@ -416,6 +417,9 @@ class Engine {
         for (const op of o.prices ?? []) if (p.size !== '' && op.size_id === p.size) price = op.price_cents;
         if (mode === 'no') price = 0;
         else if (por !== '' && halfPrice) price = Math.floor((price + 1) / 2); // half the whole-pie price, rounded up
+        // A kept option price (the Pi's kept line): the pick as it was rung.
+        const kp = pk.price_cents;
+        if (kp != null && this.ctx.price_overrides && mode !== 'no' && Number.isInteger(kp) && kp >= 0 && kp <= MAX_OPEN_PRICE_CENTS) price = kp;
         if (price > 0) {
           extras.push(price);
           (p.cmods ??= []).push({ price, option: pk.option_id, label });

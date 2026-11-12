@@ -636,13 +636,8 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 				}
 				rc := r
 				rc.Options = pricing.FreeOptions(r.Options, g.FreeMods)
-				// The coupon's name rides the note (as a combo's does): the
-				// order wire has no coupon field.
-				note := "Coupon: " + g.Name
-				if n := strings.TrimSpace(l.Note); n != "" {
-					note += " · " + n
-				}
-				b := lineOf(rc, g.Qty, note, len(lines))
+				b := lineOf(rc, g.Qty, strings.TrimSpace(l.Note), len(lines))
+				b.item.Coupon, b.item.CouponNo = g.Name, g.Coupon+1 // 00048: the Pi groups it under the coupon
 				var mods order.Money
 				for _, c := range b.item.Children {
 					mods += c.UnitPrice

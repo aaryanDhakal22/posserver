@@ -441,6 +441,8 @@ func insertLineItemTree(ctx context.Context, q *models.Queries, orderID order.ID
 		Routing:        string(item.Routing),
 		Portion:        item.Portion,
 		Mode:           item.Mode,
+		Coupon:         item.Coupon,
+		CouponNo:       int32(item.CouponNo),
 	}); err != nil {
 		return err
 	}
@@ -698,6 +700,8 @@ func buildItemTree(rows []models.LineItem) []order.LineItem {
 			Routing:   order.Routing(row.Routing),
 			Portion:   row.Portion,
 			Mode:      row.Mode,
+			Coupon:    row.Coupon,
+			CouponNo:  int(row.CouponNo),
 		}
 		if row.MenuItemID.Valid {
 			id := uuid.UUID(row.MenuItemID.Bytes)

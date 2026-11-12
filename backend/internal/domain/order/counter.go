@@ -392,7 +392,8 @@ func counterItems(in []LineItemDTO, depth int) ([]LineItem, error) {
 		}
 		out = append(out, LineItem{ID: id, Position: pos, SKU: d.SKU, Name: d.Name, Size: d.Size, Quantity: d.Quantity,
 			UnitPrice: Money(d.UnitPrice), LineTotal: Money(d.LineTotal), Notes: d.Notes, Children: kids,
-			Portion: d.Portion, Mode: d.Mode, MenuItemID: menuItem, PrinterID: printer, Routing: Routing(d.Routing)})
+			Portion: d.Portion, Mode: d.Mode, MenuItemID: menuItem, PrinterID: printer, Routing: Routing(d.Routing),
+			Coupon: d.Coupon, CouponNo: d.CouponNo})
 	}
 	return out, nil
 }

@@ -176,6 +176,12 @@ type LineItem struct {
 	Portion string
 	Mode    string
 
+	// Coupon (top-level lines, migration 00048): the coupon this line was
+	// sold in (a coupon re-prices its lines, never a discount) and which of
+	// the order's coupons it is (1-based). "" / 0 = in no coupon.
+	Coupon   string
+	CouponNo int
+
 	// Kitchen routing, stamped on top-level items when the order arrives
 	// (modifiers/children inherit their parent's). Zero values = not routed
 	// (orders that predate routing print as one full receipt).

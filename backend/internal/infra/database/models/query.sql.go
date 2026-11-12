@@ -819,9 +819,9 @@ func (q *Queries) CreateDevice(ctx context.Context, arg CreateDeviceParams) (Dev
 const createLineItem = `-- name: CreateLineItem :exec
 INSERT INTO line_items (
     id, order_id, parent_id, position, sku, name, quantity, unit_price_cents, line_total_cents, notes,
-    size, menu_item_id, printer_id, routing, portion, mode
+    size, menu_item_id, printer_id, routing, portion, mode, coupon, coupon_no
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
 )
 `
 
@@ -842,6 +842,8 @@ type CreateLineItemParams struct {
 	Routing        string      `json:"routing"`
 	Portion        string      `json:"portion"`
 	Mode           string      `json:"mode"`
+	Coupon         string      `json:"coupon"`
+	CouponNo       int32       `json:"coupon_no"`
 }
 
 func (q *Queries) CreateLineItem(ctx context.Context, arg CreateLineItemParams) error {
@@ -862,6 +864,8 @@ func (q *Queries) CreateLineItem(ctx context.Context, arg CreateLineItemParams) 
 		arg.Routing,
 		arg.Portion,
 		arg.Mode,
+		arg.Coupon,
+		arg.CouponNo,
 	)
 	return err
 }
@@ -3012,7 +3016,7 @@ func (q *Queries) GetLatestAppRelease(ctx context.Context, app string) (GetLates
 
 const getLineItemsByOrderID = `-- name: GetLineItemsByOrderID :many
 SELECT id, order_id, parent_id, position, sku, name, quantity, unit_price_cents, line_total_cents, notes,
-       size, menu_item_id, printer_id, routing, portion, mode
+       size, menu_item_id, printer_id, routing, portion, mode, coupon, coupon_no
 FROM line_items WHERE order_id = $1
 ORDER BY parent_id NULLS FIRST, position
 `
@@ -3043,6 +3047,8 @@ func (q *Queries) GetLineItemsByOrderID(ctx context.Context, orderID pgtype.UUID
 			&i.Routing,
 			&i.Portion,
 			&i.Mode,
+			&i.Coupon,
+			&i.CouponNo,
 		); err != nil {
 			return nil, err
 		}

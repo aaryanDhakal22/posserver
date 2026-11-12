@@ -319,3 +319,27 @@ def test_order_changed_replaces_lines_and_money(store, publish) -> None:
     late = {**ch, "event_id": str(uuid.uuid4())}
     res = _send(store.key, [foreign, v, late])
     assert res == {foreign["event_id"]: "invalid", v["event_id"]: "applied", late["event_id"]: "invalid"}
+
+
+def test_coupon_lines_keep_their_coupon(store) -> None:
+    """A coupon re-prices its lines (the owner, 2026-11-12; migration 00048): the Pi's counter order lines
+    carry `coupon` + `coupon_no`, main stores them, and they come back on the order (absent on other lines)."""
+    oid = _uuid7()
+    line = lambda name, cents, **kw: {"id": str(uuid.uuid4()), "position": 0, "name": name, "quantity": 1,  # noqa: E731
+                                      "unit_price_cents": cents, "line_total_cents": cents, "routing": "unassigned", **kw}
+    items = [line("Cheesesteak", 1099, coupon='8" Sub Combo', coupon_no=1, rung_cents=899),
+             line("French Fries", 0, coupon='8" Sub Combo', coupon_no=1, rung_cents=399),
+             line("Cheesesteak", 1099, coupon='8" Sub Combo', coupon_no=2, rung_cents=899),
+             line("Garden Salad", 699)]
+    for k, it in enumerate(items):
+        it["position"] = k
+    snap = _snapshot(oid, items=items,
+                     money={"subtotal_cents": 2897, "tax_cents": 174, "tip_cents": 0, "fees": [], "discounts": [], "total_cents": 3071},
+                     payments=[{"id": str(uuid.uuid4()), "method": "cash", "amount_cents": 3071, "at": _now()}])
+    ev = _placed(snap)
+    assert _send(store.key, [ev]) == {ev["event_id"]: "applied"}
+    o = _get(store.key, oid)
+    got = [(i["name"], i.get("coupon"), i.get("coupon_no")) for i in o["items"]]
+    assert got == [("Cheesesteak", '8" Sub Combo', 1), ("French Fries", '8" Sub Combo', 1),
+                   ("Cheesesteak", '8" Sub Combo', 2), ("Garden Salad", None, None)], got
+    assert not o["money"].get("discounts") and o["money"]["subtotal_cents"] == sum(i["line_total_cents"] for i in o["items"])

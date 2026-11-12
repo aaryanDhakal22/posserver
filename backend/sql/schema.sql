@@ -169,6 +169,9 @@ CREATE TABLE line_items (
     -- migration 00032: half and half on modifier children
     portion           text     NOT NULL DEFAULT '',
     mode              text     NOT NULL DEFAULT '',
+    -- migration 00048: the coupon a line was sold in (its name + which of the order's)
+    coupon            text     NOT NULL DEFAULT '',
+    coupon_no         integer  NOT NULL DEFAULT 0,
     CONSTRAINT line_items_quantity_ck CHECK (quantity > 0)
 );
 CREATE INDEX idx_line_items_order_id ON line_items(order_id);

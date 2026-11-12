@@ -399,6 +399,8 @@ type LineItem struct {
 	Routing        string      `json:"routing"`
 	Portion        string      `json:"portion"`
 	Mode           string      `json:"mode"`
+	Coupon         string      `json:"coupon"`
+	CouponNo       int32       `json:"coupon_no"`
 }
 
 type Location struct {
