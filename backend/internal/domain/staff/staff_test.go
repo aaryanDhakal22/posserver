@@ -71,6 +71,8 @@ func TestSettingsValidate(t *testing.T) {
 		func(s *Settings) { s.AreaCodes = []string{"110"} },
 		func(s *Settings) { s.AreaCodes = []string{"41a"} },
 		func(s *Settings) { s.AreaCodes = []string{"4100"} },
+		func(s *Settings) { s.DriverClaimAfterMinutes = -1 },
+		func(s *Settings) { s.DriverClaimAfterMinutes = 481 },
 	} {
 		s := DefaultSettings()
 		f(&s)
@@ -142,5 +144,18 @@ func TestDrawerAndPhoneDefaults(t *testing.T) {
 	s.AreaCodes, s.CashierPayoutCents, s.DefaultPickupMinutes = []string{"212"}, 0, 0
 	if err := s.Validate(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDriverClaimAfterDefault(t *testing.T) {
+	s := DefaultSettings()
+	if s.DriverClaimAfterMinutes != 45 {
+		t.Fatalf("default: %d", s.DriverClaimAfterMinutes)
+	}
+	for _, v := range []int{0, 45, 480} {
+		s.DriverClaimAfterMinutes = v
+		if err := s.Validate(); err != nil {
+			t.Fatalf("%d: %v", v, err)
+		}
 	}
 }

@@ -205,7 +205,7 @@
     refund: string; discount: string; lock: string; counterStart: string; receiptDone: string;
     autoClose: boolean; autoCloseAt: string; defaultTab: string; showHistory: boolean; font: string;
     priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean;
-    cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string;
+    cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string; claimAfter: string;
   };
   let sf = $state<SettingsForm | null>(null);
   let sErr = $state('');
@@ -221,7 +221,8 @@
       clickSound: s.click_sound, pricesOnButtons: s.prices_on_buttons, margin: String(s.out_of_area_margin_mi),
       nameOnPaid: s.name_on_paid_counter, cardTips: s.card_tips, tipPercents: (s.card_tip_percents ?? []).join(', '),
       meal: String(s.employee_meal_pct), payout: centsInput(s.cashier_payout_cents),
-      pickupMinutes: String(s.default_pickup_minutes), areaCodes: (s.area_codes ?? []).join(', ')
+      pickupMinutes: String(s.default_pickup_minutes), areaCodes: (s.area_codes ?? []).join(', '),
+      claimAfter: String(s.driver_claim_after_minutes)
     };
   }
 
@@ -266,6 +267,7 @@
       employee_meal_pct: int(f.meal, 'The employee meal discount', 0, 100),
       cashier_payout_cents: payout,
       default_pickup_minutes: int(f.pickupMinutes, 'The pickup time', 0, 240),
+      driver_claim_after_minutes: int(f.claimAfter, 'The drivers\' Dispatch wait', 0, 480),
       area_codes: codes
     };
   }
@@ -448,9 +450,10 @@
             <div><label class="lbl" for="ts-margin">Out-of-area margin (mi)</label><input id="ts-margin" class="field mono text-right" inputmode="decimal" bind:value={sf.margin} /></div>
             <div><label class="lbl" for="ts-pickup">Pickup ready in (min)</label><input id="ts-pickup" class="field mono text-right" inputmode="numeric" bind:value={sf.pickupMinutes} /></div>
             <div class="col-span-2"><label class="lbl" for="ts-area">Area codes</label><input id="ts-area" class="field mono" bind:value={sf.areaCodes} /></div>
+            <div><label class="lbl" for="ts-claim">Drivers may claim after (min)</label><input id="ts-claim" class="field mono text-right" inputmode="numeric" bind:value={sf.claimAfter} /></div>
           </div>
           <label class="flex items-center gap-2.5"><Switch bind:checked={sf.nameOnPaid} label="Ask a name for a paid counter order" />Ask a name for a paid counter order</label>
-          <p class="help !mt-0">The margin: a delivery up to this far past the delivery area is taken without a warning. Pickup ready in: the time a pickup is quoted. Area codes: the store's local area codes (the terminal uses them for phone numbers).</p>
+          <p class="help !mt-0">The margin: a delivery up to this far past the delivery area is taken without a warning. Pickup ready in: the time a pickup is quoted. Area codes: the store's local area codes (the terminal uses them for phone numbers). Drivers may claim after: a delivery nobody took shows in the drivers' Dispatch list once it has waited this long; a driver who claims it gets it as delivered.</p>
         </div>
 
         <div class="subcard p-3.5 flex flex-col gap-3">

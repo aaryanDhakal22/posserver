@@ -84,6 +84,10 @@ type Settings struct {
 	CashierPayoutCents   int64    `json:"cashier_payout_cents"`   // a cashier's drawer pay-out without a manager's PIN (the Pi reads it)
 	DefaultPickupMinutes int      `json:"default_pickup_minutes"` // a pickup's quoted minutes on the terminal
 	AreaCodes            []string `json:"area_codes"`             // the store's local area codes (the terminal reads them for phone numbers)
+
+	// Driver view (2026-11-11): a delivery nobody took shows in the drivers'
+	// Dispatch section once it has waited this long (the Pi reads it).
+	DriverClaimAfterMinutes int `json:"driver_claim_after_minutes"`
 }
 
 // DefaultTabs are the tabs a login may land on (the terminal's names;
@@ -102,6 +106,7 @@ const (
 	MaxPayoutCents       = 100_000
 	MaxPickupMinutes     = 240
 	MaxAreaCodes         = 20
+	MaxDriverClaimAfter  = 480
 )
 
 // DefaultAreaCodes are Lombardi's (Baltimore County): 410, 443, 667.
@@ -124,13 +129,14 @@ const DefaultAutoCloseBatchAt = "04:00"
 // past the radius go, no name on a paid counter order, no card tips (15 /
 // 18 / 20 % when on), the employee meal is 50 % off, a cashier pays out up
 // to $20 from the drawer, a pickup is quoted 15 minutes, the area codes are
-// 410 / 443 / 667.
+// 410 / 443 / 667, drivers may claim a delivery nobody took after 45 minutes.
 func DefaultSettings() Settings {
 	return Settings{CashierRefundCents: 0, CashierDiscountPct: 10, AutoLockMinutes: 5, CounterStart: 1, ReceiptAutoDoneSeconds: 15,
 		AutoCloseBatchAt: DefaultAutoCloseBatchAt,
 		DefaultTab:       "info", ButtonFont: "barlow", CashierPriceDropPct: 20, OutOfAreaMarginMi: 1,
 		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: 50,
-		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes()}
+		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes(),
+		DriverClaimAfterMinutes: 45}
 }
 
 // Ranges.
@@ -227,6 +233,8 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: cashier_payout_cents must be 0–%d", ErrBadSettings, MaxPayoutCents)
 	case s.DefaultPickupMinutes < 0 || s.DefaultPickupMinutes > MaxPickupMinutes:
 		return fmt.Errorf("%w: default_pickup_minutes must be 0–%d", ErrBadSettings, MaxPickupMinutes)
+	case s.DriverClaimAfterMinutes < 0 || s.DriverClaimAfterMinutes > MaxDriverClaimAfter:
+		return fmt.Errorf("%w: driver_claim_after_minutes must be 0–%d", ErrBadSettings, MaxDriverClaimAfter)
 	case len(s.AreaCodes) < 1 || len(s.AreaCodes) > MaxAreaCodes:
 		return fmt.Errorf("%w: area_codes needs 1–%d codes", ErrBadSettings, MaxAreaCodes)
 	}

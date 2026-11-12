@@ -178,6 +178,19 @@ def test_drawer_and_phone_settings(store, mgr) -> None:
     assert (cfg["cashier_payout_cents"], cfg["default_pickup_minutes"], cfg["area_codes"]) == (3500, 20, ["410", "443", "667"])
 
 
+def test_driver_claim_after_setting(store, mgr) -> None:
+    """driver_claim_after_minutes (the drivers' Dispatch wait, default 45, 0-480): kept when a save leaves it out,
+    sent to the Pi."""
+    assert _ok(mgr.get(SETTINGS, timeout=5))["driver_claim_after_minutes"] == 45
+    assert _config(store.key)["settings"]["driver_claim_after_minutes"] == 45
+    assert _ok(mgr.put(SETTINGS, json={"driver_claim_after_minutes": 30}, timeout=5))["driver_claim_after_minutes"] == 30
+    assert _ok(mgr.put(SETTINGS, json={"auto_lock_minutes": 6}, timeout=5))["driver_claim_after_minutes"] == 30
+    for bad in (-1, 481):
+        assert _code(mgr.put(SETTINGS, json={"driver_claim_after_minutes": bad}, timeout=5), 400) == "bad_settings", bad
+    assert _ok(mgr.put(SETTINGS, json={"driver_claim_after_minutes": 0}, timeout=5))["driver_claim_after_minutes"] == 0
+    assert _config(store.key)["settings"]["driver_claim_after_minutes"] == 0
+
+
 def test_terminal_config_for_the_pi(store, mgr) -> None:
     empty = _config(store.key)
     assert empty["version"] == 0 and empty["staff"] == [] and empty["settings"]["auto_lock_minutes"] == 5

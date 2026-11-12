@@ -860,7 +860,7 @@ export interface TerminalSettings {
   default_tab: TerminalTabName; show_history: boolean; button_font: ButtonFont; cashier_price_drop_pct: number;
   click_sound: boolean; prices_on_buttons: boolean; out_of_area_margin_mi: number; name_on_paid_counter: boolean;
   card_tips: boolean; card_tip_percents: number[]; employee_meal_pct: number;
-  cashier_payout_cents: number; default_pickup_minutes: number; area_codes: string[];
+  cashier_payout_cents: number; default_pickup_minutes: number; area_codes: string[]; driver_claim_after_minutes: number;
 }
 /** The owner's defaults (main's staff.DefaultSettings): a field main doesn't send yet shows these. */
 export const TERMINAL_DEFAULTS: TerminalSettings = {
@@ -868,5 +868,5 @@ export const TERMINAL_DEFAULTS: TerminalSettings = {
   auto_close_batch_at: '04:00', default_tab: 'info', show_history: false, button_font: 'barlow', cashier_price_drop_pct: 20,
   click_sound: false, prices_on_buttons: false, out_of_area_margin_mi: 1, name_on_paid_counter: false, card_tips: false,
   card_tip_percents: [15, 18, 20], employee_meal_pct: 50,
-  cashier_payout_cents: 2000, default_pickup_minutes: 15, area_codes: ['410', '443', '667']
+  cashier_payout_cents: 2000, default_pickup_minutes: 15, area_codes: ['410', '443', '667'], driver_claim_after_minutes: 45
 };
