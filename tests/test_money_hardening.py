@@ -127,8 +127,9 @@ def test_money_main_disagrees_with_is_stored_and_flagged(store) -> None:
     pay = _pay(oid, 2000, "card", ref="sq_flags_1")
     over = _pay(oid, 500)  # more than the total
     assert set(_send(store.key, [pay, over]).values()) == {"applied"}
-    # Cash back on a card sale nobody approved, then more back than was paid.
-    cash_back = _pay(oid, -600)
+    # A cashier's cash back on a card sale nobody approved (the Pi's cash_for_card), then more back than was paid.
+    cashier = _ok(mgr.post(f"{ME}/staff", json={"first_name": "Cara", "role": "cashier", "pin": "4820"}, timeout=10), 201)
+    cash_back = _pay(oid, -600, staff_id=cashier["id"])
     too_much = _pay(oid, -5000, "card")
     assert set(_send(store.key, [cash_back, too_much]).values()) == {"applied"}
     # A refund of a named payment: more than it took; and one of no payment of this order.
@@ -169,6 +170,33 @@ def test_refunds_over_the_persons_limit(store) -> None:
     assert "over_staff_limit" in _codes(mgr, sub(big))
     assert "refund_needs_manager" in _codes(mgr, sub(card))
     assert _codes(mgr, sub(approved)) == set()
+
+
+def test_comps_and_their_reversal_follow_the_pis_rules(store) -> None:
+    """The staging page of 2026-11-12 (flow VOID D6): a cashier comped an order, then voided it, which reverses
+    the comp (a negative comp payment) with nobody approving. The Pi allows it (a comp moves no money); main
+    used to flag every non-cash refund by a non-manager refund_needs_manager. Now main checks the Pi's rules
+    (contract/money-rules.json R12 / R13 / C01 / C03): a comp reversal is clean at any amount, a cashier's
+    comp is clean, a driver's comp nobody approved is comp_needs_manager, and a manager's own limits are
+    ignored (max refunds $25 in cash with a $5 limit of his own: clean)."""
+    mgr = store.manager_session()
+    cashier = _ok(mgr.post(f"{ME}/staff", json={"first_name": "Cara", "role": "cashier", "pin": "4824"}, timeout=10), 201)
+    driver = _ok(mgr.post(f"{ME}/staff", json={"first_name": "Dev", "role": "driver", "pin": "4825"}, timeout=10), 201)
+    boss = _ok(mgr.post(f"{ME}/staff", json={"first_name": "Max", "role": "manager", "pin": "4826",
+                                             "limits": {"refund_cents": 500}}, timeout=10), 201)
+    oid = _place(store.key, total=2500)
+    comp = _pay(oid, 2500, "comp", staff_id=cashier["id"])
+    back = _pay(oid, -2500, "comp", staff_id=cashier["id"])   # over her $20 cash limit: still free
+    oid2 = _place(store.key, total=500)
+    driver_comp = _pay(oid2, 500, "comp", staff_id=driver["id"])
+    oid3 = _place(store.key, total=3000)
+    cash = _pay(oid3, 3000, staff_id=cashier["id"])
+    own = _pay(oid3, -2500, staff_id=boss["id"])
+    assert set(_send(store.key, [comp, back, driver_comp, cash, own]).values()) == {"applied"}
+    sub = lambda e: f"payment:{e['payment']['id']}"  # noqa: E731
+    assert _codes(mgr, sub(comp)) == set() and _codes(mgr, sub(back)) == set()
+    assert _codes(mgr, sub(driver_comp)) == {"comp_needs_manager"}
+    assert _codes(mgr, sub(own)) == set()
 
 
 def test_carried_over_pickup_and_the_z_check(store) -> None:

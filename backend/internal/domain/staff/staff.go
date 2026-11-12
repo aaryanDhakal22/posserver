@@ -385,8 +385,13 @@ func RoleDefaults(role string, s Settings) Effective {
 }
 
 // EffectiveLimits are what applies to p: their own limits over their role's.
+// A manager is always unlimited: their own limits are ignored (the Pi's rule,
+// contract/money-rules.json E07: it never applied them).
 func EffectiveLimits(p Person, s Settings) Effective {
 	e := RoleDefaults(p.Role, s)
+	if p.Role == RoleManager {
+		return e
+	}
 	if p.Limits.RefundCents != nil {
 		v := *p.Limits.RefundCents
 		e.RefundCents = &v

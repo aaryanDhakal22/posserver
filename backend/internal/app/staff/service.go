@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/domain/staff"
 	sseBroker "quiccpos/main/internal/infra/sse"
 
@@ -106,6 +107,26 @@ func (s *Service) List(ctx context.Context, locationID uuid.UUID) ([]View, error
 	out := make([]View, 0, len(people))
 	for _, p := range people {
 		out = append(out, View{Person: p, EffectiveLimits: staff.EffectiveLimits(p, st)})
+	}
+	return out, nil
+}
+
+// Refunders are the store's people as the money rules see them (role +
+// effective refund limit; a manager unlimited), keyed by id, switched-off
+// people too (their earlier refunds still have a role). Floor events read
+// it once per money event (contract/money-rules.json).
+func (s *Service) Refunders(ctx context.Context, locationID uuid.UUID) (map[uuid.UUID]order.Refunder, error) {
+	people, err := s.repo.List(ctx, locationID)
+	if err != nil {
+		return nil, err
+	}
+	st, _, err := s.Settings(ctx, locationID)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[uuid.UUID]order.Refunder, len(people))
+	for _, p := range people {
+		out[p.ID] = order.RefunderOf(p.Role, staff.EffectiveLimits(p, st).RefundCents)
 	}
 	return out, nil
 }

@@ -19,7 +19,7 @@ import (
 // floor_events_seen row. Idempotent like order.payment: the same id /
 // client_key with the same body = duplicate, with another body = conflict
 // (kept in money_flags, nothing inserted). Flags (stored all the same):
-// over_staff_limit when nobody approved more than the refunder's limit. A
+// refund_needs_manager when a non-manager gave it with nobody approving. A
 // batch whose Z is in already is checked again (M-12).
 func (r *OrderRepository) AddGeneralRefund(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, p order.CheckedPayment,
 	reason string) (string, []order.MoneyFlag, error) {
@@ -83,11 +83,9 @@ func storeGeneralRefund(ctx context.Context, tx pgx.Tx, sc order.Scope, eventID 
 			return "", nil, fmt.Errorf("payment by key: %w", err)
 		}
 	}
+	// The rule flags (a manager every time: refund_needs_manager) come with
+	// p.Flags from the floor service (order.GeneralRefundFlags).
 	flags := append([]order.MoneyFlag(nil), p.Flags...)
-	if p.ApprovedBy == "" && p.RefundLimit != nil && -int64(p.Amount) > *p.RefundLimit {
-		flags = append(flags, order.MoneyFlag{Code: order.FlagOverStaffLimit, Detail: map[string]any{"limit_cents": *p.RefundLimit,
-			"refunded_cents": -int64(p.Amount), "general": true}})
-	}
 	if _, err := tx.Exec(ctx, `INSERT INTO payments (id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code,
 			tip_cents, staff_id, location_id, client_key, origin, batch_id, approved_by, flags, reason)
 		VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'counter', $13, $14, $15, $16)`,

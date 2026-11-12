@@ -120,35 +120,32 @@ func storeCounterPayment(ctx context.Context, tx pgx.Tx, sc order.Scope, eventID
 		}
 	}
 
-	// What main checks (it flags, it doesn't refuse).
-	flags := append([]order.MoneyFlag(nil), p.Flags...)
-	var paid, tender, unapproved int64
-	if err := tx.QueryRow(ctx, `SELECT COALESCE(sum(amount_cents), 0),
-			COALESCE(sum(amount_cents + tip_cents) FILTER (WHERE processor = $2), 0),
-			COALESCE(sum(-amount_cents) FILTER (WHERE amount_cents < 0 AND approved_by = ''), 0)
-		FROM payments WHERE order_id = $1 AND status IN ('captured', 'refunded')`, orderID, p.Method).
-		Scan(&paid, &tender, &unapproved); err != nil {
+	// What main checks (it flags, it doesn't refuse): the counter's rules,
+	// as the Pi enforces them (order.PaymentFlags, contract/money-rules.json).
+	ro := order.RuleOrder{Total: o.total, Cancelled: o.status == string(order.StatusCancelled)}
+	rows, err := tx.Query(ctx, `SELECT processor, amount_cents, tip_cents, approved_by, staff_id
+		FROM payments WHERE order_id = $1 AND status IN ('captured', 'refunded')`, orderID)
+	if err != nil {
 		return "", nil, fmt.Errorf("order payments: %w", err)
 	}
+	for rows.Next() {
+		var x order.PriorPayment
+		var staffID *uuid.UUID
+		if err := rows.Scan(&x.Method, &x.Amount, &x.Tip, &x.ApprovedBy, &staffID); err != nil {
+			rows.Close()
+			return "", nil, fmt.Errorf("order payment: %w", err)
+		}
+		x.By = order.Who(p.People, staffID)
+		ro.Prior = append(ro.Prior, x)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return "", nil, fmt.Errorf("order payments: %w", err)
+	}
+	flags := append(append([]order.MoneyFlag(nil), p.Flags...), order.PaymentFlags(ro, p, p.By)...)
 	amount, tip := int64(p.Amount), int64(p.Tip)
-	if amount > 0 && o.status == string(order.StatusCancelled) {
-		flags = append(flags, order.MoneyFlag{Code: order.FlagOrderCancelled})
-	}
-	if amount > 0 && paid+amount > o.total {
-		flags = append(flags, order.MoneyFlag{Code: order.FlagOverpaid, Detail: map[string]any{"paid_cents": paid + amount, "total_cents": o.total}})
-	}
 	var refundOf *uuid.UUID
 	if amount < 0 {
-		if paid+amount < 0 {
-			flags = append(flags, order.MoneyFlag{Code: order.FlagRefundExceedsPaid, Detail: map[string]any{"paid_cents": paid, "refund_cents": -amount}})
-		} else if tender+amount+tip < 0 && p.ApprovedBy == "" {
-			flags = append(flags, order.MoneyFlag{Code: order.FlagRefundExceedsTender, Detail: map[string]any{"tender": p.Method,
-				"tender_net_cents": tender, "refund_cents": -amount}})
-		}
-		if p.ApprovedBy == "" && p.RefundLimit != nil && unapproved-amount > *p.RefundLimit {
-			flags = append(flags, order.MoneyFlag{Code: order.FlagOverStaffLimit, Detail: map[string]any{"limit_cents": *p.RefundLimit,
-				"refunded_cents": unapproved - amount}})
-		}
 		if p.RefundOf != nil {
 			var orig, before int64
 			var oid uuid.UUID

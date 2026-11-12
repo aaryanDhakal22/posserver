@@ -71,8 +71,8 @@ def test_general_refund_stored_idempotent_and_in_the_z_check(store) -> None:
 
 def test_a_general_refund_nobody_approved_is_flagged(store) -> None:
     """A manager every time (the owner, 2026-11-12): a cashier's general refund with no approval is stored and
-    flagged refund_needs_manager (whatever the amount; over her limit also over_staff_limit); a manager's own
-    or an approved one is clean."""
+    flagged refund_needs_manager, the one flag whatever the amount (contract/money-rules.json G01 / G02); a
+    manager's own or an approved one is clean."""
     mgr = store.manager_session()
     cashier = _ok(mgr.post(f"{ME}/staff", json={"first_name": "Cara", "role": "cashier", "pin": "4822"}, timeout=10), 201)
     boss = _ok(mgr.post(f"{ME}/staff", json={"first_name": "Mia", "role": "manager", "pin": "4823"}, timeout=10), 201)
@@ -83,7 +83,7 @@ def test_a_general_refund_nobody_approved_is_flagged(store) -> None:
     assert set(_send(store.key, [small, big, approved, own]).values()) == {"applied"}
     sub = lambda e: f"refund:{e['payment']['id']}"  # noqa: E731
     assert _codes(mgr, sub(small)) == {"refund_needs_manager"}
-    assert {"refund_needs_manager", "over_staff_limit"} <= _codes(mgr, sub(big))
+    assert _codes(mgr, sub(big)) == {"refund_needs_manager"}
     assert _codes(mgr, sub(approved)) == set()
     assert _codes(mgr, sub(own)) == set()
 

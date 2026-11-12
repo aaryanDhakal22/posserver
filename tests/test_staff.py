@@ -67,7 +67,9 @@ def test_staff_crud_and_pins(mgr) -> None:
 
     ann = _ok(mgr.post(STAFF, json={"first_name": "Ann", "role": "manager", "pin": "77",
                                     "limits": {"refund_cents": 5000}}, timeout=10), 201)
-    assert ann["effective_limits"] == {"refund_cents": 5000, "discount_pct": None}, "a manager is unlimited unless limited"
+    # A manager is unlimited, their own limits kept but never applied (the Pi's rule; contract/money-rules.json E07).
+    assert ann["limits"] == {"refund_cents": 5000}
+    assert ann["effective_limits"] == {"refund_cents": None, "discount_pct": None}, "a manager is always unlimited"
 
     # Edit: name, role, limits ({} = the role defaults again).
     sam = _ok(mgr.patch(f"{STAFF}/{sam['id']}", json={"last_name": "Leigh", "limits": {"discount_pct": 25}}, timeout=10))

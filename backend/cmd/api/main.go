@@ -321,13 +321,39 @@ func main() {
 	if cfg.AppConfig.AppEnv == "dev" {
 		devNotices = &notify.Recorder{}
 	}
-	notifier := notify.Fanout{notify.Log{Logger: lgr}, notify.Pushover{Pager: ownerPager, Devices: func(ctx context.Context, locationID uuid.UUID) ([]string, error) {
+	// Test stores (the flows' and pytest's throwaway stores) never page the
+	// owner's phones unless NOTIFY_TEST_STORES says so: log (default) |
+	// pushover | device:<name> (that one device of the owner's account).
+	testMode, ok := notify.ParseTestStoresMode(os.Getenv("NOTIFY_TEST_STORES"))
+	if !ok {
+		lgr.Warn().Str("var", "NOTIFY_TEST_STORES").Msg("unknown mode: test stores' notices are logged only")
+	}
+	var testDevice notify.Pager
+	if d := notify.DeviceOf(testMode); d != "" {
+		p := pushover.New(agentSecrets.PushoverAppToken, agentSecrets.PushoverUserKey, "")
+		p.SetEndpoint(pushoverURL)
+		p.SetDevices([]string{d})
+		testDevice = p
+	}
+	ownerNotices := notify.Pushover{Pager: ownerPager, Devices: func(ctx context.Context, locationID uuid.UUID) ([]string, error) {
 		l, err := tenancyService.GetLocation(ctx, locationID)
 		if err != nil {
 			return nil, err
 		}
 		return tenancyDomain.OwnerDevices(l.Config), nil
-	}}}
+	}}
+	notifier := notify.Fanout{notify.Log{Logger: lgr}, notify.TestStores{Inner: ownerNotices, Mode: testMode, Device: testDevice,
+		IsTest: func(ctx context.Context, locationID uuid.UUID) (bool, error) {
+			l, err := tenancyService.GetLocation(ctx, locationID)
+			if err != nil {
+				return false, err
+			}
+			t, err := tenancyService.GetTenant(ctx, l.TenantID)
+			if err != nil {
+				return false, err
+			}
+			return t.TestStore, nil
+		}}}
 	if devNotices != nil {
 		notifier = append(notifier, devNotices)
 	}

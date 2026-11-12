@@ -40,7 +40,7 @@ func (s *Service) applyPlaced(ctx context.Context, sc order.Scope, eid uuid.UUID
 		return s.invalid(ctx, sc, eid, ev, err)
 	}
 	for i := range co.Payments {
-		s.refundLimit(ctx, sc, &co.Payments[i])
+		s.who(ctx, sc, &co.Payments[i])
 	}
 	res, flags, err := s.counter.CreateCounterOrder(ctx, sc, eid, ev.Type, co, ev.AgentStatus, ev.BatchID)
 	if err != nil {
@@ -81,7 +81,7 @@ func (s *Service) applyPayment(ctx context.Context, sc order.Scope, eid uuid.UUI
 	if cp.BatchID == nil {
 		cp.BatchID = ev.BatchID
 	}
-	s.refundLimit(ctx, sc, &cp)
+	s.who(ctx, sc, &cp)
 	res, flags, err := s.counter.AddCounterPayment(ctx, sc, eid, ev.Type, oid, cp)
 	if err != nil {
 		return "", err
@@ -308,21 +308,22 @@ func roleOf(detail json.RawMessage) string {
 	return d.Role
 }
 
-// refundLimit puts the refunder's limit on a refund (M-7: main flags a
-// refund over it that nobody approved) and flags a cashier's card refund
-// without a manager (the owner, 2026-11-12: card refunds are a manager's).
-func (s *Service) refundLimit(ctx context.Context, sc order.Scope, p *order.CheckedPayment) {
-	if s.staff == nil || p.Amount >= 0 || p.StaffID == nil || p.ApprovedBy != "" {
+// who puts the payment's person and the store's people on it (main's staff
+// table: role + effective refund limit), for the rule flags the repository
+// works out with the order's earlier payments (order.PaymentFlags, the Pi's
+// rules: contract/money-rules.json). No staff service / a failed read =
+// nobody known: no permission flag.
+func (s *Service) who(ctx context.Context, sc order.Scope, p *order.CheckedPayment) {
+	if s.staff == nil {
 		return
 	}
-	role, limit, found, err := s.staff.RefundLimit(ctx, uuid.UUID(sc.LocationID), *p.StaffID)
-	if err != nil || !found {
+	people, err := s.staff.Refunders(ctx, uuid.UUID(sc.LocationID))
+	if err != nil {
+		s.logger.Warn().Ctx(ctx).Err(err).Msg("staff for the money rules (no permission flags on this event)")
 		return
 	}
-	p.RefundLimit = limit
-	if role != staff.RoleManager && p.Method != "cash" {
-		p.Flags = append(p.Flags, order.MoneyFlag{Code: order.FlagRefundNeedsManager, Detail: map[string]any{"role": role, "method": p.Method}})
-	}
+	p.People = people
+	p.By = order.Who(people, p.StaffID)
 }
 
 // flagged logs, counts and (at most once an hour per store) pages money main

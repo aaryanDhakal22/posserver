@@ -44,6 +44,7 @@ services:
       AGENT_SECRET_PUSHOVER_USER_KEY:
       AGENT_SECRET_PUSHOVER_BOSS_KEY:
       AGENT_SECRET_PUSHOVER_ADMIN_DEVICE:
+      NOTIFY_TEST_STORES:
       # Tests only: point main's Pushover at a fake (empty = the real API).
       PUSHOVER_API_URL:
       AGENT_SECRET_OTLP_ENDPOINT:

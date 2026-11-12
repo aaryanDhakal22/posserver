@@ -29,8 +29,13 @@ func TestEffectiveLimits(t *testing.T) {
 		t.Errorf("driver: %+v", e)
 	}
 	r, d := int64(500), 30
+	// A manager's own limits are ignored (the Pi never applied them).
 	e = EffectiveLimits(Person{Role: RoleManager, Limits: Limits{RefundCents: &r}}, s)
-	if *e.RefundCents != 500 || e.DiscountPct != nil {
+	if e.RefundCents != nil || e.DiscountPct != nil {
+		t.Errorf("a manager stays unlimited: %+v", e)
+	}
+	e = EffectiveLimits(Person{Role: RoleDriver, Limits: Limits{RefundCents: &r}}, s)
+	if *e.RefundCents != 500 || *e.DiscountPct != 0 {
 		t.Errorf("own limit over the role's: %+v", e)
 	}
 	e = EffectiveLimits(Person{Role: RoleCashier, Limits: Limits{DiscountPct: &d}}, s)

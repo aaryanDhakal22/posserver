@@ -117,10 +117,10 @@ type CounterOrders interface {
 	SetDoorTip(ctx context.Context, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, cents int64, at time.Time) (string, error)
 }
 
-// StaffLimits tells a refunder's role and refund limit (the staff service):
-// found=false = no such person at the store; limit nil = unlimited.
+// StaffLimits tells who the store's people are for the money rules (the
+// staff service): each person's role and effective refund limit.
 type StaffLimits interface {
-	RefundLimit(ctx context.Context, locationID, staffID uuid.UUID) (role string, limit *int64, found bool, err error)
+	Refunders(ctx context.Context, locationID uuid.UUID) (map[uuid.UUID]order.Refunder, error)
 }
 
 // Customers applies the counter's customer.upsert (the customers service):

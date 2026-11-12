@@ -93,11 +93,11 @@ const (
 	FlagOrderCancelled      = "order_cancelled"       // a payment on a cancelled order
 	FlagOverpaid            = "overpaid"              // payments add up to more than the total
 	FlagRefundExceedsPaid   = "refund_exceeds_paid"   // refunds add up to more than was paid
-	FlagRefundExceedsTender = "refund_exceeds_tender" // more back on a tender than it took, nobody approved
+	FlagRefundExceedsTender = "refund_exceeds_tender" // cash back past the order's cash, nobody approved (cash_for_card); more comp back than comped
 	FlagRefundExceedsOrig   = "refund_exceeds_original"
 	FlagRefundOfUnknown     = "refund_of_unknown"    // refund_of names no payment of this order
 	FlagOverStaffLimit      = "over_staff_limit"     // a refund over the person's limit, nobody approved
-	FlagRefundNeedsManager  = "refund_needs_manager" // a cashier's card refund, nobody approved
+	FlagRefundNeedsManager  = "refund_needs_manager" // a card / general refund by someone with limits, nobody approved
 	FlagMoneyMismatch       = "money_mismatch"       // total != subtotal + tax + tip + fees − discounts
 	FlagLinesSubtotal       = "lines_subtotal_mismatch"
 	FlagDriverShareOverFee  = "driver_share_over_fee" // the share was dropped
@@ -125,10 +125,12 @@ type CheckedPayment struct {
 	RefundOf   *uuid.UUID
 	ApprovedBy string
 	BatchID    *int64
-	// Flags found by Check (the repo adds its own); RefundLimit is the
-	// refunder's limit (nil = unlimited / unknown) for over_staff_limit.
-	Flags       []MoneyFlag
-	RefundLimit *int64
+	// Flags found by Check (the repo adds its own). By = who took / gave it
+	// and People = the store's staff (for the refunds before it), both from
+	// main's staff table: PaymentFlags reads them (money_rules.go).
+	Flags  []MoneyFlag
+	By     Refunder
+	People map[uuid.UUID]Refunder
 }
 
 // Fingerprint is what must match for a replay of the same payment id /
