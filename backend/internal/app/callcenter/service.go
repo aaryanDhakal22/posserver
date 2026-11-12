@@ -458,19 +458,6 @@ func DisplayName(p staff.Person) string {
 	return n
 }
 
-// StaffView is the signed-in agent, in the Pi's login shape.
-type StaffView struct {
-	ID        uuid.UUID `json:"id"`
-	FirstName string    `json:"first_name"`
-	LastName  string    `json:"last_name"`
-	Name      string    `json:"name"`
-	Role      string    `json:"role"`
-}
-
-func viewOf(p staff.Person) StaffView {
-	return StaffView{ID: p.ID, FirstName: p.FirstName, LastName: p.LastName, Name: DisplayName(p), Role: p.Role}
-}
-
 // The PIN guard (security review M1). Every attempt is counted on the device
 // row BEFORE the PIN is checked, in one UPDATE that also refuses a locked or
 // revoked device, so parallel guesses can't outrun the lock; one check runs per
