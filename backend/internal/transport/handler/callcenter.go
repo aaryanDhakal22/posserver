@@ -394,6 +394,11 @@ func (h *CallcenterHandler) Relay(c *echo.Context) error {
 	if errors.Is(err, callcenterApp.ErrOffline) {
 		return h.offline(c)
 	}
+	if errors.Is(err, callcenterApp.ErrBusy) {
+		// The Pi is there, its relay is full for a moment: nothing was done; try again.
+		c.Response().Header().Set("Retry-After", "1")
+		return ccErr(c, http.StatusServiceUnavailable, callcenterApp.CodeStoreBusy, "The store's system is busy for a moment. Nothing was sent: try again.")
+	}
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil // the browser left

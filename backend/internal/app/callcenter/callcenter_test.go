@@ -450,7 +450,10 @@ func TestRelay(t *testing.T) {
 	if rep, _ := w.svc.Relay(ctx, d, w.agent.ID, "GET", "pickups", "", map[string]string{}, nil); rep.Status != 201 || string(w.pi.calls[1].Body) != "null" {
 		t.Fatalf("no body rides as null: %s", w.pi.calls[1].Body)
 	}
-	for _, path := range []string{"busy", "old", "slow"} {
+	if _, err := w.svc.Relay(ctx, d, w.agent.ID, "GET", "busy", "", map[string]string{}, nil); !errors.Is(err, ErrBusy) {
+		t.Errorf("busy: %v, want ErrBusy", err)
+	}
+	for _, path := range []string{"old", "slow"} {
 		if _, err := w.svc.Relay(ctx, d, w.agent.ID, "GET", path, "", map[string]string{}, nil); !errors.Is(err, ErrOffline) {
 			t.Errorf("%s: %v, want offline", path, err)
 		}

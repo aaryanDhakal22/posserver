@@ -527,8 +527,8 @@ def test_relay_refuses_what_the_call_center_may_not_carry(store) -> None:
 
 
 def test_store_offline(store) -> None:
-    """No Pi stream, a Pi that is busy, a reply that isn't a relay answer (an
-    older Pi): 503 store_offline every time."""
+    """No Pi stream, or a reply that isn't a relay answer (an older Pi): 503
+    store_offline. A Pi that is busy: 503 store_busy."""
     hdr, _, _ = _agent(store)
     r = requests.get(f"{CC}/pi/pickups", headers=hdr, timeout=10)
     assert r.status_code == 503 and r.json()["code"] == "store_offline", r.text
@@ -546,9 +546,11 @@ def test_store_offline(store) -> None:
 
     with FakePi(store, odd):
         assert wait_until(lambda: requests.get(f"{CC}/me", headers=hdr, timeout=5).json()["pi"]["online"], timeout=5)
-        for path in ("pickups", "checks"):
-            r = requests.get(f"{CC}/pi/{path}", headers=hdr, timeout=10)
-            assert r.status_code == 503 and r.json()["code"] == "store_offline", (path, r.text)
+        r = requests.get(f"{CC}/pi/checks", headers=hdr, timeout=10)
+        assert r.status_code == 503 and r.json()["code"] == "store_offline", r.text
+        # A Pi whose relay is full for a moment isn't offline: its own code, and "try again in a second".
+        r = requests.get(f"{CC}/pi/pickups", headers=hdr, timeout=10)
+        assert r.status_code == 503 and r.json()["code"] == "store_busy" and r.headers["Retry-After"] == "1", r.text
         # The Pi's own 503s pass through as they are.
         r = requests.post(f"{CC}/pi/orders/o1/reprint", headers=hdr, timeout=10)
         assert r.status_code == 503 and r.json()["code"] == "printing_unavailable", r.text

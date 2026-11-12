@@ -56,6 +56,7 @@ const (
 	CodeNotAllowed   = "not_allowed_for_callcenter"
 	CodeStoreOffline = "store_offline"
 	CodeStoreClosed  = "store_closed"
+	CodeStoreBusy    = "store_busy"
 )
 
 var (
@@ -65,7 +66,10 @@ var (
 	ErrWrongPin       = errors.New("wrong PIN")
 	ErrWrongRole      = errors.New("that PIN isn't a call-center agent's")
 	ErrOffline        = errors.New("the store's Pi is offline")
-	ErrTooMany        = repositories.ErrCallcenterTooMany
+	// ErrBusy: the Pi is there but its relay is full right now (a burst of
+	// calls): the same call a second later goes through.
+	ErrBusy    = errors.New("the store's Pi is busy")
+	ErrTooMany = repositories.ErrCallcenterTooMany
 	// ErrDeviceRevoked: too many wrong PINs in a row: the device token is gone.
 	ErrDeviceRevoked = errors.New("too many wrong PINs: sign in with the store's login again")
 )
@@ -748,7 +752,7 @@ func (s *Service) relay(ctx context.Context, d Device, staffID uuid.UUID, method
 			Code string `json:"code"`
 		}
 		if json.Unmarshal(rep.Body, &b) == nil && b.Code == "busy" {
-			return RelayReply{}, ErrOffline
+			return RelayReply{}, ErrBusy
 		}
 	}
 	return rep, nil
