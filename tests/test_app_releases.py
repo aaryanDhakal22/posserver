@@ -64,3 +64,26 @@ def test_only_agent_keys_download(store) -> None:
     mobile = store_key(r.json()["api_key"])
     assert requests.get(f"{STORE_V1}/agent/app/latest", headers=mobile, timeout=5).status_code == 403
     assert requests.get(f"{STORE_V1}/agent/app/latest", timeout=5).status_code == 401
+
+
+def test_apps_are_separate(admin, store) -> None:
+    """Quibase and the counter terminal (contract/agent.md §2.10w) each have their
+    own releases: an upload for one never shows as the other's latest, version
+    codes are per app, and pruning keeps each app's newest 5. Random app names
+    stand in for `quibase` / `terminal` so dev's real releases stay untouched."""
+    tablet, terminal = f"t{secrets.token_hex(4)}", f"t{secrets.token_hex(4)}"
+    agent = store_key(store.key)
+    assert _upload(admin, tablet, 50, _apk()).status_code == 201
+    assert requests.get(f"{STORE_V1}/agent/app/latest", params={"app": terminal}, headers=agent, timeout=5).status_code == 204
+    # The same version code in another app is fine (per-app ordering).
+    t_apk = _apk(512)
+    assert _upload(admin, terminal, 50, t_apk).status_code == 201
+    for code in range(51, 57):
+        assert _upload(admin, terminal, code, _apk(64)).status_code == 201
+    assert requests.get(f"{STORE_V1}/agent/app/latest", params={"app": tablet}, headers=agent, timeout=5).json()["version_code"] == 50
+    assert requests.get(f"{STORE_V1}/agent/app/latest", params={"app": terminal}, headers=agent, timeout=5).json()["version_code"] == 56
+    assert [x["version_code"] for x in admin.get(f"{ADMIN_V1}/app-releases", params={"app": terminal}, timeout=5).json()] == [56, 55, 54, 53, 52]
+    assert [x["version_code"] for x in admin.get(f"{ADMIN_V1}/app-releases", params={"app": tablet}, timeout=5).json()] == [50]
+    for app in (tablet, terminal):
+        for x in admin.get(f"{ADMIN_V1}/app-releases", params={"app": app}, timeout=5).json():
+            admin.delete(f"{ADMIN_V1}/app-releases/{x['version_code']}", params={"app": app}, timeout=5)
