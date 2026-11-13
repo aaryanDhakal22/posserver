@@ -146,7 +146,10 @@ func (s *Service) applyVoid(ctx context.Context, sc order.Scope, eid uuid.UUID, 
 		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 	}
 	out, err := s.repo.ApplyFloorUpdate(ctx, sc, order.ID(oid), eid, ev.Type, func(o *order.Order) string {
-		if o.Source() != order.SourceCounter {
+		// A counter order, or an online vendor order the Pi voided at a
+		// terminal (agent 2.5.3: a cash one, nothing paid online; the vendor
+		// isn't told). A website / channel order is cancelled another way.
+		if o.Source() != order.SourceCounter && o.Source() != order.SourceOnline {
 			return order.FloorInvalid
 		}
 		return o.ApplyVoid(reason, staffID, ev.At)

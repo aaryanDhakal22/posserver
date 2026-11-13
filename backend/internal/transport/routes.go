@@ -280,6 +280,7 @@ func routeTable(d RouterDeps) []routeDef {
 	storeH := handler.NewStoreHandler(d.TenancyService, d.SessionSigner, cfgPub, d.Logger)
 	agentRPCH := handler.NewAgentRPCHandler(d.Requester, d.Logger)
 	printerStatusH := handler.NewPrinterStatusHandler(d.PrinterCache, d.Requester, d.Meters, d.Logger)
+	devicesH := handler.NewDevicesHandler(d.AgentSync, d.Pool, d.Requester, d.Logger)
 	menuH := handler.NewMenuHandler(d.MenuService, d.Logger)
 	if d.OptionFlags != nil {
 		menuH.SetOptionFlags(d.OptionFlags)
@@ -496,6 +497,8 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", storePrefix+"/me/orders", "store-session", "Recent orders with the agent-synced floor status (?limit)", floorH.MeListOrders, storeSession),
 		def("GET", storePrefix+"/me/delivery-runs", "store-session", "Driver runs sent (AUTO suggestion vs sent), newest first (?limit=50)", floorH.MeDeliveryRuns, storeSession),
 		def("GET", storePrefix+"/me/floor", "store-session", "Driver roster + last agent floor sync", floorH.MeGetFloor, storeSession),
+		def("GET", storePrefix+"/me/terminals", "store-session", "Store › Devices › Terminals & tablets (agent 2.5.3): the store's POS terminals + Quibase tablets as the Pi last reported them {connected, reported_at, terminals[{device_id, name, app_version, last_seen_at, connected, update?{version_name, version_code, state, reason, target_code, at, android, permissions, received_at}}], tablets[], releases{terminal, quibase}}", devicesH.MeDevices, storeSession),
+		def("POST", storePrefix+"/me/terminals/update-now", "store-session", "Update now (agent 2.5.3; audited): RPC terminals.update_now → the Pi caches the newest terminal release and tells its terminals to install it at their next quiet moment → its reply {ok, code?, release, terminals[{device_id, name, app_version, connected, told, up_to_date, update?}]} | 503 agent_offline | 504 timeout", devicesH.MeUpdateTerminals, storeSession),
 		def("GET", storePrefix+"/me/printers/live", "store-session", "Agent-reported live printer roster + reachability", printerStatusH.MeGetLive, storeSession),
 		def("GET", storePrefix+"/me/printers/ip-changes", "store-session", "Printer IP changes, newest first (?limit=20) — the Pi following a printer + manager edits", storeH.MeListPrinterIPChanges, storeSession),
 		def("GET", storePrefix+"/me/printers", "store-session", "List this location's printers", storeH.MeListPrinters, storeSession),

@@ -183,6 +183,31 @@ def test_health_reports_reach_the_fleet_view(admin, store) -> None:
     assert mine and mine[0]["health"]["temp_c"] == 51.5
 
 
+def test_store_devices_terminals_and_update_now(store) -> None:
+    """Store › Devices › Terminals & tablets (agent 2.5.3): the Pi's last agent.health terminals[] / tablets[]
+    on GET /me/terminals with the newest releases; Update now asks the store's Pi over the duplex channel
+    (no Pi on an SSE stream here: 503 agent_offline) and is audited."""
+    mgr = store.manager_session()
+    empty = mgr.get(f"{STORE_V1}/me/terminals", timeout=5)
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["terminals"] == [] and empty.json()["tablets"] == [] and "terminal" in empty.json()["releases"]
+    term = {"device_id": "t1", "name": "Counter 1", "app_version": "1.0.5", "last_seen_at": _now(), "connected": True,
+            "update": {"version_name": "1.0.5", "version_code": 1762900000, "state": "waiting_for_idle", "reason": "a cart is open",
+                       "at": _now(), "android": "11 (API 30)", "permissions": {"install_packages": True}, "received_at": _now()}}
+    tab = {"device_id": "q1", "name": "Kitchen tablet", "app_version": "2.1.0", "last_seen_at": _now(), "connected": False}
+    r = _rpc(store.key, "agent.health", {"at": _now(), "device_id": store.device_id, "version": "pytest",
+                                          "terminals": [term], "tablets": [tab]})
+    assert r.status_code == 200, r.text
+    got = mgr.get(f"{STORE_V1}/me/terminals", timeout=5).json()
+    assert got["terminals"][0]["update"]["state"] == "waiting_for_idle" and got["terminals"][0]["name"] == "Counter 1", got
+    assert got["tablets"][0]["app_version"] == "2.1.0" and got["reported_at"], got
+    r = mgr.post(f"{STORE_V1}/me/terminals/update-now", timeout=10)
+    assert r.status_code == 503 and r.json()["code"] == "agent_offline", r.text
+    audit = mgr.get(f"{STORE_V1}/me/reports/audit", params={"limit": 20}, timeout=5).json()["entries"]
+    assert any("terminals/update-now" in str(e) for e in audit), audit[:3]  # refused ones are audited too
+    assert requests.get(f"{STORE_V1}/me/terminals", timeout=5).status_code == 401
+
+
 def test_opening_hours_are_validated(store) -> None:
     mgr = store.manager_session()
     loc = mgr.get(f"{STORE_V1}/me/location", timeout=5).json()

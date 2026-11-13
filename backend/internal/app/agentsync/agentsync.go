@@ -332,6 +332,12 @@ type AgentHealth struct {
 	// version [{device_id, name, app_version, last_seen_at, connected}];
 	// [] from an older agent.
 	Tablets json.RawMessage `json:"tablets"`
+	// Terminals (agent 2.5.3) are the report's POS terminals with their app
+	// version and last update report [{…, update?: {version_name,
+	// version_code, state, reason, target_code, at, android, permissions,
+	// received_at}}]; [] from an older agent. Not on the admin fleet view
+	// (its golden transcript stays as it was): Store › Devices reads it.
+	Terminals json.RawMessage `json:"-"`
 }
 
 // Fleet lists every location's latest health + whether its agent is connected.
@@ -344,9 +350,34 @@ func (s *Service) Fleet(ctx context.Context) ([]AgentHealth, error) {
 	for _, r := range rows {
 		sc := sseBroker.Scope{TenantID: fromPg(r.TenantID), LocationID: fromPg(r.LocationID)}
 		out = append(out, AgentHealth{LocationID: sc.LocationID, TenantID: sc.TenantID, LocationName: r.LocationName,
-			Connected: s.broker.SubscribersFor(sc) > 0, At: r.At.Time, Health: r.Health, Tablets: healthTablets(r.Health)})
+			Connected: s.broker.SubscribersFor(sc) > 0, At: r.At.Time, Health: r.Health, Tablets: healthTablets(r.Health),
+			Terminals: healthList(r.Health, "terminals")})
 	}
 	return out, nil
+}
+
+// LocationHealth is one location's latest report (nil = its Pi never sent one).
+func (s *Service) LocationHealth(ctx context.Context, locationID uuid.UUID) (*AgentHealth, error) {
+	all, err := s.Fleet(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range all {
+		if all[i].LocationID == locationID {
+			return &all[i], nil
+		}
+	}
+	return nil, nil
+}
+
+// healthList pulls one array (tablets / terminals) out of an agent.health
+// report; [] when it isn't there.
+func healthList(raw []byte, key string) json.RawMessage {
+	var h map[string]json.RawMessage
+	if json.Unmarshal(raw, &h) != nil || len(h[key]) == 0 || h[key][0] != '[' {
+		return json.RawMessage(`[]`)
+	}
+	return h[key]
 }
 
 // healthTablets pulls the tablets array out of an agent.health report.

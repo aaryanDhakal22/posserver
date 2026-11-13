@@ -24,6 +24,7 @@ import "encoding/json"
 const (
 	MsgPing                 = "ping"
 	MsgPrinterReport        = "printer.report"         // agent → main, unsolicited push
+	MsgTerminalsUpdateNow   = "terminals.update_now"   // main → agent (agent 2.5.3, Store › Devices "Update now"): cache the newest terminal release, tell the terminals to install it at their next quiet moment; reply {ok, code?, release, terminals[]}
 	MsgPrinterReportRequest = "printer.report.request" // main → agent, pull
 
 	// Pi updates (2.0.6). An agent older than 2.0.6 doesn't answer these
