@@ -617,6 +617,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", storePrefix+"/me/menu/views/:id", "store-session", "One view", viewH.MeGetView, storeSession),
 		def("PATCH", storePrefix+"/me/menu/views/:id", "store-session", "Rename a view / set its rules", viewH.MeUpdateView, storeSession),
 		def("DELETE", storePrefix+"/me/menu/views/:id", "store-session", "Delete a view", viewH.MeDeleteView, storeSession),
+		def("GET", storePrefix+"/me/menu/problems", "store-session", "Find problems: items not on the counter, no printer, prices that look missing, broken modifier groups", viewH.MeProblems, storeSession),
 		def("GET", storePrefix+"/me/menu/views/:id/build", "store-session", "A view as its channels see it + needs attention", viewH.MeBuildView, storeSession),
 		def("GET", storePrefix+"/me/menu/views/:id/layout", "store-session", "A counter view's layout (tabs, screens, flows, functions)", viewH.MeGetLayout, storeSession),
 		def("PUT", storePrefix+"/me/menu/views/:id/layout", "store-session", "Replace a counter view's layout (422 lists every problem)", viewH.MePutLayout, storeSession),

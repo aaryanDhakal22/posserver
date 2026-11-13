@@ -19,7 +19,7 @@
   import Badge from '$lib/ui/Badge.svelte';
   import Skeleton from '$lib/ui/Skeleton.svelte';
 
-  // Store › Staff → Call center (contract/main.md §2.5zh): the idle lock (a
+  // Store › Settings › Call center (contract/main.md §2.5zh): the idle lock (a
   // store setting), the browsers the store's login opened the call-center app
   // on (revocable), and orders + sales per call-center agent per day.
   let { agents = 0 }: { agents?: number } = $props();

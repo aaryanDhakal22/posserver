@@ -50,7 +50,7 @@
     categories: { name: 'Categories', desc: 'A button for each menu category' },
     deals: { name: 'Deals', desc: 'Shows by itself when you have active deals' },
     picks: { name: 'From the menu', desc: 'Up to 8 items you pick', edit: true },
-    hours: { name: 'Hours & contact', desc: "The week's hours, address, phone, delivery area (from Details & hours)" },
+    hours: { name: 'Hours & contact', desc: "The week's hours, address, phone, delivery area (from Settings › Hours and Store details)" },
     about: { name: 'About us', desc: 'Your story, with the cover photo', edit: true },
     install: { name: 'Install the app', desc: 'How to put your site on a phone home screen' }
   };

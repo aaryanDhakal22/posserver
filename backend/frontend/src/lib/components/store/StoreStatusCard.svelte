@@ -91,7 +91,7 @@
         }}>Pause orders</Button
       >
     {/if}
-    <Button size="sm" variant="ghost" href="{base}/store/details">Settings</Button>
+    <Button size="sm" variant="ghost" href="{base}/store/settings">Settings</Button>
   {/snippet}
   {#if !status}
     <Skeleton lines={2} />

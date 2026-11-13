@@ -1,5 +1,5 @@
-// Store › Staff (the counter terminal's people + terminal settings), as the owner uses it on a laptop and
-// a phone, and the Store › Pricing card's delivery split (store share + driver share). Every step is
+// Store › Staff (the counter terminal's people), as the owner uses it on a laptop and a phone (the
+// terminal settings moved to Store › Settings: settings.spec.ts). Every step is
 // checked against main's own API; what the owner saves is checked on the Pi's own pull
 // (GET /store/v1/agent/terminal-config). Screenshots of each state land in the test's output folder
 // (test-results/browser/…/staff-*.png; the gate copies them to artifacts/main-browser/).
@@ -158,114 +158,6 @@ test('staff: add with a confirmed PIN, PIN conflicts in words, own limits, chang
   expect((await staffList(store)).map((p) => p.first_name)).toEqual(['Cara']);
 });
 
-test('terminal settings: the defaults, plain labels with units, every field saves, a bad value is marked on its field', async ({
-  page,
-  store,
-  open
-}, info) => {
-  await open('/store/staff');
-  const field = (label: string) => page.getByLabel(label, { exact: false }).first();
-  const bar = page.getByTestId('settings-savebar');
-  // Every store starts with the owner's defaults (2026-11-12).
-  await expect(field('Refunds up to')).toHaveValue('20.00');
-  await expect(field('Discounts up to')).toHaveValue('20');
-  await expect(field('Lower an item’s price by up to')).toHaveValue('20');
-  await expect(field('Lock the terminal after')).toHaveValue('5');
-  await expect(field('Employee meal')).toHaveValue('20');
-  await expect(field('Pay out of the drawer up to')).toHaveValue('20.00');
-  await expect(field('Pickups are ready in')).toHaveValue('15');
-  await expect(field('Local area codes')).toHaveValue('410, 443, 667');
-  await expect(field('Counter orders on Quibase over')).toHaveValue('5.00'); // the owner's X, 2026-11-13
-  await expect(field('Drivers may claim after')).toHaveCount(0); // retired 2026-11-12: past the promised time
-  await expect(page.getByLabel('After login, open')).toHaveValue('info');
-  await expect(page.getByLabel('Menu button font')).toHaveValue('barlow');
-  await expect(bar).toContainText('All changes saved');
-  await shot(page, info, 'settings');
-
-  // A change shows as unsaved; Undo puts it back.
-  await field('Discounts up to').fill('12');
-  await expect(bar).toContainText('Unsaved changes');
-  await bar.getByRole('button', { name: 'Undo changes' }).click();
-  await expect(field('Discounts up to')).toHaveValue('20');
-  await expect(bar).toContainText('All changes saved');
-
-  await field('Refunds up to').fill('25');
-  await field('Discounts up to').fill('12');
-  await field('Lower an item’s price by up to').fill('25');
-  await page.getByLabel('After login, open').selectOption('takeout');
-  await page.getByLabel('Menu button font').selectOption('barlow_condensed');
-  await field('Lock the terminal after').fill('7');
-  await field('Close the receipt screen after').fill('0');
-  await page.getByRole('switch', { name: 'Show the History tab' }).click();
-  await page.getByRole('switch', { name: 'Prices on menu buttons' }).click();
-  await page.getByRole('switch', { name: 'Click sound' }).click();
-  await field('Counter numbers start at').fill('100');
-  await field('Employee meal').fill('40');
-  await field('Most of one topping').fill('4');
-  await field('Deliver past the delivery area by up to').fill('1.5');
-  await page.getByRole('switch', { name: 'Ask a name for a paid counter order' }).click();
-  await expect(page.getByLabel('Tip choices')).toBeDisabled();
-  await page.getByRole('switch', { name: 'Ask for a tip on the card reader' }).click();
-  await page.getByLabel('Tip choices').fill('10, 15, 20, 25');
-  await page.getByLabel('At (store time)').fill('03:30');
-  await field('Pay out of the drawer up to').fill('35');
-  await field('Pickups are ready in').fill('241');
-  await field('Local area codes').fill('410, 443, 410, 202');
-  await field('Counter orders on Quibase over').fill('7.50');
-  await bar.getByRole('button', { name: 'Save terminal settings' }).click();
-  // A bad value never leaves the page: the message says which field, and that field is marked + focused.
-  await expect(bar.getByRole('alert')).toContainText('Pickups are ready in: a whole number from 0 to 240.');
-  await expect(field('Pickups are ready in')).toHaveAttribute('aria-invalid', 'true');
-  await expect(field('Pickups are ready in')).toBeFocused();
-  await shot(page, info, 'settings-error');
-  await field('Pickups are ready in').fill('20');
-  await field('Local area codes').fill('410, 12');
-  await bar.getByRole('button', { name: 'Save terminal settings' }).click();
-  await expect(bar.getByRole('alert')).toContainText('Area codes');
-  await expect(field('Local area codes')).toBeFocused();
-  await field('Local area codes').fill('410, 443, 410, 202');
-  await field('Lock the terminal after').fill('0');
-  await bar.getByRole('button', { name: 'Save terminal settings' }).click();
-  await expect(bar.getByRole('alert')).toContainText('Lock the terminal after');
-  await field('Lock the terminal after').fill('7');
-  await field('A charge sent to a phone expires after').fill('240');
-  await bar.getByRole('button', { name: 'Save terminal settings' }).click();
-  await expect(bar).toContainText('All changes saved');
-
-  const want = {
-    cashier_refund_cents: 2500, cashier_discount_pct: 12, cashier_price_drop_pct: 25, default_tab: 'takeout',
-    button_font: 'barlow_condensed', auto_lock_minutes: 7, receipt_auto_done_seconds: 0, show_history: true,
-    prices_on_buttons: true, click_sound: true, counter_start: 100, employee_meal_pct: 40, out_of_area_margin_mi: 1.5,
-    name_on_paid_counter: true, card_tips: true, card_tip_percents: [10, 15, 20, 25], auto_close_batch_at: '03:30',
-    cashier_payout_cents: 3500, default_pickup_minutes: 20, area_codes: ['410', '443', '202'],
-    topping_max_count: 4, phone_charge_timeout_seconds: 240, quibase_counter_min_cents: 750
-  };
-  await expect.poll(async () => (await store.me('GET', '/terminal/settings', undefined, 200)).data).toMatchObject(want);
-  await expect(field('Local area codes')).toHaveValue('410, 443, 202'); // as main saved it
-
-  // Auto-close off saves "".
-  await page.getByRole('switch', { name: 'Close the batch by itself' }).click();
-  await bar.getByRole('button', { name: 'Save terminal settings' }).click();
-  await expect.poll(async () => (await store.me('GET', '/terminal/settings', undefined, 200)).data.auto_close_batch_at).toBe('');
-
-  // A reload shows what main has.
-  await expect(bar).toContainText('All changes saved');
-  await page.reload();
-  await expect(page.getByLabel('After login, open')).toHaveValue('takeout');
-  await expect(field('Deliver past the delivery area by up to')).toHaveValue('1.5');
-
-  // Fill in defaults (confirmed) → the owner's defaults, saved on Save.
-  await page.getByRole('button', { name: 'Fill in defaults' }).click();
-  await page.getByRole('dialog').getByRole('button', { name: 'Fill in defaults' }).click();
-  await expect(field('Discounts up to')).toHaveValue('20');
-  await expect(bar).toContainText('Unsaved changes');
-  await bar.getByRole('button', { name: 'Save terminal settings' }).click();
-  await expect
-    .poll(async () => (await store.me('GET', '/terminal/settings', undefined, 200)).data)
-    .toMatchObject({ cashier_discount_pct: 20, employee_meal_pct: 20, auto_lock_minutes: 5, cashier_price_drop_pct: 20,
-      default_tab: 'info', auto_close_batch_at: '04:00', cashier_refund_cents: 2000 });
-});
-
 test('what the owner saves reaches the Pi: terminal-config carries the staff and settings, its version moves', async ({
   page,
   store,
@@ -285,9 +177,12 @@ test('what the owner saves reaches the Pi: terminal-config carries the staff and
   await expect(page.getByTestId('pi-status')).toContainText('Pi offline');
   await addPerson(page, 'Eve', 'Ray', 'Driver', '2468');
   await expect(row(page, 'Eve Ray')).toBeVisible();
+  // The terminal settings live in Store › Settings now (one page per group).
+  await open('/store/settings/counter');
+  await expect(page.getByTestId('pi-status')).toContainText('Pi offline');
   await page.getByLabel('Employee meal', { exact: false }).first().fill('30');
-  await page.getByTestId('settings-savebar').getByRole('button', { name: 'Save terminal settings' }).click();
-  await expect(page.getByText('Terminal settings saved — the terminals get them when the Pi is back online')).toBeVisible();
+  await page.getByTestId('settings-savebar').getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText('Counter orders saved — the terminals get them when the Pi is back online')).toBeVisible();
 
   const after = await pull();
   expect(after.version).toBeGreaterThan(before.version);
@@ -295,24 +190,4 @@ test('what the owner saves reaches the Pi: terminal-config carries the staff and
   expect(after.staff).toHaveLength(1);
   expect(after.staff[0]).toMatchObject({ first_name: 'Eve', last_name: 'Ray', role: 'driver' });
   expect(after.staff[0].pin_hash).toMatch(/^\$2a\$/);
-});
-
-test('pricing: the delivery fee is a store share + a driver share', async ({ page, store, open }) => {
-  await open('/store/details');
-  // A new store delivers for $4: $1 the store's + $3 the driver's (the owner's default).
-  await expect(page.getByLabel('Delivery: store share ($)').first()).toHaveValue('1.00');
-  await expect(page.getByLabel('Delivery: driver share ($)').first()).toHaveValue('3.00');
-  const st = page.getByLabel('Delivery: store share ($)').first();
-  const dr = page.getByLabel('Delivery: driver share ($)').first();
-  await st.fill('1.00');
-  await dr.fill('3.50');
-  await expect(page.getByTestId('pr-st-del-total')).toHaveText('$4.50');
-  await page.getByRole('button', { name: 'Save pricing' }).click();
-  await expect
-    .poll(async () => (await store.me('GET', '/pricing', undefined, 200)).data.store.fees)
-    .toMatchObject({ delivery_fee_cents: 450, delivery_driver_cents: 350 });
-
-  await page.reload();
-  await expect(page.getByLabel('Delivery: store share ($)').first()).toHaveValue('1.00');
-  await expect(page.getByLabel('Delivery: driver share ($)').first()).toHaveValue('3.50');
 });
