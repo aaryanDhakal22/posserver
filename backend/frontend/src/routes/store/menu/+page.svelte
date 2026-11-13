@@ -130,9 +130,27 @@
   async function loadPrinters() {
     printers = await storeApi<Printer[]>('/me/printers');
   }
+  // The store's Quick add item (main 00008, made the first time): the terminal's typed lines print where it
+  // routes. Read before the menus so its "Quick add" menu is listed.
+  type QuickAdd = { item_id: string; category_id: string; menu_id: string };
+  let quickAdd = $state<QuickAdd | null>(null);
+  async function loadQuickAdd() {
+    quickAdd = await storeApi<QuickAdd>('/me/menu/quick-add').catch(() => null);
+  }
+  const isQuickAdd = (it: Item) => !!(it as Item & { quick_add?: boolean }).quick_add;
+  async function openQuickAdd() {
+    if (!quickAdd) return;
+    const m = menus.find((x) => x.id === quickAdd!.menu_id);
+    if (!m) return;
+    tab = 'items';
+    clearFilters();
+    if (activeMenu?.id !== m.id) await selectMenu(m);
+    editing = (itemsByCat[quickAdd.category_id] ?? []).find((it) => it.id === quickAdd!.item_id) ?? null;
+  }
 
   onMount(async () => {
     try {
+      await loadQuickAdd();
       await Promise.all([loadPrinters(), loadMenus(), loadBank()]);
       ({ live, pi: piState } = await loadPiStatus());
       await loadUnmatched();
@@ -436,6 +454,15 @@
       </EmptyState>
     </section>
   {:else}
+    {#if quickAdd && activeMenu.id !== quickAdd.menu_id}
+      <div class="flex flex-wrap items-center gap-2.5 px-3.5 py-2.5 rounded-r12 bg-info-bg text-text2" data-testid="quick-add-strip">
+        <Icon name="printer" size={18} />
+        <span class="flex-1 min-w-[200px]">
+          <b>Quick add</b> on the terminal (a typed name + price) prints where the <b>Quick add</b> item prints.
+        </span>
+        <Button size="sm" onclick={openQuickAdd}>Set where it prints</Button>
+      </div>
+    {/if}
     {#if noPrinterCount}
       <div class="flex flex-wrap items-center gap-2.5 px-3.5 py-2.5 rounded-r12 bg-warn-bg text-warn font-medium" role="status">
         <Icon name="alert" size={18} />
@@ -584,6 +611,7 @@
                       <button type="button" class="block w-full text-left font-semibold truncate hover:text-accent py-1.5 -my-1.5" onclick={(e) => { e.stopPropagation(); editing = it; }}>
                         {it.name}
                       </button>
+                      {#if isQuickAdd(it)}<span class="block text-xs text-muted truncate" data-testid="quick-add-row">The terminal's Quick add (typed items): never on a menu</span>{/if}
                       {#if subtitle(it)}<span class="block text-xs text-muted truncate">{subtitle(it)}</span>{/if}
                       <span class="sm:hidden block text-xs truncate {eff ? 'text-text2' : 'text-warn font-medium'}">
                         {eff ? `Prints on ${printerName(eff)}` : 'No printer — prints on every station'}

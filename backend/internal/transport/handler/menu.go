@@ -54,6 +54,9 @@ func (h *MenuHandler) mErr(c *echo.Context, err error) error {
 	if menuApp.IsNotFound(err) {
 		return c.JSON(http.StatusNotFound, errResp("not found"))
 	}
+	if errors.Is(err, menuApp.ErrQuickAddKept) {
+		return c.JSON(http.StatusConflict, errCode(err.Error(), "quick_add_kept"))
+	}
 	return c.JSON(http.StatusBadRequest, errResp(err.Error()))
 }
 
@@ -86,6 +89,18 @@ func parseIDs(raw []string) ([]uuid.UUID, error) {
 }
 
 // --- Menus -----------------------------------------------------------------
+
+// GET /store/v1/me/menu/quick-add — the store's Quick add item (made the
+// first time): {item_id, category_id, menu_id}. Its printer / "no kitchen
+// ticket" decide where the terminal's typed (Quicc Add) lines print.
+func (h *MenuHandler) MeQuickAdd(c *echo.Context) error {
+	tid, lid, _ := meScope(c)
+	qa, err := h.svc.QuickAdd(c.Request().Context(), tid, lid)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, errResp("quick add failed"))
+	}
+	return c.JSON(http.StatusOK, qa)
+}
 
 func (h *MenuHandler) MeListMenus(c *echo.Context) error {
 	_, lid, _ := meScope(c)

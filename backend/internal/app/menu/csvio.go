@@ -360,7 +360,15 @@ func (s *Service) ImportCSV(ctx context.Context, tenantID, locationID uuid.UUID,
 		return nil, err
 	}
 	if replace {
+		// The store's Quick add menu (00008) stays: it isn't the CSV's.
+		qa, err := s.repo.QuickAdd(ctx, locationID)
+		if err != nil {
+			return nil, err
+		}
 		for _, m := range menus {
+			if qa != nil && m.ID == qa.MenuID {
+				continue
+			}
 			res.MenusDeleted++
 			res.note("- menu %q (and everything in it)", m.Name)
 			if !dryRun {
@@ -701,6 +709,9 @@ func (s *Service) ExportCSV(ctx context.Context, locationID uuid.UUID, w io.Writ
 				return err
 			}
 			for _, it := range items {
+				if it.QuickAdd {
+					continue // the store's Quick add item (00008): set in Store › Menu, not in a CSV
+				}
 				printer, noKitchen := "", "no"
 				switch {
 				case it.NoKitchenTicket || (it.PrinterID == nil && c.NoKitchenTicket):

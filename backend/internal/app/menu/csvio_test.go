@@ -25,6 +25,8 @@ type memRepo struct {
 	calls int // writes
 }
 
+func (r *memRepo) QuickAdd(context.Context, uuid.UUID) (*menuDom.QuickAdd, error) { return nil, nil }
+
 func (r *memRepo) ListMenusByLocation(_ context.Context, loc uuid.UUID) ([]menuDom.Menu, error) {
 	var out []menuDom.Menu
 	for _, m := range r.menus {

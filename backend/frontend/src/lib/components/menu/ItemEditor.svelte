@@ -75,6 +75,8 @@
   let tagsStr = $state((it0.tags || []).join(', '));
   let printerId = $state<string | null>(it0.printer_id);
   let noKitchen = $state(!!it0.no_kitchen_ticket);
+  // The store's Quick add item (main 00008): the route of the terminal's typed lines.
+  const quickAdd = !!(it0 as Item & { quick_add?: boolean }).quick_add;
   // Receipt only: its own flag, or its category's when it has no printer of its own.
   const receiptOnly = $derived(noKitchen || (printerId === null && categoryNoKitchen));
   let priceErr = $state('');
@@ -249,6 +251,13 @@
       save();
     }}
   >
+    {#if quickAdd}
+      <p class="rounded-r12 bg-info-bg text-text2 px-3.5 py-2.5 text-[13px]" data-testid="quick-add-note">
+        <b>Quick add</b> on the terminal (the cashier types a name and a price) prints where this item prints: its
+        printer below, else its category's default printer; <b>No kitchen ticket</b> = the receipt only; neither = every
+        station. It is never on a menu, and it can't be deleted.
+      </p>
+    {/if}
     <div>
       <label class="lbl" for="ie-name">Name</label>
       <input id="ie-name" class="field" bind:value={name} />
@@ -378,6 +387,6 @@
 
   {#snippet footer()}
     <Button type="submit" form="item-form" variant="primary" class="flex-1" loading={saving}>Save item</Button>
-    <Button variant="danger-ghost" onclick={del}><Icon name="trash" size={16} />Delete</Button>
+    {#if !quickAdd}<Button variant="danger-ghost" onclick={del}><Icon name="trash" size={16} />Delete</Button>{/if}
   {/snippet}
 </Drawer>

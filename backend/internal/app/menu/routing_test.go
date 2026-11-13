@@ -198,3 +198,29 @@ func TestRoutingNoKitchen(t *testing.T) {
 		t.Errorf("salad has a route, want none (prints on every station)")
 	}
 }
+
+// The Quick add item (00008) is the terminal's route only: an online line
+// named like it is not matched to it, and a real item of the same name still is.
+func TestRouteItemsSkipsQuickAdd(t *testing.T) {
+	p1 := uuid.New()
+	qa, real := uuid.New(), uuid.New()
+	repo := routingRepo{entries: []menuDom.RouteEntry{
+		{ItemID: qa, Name: "Quick add", PrinterID: &p1, QuickAdd: true},
+		{ItemID: uuid.New(), Name: "Open item", PrinterID: &p1, QuickAdd: false},
+		{ItemID: real, Name: "Quick Add", PrinterID: &p1}, // a later twin that is a real item
+	}}
+	meters, _ := observability.NewMeters()
+	svc := NewService(repo, nil, meters, zerolog.Nop())
+	got, err := svc.RouteItems(context.Background(), uuid.New(), []string{"quick add"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0].MenuItemID == nil || *got[0].MenuItemID != real {
+		t.Errorf("quick add matched %v, want the real item %v", got[0].MenuItemID, real)
+	}
+	repo.entries = repo.entries[:1]
+	svc = NewService(repo, nil, meters, zerolog.Nop())
+	if got, _ = svc.RouteItems(context.Background(), uuid.New(), []string{"Quick add"}); got[0].Routing != order.RoutingUnmatched {
+		t.Errorf("only the Quick add item: %+v, want unmatched", got[0])
+	}
+}

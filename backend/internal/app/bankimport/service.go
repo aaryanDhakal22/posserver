@@ -762,10 +762,15 @@ func (a *applier) applyTree(ctx context.Context) error {
 		return out
 	}
 	keptMenus, keptCats, keptItems := keptIDs(a.menus), keptIDs(a.cats), keptIDs(a.items)
+	// The store's Quick add item (00008) is main's own: never pruned, nor the
+	// category and menu that hold it.
 	for _, m := range a.bank.Menus {
 		for _, c := range m.Categories {
+			if catHoldsQuickAdd(c) {
+				keptCats[c.ID], keptMenus[m.ID] = true, true
+			}
 			for _, it := range c.Items {
-				if !keptItems[it.ID] {
+				if !keptItems[it.ID] && !it.QuickAdd {
 					if err := a.tx.DeleteItem(ctx, it.ID); err != nil {
 						return err
 					}

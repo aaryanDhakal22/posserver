@@ -2758,3 +2758,8 @@ ALTER TABLE public.tenants ADD COLUMN session_epoch bigint DEFAULT 0 NOT NULL;
 
 -- 00007_geo_pins_per_store: data only (pinned geo_cache rows move from the shared
 -- address key to 'pin|<tenant_id>|<key>'); no schema change.
+
+-- 00008_quick_add_item: the location's one "Quick add" item (the terminal's
+-- typed lines print where it routes; never sold from a menu).
+ALTER TABLE public.menu_items ADD COLUMN quick_add boolean DEFAULT false NOT NULL;
+CREATE UNIQUE INDEX menu_items_quick_add_uq ON public.menu_items USING btree (location_id) WHERE quick_add;

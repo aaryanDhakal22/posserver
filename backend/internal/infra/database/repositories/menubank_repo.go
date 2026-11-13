@@ -90,6 +90,10 @@ func loadBank(ctx context.Context, q *models.Queries, locationID uuid.UUID) (*me
 	if err != nil {
 		return nil, err
 	}
+	qa, err := quickAddOf(ctx, q.Raw(), locationID)
+	if err != nil {
+		return nil, err
+	}
 	regular := map[uuid.UUID]bool{}
 	for _, f := range fams {
 		if f.Kind == menu.FamilyMod && f.Class == menu.ClassRegular {
@@ -143,6 +147,7 @@ func loadBank(ctx context.Context, q *models.Queries, locationID uuid.UUID) (*me
 	for _, it := range items {
 		bi := menu.BankItem{Item: toDomainItem(it), KitchenName: it.KitchenName, SKU: it.Sku,
 			Sizes: sizesByItem[idOf(it.ID)], GroupIDs: groupIDs[idOf(it.ID)], FamilyID: famOf(itemFam, idOf(it.ID))}
+		bi.QuickAdd = qa != nil && bi.ID == qa.ItemID
 		if bi.Sizes == nil {
 			bi.Sizes = []menu.ItemSize{}
 		}

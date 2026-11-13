@@ -68,3 +68,21 @@ func TestCompileMenusRule(t *testing.T) {
 		t.Errorf("no rule shows every menu: %d categories", len(b.Categories))
 	}
 }
+
+// The Quick add item (00008) is in no build, and its category (only it) with it.
+func TestCompileSkipsQuickAdd(t *testing.T) {
+	m, cPizza, cQA := uuid.New(), uuid.New(), uuid.New()
+	pizza, qa := uuid.New(), uuid.New()
+	bank := &menu.Bank{Groups: map[uuid.UUID]menu.BankGroup{}, Menus: []menu.BankMenu{
+		{Menu: menu.Menu{ID: m, Available: true}, Categories: []menu.BankCategory{
+			{Category: menu.Category{ID: cPizza, Name: "Pizza", Available: true}, Items: []menu.BankItem{{Item: menu.Item{ID: pizza, Name: "Cheese", PriceCents: 100, InStock: true}}}},
+			{Category: menu.Category{ID: cQA, Name: "Quick add", Available: true}, Items: []menu.BankItem{{Item: menu.Item{ID: qa, Name: "Quick add", InStock: true, QuickAdd: true}}}},
+		}},
+	}}
+	for _, k := range []Kind{KindWeb, KindOperator, KindCounter} {
+		b := Compile(bank, View{Kind: k}, nil, nil)
+		if len(b.Categories) != 1 || len(b.Categories[0].Items) != 1 || b.Categories[0].Items[0].ID != pizza.String() {
+			t.Errorf("%s build: %+v", k, b.Categories)
+		}
+	}
+}

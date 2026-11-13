@@ -32,6 +32,7 @@ func export(ctx context.Context, tx bankdoc.Tx) (*bankdoc.Document, error) {
 	if err != nil {
 		return nil, err
 	}
+	bank = withoutQuickAdd(bank)
 	ps, err := tx.Printers(ctx)
 	if err != nil {
 		return nil, err
@@ -244,4 +245,48 @@ func exportEntry(e menuview.Entry, item map[string]string, size map[uuid.UUID]st
 		}
 	}
 	return de
+}
+
+// withoutQuickAdd is the bank without the store's Quick add item (00008:
+// main's own, never in a document), and without the category / menu it
+// leaves empty. A copy: the export's loops read doc and bank in step.
+func withoutQuickAdd(bank *menu.Bank) *menu.Bank {
+	out := *bank
+	out.Menus = make([]menu.BankMenu, 0, len(bank.Menus))
+	for _, m := range bank.Menus {
+		mm := m
+		mm.Categories = make([]menu.BankCategory, 0, len(m.Categories))
+		held := false
+		for _, c := range m.Categories {
+			if !catHoldsQuickAdd(c) {
+				mm.Categories = append(mm.Categories, c)
+				continue
+			}
+			held = true
+			cc := c
+			cc.Items = make([]menu.BankItem, 0, len(c.Items))
+			for _, it := range c.Items {
+				if !it.QuickAdd {
+					cc.Items = append(cc.Items, it)
+				}
+			}
+			if len(cc.Items) > 0 {
+				mm.Categories = append(mm.Categories, cc)
+			}
+		}
+		if held && len(mm.Categories) == 0 {
+			continue
+		}
+		out.Menus = append(out.Menus, mm)
+	}
+	return &out
+}
+
+func catHoldsQuickAdd(c menu.BankCategory) bool {
+	for _, it := range c.Items {
+		if it.QuickAdd {
+			return true
+		}
+	}
+	return false
 }

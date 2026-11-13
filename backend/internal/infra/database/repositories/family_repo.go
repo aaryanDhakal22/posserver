@@ -152,7 +152,7 @@ func (r *FamilyRepository) List(ctx context.Context, locationID uuid.UUID) ([]me
 		return out, rows.Err()
 	}
 	items, err := members(`SELECT i.id, i.name, c.name, c.id, i.price_cents, i.family_id FROM menu_items i
-		JOIN menu_categories c ON c.id = i.category_id WHERE i.location_id = $1 ORDER BY c.position, c.name, i.position, i.name, i.id`)
+		JOIN menu_categories c ON c.id = i.category_id WHERE i.location_id = $1 AND NOT i.quick_add ORDER BY c.position, c.name, i.position, i.name, i.id`)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("items: %w", err)
 	}
