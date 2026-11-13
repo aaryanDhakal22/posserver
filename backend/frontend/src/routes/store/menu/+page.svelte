@@ -98,6 +98,10 @@
     return id ? (p ? printerLabel(p, printers) : '—') : '';
   };
   const effective = (it: Item, c: Category) => it.printer_id ?? c.default_printer_id;
+  // Receipt only (no kitchen ticket): its own flag, or its category's when it has no printer of its own —
+  // main routes those to the receipt alone, so they never print on every station (ListRoutingByLocation).
+  const receiptOnly = (it: Item, c: Category) => !!it.no_kitchen_ticket || (!it.printer_id && !!c.no_kitchen_ticket);
+  const unprinted = (it: Item, c: Category) => !effective(it, c) && !receiptOnly(it, c);
 
   // --- loading --------------------------------------------------------------
   // Vendor item names from the last 14 days that print on every station
@@ -154,7 +158,7 @@
   const filtering = $derived(!!q.trim() || !!catF || !!printerF || outOnly || noPrinterOnly);
   const allItems = $derived(categories.flatMap((c) => (itemsByCat[c.id] || []).map((it) => ({ it, c }))));
   const itemCount = $derived(allItems.length);
-  const noPrinterCount = $derived(allItems.filter(({ it, c }) => !effective(it, c)).length);
+  const noPrinterCount = $derived(allItems.filter(({ it, c }) => unprinted(it, c)).length);
   const groups = $derived.by(() => {
     const s = q.trim().toLowerCase();
     return categories
@@ -166,7 +170,7 @@
           if (s && !it.name.toLowerCase().includes(s)) return false;
           if (printerF === '__none' ? !!eff : printerF && eff !== printerF) return false;
           if (outOnly && it.in_stock) return false;
-          if (noPrinterOnly && eff) return false;
+          if (noPrinterOnly && !unprinted(it, c)) return false;
           return true;
         })
       }))
