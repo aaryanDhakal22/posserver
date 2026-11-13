@@ -32,6 +32,92 @@
   }
   onMount(() => load().catch((e) => toast.error(e)));
 
+  // Terminals & tablets (agent 2.5.3): what the Pi last reported, the newest
+  // release main has, and "Update now" (the Pi tells its terminals to install
+  // it at their next quiet moment).
+  type AppUpdate = {
+    version_name: string;
+    version_code: number;
+    state: string;
+    reason?: string;
+    target_code?: number;
+    at: string;
+    android?: string;
+    permissions?: Record<string, boolean>;
+    received_at: string;
+  };
+  type FloorDevice = {
+    device_id: string;
+    name: string;
+    app_version: string;
+    last_seen_at: string | null;
+    connected: boolean;
+    update?: AppUpdate;
+  };
+  type Release = { version_code: number; version_name: string; created_at: string } | null;
+  type Floor = {
+    connected: boolean;
+    reported_at: string | null;
+    terminals: FloorDevice[];
+    tablets: FloorDevice[];
+    releases: { terminal: Release; quibase: Release };
+  };
+  type UpdateNow = {
+    ok: boolean;
+    code?: string;
+    release: Release;
+    terminals: { device_id: string; name: string; told: boolean; up_to_date: boolean; connected: boolean }[];
+  };
+  let floor = $state<Floor | null>(null);
+  let updating = $state(false);
+  let updateResult = $state('');
+
+  async function loadFloor() {
+    floor = await storeApi<Floor>('/me/terminals');
+  }
+  onMount(() => loadFloor().catch((e) => toast.error(e)));
+
+  const STATE_LABEL: Record<string, string> = {
+    up_to_date: 'Up to date',
+    downloading: 'Downloading',
+    cached: 'Downloaded, waiting',
+    waiting_for_idle: 'Waiting for a quiet moment',
+    waiting_for_tap: 'Waiting for a tap on the screen',
+    installing: 'Installing',
+    failed: 'Failed'
+  };
+  const permsText = (p?: Record<string, boolean>) =>
+    p ? Object.entries(p).map(([k, v]) => `${k.replaceAll('_', ' ')}: ${v ? 'yes' : 'NO'}`).join(', ') : '—';
+
+  async function updateNow() {
+    const ok = await confirmDialog({
+      title: 'Update the terminals now?',
+      body: 'The Pi gets the newest terminal app and each terminal installs it at its next quiet moment (no order on its screen). Staff log in again afterwards.',
+      confirmLabel: 'Update now'
+    });
+    if (!ok) return;
+    updating = true;
+    updateResult = '';
+    try {
+      const r = await storeApi<UpdateNow>('/me/terminals/update-now', { method: 'POST' });
+      if (!r.ok) {
+        updateResult = 'There is no terminal release to install yet.';
+      } else {
+        const told = r.terminals.filter((t) => t.told).length;
+        const current = r.terminals.filter((t) => t.up_to_date).length;
+        updateResult = `Version ${r.release?.version_name} sent: ${told} terminal${told === 1 ? '' : 's'} told` +
+          (current ? `, ${current} already up to date` : '') + '.';
+      }
+      toast.success('Update sent to the Pi');
+      await loadFloor();
+    } catch (err) {
+      updateResult = err instanceof Error ? err.message : String(err);
+      toast.error(err);
+    } finally {
+      updating = false;
+    }
+  }
+
   async function mint(e: SubmitEvent) {
     e.preventDefault();
     nameErr = '';
@@ -101,6 +187,59 @@
     </div>
   {:else}
     <EmptyState icon="tablet" title="No devices yet" body="The Pi appears here once it's linked. Create a key below for anything else." />
+  {/if}
+</Card>
+
+<Card title="Terminals & tablets" padded={false}>
+  <div class="px-5 pb-3 flex flex-wrap items-center gap-3" data-testid="floor-devices-head">
+    {#if floor}
+      <span>Pi: {#if floor.connected}<Badge tone="ok">online</Badge>{:else}<Badge tone="bad">offline</Badge>{/if}</span>
+      <span class="text-sm">Last report: {floor.reported_at ? timeAgo(floor.reported_at) : 'never'}</span>
+      <span class="text-sm">Newest terminal app: {floor.releases.terminal ? `${floor.releases.terminal.version_name} (${floor.releases.terminal.version_code})` : 'none'}</span>
+      <span class="text-sm">Newest Quibase: {floor.releases.quibase ? `${floor.releases.quibase.version_name} (${floor.releases.quibase.version_code})` : 'none'}</span>
+    {/if}
+    <Button variant="primary" icon="refresh" loading={updating} onclick={updateNow} data-testid="update-now">Update now</Button>
+  </div>
+  {#if updateResult}<p class="px-5 pb-3 text-sm" role="status" data-testid="update-result">{updateResult}</p>{/if}
+  {#if floor === null}
+    <div class="px-5 pb-5"><Skeleton lines={3} /></div>
+  {:else if floor.terminals.length || floor.tablets.length}
+    <div class="overflow-x-auto">
+      <table class="tbl stack min-w-[760px]" data-testid="floor-devices">
+        <thead><tr><th>Name</th><th>Kind</th><th>App version</th><th>Update</th><th>Permissions</th><th>Android</th><th>Last contact</th></tr></thead>
+        <tbody>
+          {#each floor.terminals as d (d.device_id)}
+            <tr>
+              <td class="font-semibold"><span>{d.name}{#if d.connected}<Badge tone="ok" class="ml-2">on</Badge>{/if}</span></td>
+              <td data-label="Kind">Terminal</td>
+              <td data-label="App version" class="mono">{d.update ? `${d.update.version_name} (${d.update.version_code})` : d.app_version || '—'}</td>
+              <td data-label="Update" title={d.update?.reason ?? ''}>
+                {#if d.update}{STATE_LABEL[d.update.state] ?? d.update.state}{#if d.update.reason} — {d.update.reason}{/if}
+                  <span class="text-xs opacity-70">({timeAgo(d.update.at)})</span>{:else}—{/if}
+              </td>
+              <td data-label="Permissions">{permsText(d.update?.permissions)}</td>
+              <td data-label="Android">{d.update?.android ?? '—'}</td>
+              <td data-label="Last contact" title={fmtTime(d.update?.received_at ?? d.last_seen_at)}>
+                {(d.update?.received_at ?? d.last_seen_at) ? timeAgo((d.update?.received_at ?? d.last_seen_at) as string) : 'never'}
+              </td>
+            </tr>
+          {/each}
+          {#each floor.tablets as d (d.device_id)}
+            <tr>
+              <td class="font-semibold"><span>{d.name}{#if d.connected}<Badge tone="ok" class="ml-2">on</Badge>{/if}</span></td>
+              <td data-label="Kind">Quibase tablet</td>
+              <td data-label="App version" class="mono">{d.app_version || '—'}</td>
+              <td data-label="Update">updates itself after Close batch</td>
+              <td data-label="Permissions">—</td>
+              <td data-label="Android">—</td>
+              <td data-label="Last contact" title={fmtTime(d.last_seen_at)}>{d.last_seen_at ? timeAgo(d.last_seen_at) : 'never'}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    </div>
+  {:else}
+    <EmptyState icon="tablet" title="No terminals or tablets reported yet" body="The Pi lists them here once they are paired (its report comes every few minutes)." />
   {/if}
 </Card>
 
