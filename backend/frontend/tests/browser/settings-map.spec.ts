@@ -17,8 +17,7 @@ test('search: a word finds the setting, Enter opens its page with the field lit 
   await expect(hits).toContainText('Online and kitchen numbers start at');
   await box.press('Enter');
   await expect(page).toHaveURL(/\/app\/store\/settings\/counter#counter_start$/);
-  const hit = page.locator('.setting-hit');
-  await expect(hit).toContainText('Counter numbers start at');
+  await expect(page.locator('.setting-hit', { hasText: 'Counter numbers start at' })).toBeVisible();
   await expect(page.locator('input').and(page.getByLabel('Counter numbers start at', { exact: false }))).toBeFocused();
 
   // Arrow keys pick another hit; synonyms count ("radius" → the delivery area).
@@ -36,9 +35,9 @@ test('search: a word finds the setting, Enter opens its page with the field lit 
 
 test('a deep link lands on its field: on load, and when only the hash changes', async ({ page, open }) => {
   await open('/store/settings/end-of-day#close_unpaid_counter_action');
-  await expect(page.locator('.setting-hit')).toContainText('Unpaid counter checks at close');
+  await expect(page.locator('.setting-hit', { hasText: 'Unpaid counter checks at close' })).toBeVisible();
   await page.evaluate(() => (location.hash = '#drawer_start_cents'));
-  await expect(page.locator('.setting-hit')).toContainText('Cash left in each drawer at opening');
+  await expect(page.locator('.setting-hit', { hasText: 'Cash left in each drawer at opening' })).toBeVisible();
   // A tab: the link opens it.
   await open('/store/menu#deals');
   await expect(page.locator('#mt-deals')).toHaveAttribute('aria-selected', 'true');
