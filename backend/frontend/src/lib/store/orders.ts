@@ -52,6 +52,8 @@ export interface DetailPayment {
   amount_cents: number;
   tip_cents: number;
   last4?: string;
+  /** amex | discover | mastercard | visa | other; absent from an older Pi (agent 2.5.5). */
+  card_brand?: string;
   auth_code?: string;
   origin?: string;
   refund_of?: string;
@@ -83,6 +85,27 @@ export interface OrderDetail {
   channel?: { kind: string; name: string; client_order_id?: string; operator?: string } | null;
   staff?: { id: string; name: string; role: string } | null;
   printers: Record<string, { name: string; is_receipt: boolean }>;
+  /** What each print job printed, oldest first (the Pi's order.printed, agent 2.5.5; [] from an older Pi). */
+  prints?: PrintJob[];
+}
+
+/** One print job of an order (contract/main.md §2.5zn). */
+export interface PrintJob {
+  event_id: string;
+  mode: string;
+  at: string;
+  tickets: PrintTicket[];
+}
+
+export interface PrintTicket {
+  kind: string; // station | receipt | delivery_copies | reprint | void | change | add_on
+  printer: string;
+  result: 'printed' | 'rerouted' | 'failed' | 'skipped' | string;
+  printed_on?: string;
+  by?: string; // rule | auto
+  attempts: number;
+  error?: string;
+  at: string;
 }
 
 /** The Pi's own floor status for the order (agent contract §2.1, as it last synced it). */
@@ -211,6 +234,102 @@ export function tenderLabel(method: string): string {
       return 'Door tip';
     default:
       return method ? method[0].toUpperCase() + method.slice(1).replaceAll('_', ' ') : 'Payment';
+  }
+}
+
+/** A card brand as printed on the card ("Visa", "Amex"…), or '' when the Pi didn't say. */
+export function brandLabel(b?: string): string {
+  switch ((b ?? '').toLowerCase()) {
+    case 'visa':
+      return 'Visa';
+    case 'mastercard':
+      return 'Mastercard';
+    case 'amex':
+      return 'Amex';
+    case 'discover':
+      return 'Discover';
+    case 'other':
+      return 'Other card';
+    default:
+      return '';
+  }
+}
+
+/**
+ * Who took the order (the owner, 2026-11-13): "Carlos on Counter 1" for a store terminal (the cashier on the
+ * paired terminal's name), "Dana L. (call center)" for the call center. An order from before the Pi sent names
+ * shows the terminal's id. staffName = main's name for the order's staff_id (the detail panel), else the name the
+ * Pi sent. '' for anything not taken at a terminal.
+ */
+export function takenBy(o: Pick<StoreOrder, 'source_metadata'> & { source?: string }, staffName?: string): string {
+  if (o.source !== 'counter') return '';
+  const meta = (o.source_metadata ?? {}) as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  if (meta.device_kind === 'callcenter') {
+    const who = str(meta.taken_by).replace(/^call\s*center\s*[-–—:]\s*/i, '') || str(staffName) || str(meta.staff_name);
+    return who ? `${who} (call center)` : 'Call center';
+  }
+  const who = str(staffName) || str(meta.staff_name);
+  const on = str(meta.device_name) || str(meta.device_id);
+  if (who && on) return `${who} on ${on}`;
+  return who || (on ? `On ${on}` : '');
+}
+
+/** A print job as the panel names it. */
+export function printJobLabel(mode: string): string {
+  switch (mode) {
+    case 'accept':
+    case 'accept_kitchen':
+      return 'Accepted';
+    case 'placed':
+      return 'Placed';
+    case 'kitchen':
+      return 'Kitchen tickets';
+    case 'receipt':
+      return 'Receipt reprinted';
+    case 'order_receipt':
+      return 'Customer receipt';
+    case 'void':
+      return 'Void slip';
+    case 'change':
+    case 'type_change':
+    case 'add_on':
+      return 'Change tickets';
+    case 'delivery_update':
+      return 'Delivery copies again';
+    case 'future_early':
+    case 'future_kitchen':
+    case 'future_receipt':
+    case 'future_both':
+      return 'Printed early';
+    default:
+      return mode ? mode[0].toUpperCase() + mode.slice(1).replaceAll('_', ' ') : 'Printed';
+  }
+}
+
+/** One ticket of a job: "Pizza ✓", "Receipt → rerouted to Online", "Wings ✗ failed (3 tries)". */
+export function printTicketText(t: PrintTicket): string {
+  const KIND: Record<string, string> = {
+    receipt: 'Receipt',
+    reprint: 'Receipt',
+    delivery_copies: 'Delivery copies',
+    void: 'Void',
+    change: 'Change',
+    add_on: 'Add-on'
+  };
+  let what = t.kind === 'station' ? t.printer || 'Kitchen' : KIND[t.kind] ?? t.kind.replaceAll('_', ' ');
+  if (t.kind !== 'station' && t.kind !== 'receipt' && t.kind !== 'reprint' && t.kind !== 'delivery_copies' && t.printer) what += ` · ${t.printer}`;
+  switch (t.result) {
+    case 'printed':
+      return `${what} ✓`;
+    case 'rerouted':
+      return `${what} → rerouted to ${t.printed_on}${t.by === 'rule' ? ' (routing rule)' : ''}`;
+    case 'failed':
+      return `${what} ✗ failed${t.attempts > 1 ? ` (${t.attempts} tries)` : ''}`;
+    case 'skipped':
+      return `${what} ✗ not printed (no printer)`;
+    default:
+      return `${what} · ${t.result}`;
   }
 }
 

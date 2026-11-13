@@ -422,3 +422,18 @@ func SummaryOf(z Z) Summary {
 		ClosedAt: z.ClosedAt, CloseKind: r.CloseKind, TotalCents: r.Sales.TotalCents, Orders: r.Counts.Orders,
 		OverShortCents: r.OverShortCents, DifferenceCents: r.Reconcile.DifferenceCents, ReceivedAt: z.ReceivedAt}
 }
+
+// CardPayment is one card payment (or refund) main has for a batch, for the
+// day close's card list (Store › Reports, main §2.5zn): the brand the Pi
+// sent (agent 2.5.5), "" from an older Pi.
+type CardPayment struct {
+	ID          string    `json:"id"`
+	OrderID     string    `json:"order_id,omitempty"`
+	Method      string    `json:"method"` // card | manual_card | square_app
+	Brand       string    `json:"card_brand,omitempty"`
+	Last4       string    `json:"last4,omitempty"`
+	AmountCents int64     `json:"amount_cents"` // negative = a refund
+	TipCents    int64     `json:"tip_cents"`
+	At          time.Time `json:"at"`
+	OrderNumber *int64    `json:"order_number,omitempty"` // the counter / kitchen number
+}

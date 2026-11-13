@@ -82,6 +82,12 @@ func (h *DayCloseHandler) MeZ(c *echo.Context) error {
 	if len(z.MainCheck) > 0 {
 		out["main_check"] = json.RawMessage(z.MainCheck)
 	}
+	// The batch's card payments with their brand (main §2.5zn).
+	cards, err := h.svc.CardPayments(c.Request().Context(), lid, z.BatchID)
+	if err != nil {
+		return h.fail(c, err)
+	}
+	out["card_payments"] = cards
 	return c.JSON(http.StatusOK, out)
 }
 

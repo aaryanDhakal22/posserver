@@ -10,7 +10,7 @@
   import Drawer from '$lib/ui/Drawer.svelte';
   import EmptyState from '$lib/ui/EmptyState.svelte';
   import Skeleton from '$lib/ui/Skeleton.svelte';
-  import { tenderLabel, whenText } from '$lib/store/orders';
+  import { brandLabel, tenderLabel, whenText } from '$lib/store/orders';
 
   // Store › Reports: the day closes (the Pi's Z report, one per Close batch), the cash drawers and the money
   // notes main keeps (contract/main.md §2.5zc–§2.5zd). Read only: the Pi builds every number; main checks
@@ -28,7 +28,25 @@
   type ZFull = {
     report: Record<string, any>; received_at: string; version: number; flagged: boolean;
     main_check?: { tender: string; pi_cents: number; main_cents: number }[]; main_difference_cents?: number;
+    card_payments?: CardPay[];
   };
+  /** A card payment main has for the day (main §2.5zn): the brand the Pi sent, '' from an older Pi. */
+  type CardPay = {
+    id: string; order_id?: string; method: string; card_brand?: string; last4?: string; amount_cents: number; tip_cents: number;
+    at: string; order_number?: number;
+  };
+  /** The day's card payments by brand: count and net (refunds negative, tips in). */
+  function byBrand(cards: CardPay[]): { brand: string; count: number; cents: number }[] {
+    const m = new Map<string, { brand: string; count: number; cents: number }>();
+    for (const c of cards) {
+      const b = brandLabel(c.card_brand) || 'Not recorded';
+      const row = m.get(b) ?? { brand: b, count: 0, cents: 0 };
+      row.count++;
+      row.cents += c.amount_cents + c.tip_cents;
+      m.set(b, row);
+    }
+    return [...m.values()].sort((a, b) => b.cents - a.cents);
+  }
 
   let day = $state('');
   let zs = $state<ZRow[]>([]);
@@ -240,6 +258,29 @@
         <span>No sales</span><span class="mono">{r.no_sales ?? 0}</span>
         <span class="font-semibold">Difference</span><span class="mono font-semibold {r.reconcile?.difference_cents ? 'text-warn' : ''}">{signed(r.reconcile?.difference_cents ?? 0)}</span>
       </section>
+      {#if (z.card_payments ?? []).length}
+        {@const cards = z.card_payments ?? []}
+        <section data-testid="z-cards">
+          <h3 class="sec">Card payments</h3>
+          <div class="flex flex-wrap gap-2 mb-2">
+            {#each byBrand(cards) as b (b.brand)}<Badge tone="mute">{b.brand} · {b.count} · {dollars(b.cents)}</Badge>{/each}
+          </div>
+          <table class="tbl">
+            <thead><tr><th>Time</th><th>Order</th><th>Card</th><th class="!text-right">Amount</th><th class="!text-right">Tip</th></tr></thead>
+            <tbody>
+              {#each cards as c (c.id)}
+                <tr>
+                  <td class="text-text2 whitespace-nowrap">{new Date(c.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</td>
+                  <td>{#if c.order_id}<a class="text-accent" href="{base}/store/orders?order={c.order_id}">{c.order_number ?? 'Open'}</a>{:else}—{/if}</td>
+                  <td>{tenderLabel(c.method)}{brandLabel(c.card_brand) ? ` · ${brandLabel(c.card_brand)}` : ''}{#if c.last4}<span class="mono text-text2">{` •••• ${c.last4}`}</span>{/if}</td>
+                  <td class="mono text-right {c.amount_cents < 0 ? 'text-bad' : ''}">{c.amount_cents < 0 ? '−' : ''}{dollars(Math.abs(c.amount_cents))}</td>
+                  <td class="mono text-right">{c.tip_cents ? dollars(c.tip_cents) : ''}</td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </section>
+      {/if}
       {#if (r.drivers ?? []).length}
         <section>
           <h3 class="sec">Drivers</h3>

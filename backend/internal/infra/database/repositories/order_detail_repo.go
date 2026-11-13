@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"quiccpos/main/internal/domain/order"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -38,6 +40,9 @@ type OrderDetailExtras struct {
 	Channel       *OrderChannelRow     `json:"channel"`
 	Staff         *OrderPersonRow      `json:"staff"`
 	Printers      map[string]PrinterNm `json:"printers"`
+	// Prints: what each print job of the order printed, oldest first (the
+	// Pi's order.printed, agent 2.5.5 §2.10ag; [] from an older Pi).
+	Prints []order.OrderPrint `json:"prints"`
 }
 
 type OrderStatusRow struct {
@@ -49,22 +54,24 @@ type OrderStatusRow struct {
 }
 
 type OrderPaymentRow struct {
-	ID          string     `json:"id"`
-	Method      string     `json:"method"`
-	Status      string     `json:"status"`
-	AmountCents int64      `json:"amount_cents"`
-	TipCents    int64      `json:"tip_cents"`
-	Last4       string     `json:"last4,omitempty"`
-	AuthCode    string     `json:"auth_code,omitempty"`
-	Origin      string     `json:"origin,omitempty"`
-	RefundOf    string     `json:"refund_of,omitempty"`
-	ApprovedBy  string     `json:"approved_by,omitempty"`
-	Reason      string     `json:"reason,omitempty"`
-	Flags       []string   `json:"flags"`
-	StaffName   string     `json:"staff_name,omitempty"`
-	BatchID     *int64     `json:"batch_id"`
-	CapturedAt  *time.Time `json:"captured_at"`
-	ReceivedAt  time.Time  `json:"received_at"`
+	ID          string `json:"id"`
+	Method      string `json:"method"`
+	Status      string `json:"status"`
+	AmountCents int64  `json:"amount_cents"`
+	TipCents    int64  `json:"tip_cents"`
+	Last4       string `json:"last4,omitempty"`
+	// CardBrand: amex | discover | mastercard | visa | other ("" = not sent).
+	CardBrand  string     `json:"card_brand,omitempty"`
+	AuthCode   string     `json:"auth_code,omitempty"`
+	Origin     string     `json:"origin,omitempty"`
+	RefundOf   string     `json:"refund_of,omitempty"`
+	ApprovedBy string     `json:"approved_by,omitempty"`
+	Reason     string     `json:"reason,omitempty"`
+	Flags      []string   `json:"flags"`
+	StaffName  string     `json:"staff_name,omitempty"`
+	BatchID    *int64     `json:"batch_id"`
+	CapturedAt *time.Time `json:"captured_at"`
+	ReceivedAt time.Time  `json:"received_at"`
 }
 
 type OrderJournalRow struct {
@@ -121,7 +128,7 @@ var ErrOrderNotInStore = fmt.Errorf("order not found")
 // Extras loads the detail panel's data for one order of the store.
 func (r *OrderDetailRepository) Extras(ctx context.Context, tenantID, locationID, orderID uuid.UUID) (*OrderDetailExtras, error) {
 	out := &OrderDetailExtras{StatusHistory: []OrderStatusRow{}, Payments: []OrderPaymentRow{}, Journal: []OrderJournalRow{},
-		Flags: []OrderFlagRow{}, Printers: map[string]PrinterNm{}}
+		Flags: []OrderFlagRow{}, Printers: map[string]PrinterNm{}, Prints: []order.OrderPrint{}}
 	var staffID string
 	err := r.pool.QueryRow(ctx, `SELECT received_at, updated_at, agent_ack_at, agent_status, agent_batch_id,
 		       COALESCE(source_metadata->>'staff_id', '')
@@ -176,7 +183,7 @@ func (r *OrderDetailRepository) Extras(ctx context.Context, tenantID, locationID
 		out.Staff = &p
 	}
 
-	rows, err = r.pool.Query(ctx, `SELECT id::text, processor, status, amount_cents, tip_cents, last4, auth_code, origin,
+	rows, err = r.pool.Query(ctx, `SELECT id::text, processor, status, amount_cents, tip_cents, last4, card_brand, auth_code, origin,
 		       COALESCE(refund_of::text, ''), approved_by, reason, flags, COALESCE(staff_id::text, ''), batch_id,
 		       captured_at, received_at
 		FROM payments WHERE order_id = $1 ORDER BY COALESCE(captured_at, received_at), received_at`, orderID)
@@ -186,7 +193,7 @@ func (r *OrderDetailRepository) Extras(ctx context.Context, tenantID, locationID
 	for rows.Next() {
 		var p OrderPaymentRow
 		var sid string
-		if err := rows.Scan(&p.ID, &p.Method, &p.Status, &p.AmountCents, &p.TipCents, &p.Last4, &p.AuthCode, &p.Origin,
+		if err := rows.Scan(&p.ID, &p.Method, &p.Status, &p.AmountCents, &p.TipCents, &p.Last4, &p.CardBrand, &p.AuthCode, &p.Origin,
 			&p.RefundOf, &p.ApprovedBy, &p.Reason, &p.Flags, &sid, &p.BatchID, &p.CapturedAt, &p.ReceivedAt); err != nil {
 			rows.Close()
 			return nil, err
@@ -279,7 +286,26 @@ func (r *OrderDetailRepository) Extras(ctx context.Context, tenantID, locationID
 		out.Printers[id] = p
 	}
 	rows.Close()
-	return out, nil
+
+	rows, err = r.pool.Query(ctx, `SELECT event_id::text, mode, at, tickets FROM order_prints
+		WHERE order_id = $1 AND tenant_id = $2 AND location_id = $3 ORDER BY at, received_at LIMIT 200`, orderID, tenantID, locationID)
+	if err != nil {
+		return nil, fmt.Errorf("prints: %w", err)
+	}
+	for rows.Next() {
+		var p order.OrderPrint
+		var raw []byte
+		if err := rows.Scan(&p.EventID, &p.Mode, &p.At, &raw); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &p.Tickets); err != nil || p.Tickets == nil {
+			p.Tickets = []order.PrintTicket{}
+		}
+		out.Prints = append(out.Prints, p)
+	}
+	rows.Close()
+	return out, rows.Err()
 }
 
 // ListIDs answers the store's orders for Store › Orders, newest placed first

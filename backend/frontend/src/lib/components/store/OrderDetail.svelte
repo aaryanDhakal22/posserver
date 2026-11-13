@@ -7,6 +7,7 @@
   import Skeleton from '$lib/ui/Skeleton.svelte';
   import StatusBadge from '$lib/ui/StatusBadge.svelte';
   import {
+    brandLabel,
     channelLabel,
     childLabel,
     customerName,
@@ -14,7 +15,10 @@
     numberKind,
     orderNumber,
     phoneText,
+    printJobLabel,
+    printTicketText,
     stations,
+    takenBy as takenByText,
     tenderLabel,
     timeline,
     titleCase,
@@ -64,15 +68,13 @@
   const takenBy = $derived.by(() => {
     if (!d || !o) return '';
     const meta = o.source_metadata ?? {};
-    if (o.source === 'counter') {
-      if (meta.device_kind === 'callcenter') return String(meta.taken_by || 'Call center') + (d.staff?.name && !String(meta.taken_by ?? '').includes(d.staff.name) ? ` (${d.staff.name})` : '');
-      return (d.staff?.name || 'A cashier') + (meta.device_id ? ` · ${meta.device_id}` : '');
-    }
+    if (o.source === 'counter') return takenByText(o, d.staff?.name) || (meta.device_kind === 'callcenter' ? 'Call center' : 'A cashier');
     if (d.channel?.operator) return `${d.channel.operator} (call center)`;
     if (d.channel) return d.channel.kind === 'web' ? `The website (${d.channel.name})` : d.channel.name;
     if (o.source === 'online') return 'The online ordering vendor (Brygid)';
     return channelLabel(o);
   });
+  const prints = $derived(d?.prints ?? []);
   const tipTotal = $derived((d?.payments ?? []).reduce((n, p) => n + (p.amount_cents >= 0 ? p.tip_cents : 0), 0));
   const paid = $derived((d?.payments ?? []).filter((p) => p.status === 'captured' || p.status === 'refunded').reduce((n, p) => n + p.amount_cents, 0));
   const refundOwed = $derived(Number(o?.source_metadata?.refund_owed_cents ?? 0));
@@ -186,7 +188,7 @@
           <div class="pay border-b border-border">
             <div class="flex-1 min-w-0">
               <div class="font-medium">
-                {p.amount_cents < 0 ? 'Refund · ' : ''}{tenderLabel(p.method)}{#if p.last4}<span class="mono text-text2">{` •••• ${p.last4}`}</span>{/if}
+                {p.amount_cents < 0 ? 'Refund · ' : ''}{tenderLabel(p.method)}{#if brandLabel(p.card_brand)}<span data-testid="card-brand">{` · ${brandLabel(p.card_brand)}`}</span>{/if}{#if p.last4}<span class="mono text-text2">{` •••• ${p.last4}`}</span>{/if}
                 {#if p.status !== 'captured' && p.status !== 'refunded'}<Badge tone="warn" class="ml-1">{p.status}</Badge>{/if}
               </div>
               <div class="text-[12.5px] text-text2">
@@ -241,9 +243,24 @@
             <li><span class="font-medium">{t.name}</span><span class="text-text2">{` · ${t.lines.join(', ')}`}</span></li>
           {/each}
         </ul>
+        {#if prints.length}
+          <ul class="list-none m-0 mt-3 p-0 flex flex-col gap-1.5" data-testid="print-results">
+            {#each prints as j (j.event_id)}
+              <li class="text-[13px]">
+                <span class="mono text-text2 mr-1">{stepTime(j.at)}</span><span class="font-medium">{printJobLabel(j.mode)}</span>
+                {#each j.tickets as t, i (i)}
+                  <span class="text-text2">{' · '}</span><span
+                    class={t.result === 'failed' || t.result === 'skipped' ? 'text-bad' : t.result === 'rerouted' ? 'text-warn' : ''}
+                    title={[`${t.attempts} ${t.attempts === 1 ? 'try' : 'tries'}`, t.error, t.at ? new Date(t.at).toLocaleTimeString() : ''].filter(Boolean).join(' · ')}
+                    >{printTicketText(t)}</span>
+                {/each}
+              </li>
+            {/each}
+          </ul>
+        {/if}
         <p class="text-[12.5px] text-muted mt-2 mb-0">
           {d.agent_status?.printed_date ? `The Pi printed the tickets ${whenText(d.agent_status.printed_date)}.` : o.status === 'received' ? 'Not printed yet: the kitchen hasn’t accepted it.' : ''}
-          Where each line prints comes from the menu; the Pi doesn't send main each printer's result.
+          {prints.length ? 'What printed where, as the Pi reported it.' : 'Where each line prints comes from the menu; this Pi doesn’t report what printed (older Pi).'}
         </p>
       </section>
 
@@ -259,7 +276,7 @@
   {/if}
   {#snippet footer()}
     <Button icon="copy" onclick={link}>Copy link</Button>
-    <span class="text-[12.5px] text-muted self-center flex-1 min-w-[200px]">Reprint a receipt on the store's terminal or tablet: main can't ask the Pi to print yet.</span>
+    <span class="text-[12.5px] text-muted self-center flex-1 min-w-[200px]">Reprint a receipt on the store's terminal or tablet.</span>
   {/snippet}
 </Drawer>
 

@@ -187,8 +187,8 @@ async function seedOrders(s: TestStore): Promise<Record<string, string>> {
         line('Wings', 1099, { position: 1 }),
         line('Fries', 0, { position: 2, routing: 'none', printer_id: undefined, children: [{ id: randomUUID(), position: 0, name: 'No salt', quantity: 1, unit_price_cents: 0, line_total_cents: 0, mode: 'no' }] })
       ],
-      payments: [{ id: randomUUID(), method: 'card', amount_cents: 2494, tip_cents: 400, last4: '4242', auth_code: 'A1B2C3', at: at(40), staff_id: staffId }],
-      notes: '', placed_at: at(42), kitchen_order_number: 3, staff_id: staffId, device_id: 'terminal-1'
+      payments: [{ id: randomUUID(), method: 'card', amount_cents: 2494, tip_cents: 400, last4: '4242', auth_code: 'A1B2C3', brand: 'visa', at: at(40), staff_id: staffId }],
+      notes: '', placed_at: at(42), kitchen_order_number: 3, staff_id: staffId, device_id: 'terminal-1', device_name: 'Counter 1'
     }),
     placed({
       id: delivery, source: 'counter', source_event_id: `cc-${delivery.slice(0, 8)}`, status: 'accepted', currency: 'USD',
@@ -211,7 +211,12 @@ async function seedOrders(s: TestStore): Promise<Record<string, string>> {
     status(delivery, 'ready', 20),
     status(delivery, 'on_delivery', 15, { driver_name: 'Mike' }),
     status(delivery, 'delivered', 5, { driver_name: 'Mike' }),
-    { event_id: randomUUID(), type: 'order.void', order_id: voided, at: at(18), batch_id: 1, reason: 'Customer left', staff_id: staffId }
+    { event_id: randomUUID(), type: 'order.void', order_id: voided, at: at(18), batch_id: 1, reason: 'Customer left', staff_id: staffId },
+    // What the Pi printed (agent 2.5.5): the panel's print results.
+    { event_id: randomUUID(), type: 'order.printed', order_id: counter, mode: 'kitchen', at: at(41), tickets: [
+      { kind: 'station', printer: 'Kitchen', result: 'printed', printed_on: 'Kitchen', attempts: 1, at: at(41) },
+      { kind: 'receipt', printer: 'Front', result: 'rerouted', printed_on: 'Kitchen', by: 'auto', attempts: 2, at: at(41) }
+    ] }
   ]);
   return { counter, delivery, voided };
 }

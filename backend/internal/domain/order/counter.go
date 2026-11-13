@@ -55,12 +55,35 @@ type CounterSnapshot struct {
 	// source_metadata for the per-agent report; empty for a store terminal.
 	DeviceKind string `json:"device_kind"`
 	TakenBy    string `json:"taken_by"`
+	// DeviceName / StaffName (agent 2.5.5, §2.10ag): the paired terminal's
+	// name and the cashier's name as the Pi had them when the order was
+	// taken, kept in source_metadata for "Carlos on Counter 1". An older Pi
+	// sends them only inside source_metadata.terminal (read from there).
+	DeviceName string `json:"device_name"`
+	StaffName  string `json:"staff_name"`
 	// Payments as the Pi records them (Snapshot.Payments is the summary
 	// shape; a counter snapshot carries the full payment).
 	CounterPayments []CounterPayment `json:"payments"`
 	// CustomerID: the store customer the order is for (terminal 1d; the Pi's
 	// id of it), kept in source_metadata.customer_id.
 	CustomerID string `json:"customer_id"`
+}
+
+// terminalName is a name the Pi sent for who took the order: the top-level
+// field, else (an older Pi) the same key in source_metadata.terminal;
+// trimmed, "" when blank or longer than 120 characters.
+func (s CounterSnapshot) terminalName(key, top string) string {
+	n := strings.TrimSpace(top)
+	if n == "" {
+		if t, ok := s.SourceMeta["terminal"].(map[string]any); ok {
+			n, _ = t[key].(string)
+			n = strings.TrimSpace(n)
+		}
+	}
+	if utf8.RuneCountInString(n) > 120 {
+		return ""
+	}
+	return n
 }
 
 // CounterPayment is one payment (or, negative, refund) taken at the counter.
@@ -85,6 +108,10 @@ type CounterPayment struct {
 	// carried), stored in the Pi's open batch. Also read from the
 	// order.payment event itself.
 	EarlierDay bool `json:"earlier_day"`
+	// Brand (main 4.0.6, agent 2.5.5 §2.10ag): a card payment's brand as
+	// Square named it (amex | discover | mastercard | visa | other); absent
+	// from an older Pi (kept blank).
+	Brand string `json:"brand"`
 }
 
 // MoneyFlag is a problem main found in money it stored anyway (M-2 / M-7 /
@@ -187,6 +214,8 @@ type CheckedPayment struct {
 	BatchID    *int64
 	// EarlierDay: a refund on an earlier day's order (RuleOrder.Earlier).
 	EarlierDay bool
+	// Brand: a card payment's brand (NormCardBrand; "" = not given).
+	Brand string
 	// Flags found by Check (the repo adds its own). By = who took / gave it
 	// and People = the store's staff (for the refunds before it), both from
 	// main's staff table: PaymentFlags reads them (money_rules.go).
@@ -266,7 +295,46 @@ func (p CounterPayment) Check() (CheckedPayment, error) {
 	}
 	return CheckedPayment{ID: id, Method: p.Method, Status: st, Amount: Money(p.AmountCents), Tip: Money(p.TipCents),
 		Last4: p.Last4, AuthCode: p.AuthCode, Ref: p.Ref, At: at, StaffID: staffID,
-		ClientKey: strings.TrimSpace(p.ClientKey), RefundOf: refundOf, ApprovedBy: p.ApprovedBy, BatchID: p.BatchID, EarlierDay: p.EarlierDay, Flags: flags}, nil
+		ClientKey: strings.TrimSpace(p.ClientKey), RefundOf: refundOf, ApprovedBy: p.ApprovedBy, BatchID: p.BatchID, EarlierDay: p.EarlierDay, Flags: flags,
+		Brand: cardBrandOf(p.Method, p.Brand)}, nil
+}
+
+// Card brands (payments.card_brand): what Square calls a card, as the Pi
+// sends it (agent §2.10ag).
+const (
+	CardBrandAmex       = "amex"
+	CardBrandDiscover   = "discover"
+	CardBrandMastercard = "mastercard"
+	CardBrandVisa       = "visa"
+	CardBrandOther      = "other"
+)
+
+// NormCardBrand maps a brand as the Pi or Square names it to ours: "" stays
+// "" (not given), anything unknown is CardBrandOther.
+func NormCardBrand(b string) string {
+	k := strings.ToLower(strings.TrimSpace(b))
+	k = strings.NewReplacer(" ", "", "_", "", "-", "").Replace(k)
+	switch k {
+	case "":
+		return ""
+	case "amex", "americanexpress":
+		return CardBrandAmex
+	case "discover", "discoverdiners", "diners", "dinersclub":
+		return CardBrandDiscover
+	case "mastercard", "mc":
+		return CardBrandMastercard
+	case "visa":
+		return CardBrandVisa
+	}
+	return CardBrandOther
+}
+
+// cardBrandOf is a payment's stored brand: only a card tender has one.
+func cardBrandOf(method, brand string) string {
+	if method != "card" && method != "manual_card" && method != "square_app" {
+		return ""
+	}
+	return NormCardBrand(brand)
 }
 
 // CounterOrder is a counter snapshot made into an order (+ its payments and
@@ -390,6 +458,12 @@ func NewCounterOrder(sc Scope, s CounterSnapshot, raw []byte) (*CounterOrder, er
 	}
 	if s.TakenBy != "" && len(s.TakenBy) <= 120 {
 		meta["taken_by"] = s.TakenBy
+	}
+	if n := s.terminalName("device_name", s.DeviceName); n != "" {
+		meta["device_name"] = n
+	}
+	if n := s.terminalName("staff_name", s.StaffName); n != "" {
+		meta["staff_name"] = n
 	}
 	if cid, err := uuid.Parse(s.CustomerID); err == nil {
 		meta["customer_id"] = cid.String()

@@ -2,7 +2,7 @@
   import { base } from '$app/paths';
   import { dollars, type StoreOrder } from '$lib/api';
   import StatusBadge from '$lib/ui/StatusBadge.svelte';
-  import { channelLabel, customerName, externalRef, numberKind, orderNumber, titleCase, typeLabel, whenText } from '$lib/store/orders';
+  import { channelLabel, customerName, externalRef, numberKind, orderNumber, takenBy, titleCase, typeLabel, whenText } from '$lib/store/orders';
 
   // The orders table (read only: the store's Pi decides status, numbers and drivers; main mirrors them).
   // A row opens the order's detail panel: `onopen` on the Orders page, else a link to it (?order=<id>).
@@ -22,10 +22,10 @@
 </script>
 
 <div class="overflow-x-auto">
-  <table class="tbl min-w-[820px]">
+  <table class="tbl min-w-[920px]">
     <thead>
       <tr>
-        <th>Placed</th><th>No.</th><th>Customer</th><th>Type</th><th>Status</th><th>Driver</th><th class="!text-right">Total</th>
+        <th>Placed</th><th>No.</th><th>Customer</th><th>Type</th><th>Taken by</th><th>Status</th><th>Driver</th><th class="!text-right">Total</th>
       </tr>
     </thead>
     <tbody>
@@ -40,6 +40,7 @@
           </td>
           <td>{customerName(o)}</td>
           <td class="whitespace-nowrap">{typeLabel(o.fulfillment?.type)}<span class="block text-[11.5px] text-muted">{channelLabel(o)}</span></td>
+          <td class="text-text2" data-testid="taken-by">{takenBy(o)}</td>
           <td><StatusBadge order={o} /></td>
           <td>{o.driver_name ? titleCase(o.driver_name) : ''}</td>
           <td class="mono text-right">
@@ -49,7 +50,7 @@
           </td>
         </tr>
       {:else}
-        <tr><td colspan="7" class="text-muted text-center !py-8">{empty}</td></tr>
+        <tr><td colspan="8" class="text-muted text-center !py-8">{empty}</td></tr>
       {/each}
     </tbody>
   </table>

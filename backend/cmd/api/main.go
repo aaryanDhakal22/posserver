@@ -398,6 +398,7 @@ func main() {
 	// 2.2.0: the tablet sets the delivery radius through the Pi.
 	requester.RegisterInbound(rpc.MsgLocationRadius, geoService.HandleRadius)
 	floorService.OnDeliveryRun(repositories.NewDeliveryRunStore(pool))
+	floorService.OnPrints(repositories.NewOrderPrintStore(pool)) // order.printed (agent §2.10ag)
 	mainLogger.Info().Str("geo_providers", geoService.Providers().Name()).Msg("geo worker configured")
 	safego.Loop(ctx, "geo.worker", geoService.Run)
 

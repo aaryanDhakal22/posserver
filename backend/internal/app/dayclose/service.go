@@ -41,6 +41,8 @@ type Repo interface {
 	GetZ(ctx context.Context, locationID, id uuid.UUID) (dayclose.Z, error)
 	ListDrawers(ctx context.Context, locationID uuid.UUID, date *time.Time, limit int) ([]dayclose.Drawer, error)
 	GetDrawer(ctx context.Context, locationID, id uuid.UUID) (dayclose.Drawer, []dayclose.Movement, error)
+	// CardPayments: the batch's card payments, oldest first (main §2.5zn).
+	CardPayments(ctx context.Context, locationID uuid.UUID, batch int64) ([]dayclose.CardPayment, error)
 }
 
 // ErrNotFound: the store has no such drawer session / Z report.
@@ -241,6 +243,12 @@ func (s *Service) Drawers(ctx context.Context, locationID uuid.UUID, date *time.
 		limit = 200
 	}
 	return s.repo.ListDrawers(ctx, locationID, date, limit)
+}
+
+// CardPayments lists a batch's card payments with their brand (the day
+// close's card list).
+func (s *Service) CardPayments(ctx context.Context, locationID uuid.UUID, batch int64) ([]dayclose.CardPayment, error) {
+	return s.repo.CardPayments(ctx, locationID, batch)
 }
 
 // Drawer is one drawer session with its pay-ins / pay-outs.
