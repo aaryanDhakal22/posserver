@@ -171,10 +171,12 @@ def test_status_payment_void(store) -> None:
     assert _get(store.key, oid)["status"] == "cancelled"
 
 
-def test_void_only_for_counter_orders_payments_for_any(store, make_store, publish) -> None:
-    """A void is for counter orders only; a payment the terminal took is kept
-    on any order of the store (an online "pay at pickup" order paid in cash at
-    the counter), refunds as negative ones, idempotent by payment id."""
+def test_void_counter_and_online_orders_payments_for_any(store, make_store, publish) -> None:
+    """A void is for counter orders and (agent 2.5.3) online vendor orders the
+    Pi voided at a terminal (cash ones; the Pi refuses the paid-online ones);
+    a payment the terminal took is kept on any order of the store (an online
+    "pay at pickup" order paid in cash at the counter), refunds as negative
+    ones, idempotent by payment id."""
     o = store.order()
     publish(o)
     online = wait_order(store.key, o["order_id"])
@@ -186,12 +188,18 @@ def test_void_only_for_counter_orders_payments_for_any(store, make_store, publis
     refund = {"event_id": str(uuid.uuid4()), "type": "order.payment", "order_id": oid,
               "payment": {**pay, "id": str(uuid.uuid4()), "amount_cents": -200, "tip_cents": 0}}
     again = {**p, "event_id": str(uuid.uuid4())}  # the same payment id
-    assert _send(store.key, [v, p, refund, again]) == {v["event_id"]: "invalid", p["event_id"]: "applied",
-                                                       refund["event_id"]: "applied", again["event_id"]: "duplicate"}
+    assert _send(store.key, [p, refund, again]) == {p["event_id"]: "applied", refund["event_id"]: "applied",
+                                                    again["event_id"]: "duplicate"}
     after = _get(store.key, oid)
     assert after["status"] != "cancelled"
     assert sorted(x["amount_cents"] for x in after["payments"]) == sorted([*(x["amount_cents"] for x in before), 1234, -200])
     assert after["money"] == online["money"] and after["items"] == online["items"], "the snapshot never moves"
+
+    # The Pi voids it (an online cash order voided at a terminal, 2.5.3): cancelled, once.
+    assert _send(store.key, [v]) == {v["event_id"]: "applied"}
+    assert _get(store.key, oid)["status"] == "cancelled"
+    again_v = {**v, "event_id": str(uuid.uuid4())}
+    assert _send(store.key, [again_v]) == {again_v["event_id"]: "stale"}
 
     # Another store's Pi can't pay this order.
     other = make_store()
