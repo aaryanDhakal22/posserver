@@ -59,19 +59,23 @@
   const attention = $derived.by<Attention[]>(() => {
     if (!data) return [];
     const out: Attention[] = [];
+    // One line per store: an offline Pi that also makes main refuse its online orders says both.
+    const offIds = new Set(offline.map((r) => r.tenant.id));
     for (const r of offline) {
       out.push({
         key: 'off-' + r.tenant.id,
         tone: 'bad',
-        tag: 'Offline',
+        tag: r.kitchenOffline ? 'Offline · orders refused' : 'Offline',
         store: r.tenant.name,
-        text: r.lastSeen ? `Pi hasn't checked in for ${durationSince(r.lastSeen)}` : "Pi has a key but hasn't connected yet",
+        text:
+          (r.lastSeen ? `Pi hasn't checked in for ${durationSince(r.lastSeen)}` : "Pi has a key but hasn't connected yet") +
+          (r.kitchenOffline ? ' — online orders are being refused; if its Pi was retired, revoke the old key' : ''),
         href: `${base}/admin/tenants/${r.tenant.id}`,
         cta: 'Open store'
       });
     }
     for (const r of rows) {
-      if (!r.kitchenOffline) continue;
+      if (!r.kitchenOffline || offIds.has(r.tenant.id)) continue;
       out.push({
         key: 'ko-' + r.tenant.id,
         tone: 'bad',

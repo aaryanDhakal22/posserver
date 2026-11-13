@@ -204,6 +204,25 @@
       toast.error(err);
     }
   }
+  /** What an entry changes, in words (the owner can't tell 200 "item" rows apart otherwise). */
+  function entryChanges(e: ViewEntry): string {
+    const out: string[] = [];
+    if (e.hidden) out.push('hidden');
+    if (e.kind === 'item' && e.display_name) out.push('renamed');
+    if (e.description) out.push('description');
+    if (e.photo) out.push('photo');
+    if (e.category) out.push(`in “${e.category}”`);
+    const sp = Object.keys(e.extra?.size_prices ?? {}).length;
+    if (sp) out.push(`${sp} size price${sp === 1 ? '' : 's'}`);
+    const lb = Object.keys(e.extra?.labels ?? {}).length;
+    if (lb) out.push(`${lb} label${lb === 1 ? '' : 's'}`);
+    return out.join(' · ');
+  }
+  let entryQ = $state('');
+  const shownEntries = $derived.by(() => {
+    const q = entryQ.trim().toLowerCase();
+    return q ? entries.filter((e) => (entryTitle(e) + ' ' + entryChanges(e)).toLowerCase().includes(q)) : entries;
+  });
   function entryTitle(e: ViewEntry): string {
     if (e.kind === 'map') return `“${e.extra.vendor_name}” → ${itemName(e.anchor.item_ids[0])}`;
     const names = e.anchor.item_ids.map(itemName).join(' + ');
@@ -423,16 +442,19 @@
             <Button size="sm" icon="layers" onclick={() => newEntry('merge')}>Combine items</Button>
             <Button size="sm" icon="plus" onclick={() => newEntry('augment')}>Add a deal</Button>
           </div>
+          {#if entries.length > 8}
+            <SearchInput id="vw-entry-q" label="Find a change" placeholder="Find a change ({entries.length})" bind:value={entryQ} class="max-w-[360px]" />
+          {/if}
           <ul class="flex flex-col gap-1.5">
-            {#each entries as e (e.id)}
+            {#each shownEntries as e (e.id)}
               <li class="subcard flex items-center gap-2 px-3 py-2">
                 <Badge tone="mute">{e.kind === 'item' ? 'item' : e.kind === 'merge' ? 'combined' : 'deal'}</Badge>
-                <button type="button" class="flex-1 min-w-0 truncate text-left hover:text-accent" onclick={() => editEntry(e)}>{entryTitle(e)}</button>
+                <button type="button" class="flex-1 min-w-0 truncate text-left hover:text-accent" onclick={() => editEntry(e)}>{entryTitle(e)}{#if entryChanges(e)}<span class="text-muted text-[12.5px]">{` · ${entryChanges(e)}`}</span>{/if}</button>
                 {#if e.price_override_cents != null}<span class="mono text-text2">{dollars(e.price_override_cents)}</span>{/if}
                 <Button size="xs" variant="ghost" icon="x" aria-label="Remove this change" onclick={() => deleteEntry(e)} />
               </li>
             {:else}
-              <li class="text-[13px] text-muted">None — this view shows your menu as it is (with the rules above).</li>
+              <li class="text-[13px] text-muted">{entries.length ? 'No change matches.' : 'None — this view shows your menu as it is (with the rules above).'}</li>
             {/each}
           </ul>
         </section>

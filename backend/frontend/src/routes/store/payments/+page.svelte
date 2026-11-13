@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { base } from '$app/paths';
   import { onMount } from 'svelte';
   import { page } from '$app/state';
   import { storeApi, dollars, plural, type SquareStatus, type CardHoldRow, type HoldStatus } from '$lib/api';
@@ -188,7 +189,7 @@
 
 <svelte:head><title>Payments — quicc</title></svelte:head>
 
-<PageHeader title="Payments" subtitle="Card orders from the website are held on the card at checkout and charged when they're done." />
+<PageHeader crumbs={[{ label: 'Settings', href: base + '/store/settings' }, { label: 'Payments' }]} title="Payments" subtitle="Card orders from the website are held on the card at checkout and charged when they're done." />
 
 <div class="flex flex-col gap-4 max-w-[900px]">
   <Card title="Square" subtitle="Online card payments go to your Square account.">
@@ -318,7 +319,7 @@
           {#each holds as h (h.order_id)}
             <tr>
               <td>
-                <div class="mono">{h.order_ref}</div>
+                <a class="mono text-accent hover:underline" href="{base}/store/orders?order={h.order_id}" title="Open the order">{h.order_ref}</a>
                 <div class="text-muted text-[12px] whitespace-nowrap">{h.type === 'delivery' ? 'Delivery' : 'Pickup'} · {time(h.placed_at)}</div>
               </td>
               <td>{h.customer || '—'}</td>

@@ -274,7 +274,7 @@ export function timeline(d: OrderDetail): TimelineStep[] {
   };
   add(o.placed_at, 'Placed', channelLabel(o) + (customerName(o) ? ` · ${customerName(o)}` : ''));
   if (Math.abs(new Date(d.received_at).getTime() - new Date(o.placed_at).getTime()) > 60_000)
-    add(d.received_at, 'Reached quicc', 'main stored it');
+    add(d.received_at, 'Synced to quicc', 'the Pi sent it later than it was placed', 'mute');
   if (st.accepted_at)
     add(st.accepted_at, st.auto_accepted ? 'Accepted (automatically)' : 'Accepted', [
       o.kitchen_order_number != null ? `${numberKind(o)} ${o.kitchen_order_number}` : '',

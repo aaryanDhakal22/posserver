@@ -59,7 +59,7 @@
 </script>
 
 {#if who}
-  <AppShell title={who.tenant.name} subtitle={who.location.name} {nav} onsignout={signOut}>
+  <AppShell title={who.tenant.name} subtitle={who.location.name && who.location.name !== who.tenant.name ? who.location.name : "Store manager"} {nav} onsignout={signOut}>
     {#snippet banner()}
       {#if who.impersonated}
         <div class="flex flex-wrap items-center justify-center gap-2.5 px-4 py-2 text-[13px] font-semibold" style="background:#AC94F4;color:#241B47">

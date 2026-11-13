@@ -442,7 +442,7 @@
             <div class="kv">
               <span>Printers</span>
               <span class="mono {info.printersDown ? 'text-bad' : ''}">
-                {info.printersUp === null ? '—' : `${info.printersUp} / ${info.printersUp + (info.printersDown ?? 0)} up`}
+                {info.printersUp === null ? '—' : `${info.printersUp} / ${info.printersUp + (info.printersDown ?? 0)} up${pi.pi === 'offline' ? ' (last report)' : ''}`}
               </span>
             </div>
             {#if info.problems.length}

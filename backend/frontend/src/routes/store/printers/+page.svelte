@@ -220,8 +220,8 @@
   subtitle={pi === 'none'
     ? PI_NOT_LINKED
     : live && !live.agent_online
-      ? 'The Pi is offline — live status is unavailable'
-      : 'Live status from the Pi · checked every 25 s'}
+      ? 'The Pi is offline, so there is no live status. Paper width: most printers take 80 mm; if a long line wraps, run the width test on the Pi, or pick 42.'
+      : 'Live status from the Pi · checked every 25 s. Paper width: most printers take 80 mm; if a long line wraps, run the width test on the Pi, or pick 42.'}
 >
   {#snippet actions()}
     <Button
@@ -322,7 +322,7 @@
                 </div>
               {/if}
             </div>
-            <Badge tone={st.tone} dot>{st.label}</Badge>
+            {#if live?.agent_online || pi === 'none'}<Badge tone={st.tone} dot>{st.label}</Badge>{/if}
           </div>
           <div class="flex flex-wrap gap-1.5 items-center min-h-[22px]">
             {#if p.is_receipt}<Badge tone="brand">Receipts</Badge>{/if}
@@ -336,11 +336,8 @@
               value={p.print_columns || 48}
               onchange={(e) => setWidth(p, Number((e.currentTarget as HTMLSelectElement).value))}
             >
-              {#each PRINT_WIDTHS as w (w.cols)}<option value={w.cols}>{w.label}</option>{/each}
+              {#each PRINT_WIDTHS as w (w.cols)}<option value={w.cols}>{w.label.replace(/ \(\d+ dots\)$/, "")}</option>{/each}
             </select>
-            <p class="help">
-              Most printers take 80 mm paper. If a long line wraps on this printer, run the width test on the Pi's Printers page, or pick 42.
-            </p>
           </div>
           {#if st.down}
             <p class="m-0 text-[13px] text-bad">

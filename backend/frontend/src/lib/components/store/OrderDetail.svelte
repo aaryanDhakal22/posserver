@@ -66,7 +66,7 @@
     const meta = o.source_metadata ?? {};
     if (o.source === 'counter') {
       if (meta.device_kind === 'callcenter') return String(meta.taken_by || 'Call center') + (d.staff?.name && !String(meta.taken_by ?? '').includes(d.staff.name) ? ` (${d.staff.name})` : '');
-      return (d.staff?.name || 'A cashier') + (meta.device_id ? ` (terminal ${meta.device_id})` : '');
+      return (d.staff?.name || 'A cashier') + (meta.device_id ? ` · ${meta.device_id}` : '');
     }
     if (d.channel?.operator) return `${d.channel.operator} (call center)`;
     if (d.channel) return d.channel.kind === 'web' ? `The website (${d.channel.name})` : d.channel.name;
@@ -92,7 +92,10 @@
     order_cancelled: 'Paid after it was cancelled',
     zero_amount: 'A $0 payment',
     payment_conflict: 'Payment id used twice',
-    changed_after_z: 'Changed after the day closed'
+    changed_after_z: 'Changed after the day closed',
+    void_needs_manager: 'Void without a manager',
+    refund_exceeds_paid: 'Refunded more than was paid',
+    refund_exceeds_tender: 'Cash back over the order’s cash'
   };
 
   function lineMoney(l: OrderLine): string {
