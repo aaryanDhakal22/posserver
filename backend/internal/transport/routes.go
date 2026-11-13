@@ -285,6 +285,10 @@ func routeTable(d RouterDeps) []routeDef {
 	operatorH := handler.NewOperatorHandler(d.OperatorService, d.MenuService, d.Meters, d.Logger)
 	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
 	siteH := handler.NewSiteHandler(d.Site, d.Logger)
+	if d.Site != nil { // store_config carries the store's receipt logo
+		sseH.SetReceiptLogos(d.Site)
+		cfgPub.SetReceiptLogos(d.Site)
+	}
 	squareH := handler.NewSquareHandler(d.Square, d.CardHolds, d.AppEnv, d.Logger)
 	customersH := handler.NewCustomersHandler(d.Customers, d.TenancyService.GetLocation, d.Logger)
 	accountH := handler.NewAccountHandler(d.Customers, d.OrderPort, d.Receipts, d.FakeCodes, d.FakeMail, d.AppEnv, d.Logger)
@@ -464,6 +468,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", storePrefix+"/agent/app/releases/:code/apk", "device", "Download a tablet-app APK (?app=quibase) — agent keys only", appRelH.APK, device, agentOnly),
 		def("GET", storePrefix+"/agent/customers", "device", "The store's customer changes for the Pi's offline copy (?since=<cursor>&limit) — agent keys only", customersH.Feed, device, agentOnly),
 		def("GET", storePrefix+"/agent/terminal-config", "device", "The counter terminal's settings + active staff with PIN hashes (ETag) — agent keys only", staffH.TerminalConfig, device, agentOnly),
+		def("GET", storePrefix+"/agent/receipt-logo", "device", "The store's published Website logo for the Pi's receipts (PNG/JPEG/WebP bytes, ETag, 304; 404 no_logo when none or SVG) — agent keys only", siteH.AgentReceiptLogo, device, agentOnly),
 		def("GET", storePrefix+"/agent/counter-menu", "device", "The counter view's build + layout + the counter's pricing (ETag, gzip) — agent keys only", staffH.CounterMenu, device, agentOnly, channelGzip),
 		def("POST", storePrefix+"/agent/revoke", "device", "Agent self-revoke (kills its own key) — agent keys only", storeH.AgentSelfRevoke, device, agentOnly),
 		def("POST", storePrefix+"/agent/tablet-tokens", "device", "Mint a tablet's diagnostics report token {tablet_id, tablet_name} — agent keys only", diagH.MintTabletToken, device, agentOnly),

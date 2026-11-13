@@ -236,6 +236,11 @@ func (s *Service) Publish(ctx context.Context, locationID uuid.UUID, by string) 
 	}
 	s.logger.Info().Str("location_id", locationID.String()).Int64("version", v).Str("by", by).Msg("website published")
 	s.dropUnused(ctx, locationID)
+	if tenantID, err := s.tenantOf(ctx, locationID); err == nil {
+		for _, fn := range s.onPublished {
+			fn(ctx, tenantID, locationID)
+		}
+	}
 	return s.Website(ctx, locationID)
 }
 

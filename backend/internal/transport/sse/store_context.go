@@ -23,6 +23,20 @@ type StoreContext struct {
 	Tenant   TenantContext    `json:"tenant"`
 	Location LocationContext  `json:"location"`
 	Printers []PrinterContext `json:"printers"`
+	// ReceiptLogo is the store's published Website logo for the top of the
+	// Pi's receipts (PNG / JPEG / WebP only; the bytes come from GET
+	// /store/v1/agent/receipt-logo). Left out (= null) when the store has
+	// none or it is an SVG, so the frame stays byte-identical for older
+	// agents (golden).
+	ReceiptLogo *ReceiptLogoContext `json:"receipt_logo,omitempty"`
+}
+
+// ReceiptLogoContext names the receipt logo: ETag is the quoted HTTP ETag
+// the route answers with (send it back as If-None-Match).
+type ReceiptLogoContext struct {
+	ID          string `json:"id"`
+	ETag        string `json:"etag"`
+	ContentType string `json:"content_type"`
 }
 
 type TenantContext struct {

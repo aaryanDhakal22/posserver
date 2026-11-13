@@ -497,6 +497,10 @@ func main() {
 		siteService.SetPreviewOrigin("http://{host}:5173")
 	}
 	siteService.SetWebChannels(channelService)
+	// The published Website logo prints on the Pi's receipts: store_config
+	// carries it, and a publish pushes the fresh store_config.
+	storeConfigPub.SetReceiptLogos(siteService)
+	siteService.OnPublished(storeConfigPub.Publish)
 	channelService.SetSites(siteService)
 	// Email receipts for web orders (weborder stage 2).
 	mailSender, fakeMail, mailFrom := receipts.SenderFromEnv(ctx, cfg.AppConfig.AppEnv, lgr)

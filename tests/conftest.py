@@ -65,8 +65,10 @@ XDIST_WORKER = os.getenv("PYTEST_XDIST_WORKER", "")
 _WORKER_NUM = int(XDIST_WORKER[2:]) if XDIST_WORKER.startswith("gw") else 0
 # Each worker draws order_ids from its own block above the data.py fixtures
 # (1001-1006 + RUN_OFFSET), so ids never collide inside a run — the absence
-# checks look an id up across every tenant.
-_ORDER_IDS = itertools.count(RUN_OFFSET + 1100 + (_WORKER_NUM % 4) * 2000)
+# checks look an id up across every tenant. 1,100 ids per worker, 8 workers
+# (the gate's xdist count) inside one run's 10,000 (a `% 4` once let gw3 and
+# gw7 share a block: test_routing found the other worker's order).
+_ORDER_IDS = itertools.count(RUN_OFFSET + 1100 + (_WORKER_NUM % 8) * 1100)
 
 
 # ---------------------------------------------------------------------------

@@ -67,6 +67,7 @@ type Service struct {
 	baseDomain string
 	// previewOrigin turns a host into the preview's origin ("" = https://{host}).
 	previewOrigin string
+	onPublished   []func(ctx context.Context, tenantID, locationID uuid.UUID)
 	logger        zerolog.Logger
 }
 
