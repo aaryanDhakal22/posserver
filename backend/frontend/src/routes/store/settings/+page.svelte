@@ -223,12 +223,13 @@
     font-size: 15px;
   }
   .tile-sum {
-    display: block;
+    display: -webkit-box;
     margin-top: 2px;
     font-size: 13px;
     color: var(--muted);
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
   }
 </style>

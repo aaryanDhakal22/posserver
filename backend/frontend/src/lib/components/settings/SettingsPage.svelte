@@ -69,7 +69,9 @@
 
 <svelte:head><title>{title} — Settings — quicc</title></svelte:head>
 
-<PageHeader crumbs={[{ label: 'Settings', href: base + '/store/settings' }, { label: title }]} {title} {subtitle} {actions} />
+<div class="settings-body">
+  <PageHeader crumbs={[{ label: 'Settings', href: base + '/store/settings' }, { label: title }]} {title} {subtitle} {actions} />
+</div>
 
 <div class="settings-body">
   {#if loading}

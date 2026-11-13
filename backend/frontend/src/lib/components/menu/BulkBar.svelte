@@ -137,7 +137,7 @@
 {#if n}
   <div class="bulkbar" role="region" aria-label="Bulk edit" data-testid="bulk-bar">
     <span class="font-semibold whitespace-nowrap" data-testid="bulk-count">{items(n)} selected</span>
-    <div class="flex flex-wrap gap-2 flex-1 justify-end">
+    <div class="bulk-actions">
       <Button size="sm" icon="printer" onclick={() => openDialog('printer')} disabled={busy}>Printer…</Button>
       <Button size="sm" icon="layers" onclick={() => openDialog('move')} disabled={busy}>Move to…</Button>
       <Button size="sm" icon="percent" onclick={() => openDialog('price')} disabled={busy}>Change prices…</Button>
@@ -214,8 +214,11 @@
         {#each preview.slice(0, 8) as p (p.item.id)}
           <div class="pv-item">
             <span class="font-medium truncate">{p.item.name}</span>
-            <span class="text-[13px] text-text2 mono">
-              {#each p.rows as r, i (i)}{#if i}<span class="text-muted"> · </span>{/if}{#if r.label}<span class="text-muted">{r.label} </span>{/if}{dollars(r.from)} → <b class={r.to === null ? 'text-bad' : ''}>{r.to === null ? 'below $0' : dollars(r.to)}</b>{/each}
+            <span class="pv-rows text-[13px] text-text2">
+              {#each p.rows as r, i (i)}
+                <span class="text-muted">{r.label}</span>
+                <span class="mono">{dollars(r.from)} → <b class={r.to === null ? 'text-bad' : ''}>{r.to === null ? 'below $0' : dollars(r.to)}</b></span>
+              {/each}
             </span>
           </div>
         {/each}
@@ -246,6 +249,24 @@
     border-radius: 14px;
     box-shadow: var(--shadow);
   }
+  .bulk-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    flex: 1;
+    justify-content: flex-end;
+  }
+  @media (max-width: 640px) {
+    .bulkbar {
+      flex-direction: column;
+      align-items: stretch;
+      bottom: 8px;
+    }
+    .bulk-actions {
+      justify-content: flex-start;
+      gap: 6px;
+    }
+  }
   .preview {
     display: flex;
     flex-direction: column;
@@ -260,6 +281,12 @@
   .pv-item {
     display: flex;
     flex-direction: column;
+    gap: 2px;
     min-width: 0;
+  }
+  .pv-rows {
+    display: grid;
+    grid-template-columns: max-content max-content;
+    gap: 0 14px;
   }
 </style>
