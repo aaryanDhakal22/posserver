@@ -86,3 +86,30 @@ func (h *MenuViewHandler) MeDeleteLayout(c *echo.Context) error {
 	}
 	return c.NoContent(http.StatusNoContent)
 }
+
+// POST /store/v1/me/menu/views/:id/layout/remove — take buttons {where_kind,
+// where, page, row, col} and flows (bank item ids) out of a counter view's
+// layout, saved when that adds no problem (the layout may keep others).
+// → {buttons, flows} removed; 422 invalid_layout when it would add one.
+func (h *MenuViewHandler) MeRemoveFromLayout(c *echo.Context) error {
+	_, lid, _ := meScope(c)
+	id, ok := idParam(c, "id")
+	if !ok {
+		return badID(c)
+	}
+	var body struct {
+		Buttons []menuview.ButtonRef `json:"buttons"`
+		Flows   []string             `json:"flows"`
+	}
+	if err := echo.BindBody(c, &body); err != nil {
+		return badBody(c)
+	}
+	if len(body.Buttons)+len(body.Flows) == 0 || len(body.Buttons) > 5000 || len(body.Flows) > menuview.MaxFlows {
+		return c.JSON(http.StatusBadRequest, errCode("name 1..5000 buttons or flows", "bad_request"))
+	}
+	r, err := h.svc.RemoveFromLayout(c.Request().Context(), lid, id, body.Buttons, body.Flows)
+	if err != nil {
+		return h.layoutErr(c, err)
+	}
+	return c.JSON(http.StatusOK, r)
+}

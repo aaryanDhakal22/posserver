@@ -34,7 +34,7 @@
   let loading = $state(true);
 
   async function loadFloor() {
-    [orders, floor] = await Promise.all([storeApi<StoreOrder[]>('/me/orders?limit=100'), storeApi<StoreFloor>('/me/floor')]);
+    [orders, floor] = await Promise.all([storeApi<StoreOrder[]>('/me/orders?sort=placed&limit=100'), storeApi<StoreFloor>('/me/floor')]);
   }
   async function loadLive() {
     ({ live, pi } = await loadPiStatus());
@@ -48,7 +48,7 @@
     return () => clearInterval(t);
   });
 
-  const today = $derived(orders.filter((o) => isToday(o.received_at)));
+  const today = $derived(orders.filter((o) => isToday((o as StoreOrder & { placed_at?: string }).placed_at ?? o.received_at)));
   const count = (b: string) => today.filter((o) => orderBucket(o) === b).length;
   const sales = $derived(today.reduce((n, o) => n + (o.money?.total_cents || 0), 0));
   const driversOut = $derived(floor?.drivers.filter((d) => d.status === 'out') ?? []);
@@ -58,7 +58,7 @@
 
 <PageHeader
   title="Overview"
-  subtitle={floor?.last_sync_at ? `Synced from the restaurant tablet ${timeAgo(floor.last_sync_at)} · refreshes every 15 s` : "The restaurant tablet hasn't synced yet"}
+  subtitle={`${pi === 'online' ? 'The Pi is online' : pi === 'offline' ? 'The Pi is offline' : pi === 'none' ? 'No Pi linked yet' : 'Today at the store'}${floor?.last_sync_at ? ` · last update from the store ${timeAgo(floor.last_sync_at)}` : ''} · refreshes every 15 s`}
 />
 
 <StoreStatusCard />

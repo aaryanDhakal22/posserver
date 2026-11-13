@@ -89,6 +89,16 @@ func Check(changes []Change) ([]Resolved, error) {
 				r.Printer = &id
 			}
 		}
+		// One printer choice (menu.NormalizeRouting): "No printer" clears the item's own printer; a printer
+		// (not the category's "") clears "No printer".
+		if c.NoKitchenTicket != nil && *c.NoKitchenTicket {
+			r.SetPrinter, r.Printer = true, nil
+			empty := ""
+			r.PrinterID = &empty
+		} else if r.Printer != nil && c.NoKitchenTicket == nil {
+			f := false
+			r.NoKitchenTicket = &f
+		}
 		if c.PriceCents != nil && (*c.PriceCents < 0 || *c.PriceCents > MaxPriceCents) {
 			return nil, fmt.Errorf("%w: changes[%d]: a price is $0 to $100,000", ErrBadPrice, i)
 		}

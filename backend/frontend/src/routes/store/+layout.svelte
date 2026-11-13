@@ -19,6 +19,7 @@
   const nav: NavItem[] = [
     { href: base + '/store', label: 'Overview', icon: 'dashboard' },
     { href: base + '/store/orders', label: 'Orders', icon: 'receipt', match: base + '/store/orders' },
+    { href: base + '/store/reports', label: 'Reports', icon: 'activity', match: base + '/store/reports' },
     { href: base + '/store/menu', label: 'Menu', icon: 'utensils', match: base + '/store/menu' },
     { href: base + '/store/printers', label: 'Printers', icon: 'printer', match: base + '/store/printers' },
     { href: base + '/store/devices', label: 'Devices', icon: 'tablet', match: base + '/store/devices' },

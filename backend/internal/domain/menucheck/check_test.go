@@ -338,3 +338,41 @@ func TestNoBank(t *testing.T) {
 		t.Fatalf("%+v", r)
 	}
 }
+
+func TestBrokenButtonsAndEntries(t *testing.T) {
+	f := newFixture()
+	in := f.build()
+	if in.Views[0].Build.NeedsAttention == nil || Run(in).Counts[CheckBroken] != 0 {
+		t.Fatalf("nothing broken yet: %v", codes(Run(in)))
+	}
+	// The owner deleted an item a website change and a counter button still name.
+	ghost := uuid.New()
+	entries := []menuview.Entry{{ID: uuid.New(), Kind: menuview.EntryItem, Anchor: menuview.Anchor{ItemIDs: []uuid.UUID{ghost}}, DisplayName: "Old Salad"}}
+	in.Views[0].Build = menuview.Compile(f.bank, f.webVw, entries, nil)
+	f.layout.Tabs[0].Pages = []menuview.Page{{Name: "Main"}}
+	f.layout.Tabs[0].Buttons = append(f.layout.Tabs[0].Buttons, menuview.ButtonOf[menuview.Action]{Row: 2, Col: 3, Caption: "Old Wings",
+		Action: menuview.Action{Type: menuview.ActItem, ItemID: &ghost}})
+	menuview.ResolveLayout(&in.Views[1].Build, f.bank, f.counterVw, nil, f.layout)
+	r := Run(in)
+	if r.Counts[CheckBroken] != 2 {
+		t.Fatalf("broken count %d: %v", r.Counts[CheckBroken], codes(r))
+	}
+	var entry, button *Problem
+	for i := range r.Problems {
+		p := &r.Problems[i]
+		switch p.Code {
+		case "anchor_gone":
+			entry = p
+		case "layout_item_missing":
+			button = p
+		}
+	}
+	if entry == nil || entry.ViewName != "Website" || entry.ViewKind != "web" || entry.Attention == nil || entry.Attention.EntryID != entries[0].ID.String() ||
+		entry.Message != "Change “Old Salad”: its item was deleted (item "+ghost.String()[:8]+")." || entry.ItemID != "" {
+		t.Fatalf("entry: %+v", entry)
+	}
+	if button == nil || button.ViewID != f.counterVw.ID.String() || button.Attention.Where != "Food" || button.Attention.Caption != "Old Wings" ||
+		button.Attention.Cell == nil || button.Attention.Cell.Row != 2 || !strings.Contains(button.Message, "Button “Old Wings” on tab “Food”") {
+		t.Fatalf("button: %+v %+v", button, button.Attention)
+	}
+}

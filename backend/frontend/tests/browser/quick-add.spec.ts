@@ -24,7 +24,7 @@ test('quick add: the strip opens the item, its printer is saved, it cannot be de
   await expect(page.getByRole('button', { name: 'Delete', exact: true })).toHaveCount(0);
   await expect(page.getByTestId('quick-add-row')).toBeVisible();
   const kitchen = ((await store.me('GET', '/printers', undefined, 200)).data as Array<{ id: string }>)[0].id;
-  await page.getByLabel('Kitchen printer').selectOption(kitchen);
+  await page.getByLabel('Prints on').selectOption(kitchen);
   await shot(page, info, 'editor');
   await page.getByRole('button', { name: 'Save item' }).click();
 

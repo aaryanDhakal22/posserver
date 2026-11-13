@@ -71,14 +71,14 @@
 
   // --- printer -------------------------------------------------------------------------
   let printerOpen = $state(false);
-  let printerPick = $state(''); // '' = the category's · '__none' = no kitchen ticket · printer id
+  let printerPick = $state(''); // '' = the category's · '__none' = No printer (no_kitchen_ticket) · printer id
   async function savePrinter(e: SubmitEvent) {
     e.preventDefault();
     const changes: BulkChange[] = picked.map(({ item }) =>
       printerPick === '__none' ? { item_id: item.id, no_kitchen_ticket: true } : { item_id: item.id, printer_id: printerPick, no_kitchen_ticket: false }
     );
     const undo: BulkChange[] = picked.map(({ item }) => ({ item_id: item.id, printer_id: item.printer_id ?? '', no_kitchen_ticket: !!item.no_kitchen_ticket }));
-    const label = printerPick === '__none' ? 'No kitchen ticket' : printerPick ? `Prints on ${printers.find((p) => p.id === printerPick)?.name}` : 'Same printer as the category';
+    const label = printerPick === '__none' ? 'No printer (receipt only)' : printerPick ? `Prints on ${printers.find((p) => p.id === printerPick)?.name}` : 'Same printer as the category';
     if (await run(changes, undo, label)) printerOpen = false;
   }
 
@@ -152,13 +152,13 @@
 <Dialog bind:open={printerOpen} title="Where {items(n)} print" description="Each item's own setting: the category's default printer stays as it is.">
   <form id="bulk-printer" class="flex flex-col gap-3" onsubmit={savePrinter}>
     <div>
-      <label class="lbl" for="bulk-printer-pick">Kitchen printer</label>
+      <label class="lbl" for="bulk-printer-pick">Prints on</label>
       <select id="bulk-printer-pick" class="field" bind:value={printerPick}>
-        <option value="">Same as their category</option>
+        <option value="">Their category's printer</option>
         {#each printers as p (p.id)}<option value={p.id}>{printerLabel(p, printers)}</option>{/each}
-        <option value="__none">No kitchen ticket (receipt only)</option>
+        <option value="__none">No printer: prints on the customer receipt only</option>
       </select>
-      <p class="help">No kitchen ticket: no station ticket, still on the customer receipt (drinks, sauces on the side).</p>
+      <p class="help">No printer: no station ticket, still on the customer receipt (drinks, sauces on the side).</p>
     </div>
     {#if err}<p class="field-error !m-0" role="alert">{err}</p>{/if}
   </form>

@@ -1,7 +1,8 @@
 <script lang="ts" module>
   /** GET /me/menu/problems (contract/main.md §2.5zj). */
+  import type { Attention } from '$lib/store/menuAttention';
   export interface MenuProblem {
-    check: 'pos' | 'printer' | 'price' | 'mods';
+    check: 'pos' | 'printer' | 'price' | 'mods' | 'broken';
     code: string;
     severity: 'error' | 'review' | 'info';
     message: string;
@@ -15,6 +16,11 @@
     option_name?: string;
     sizes?: string[];
     channels?: string[];
+    /** The broken check: the view and its needs-attention line (where the button sits, the entry). */
+    view_id?: string;
+    view_name?: string;
+    view_kind?: string;
+    attention?: Attention;
   }
   export interface ProblemsReport {
     version: number;
@@ -33,6 +39,9 @@
   import SearchInput from '$lib/ui/SearchInput.svelte';
   import Skeleton from '$lib/ui/Skeleton.svelte';
   import BulkBar from './BulkBar.svelte';
+  import { confirmDialog } from '$lib/confirm.svelte';
+  import { toast } from '$lib/toast.svelte';
+  import { isBrokenButton, removableEntry, removeButtons, removeEntries } from '$lib/store/menuAttention';
 
   // Store › Menu › Find problems: what to look at before trusting the menu, one check at a time, each a
   // count and a list. Item problems can be selected and fixed in bulk (printer, prices, stock, category);
@@ -56,9 +65,10 @@
 
   const CHECKS: { id: MenuProblem['check']; title: string; blurb: string; icon: IconName }[] = [
     { id: 'pos', title: 'Not on the counter', blurb: 'Items a cashier can’t ring up at the terminal.', icon: 'monitor' },
-    { id: 'printer', title: 'No kitchen printer', blurb: 'Items that print on every station.', icon: 'printer' },
+    { id: 'printer', title: 'Printer not set', blurb: 'Items with no printer of their own or from their category: they print on every station.', icon: 'printer' },
     { id: 'price', title: 'Prices to check', blurb: '$0 prices and sizes that look like a price is missing.', icon: 'percent' },
-    { id: 'mods', title: 'Modifier problems', blurb: 'Counter screens, empty groups, duplicates.', icon: 'list' }
+    { id: 'mods', title: 'Modifier problems', blurb: 'Counter screens, empty groups, duplicates.', icon: 'list' },
+    { id: 'broken', title: 'Broken buttons', blurb: 'Counter buttons and view changes whose item was deleted.', icon: 'ban' }
   ];
 
   let report = $state<ProblemsReport | null>(null);
@@ -136,7 +146,44 @@
   };
   const CHANNEL: Record<string, string> = { web: 'Website', operator: 'Call center', counter: 'Counter' };
   const title = (p: MenuProblem) =>
-    p.item_name ?? (p.option_name ? `${p.group_name} › ${p.option_name}` : (p.group_name ?? ''));
+    p.item_name ?? (p.option_name ? `${p.group_name} › ${p.option_name}` : (p.group_name ?? (p.view_name ? `${p.view_name} view` : '')));
+
+  // The broken check: remove the entry / the counter button, one or all.
+  let fixing = $state(false);
+  const fixable = (p: MenuProblem) => !!p.attention && !!p.view_id && (removableEntry(p.attention) || isBrokenButton(p.attention));
+  async function removeLines(ps: MenuProblem[]) {
+    let entries = 0;
+    let buttons = 0;
+    const byView = new Map<string, MenuProblem[]>();
+    for (const p of ps.filter((x) => x.attention && isBrokenButton(x.attention))) byView.set(p.view_id!, [...(byView.get(p.view_id!) ?? []), p]);
+    entries = await removeEntries(ps.filter((p) => p.attention && removableEntry(p.attention)).map((p) => p.attention!));
+    for (const [view, list] of byView) buttons += (await removeButtons(view, list.map((p) => p.attention!))).buttons;
+    return { entries, buttons };
+  }
+  async function fix(ps: MenuProblem[]) {
+    if (fixing || !ps.length) return;
+    fixing = true;
+    try {
+      const r = await removeLines(ps);
+      const parts = [r.buttons ? `${r.buttons} button${r.buttons === 1 ? '' : 's'}` : '', r.entries ? `${r.entries} change${r.entries === 1 ? '' : 's'}` : ''];
+      toast.success(`Removed ${parts.filter(Boolean).join(' and ') || 'nothing (already gone)'}`);
+      await load();
+    } catch (e) {
+      toast.error(e);
+    } finally {
+      fixing = false;
+    }
+  }
+  const shownFixable = $derived(shown.filter(fixable));
+  async function fixAll() {
+    const ok = await confirmDialog({
+      title: `Remove all ${shownFixable.length}?`,
+      body: 'Each one points at an item that was deleted: the counter buttons come off the layout, the changes come off their views.',
+      confirmLabel: 'Remove all',
+      danger: true
+    });
+    if (ok) await fix(shownFixable);
+  }
 </script>
 
 <div class="flex flex-col gap-4">
@@ -190,6 +237,9 @@
           </button>
         {/if}
         <span class="ml-auto text-[13px] text-muted">{shown.length} shown</span>
+        {#if check === 'broken' && shownFixable.length > 1}
+          <Button size="sm" variant="danger-ghost" icon="trash" disabled={fixing} onclick={fixAll}>Remove all {shownFixable.length}</Button>
+        {/if}
       </div>
       {#if !shown.length}
         <div class="px-4 py-8 text-center text-muted" data-testid="no-problems">
@@ -198,7 +248,7 @@
         </div>
       {:else}
         <ul class="list">
-          {#each shown as p, i (p.code + (p.item_id ?? '') + (p.group_id ?? '') + (p.option_id ?? '') + i)}
+          {#each shown as p, i (p.code + (p.item_id ?? '') + (p.group_id ?? '') + (p.option_id ?? '') + (p.attention?.entry_id ?? '') + i)}
             <li class="prow" data-testid="problem-row" data-code={p.code}>
               <span class="pt-0.5">
                 {#if p.item_id}
@@ -226,6 +276,10 @@
                   <Button size="sm" onclick={() => onopenitem(p.item_id!)} aria-label="Open {p.item_name}">Open</Button>
                 {:else if p.group_id}
                   <Button size="sm" onclick={() => onopengroup(p.group_id!)} aria-label="Open {p.group_name}">Open group</Button>
+                {:else if fixable(p)}
+                  <Button size="sm" variant="ghost" icon="trash" disabled={fixing} onclick={() => fix([p])} aria-label="Remove: {p.message}">
+                    {p.attention && isBrokenButton(p.attention) ? (p.attention.where_kind === 'flow' ? 'Remove flow' : 'Remove button') : 'Remove'}
+                  </Button>
                 {/if}
               </span>
             </li>

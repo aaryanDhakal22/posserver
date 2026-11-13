@@ -2,7 +2,7 @@
   import { printerLabel, storeApi, type Category, type Item, type Menu, type Printer } from '$lib/api';
   import { confirmDialog } from '$lib/confirm.svelte';
   import { toast } from '$lib/toast.svelte';
-  // The default-printer select's "No kitchen ticket" choice (not a printer id).
+  // The default-printer select's "No printer" choice (= no_kitchen_ticket; not a printer id).
   const NO_KITCHEN = '__no_kitchen__';
   import Card from '$lib/ui/Card.svelte';
   import Button from '$lib/ui/Button.svelte';
@@ -177,7 +177,7 @@
   {#if active}
     <Card
       title="Categories in {active.name}"
-      subtitle="Items without their own printer use the category's default printer. No kitchen ticket = prints on the receipt only: no station ticket, not in 'Also on this order'."
+      subtitle="Items without their own printer use the category's default printer. No printer = the customer receipt only: no station ticket, not in 'Also on this order'."
       padded={false}
     >
       <div role="table" aria-label="Categories in {active.name}">
@@ -199,13 +199,13 @@
                 value={c.no_kitchen_ticket ? NO_KITCHEN : (c.default_printer_id ?? '')}
                 onchange={(e) => {
                   const v = e.currentTarget.value;
-                  if (v === NO_KITCHEN) saveCategory(c, { default_printer_id: null, no_kitchen_ticket: true }, 'No kitchen ticket: receipt only');
+                  if (v === NO_KITCHEN) saveCategory(c, { default_printer_id: null, no_kitchen_ticket: true }, 'No printer: customer receipt only');
                   else saveCategory(c, { default_printer_id: v || null, no_kitchen_ticket: false }, 'Default printer saved');
                 }}
               >
-                <option value="">No default printer</option>
-                <option value={NO_KITCHEN}>No kitchen ticket (receipt only)</option>
+                {#if !c.no_kitchen_ticket && !c.default_printer_id}<option value="" disabled>Not set: prints on every station</option>{/if}
                 {#each printers as p (p.id)}<option value={p.id}>{printerLabel(p, printers)}</option>{/each}
+                <option value={NO_KITCHEN}>No printer: customer receipt only</option>
               </select>
             </span>
             <span class="c-vis" role="cell">

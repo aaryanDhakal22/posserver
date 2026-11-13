@@ -142,3 +142,41 @@ def test_online_lines_are_routed_none(nk_store, publish) -> None:
         assert by[n]["routing"] == "matched" and by[n]["printer_id"] == printers["Wings"], by[n]
     rep = _ok(mgr.get(f"{MENU}/unmatched", params={"days": 7}, timeout=5))
     assert not {r["name"].lower() for r in rep} & {"coke 2 liter", "pepsi can"}, rep
+
+
+def test_one_printer_choice_normalises(nk_store) -> None:
+    """The owner's "No printer" (2026-11-13): one printer dropdown. A printer clears "No printer" (the flag);
+    "No printer" clears the item's printer; the same on a category's default and in bulk edit."""
+    store, mgr, printers = nk_store
+    menus = _ok(mgr.get(f"{MENU}/menus", timeout=5))
+    cats = {c["name"]: c for c in _ok(mgr.get(f"{MENU}/menus/{menus[0]['id']}/categories", timeout=5))}
+    items = {i["name"]: i for c in cats.values() for i in _ok(mgr.get(f"{MENU}/categories/{c['id']}/items", timeout=5))}
+    coke = items["Coke 2 Liter"]
+    assert coke["no_kitchen_ticket"] is True
+
+    def routes() -> dict:
+        return _ok(requests.get(COUNTER_MENU, headers=store_key(store.key), timeout=10))["routes"]
+
+    # A printer with the flag left out: the flag goes, the item prints there.
+    _ok(mgr.patch(f"{MENU}/items/{coke['id']}/printer", json={"printer_id": printers["Wings"]}, timeout=5), 204)
+    assert routes()[coke["id"]]["printer_id"] == printers["Wings"]
+    # "No printer" with a printer still named (an older page): receipt only, the printer is cleared.
+    _ok(mgr.patch(f"{MENU}/items/{coke['id']}/printer", json={"printer_id": printers["Wings"], "no_kitchen_ticket": True}, timeout=5), 204)
+    assert routes()[coke["id"]] == {"printer_id": "", "no_kitchen": True}
+    got = {i["name"]: i for i in _ok(mgr.get(f"{MENU}/categories/{coke['category_id']}/items", timeout=5))}["Coke 2 Liter"]
+    assert got["no_kitchen_ticket"] is True and not got.get("printer_id")
+
+    # A category: a default printer clears its "No printer".
+    drinks = cats["Drinks"]
+    assert drinks["no_kitchen_ticket"] is True
+    _ok(mgr.patch(f"{MENU}/categories/{drinks['id']}", json={"name": "Drinks", "description": "", "available": True,
+                                                               "default_printer_id": printers["Wings"]}, timeout=5))
+    after = {c["name"]: c for c in _ok(mgr.get(f"{MENU}/menus/{menus[0]['id']}/categories", timeout=5))}["Drinks"]
+    assert not after.get("no_kitchen_ticket") and after["default_printer_id"] == printers["Wings"]
+
+    # Bulk: a printer clears the flag; "No printer" clears the printer.
+    _ok(mgr.post(f"{MENU}/items/bulk", json={"changes": [{"item_id": coke["id"], "printer_id": printers["Wings"]}]}, timeout=5))
+    assert routes()[coke["id"]]["printer_id"] == printers["Wings"]
+    _ok(mgr.post(f"{MENU}/items/bulk", json={"changes": [{"item_id": coke["id"], "no_kitchen_ticket": True}]}, timeout=5))
+    got = {i["name"]: i for i in _ok(mgr.get(f"{MENU}/categories/{coke['category_id']}/items", timeout=5))}["Coke 2 Liter"]
+    assert got["no_kitchen_ticket"] is True and not got.get("printer_id")

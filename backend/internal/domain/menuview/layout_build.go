@@ -1,6 +1,10 @@
 package menuview
 
 import (
+	"fmt"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	"quiccpos/main/internal/domain/menu"
@@ -60,15 +64,34 @@ func ResolveLayout(b *Build, bank *menu.Bank, v View, deals map[string]string, l
 	for _, g := range b.ModifierGroups {
 		c.groupSeen[g.ID] = true
 	}
+	// One line per broken button (each is removed on its own), one per
+	// broken flow whose item no button flags already.
 	missing := map[string]bool{}
+	flagged := map[string]bool{} // item ids a button line names
+	var at *buttonPlace          // the button act is resolving
 	gone := func(code, id, name, msg string) {
-		if missing[code+id] {
+		n := NeedsAttention{Code: code, ItemID: id, Name: name, Message: msg}
+		key := code + id
+		if at != nil {
+			n.WhereKind, n.Where, n.Caption = at.kind, at.where, at.caption
+			if at.kind != "flow" {
+				cell := at.cell
+				n.Cell = &cell
+				key += "|" + at.kind + "|" + at.where + "|" + fmt.Sprint(cell.Page, cell.Row, cell.Col)
+			}
+		}
+		if missing[key] {
 			return
 		}
-		missing[code+id] = true
-		b.NeedsAttention = append(b.NeedsAttention, NeedsAttention{Code: code, ItemID: id, Name: name, Message: msg})
+		missing[key] = true
+		if at != nil && at.kind != "flow" {
+			flagged[id] = true
+		}
+		b.NeedsAttention = append(b.NeedsAttention, n)
 	}
-	act := func(_ string, a Action) (BuildAction, error) {
+	act := func(path string, a Action) (BuildAction, error) {
+		at = placeOf(l, path)
+		defer func() { at = nil }()
 		out := BuildAction{Action: a}
 		switch a.Type {
 		case ActItem, ActItemPick:
@@ -108,7 +131,7 @@ func ResolveLayout(b *Build, bank *menu.Bank, v View, deals map[string]string, l
 				}
 				if !found {
 					out.Missing = true
-					gone("layout_size_missing", a.ItemID.String()+a.SizeID.String(), bi.Name, "a counter layout button sells a size the item no longer comes in")
+					gone("layout_size_missing", a.ItemID.String(), bi.Name, "a counter layout button sells a size the item no longer comes in")
 				}
 			}
 			out.PriceCents = &price
@@ -175,15 +198,22 @@ func ResolveLayout(b *Build, bank *menu.Bank, v View, deals map[string]string, l
 	for i := range out.Screens {
 		captions(out.Screens[i].Buttons)
 	}
+	keys := make([]string, 0, len(out.Flows))
 	for k := range out.Flows {
-		if _, ok := items[k]; !ok {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if _, ok := items[k]; !ok && !flagged[k] {
 			name := ""
 			if id, err := uuid.Parse(k); err == nil {
 				if it, _, found := bank.Item(id); found {
 					name = it.Name
 				}
 			}
+			at = &buttonPlace{kind: "flow"}
 			gone("layout_item_missing", k, name, "a counter layout flow is for an item this view doesn't show")
+			at = nil
 		}
 	}
 	b.Layout = &out
@@ -214,4 +244,44 @@ func captions(bs []ButtonOf[BuildAction]) {
 			}
 		}
 	}
+}
+
+// buttonPlace is where a layout button sits, for its needs-attention line.
+type buttonPlace struct {
+	kind, where, caption string
+	cell                 ButtonCell
+}
+
+var buttonPath = regexp.MustCompile(`^(tabs|screens)\[(\d+)\]\.buttons\[(\d+)\]`)
+
+// placeOf is the button a MapLayout action path names
+// ("tabs[3].buttons[5].action"), nil when the path names none.
+func placeOf(l *Layout, path string) *buttonPlace {
+	m := buttonPath.FindStringSubmatch(path)
+	if m == nil {
+		return nil
+	}
+	i, _ := strconv.Atoi(m[2])
+	j, _ := strconv.Atoi(m[3])
+	var where string
+	var pages []Page
+	var bs []ButtonOf[Action]
+	switch {
+	case m[1] == "tabs" && i < len(l.Tabs):
+		where, pages, bs = l.Tabs[i].Name, l.Tabs[i].Pages, l.Tabs[i].Buttons
+	case m[1] == "screens" && i < len(l.Screens):
+		where, pages, bs = l.Screens[i].Name, l.Screens[i].Pages, l.Screens[i].Buttons
+	default:
+		return nil
+	}
+	if j >= len(bs) {
+		return nil
+	}
+	btn := bs[j]
+	p := &buttonPlace{kind: strings.TrimSuffix(m[1], "s"), where: where, caption: btn.Caption,
+		cell: ButtonCell{Page: btn.Page, Row: btn.Row, Col: btn.Col}}
+	if btn.Page >= 0 && btn.Page < len(pages) {
+		p.cell.PageName = pages[btn.Page].Name
+	}
+	return p
 }

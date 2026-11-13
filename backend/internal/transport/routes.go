@@ -288,7 +288,7 @@ func routeTable(d RouterDeps) []routeDef {
 	if d.OptionFlags != nil {
 		menuH.SetOptionFlags(d.OptionFlags)
 	}
-	floorH := handler.NewFloorHandler(d.Service, d.FloorService, d.Logger)
+	floorH := handler.NewFloorHandler(d.Service, d.FloorService, repositories.NewOrderDetailRepository(d.Pool), d.Logger)
 	operatorH := handler.NewOperatorHandler(d.OperatorService, d.MenuService, d.Meters, d.Logger)
 	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
 	siteH := handler.NewSiteHandler(d.Site, d.Logger)
@@ -499,6 +499,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("POST", storePrefix+"/me/alerts/test", "store-session", "Send one test Pushover to the saved owner phones (location config pushover_owner_devices; 1 per 10 s)", alertsH.MeTest, storeSession),
 		def("PUT", storePrefix+"/me/location/pin", "store-session", "Place the store pin by hand {lat, lng} (Store › Settings › Map and delivery area)", geoH.MeSetPin, storeSession),
 		def("GET", storePrefix+"/me/orders", "store-session", "Recent orders with the agent-synced floor status (?limit)", floorH.MeListOrders, storeSession),
+		def("GET", storePrefix+"/me/orders/:id", "store-session", "One order with its status history, payments (who took them), the Pi floor status, journal lines, money flags, card hold, channel and printers: {order, received_at, updated_at, agent_ack_at, agent_status, batch_id, status_history, payments, journal, flags, card_hold, channel, staff, printers}", floorH.MeGetOrder, storeSession),
 		def("GET", storePrefix+"/me/delivery-runs", "store-session", "Driver runs sent (AUTO suggestion vs sent), newest first (?limit=50)", floorH.MeDeliveryRuns, storeSession),
 		def("GET", storePrefix+"/me/floor", "store-session", "Driver roster + last agent floor sync", floorH.MeGetFloor, storeSession),
 		def("GET", storePrefix+"/me/terminals", "store-session", "Store › Devices › Terminals & tablets (agent 2.5.3): the store's POS terminals + Quibase tablets as the Pi last reported them {connected, reported_at, terminals[{device_id, name, app_version, last_seen_at, connected, update?{version_name, version_code, state, reason, target_code, at, android, permissions, received_at}}], tablets[], releases{terminal, quibase}}", devicesH.MeDevices, storeSession),
@@ -622,11 +623,12 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", storePrefix+"/me/menu/views/:id", "store-session", "One view", viewH.MeGetView, storeSession),
 		def("PATCH", storePrefix+"/me/menu/views/:id", "store-session", "Rename a view / set its rules", viewH.MeUpdateView, storeSession),
 		def("DELETE", storePrefix+"/me/menu/views/:id", "store-session", "Delete a view", viewH.MeDeleteView, storeSession),
-		def("GET", storePrefix+"/me/menu/problems", "store-session", "Find problems: items not on the counter, no printer, prices that look missing, broken modifier groups", viewH.MeProblems, storeSession),
+		def("GET", storePrefix+"/me/menu/problems", "store-session", "Find problems: items not on the counter, no printer, prices that look missing, broken modifier groups, broken buttons and view changes", viewH.MeProblems, storeSession),
 		def("GET", storePrefix+"/me/menu/views/:id/build", "store-session", "A view as its channels see it + needs attention", viewH.MeBuildView, storeSession),
 		def("GET", storePrefix+"/me/menu/views/:id/layout", "store-session", "A counter view's layout (tabs, screens, flows, functions)", viewH.MeGetLayout, storeSession),
 		def("PUT", storePrefix+"/me/menu/views/:id/layout", "store-session", "Replace a counter view's layout (422 lists every problem)", viewH.MePutLayout, storeSession),
 		def("DELETE", storePrefix+"/me/menu/views/:id/layout", "store-session", "Clear a counter view's layout", viewH.MeDeleteLayout, storeSession),
+		def("POST", storePrefix+"/me/menu/views/:id/layout/remove", "store-session", "Take buttons {where_kind, where, page, row, col} and flows (item ids) out of a counter view's layout (saved when that adds no problem) → {buttons, flows}", viewH.MeRemoveFromLayout, storeSession),
 		def("GET", storePrefix+"/me/menu/views/:id/entries", "store-session", "A view's entries", viewH.MeListEntries, storeSession),
 		def("POST", storePrefix+"/me/menu/views/:id/entries", "store-session", "Add an entry (item, merge, augment, map)", viewH.MeCreateEntry, storeSession),
 		def("PUT", storePrefix+"/me/menu/entries/:id", "store-session", "Replace an entry", viewH.MeUpdateEntry, storeSession),

@@ -56,7 +56,7 @@ def test_problems_shape_counts_and_fix(store, mgr):
     tops = next(g for g in _ok(mgr.get(f"{MENU}/modifier-groups")) if g["name"] == "Toppings")
     _ok(mgr.post(f"{MENU}/modifier-groups/{tops['id']}/options", json={"name": "pepperoni", "price_delta_cents": 150}), 201)
     body = _ok(mgr.get(PROBLEMS))
-    assert set(body["counts"]) == {"pos", "printer", "price", "mods"}
+    assert set(body["counts"]) == {"pos", "printer", "price", "mods", "broken"}
     assert isinstance(body["version"], int) and body["version"] > 0
     codes = _codes(body)
     # No category printer anywhere: both items print on every station.
@@ -88,7 +88,7 @@ def test_problems_are_per_store(store, mgr, make_store):
     s = other.manager_session()
     try:
         body = _ok(s.get(PROBLEMS))
-        assert body["problems"] == [] and body["counts"] == {"pos": 0, "printer": 0, "price": 0, "mods": 0}
+        assert body["problems"] == [] and body["counts"] == {"pos": 0, "printer": 0, "price": 0, "mods": 0, "broken": 0}
     finally:
         s.close()
 

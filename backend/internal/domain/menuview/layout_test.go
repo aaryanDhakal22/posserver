@@ -298,7 +298,9 @@ func TestResolveLayoutAddsScreenGroups(t *testing.T) {
 			n++
 		}
 	}
-	if n != 1 {
-		t.Errorf("one needs-attention line per missing item, got %d: %+v", n, b.NeedsAttention)
+	// One per broken button (its two sizes' buttons); its flow adds none
+	// (a button already names the item).
+	if n != 2 {
+		t.Errorf("one needs-attention line per broken button, got %d: %+v", n, b.NeedsAttention)
 	}
 }

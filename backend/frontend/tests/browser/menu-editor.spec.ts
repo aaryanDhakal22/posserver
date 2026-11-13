@@ -65,7 +65,7 @@ test('bulk edit: select, change prices with a preview, undo, move, printer, stoc
 
   await select(page, 'Fries').check();
   await bar(page).getByRole('button', { name: 'Printer…' }).click();
-  await page.getByRole('dialog').getByLabel('Kitchen printer').selectOption('__none');
+  await page.getByRole('dialog').getByLabel('Prints on').selectOption('__none');
   await page.getByRole('dialog').getByRole('button', { name: 'Save 1 item' }).click();
   await expect.poll(async () => (await item(store, pz.id, 'Fries'))?.no_kitchen_ticket).toBe(true);
   await expect(bar(page)).toHaveCount(0);
@@ -134,7 +134,7 @@ test('find problems: a count per check, select and fix in bulk, open the item or
   await shot(page, info, 'problems-printer');
   await page.getByRole('checkbox', { name: 'Select every item shown' }).check();
   await page.getByTestId('bulk-bar').getByRole('button', { name: 'Printer…' }).click();
-  await page.getByRole('dialog').getByLabel('Kitchen printer').selectOption({ label: 'Kitchen' });
+  await page.getByRole('dialog').getByLabel('Prints on').selectOption({ label: 'Kitchen' });
   await page.getByRole('dialog').getByRole('button', { name: 'Save 3 items' }).click();
   await expect(page.getByTestId('count-printer')).toHaveText('0');
   await expect(page.getByTestId('no-problems')).toContainText('Nothing to fix here.');

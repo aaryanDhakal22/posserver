@@ -21,16 +21,17 @@ import (
 	"github.com/google/uuid"
 )
 
-// The four checks, in the order a page shows them.
+// The five checks, in the order a page shows them.
 const (
 	CheckPOS     = "pos"     // not on the counter terminal
 	CheckPrinter = "printer" // prints nowhere
 	CheckPrice   = "price"   // a price looks missing
 	CheckMods    = "mods"    // a modifier group is broken
+	CheckBroken  = "broken"  // a counter button or a view change points at what is gone
 )
 
 // Checks lists the checks in order.
-var Checks = []string{CheckPOS, CheckPrinter, CheckPrice, CheckMods}
+var Checks = []string{CheckPOS, CheckPrinter, CheckPrice, CheckMods, CheckBroken}
 
 // Severities: an error is broken for sure; review looks wrong and wants a
 // person's eye; info is on purpose (hidden by the store) and never counted.
@@ -92,6 +93,13 @@ type Problem struct {
 	// Channels: where the item is sold now (web, operator, counter) — the
 	// POS check says it so a manager sees what else misses it.
 	Channels []string `json:"channels,omitempty"`
+	// The broken check: the view whose build has the line, and the line
+	// itself (anchor_gone with the entry; layout_*_missing with where the
+	// button sits), so a page can remove the entry or the button.
+	ViewID    string                   `json:"view_id,omitempty"`
+	ViewName  string                   `json:"view_name,omitempty"`
+	ViewKind  string                   `json:"view_kind,omitempty"`
+	Attention *menuview.NeedsAttention `json:"attention,omitempty"`
 }
 
 // Report is the whole result.
@@ -115,6 +123,7 @@ func Run(in Input) Report {
 	c.itemPrices()
 	c.optionPrices()
 	c.mods()
+	c.broken()
 	for _, k := range Checks {
 		r.Counts[k] = 0
 	}
@@ -781,4 +790,23 @@ func verbS(n int) string {
 		return "s"
 	}
 	return ""
+}
+
+// --- broken buttons and changes -------------------------------------------------
+
+// broken lists every view's needs-attention lines about a bank row that is
+// gone: entries whose item was deleted (anchor_gone) and counter layout
+// buttons / flows that no longer resolve (layout_*_missing; the counter view's
+// build has them when the caller resolved its layout).
+func (c *checker) broken() {
+	for _, v := range c.in.Views {
+		for _, n := range v.Build.NeedsAttention {
+			if n.Code != "anchor_gone" && !strings.HasPrefix(n.Code, "layout_") {
+				continue
+			}
+			n := n
+			c.add(Problem{Check: CheckBroken, Code: n.Code, Severity: SevError, Message: n.Describe() + ".",
+				ViewID: v.View.ID.String(), ViewName: v.View.Name, ViewKind: string(v.View.Kind), Attention: &n})
+		}
+	}
 }
