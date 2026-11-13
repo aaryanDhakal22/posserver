@@ -30,6 +30,8 @@ export interface OptionFacts { family?: string; class?: string; never_included?:
 export interface Settings {
   tax_bps: number; service_fee_cents: number; service_fee_bps: number;
   delivery_fee_cents: number; free_delivery_over_cents: number | null; delivery_min_cents: number;
+  /** The delivery fee by distance (absent = the flat delivery_fee_cents); deliveryFeeFor picks one. */
+  delivery_bands?: DeliveryBand[] | null;
   tips: { enabled: boolean; presets: number[]; default_pct: number };
   card_fee: { mode: 'none' | 'surcharge' | 'cash_discount' | string; bps: number };
   stacking: 'best' | 'stack' | 'single' | string;
@@ -84,6 +86,18 @@ export interface Cart {
   tip_cents?: number | null; tip_pct?: number | null; first_order?: boolean | null;
   /** Applied coupons: a coupon deal and the cart line units it takes (one index per unit). */
   coupons?: CartCoupon[] | null;
+  /** A delivery's straight-line distance from the store in meters (null / absent = unknown): the fee bands read it. */
+  distance_m?: number | null;
+}
+/** One row of the delivery fee by distance: up to up_to_m meters costs fee_cents (ascending; the last also covers farther). */
+export interface DeliveryBand { up_to_m: number; fee_cents: number }
+/** The customer's delivery fee: the first band the distance is within, the last past them all, the FIRST when the
+ *  distance is unknown; no bands = the flat fee (Go DeliveryFeeFor). */
+export function deliveryFeeFor(flat: number, bands: DeliveryBand[] | null | undefined, distanceM: number | null | undefined): number {
+  if (!bands || bands.length === 0) return flat;
+  if (distanceM === null || distanceM === undefined) return bands[0].fee_cents;
+  for (const b of bands) if (distanceM <= b.up_to_m) return b.fee_cents;
+  return bands[bands.length - 1].fee_cents;
 }
 export interface CartCoupon { id: string; lines: number[] | null }
 /** unit_cents: the item's own price (with its options); total_cents: the line as sold (a coupon's units at their coupon prices). */
@@ -927,11 +941,12 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
   if (type === 'delivery' && ctx.types.delivery) {
     if (q.lines.length > 0 && after < st.delivery_min_cents)
       issue('delivery_minimum', `Delivery needs a ${money(st.delivery_min_cents)} minimum. Add ${money(st.delivery_min_cents - after)} more or pick it up.`, null);
-    q.delivery_fee_cents = st.delivery_fee_cents;
+    const fee = deliveryFeeFor(st.delivery_fee_cents, st.delivery_bands, cart.distance_m);
+    q.delivery_fee_cents = fee;
     const f = st.free_delivery_over_cents;
     if (f !== null && f !== undefined) {
       if (after >= f) q.delivery_fee_cents = 0;
-      else if (st.delivery_fee_cents > 0) nudge(`Free delivery over ${money(f)}: add ${money(f - after)}.`);
+      else if (fee > 0) nudge(`Free delivery over ${money(f)}: add ${money(f - after)}.`);
     }
   }
 

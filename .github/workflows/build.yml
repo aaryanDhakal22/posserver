@@ -19,6 +19,11 @@ name: Build and Push to GHCR
 # Docs-only pushes don't run CI; a newer push to the same branch cancels the
 # older run (never for tags).
 #
+# Gate attestation (SHIP-PLAN.md item 7): a commit whose `quicc/gate` status
+# is success (posted by quicc-ops scripts/gate-attest.sh after a green full
+# gate on clean, pushed trees) skips verify: the gate ran those tests and
+# more. build (and the staging image) always runs.
+#
 # `prod-latest` is never written by CI: it stays the last v1 image (the v1
 # rollback target). Prod deploys always pin an exact tag (`deploy.sh
 # prod-vX.Y.Z`). Nothing here deploys: a host only changes when an operator
@@ -71,12 +76,37 @@ jobs:
           echo "released $src as $v / prod-v$v"
 
   # ──────────────────────────────────────────────────────────────────────
-  # Verify — go vet + go test.
+  # Gate — did quicc-ops' release gate already test this exact commit?
+  # ──────────────────────────────────────────────────────────────────────
+  gate:
+    name: Gate attestation (quicc/gate)
+    runs-on: ubuntu-latest
+    permissions:
+      statuses: read
+    outputs:
+      tested: ${{ steps.check.outputs.tested }}
+    steps:
+      - id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          s=$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/status" \
+                --jq '[.statuses[] | select(.context == "quicc/gate")][0] | "\(.state) \(.description)"' 2>/dev/null || true)
+          if [ "${s%% *}" = success ]; then
+            echo "tested=true" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Tests skipped::quicc/gate is green on ${GITHUB_SHA::7} (${s#* }): the release gate ran these tests"
+            echo "Tests skipped: quicc/gate is green on \`${GITHUB_SHA::7}\` (${s#* })." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no quicc/gate success on ${GITHUB_SHA::7}: verify runs"
+          fi
+
+  # ──────────────────────────────────────────────────────────────────────
+  # Verify — go vet + go test (skipped when the gate already passed it).
   # ──────────────────────────────────────────────────────────────────────
   verify:
     name: Verify (go vet + go test)
-    needs: reuse
-    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' }}
+    needs: [reuse, gate]
+    if: ${{ !cancelled() && needs.reuse.outputs.reused != 'true' && needs.gate.outputs.tested != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -202,8 +232,10 @@ jobs:
   # ──────────────────────────────────────────────────────────────────────
   release-production:
     name: Push production image
-    needs: [verify, build]
-    if: ${{ !cancelled() && github.ref_type == 'tag' && needs.verify.result == 'success' && needs.build.result == 'success' }}
+    needs: [gate, verify, build]
+    if: >-
+      !cancelled() && github.ref_type == 'tag' && needs.build.result == 'success' &&
+      (needs.verify.result == 'success' || needs.gate.outputs.tested == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read

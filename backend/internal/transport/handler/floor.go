@@ -2,13 +2,16 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	floorApp "quiccpos/main/internal/app/floor"
 	orderSvc "quiccpos/main/internal/app/order"
 	"quiccpos/main/internal/domain/order"
+	"quiccpos/main/internal/infra/database/repositories"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v5"
@@ -21,14 +24,18 @@ import (
 type FloorHandler struct {
 	orders *orderSvc.Service
 	floor  *floorApp.Service
+	detail *repositories.OrderDetailRepository
 	logger zerolog.Logger
 }
 
-func NewFloorHandler(orders *orderSvc.Service, floor *floorApp.Service, logger zerolog.Logger) *FloorHandler {
-	return &FloorHandler{orders: orders, floor: floor, logger: logger.With().Str("handler", "floor").Logger()}
+func NewFloorHandler(orders *orderSvc.Service, floor *floorApp.Service, detail *repositories.OrderDetailRepository, logger zerolog.Logger) *FloorHandler {
+	return &FloorHandler{orders: orders, floor: floor, detail: detail, logger: logger.With().Str("handler", "floor").Logger()}
 }
 
 // GET /store/v1/me/orders?limit=50 — newest-first snapshots for this location.
+// sort=placed (Store › Orders): newest *placed* first, with the optional
+// date=YYYY-MM-DD (a store-local day) and q (order / kitchen # / customer /
+// phone / driver). Without them: newest received first, as before.
 func (h *FloorHandler) MeListOrders(c *echo.Context) error {
 	tid, lid, ok := meScope(c)
 	if !ok {
@@ -39,6 +46,31 @@ func (h *FloorHandler) MeListOrders(c *echo.Context) error {
 		limit = v
 	}
 	sc := order.Scope{TenantID: order.TenantID(tid), LocationID: order.LocationID(lid)}
+	day, q := c.QueryParam("date"), strings.TrimSpace(c.QueryParam("q"))
+	if h.detail != nil && (c.QueryParam("sort") == "placed" || day != "" || q != "") {
+		if day != "" {
+			if _, err := time.Parse("2006-01-02", day); err != nil {
+				return c.JSON(http.StatusBadRequest, errCode("date must be YYYY-MM-DD", "bad_date"))
+			}
+		}
+		if len(q) > 100 {
+			q = q[:100]
+		}
+		ids, err := h.detail.ListIDs(c.Request().Context(), tid, lid, day, q, limit)
+		if err != nil {
+			h.logger.Error().Err(err).Msg("list orders failed")
+			return c.JSON(http.StatusInternalServerError, errResp("list failed"))
+		}
+		out := make([]order.Snapshot, 0, len(ids))
+		for _, id := range ids {
+			o, err := h.orders.GetByID(c.Request().Context(), sc, order.ID(id))
+			if err != nil {
+				continue // deleted meanwhile
+			}
+			out = append(out, o.Snapshot())
+		}
+		return c.JSON(http.StatusOK, out)
+	}
 	os, err := h.orders.GetOrdersPage(c.Request().Context(), sc, 0, limit)
 	if err != nil {
 		h.logger.Error().Err(err).Msg("list orders failed")
@@ -49,6 +81,38 @@ func (h *FloorHandler) MeListOrders(c *echo.Context) error {
 		out = append(out, o.Snapshot())
 	}
 	return c.JSON(http.StatusOK, out)
+}
+
+// GET /store/v1/me/orders/:id — one order with everything Store › Orders'
+// detail panel shows: {order: Snapshot, …OrderDetailExtras}. 404 not_found
+// for an unknown id or another store's order.
+func (h *FloorHandler) MeGetOrder(c *echo.Context) error {
+	tid, lid, ok := meScope(c)
+	if !ok {
+		return c.JSON(http.StatusUnauthorized, errResp("unauthorized"))
+	}
+	id, err := uuid.Parse(c.Param("id"))
+	if err != nil {
+		return c.JSON(http.StatusNotFound, errCode("order not found", "not_found"))
+	}
+	ctx := c.Request().Context()
+	sc := order.Scope{TenantID: order.TenantID(tid), LocationID: order.LocationID(lid)}
+	extras, err := h.detail.Extras(ctx, tid, lid, id)
+	if errors.Is(err, repositories.ErrOrderNotInStore) {
+		return c.JSON(http.StatusNotFound, errCode("order not found", "not_found"))
+	}
+	if err != nil {
+		h.logger.Error().Err(err).Msg("order detail failed")
+		return c.JSON(http.StatusInternalServerError, errCode("order detail failed", "internal"))
+	}
+	o, err := h.orders.GetByID(ctx, sc, order.ID(id))
+	if err != nil {
+		return c.JSON(http.StatusNotFound, errCode("order not found", "not_found"))
+	}
+	return c.JSON(http.StatusOK, struct {
+		Order order.Snapshot `json:"order"`
+		*repositories.OrderDetailExtras
+	}{o.Snapshot(), extras})
 }
 
 // GET /store/v1/me/floor — {drivers, last_sync_at, shifts (last 7 days)} as

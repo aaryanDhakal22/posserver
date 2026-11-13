@@ -65,6 +65,14 @@ type Settings struct {
 	CashierDiscountPct     int   `json:"cashier_discount_pct"`
 	AutoLockMinutes        int   `json:"auto_lock_minutes"`
 	CounterStart           int   `json:"counter_start"`
+	// KitchenStart (the owner's X, 2026-11-13): where the online / kitchen
+	// numbers start (an accepted online, website or call-center-from-main
+	// order's kitchen #). Default DefaultKitchenStart (1100, the Pi's old
+	// fixed start). CounterStart stays below it (S-6: a counter number never
+	// looks like a kitchen number). Both restart once per business day, at
+	// the first order after a close on a new day (agent contract §2.10ae).
+	// Edited on Store › Settings › Counter orders.
+	KitchenStart int `json:"kitchen_start"`
 	ReceiptAutoDoneSeconds int   `json:"receipt_auto_done_seconds"`
 	// AutoCloseBatchAt: the Pi closes a batch nobody closed at this store
 	// time ("HH:MM", 24 h; "" = off). Default DefaultAutoCloseBatchAt.
@@ -136,6 +144,16 @@ type Settings struct {
 	// always carried. A manual close without force is refused either way.
 	// Edited on Store › Settings › End of day.
 	CloseUnpaidCounterAction string `json:"close_unpaid_counter_action"`
+
+	// TakeoutTwoCopies (the owner, 2026-11-13; main 4.0.6, agent 2.5.5,
+	// terminal 1.0.6): every takeout / pickup order, from any source,
+	// prints two Customer Copies (each cut): Centurion's own receipt for a
+	// takeout it rang, the Pi's customer receipt for an online, website or
+	// call-center pickup. The Pi's own receipt Copies (Quibase Settings)
+	// still applies: a pickup on the Pi prints max(copies, 2). Reprints,
+	// counter (dine-in) and delivery are unchanged. Default off. Edited on
+	// Store › Settings › Receipts and printing.
+	TakeoutTwoCopies bool `json:"takeout_two_copies"`
 }
 
 // The close_unpaid_counter_action choices (default CloseUnpaidWaste).
@@ -150,6 +168,10 @@ const (
 	DefaultQuibaseCounterMinCents = 500
 	MaxQuibaseCounterMinCents     = 100_000
 )
+
+// DefaultKitchenStart is where the online / kitchen numbers start (the Pi's
+// fixed 1100 before the setting).
+const DefaultKitchenStart = 1100
 
 // DefaultCallcenterIdleLock is the call center's idle lock (minutes).
 const DefaultCallcenterIdleLock = 15
@@ -236,7 +258,7 @@ const DefaultAutoCloseBatchAt = "04:00"
 // 410 / 443 / 667. (Drivers claim a delivery nobody took once it is past
 // the order's promised time on the Pi: no setting since 2026-11-12.)
 func DefaultSettings() Settings {
-	return Settings{CashierRefundCents: DefaultCashierRefundCents, CashierDiscountPct: DefaultCashierDiscountPct, AutoLockMinutes: 5, CounterStart: 1, ReceiptAutoDoneSeconds: 15,
+	return Settings{CashierRefundCents: DefaultCashierRefundCents, CashierDiscountPct: DefaultCashierDiscountPct, AutoLockMinutes: 5, CounterStart: 1, KitchenStart: DefaultKitchenStart, ReceiptAutoDoneSeconds: 15,
 		AutoCloseBatchAt: DefaultAutoCloseBatchAt,
 		DefaultTab:       "info", ButtonFont: "barlow", CashierPriceDropPct: 20, OutOfAreaMarginMi: 1,
 		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: DefaultEmployeeMealPct, ToppingMaxCount: 3,
@@ -344,6 +366,10 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: auto_lock_minutes must be 1–%d", ErrBadSettings, MaxAutoLock)
 	case s.CounterStart < 1 || s.CounterStart > MaxCounterStart:
 		return fmt.Errorf("%w: counter_start must be 1–%d", ErrBadSettings, MaxCounterStart)
+	case s.KitchenStart < 2 || s.KitchenStart > MaxCounterStart:
+		return fmt.Errorf("%w: kitchen_start must be 2–%d", ErrBadSettings, MaxCounterStart)
+	case s.CounterStart >= s.KitchenStart:
+		return fmt.Errorf("%w: counter_start must be below kitchen_start (counter numbers stay below the online / kitchen numbers)", ErrBadSettings)
 	case s.CallcenterIdleLockMinutes != 0 && (s.CallcenterIdleLockMinutes < 1 || s.CallcenterIdleLockMinutes > MaxAutoLock):
 		return fmt.Errorf("%w: callcenter_idle_lock_minutes must be 1–%d", ErrBadSettings, MaxAutoLock)
 	case s.PhoneChargeTimeoutSeconds != 0 && (s.PhoneChargeTimeoutSeconds < MinPhoneChargeTimeoutS || s.PhoneChargeTimeoutSeconds > MaxPhoneChargeTimeoutS):
@@ -436,6 +462,9 @@ func (s *Settings) Normalize() {
 	}
 	if s.CallcenterIdleLockMinutes == 0 {
 		s.CallcenterIdleLockMinutes = DefaultCallcenterIdleLock
+	}
+	if s.KitchenStart == 0 {
+		s.KitchenStart = DefaultKitchenStart
 	}
 	if s.CloseUnpaidCounterAction == "" {
 		s.CloseUnpaidCounterAction = CloseUnpaidWaste

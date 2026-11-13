@@ -28,7 +28,10 @@
   const kindLabel = (k: string) => ({ agent: 'Pi', mobile: 'Mobile', kiosk: 'Kiosk', ingest: 'Ingest' })[k] ?? k;
 
   async function load() {
-    devices = await storeApi<Device[]>('/me/devices');
+    // Working keys first (the newest used on top), revoked ones last.
+    devices = (await storeApi<Device[]>('/me/devices')).sort(
+      (a, b) => Number(!!a.revoked_at) - Number(!!b.revoked_at) || String(b.last_used_at ?? '').localeCompare(String(a.last_used_at ?? ''))
+    );
   }
   onMount(() => load().catch((e) => toast.error(e)));
 
@@ -157,7 +160,7 @@
 
 <svelte:head><title>Devices — quicc</title></svelte:head>
 
-<PageHeader title="Devices" subtitle="Keys that let devices talk to quicc for this store" />
+<PageHeader title="Devices" subtitle="The store's Pi, its tablets and terminals, and the keys that let a device talk to quicc." />
 
 {#if minted}
   <SecretReveal title="New device key — copy it now, it is never shown again" secret={minted.api_key} ondismiss={() => (minted = null)}>

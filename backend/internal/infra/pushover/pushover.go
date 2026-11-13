@@ -60,6 +60,10 @@ type Client struct {
 	devices  []string
 	http     *http.Client
 	endpoint string
+	// The prod-only guard (guard.go): APP_ENV as read at New, allowed =
+	// APP_ENV prod or the tests-only PUSHOVER_NONPROD=1.
+	appEnv  string
+	allowed bool
 }
 
 // New builds a client for app `token` paging every non-empty recipient key.
@@ -70,7 +74,10 @@ func New(token string, recipients ...string) *Client {
 			rs = append(rs, r)
 		}
 	}
+	appEnv, allowed := guardFromEnv()
 	return &Client{
+		appEnv:     appEnv,
+		allowed:    allowed,
 		token:      strings.TrimSpace(token),
 		recipients: rs,
 		http:       &http.Client{Timeout: 10 * time.Second},
@@ -188,6 +195,9 @@ func (c *Client) SendDevices(ctx context.Context, devices []string, title, messa
 }
 
 func (c *Client) post(ctx context.Context, user, device, title, message, sound string) error {
+	if c.suppressed(title, message) { // prod only (guard.go)
+		return nil
+	}
 	form := url.Values{"token": {c.token}, "user": {user}, "message": {message}}
 	if device != "" {
 		form.Set("device", device)

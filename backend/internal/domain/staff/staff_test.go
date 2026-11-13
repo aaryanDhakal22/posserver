@@ -117,7 +117,7 @@ func TestTerminalAppDefaults(t *testing.T) {
 	d := DefaultSettings()
 	if d.DefaultTab != "info" || d.ShowHistory || d.ButtonFont != "barlow" || d.CashierPriceDropPct != 20 || d.ClickSound ||
 		d.PricesOnButtons || d.OutOfAreaMarginMi != 1 || d.NameOnPaidCounter || d.CardTips ||
-		!reflect.DeepEqual(d.CardTipPercents, []int{15, 18, 20}) || d.EmployeeMealPct != 20 {
+		!reflect.DeepEqual(d.CardTipPercents, []int{15, 18, 20}) || d.EmployeeMealPct != 20 || d.TakeoutTwoCopies {
 		t.Fatalf("defaults: %+v", d)
 	}
 	for _, tab := range DefaultTabs {
@@ -276,5 +276,32 @@ func TestCloseUnpaidCounterAction(t *testing.T) {
 	s.Normalize()
 	if s.CloseUnpaidCounterAction != CloseUnpaidWaste || s.Validate() != nil {
 		t.Fatalf("a row saved before the field: %q", s.CloseUnpaidCounterAction)
+	}
+}
+
+// The owner's X of 2026-11-13: the online / kitchen numbers start at
+// kitchen_start (default 1100); counter_start stays below it (S-6).
+func TestKitchenStart(t *testing.T) {
+	d := DefaultSettings()
+	if DefaultKitchenStart != 1100 || d.KitchenStart != DefaultKitchenStart || d.Validate() != nil {
+		t.Fatalf("default %d", d.KitchenStart)
+	}
+	ok := DefaultSettings()
+	ok.CounterStart, ok.KitchenStart = 100, 500
+	if err := ok.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct{ counter, kitchen int }{{500, 500}, {600, 500}, {1, 1}, {1, MaxCounterStart + 1}} {
+		s := DefaultSettings()
+		s.CounterStart, s.KitchenStart = c.counter, c.kitchen
+		if err := s.Validate(); err == nil {
+			t.Fatalf("counter %d kitchen %d accepted", c.counter, c.kitchen)
+		}
+	}
+	s := DefaultSettings()
+	s.KitchenStart = 0 // a row saved before the field
+	s.Normalize()
+	if s.KitchenStart != DefaultKitchenStart || s.Validate() != nil {
+		t.Fatalf("a row saved before the field: %d", s.KitchenStart)
 	}
 }

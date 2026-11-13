@@ -75,10 +75,10 @@
   let tagsStr = $state((it0.tags || []).join(', '));
   let printerId = $state<string | null>(it0.printer_id);
   let noKitchen = $state(!!it0.no_kitchen_ticket);
+  // The printer dropdown's "No printer" (the owner, 2026-11-13: one dropdown; = no_kitchen_ticket).
+  const NO_PRINTER = '__no_printer__';
   // The store's Quick add item (main 00008): the route of the terminal's typed lines.
   const quickAdd = !!(it0 as Item & { quick_add?: boolean }).quick_add;
-  // Receipt only: its own flag, or its category's when it has no printer of its own.
-  const receiptOnly = $derived(noKitchen || (printerId === null && categoryNoKitchen));
   let priceErr = $state('');
   // Bank data: kitchen name, SKU, sizes (saved with the item).
   const b0 = untrack(() => ({
@@ -236,7 +236,7 @@
       if (printerId !== it0.printer_id || noKitchen !== !!it0.no_kitchen_ticket) {
         await storeApi(`/me/menu/items/${it0.id}/printer`, {
           method: 'PATCH',
-          body: JSON.stringify({ printer_id: printerId, no_kitchen_ticket: noKitchen })
+          body: JSON.stringify({ printer_id: noKitchen ? null : printerId, no_kitchen_ticket: noKitchen })
         });
       }
       onsaved(it0.category_id);
@@ -303,7 +303,7 @@
     {#if quickAdd}
       <p class="rounded-r12 bg-info-bg text-text2 px-3.5 py-2.5 text-[13px]" data-testid="quick-add-note">
         <b>Quick add</b> on the terminal (the cashier types a name and a price) prints where this item prints: its
-        printer below, else its category's default printer; <b>No kitchen ticket</b> = the receipt only; neither = every
+        printer below, else its category's default printer; <b>No printer</b> = the customer receipt only; neither = every
         station. It is never on a menu, and it can't be deleted.
       </p>
     {/if}
@@ -394,30 +394,39 @@
       </div>
     </div>
     <div>
-      <label class="lbl" for="ie-printer">Kitchen printer</label>
-      <select id="ie-printer" class="field" bind:value={printerId} disabled={noKitchen}>
-        <option value={null}
+      <label class="lbl" for="ie-printer">Prints on</label>
+      <select
+        id="ie-printer"
+        class="field"
+        value={noKitchen ? NO_PRINTER : (printerId ?? '')}
+        onchange={(e) => {
+          const v = e.currentTarget.value;
+          noKitchen = v === NO_PRINTER;
+          printerId = v && v !== NO_PRINTER ? v : null;
+        }}
+      >
+        <option value=""
           >{categoryNoKitchen
-            ? 'Same as category (no kitchen ticket)'
+            ? "Category's printer (No printer: receipt only)"
             : inheritedPrinter
-              ? `Same as category (${inheritedPrinter})`
-              : 'None — prints on every station'}</option
+              ? `Category's printer (${inheritedPrinter})`
+              : "Category's printer (none set: every station)"}</option
         >
         {#each printers as p (p.id)}
           <option value={p.id}>{printerLabel(p, printers)}{upFor(p.name) === true ? ' · online' : upFor(p.name) === false ? ' · offline' : ''}</option>
         {/each}
+        <option value={NO_PRINTER}>No printer: prints on the customer receipt only</option>
       </select>
-      {#if printerId === null && !inheritedPrinter && !receiptOnly}
-        <p class="help !text-warn">Neither the item nor its category has a printer, so it prints on every kitchen station.</p>
-      {/if}
-      <div class="flex items-center gap-2.5 mt-2">
-        <Switch bind:checked={noKitchen} label="No kitchen ticket" />
-        <span>No kitchen ticket</span>
-      </div>
       <p class="help" data-testid="no-kitchen-hint">
-        Prints on the receipt only: no station ticket, not in 'Also on this order'.{receiptOnly && !noKitchen
-          ? ' Its category is set this way.'
-          : ''}
+        {#if noKitchen}
+          No station ticket and not in 'Also on this order'; it still prints on the customer receipt (drinks, sauces on the side).
+        {:else if printerId === null && categoryNoKitchen}
+          Its category prints on the customer receipt only.
+        {:else if printerId === null && !inheritedPrinter}
+          <span class="text-warn">Neither the item nor its category has a printer, so it prints on every kitchen station.</span>
+        {:else}
+          The kitchen ticket prints here; the customer receipt prints on the receipt printer as always.
+        {/if}
       </p>
       {#if piState === 'offline'}<p class="help !text-warn">The Pi is offline — printer status may be stale.</p>{/if}
     </div>

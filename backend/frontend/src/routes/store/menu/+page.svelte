@@ -92,7 +92,7 @@
   // filters
   let q = $state('');
   let catF = $state('');
-  let printerF = $state(''); // '' any · '__none' no kitchen printer · printer id
+  let printerF = $state(''); // '' any · '__none' No printer (receipt only) · '__every' not set (every station) · printer id
   let outOnly = $state(false);
   let noPrinterOnly = $state(false);
   let zeroOnly = $state(false);
@@ -257,7 +257,7 @@
           const eff = effective(it, c);
           if (!matches(it, s)) return false;
           if (zeroOnly && !zeroPriced(it)) return false;
-          if (printerF === '__none' ? !!eff : printerF && eff !== printerF) return false;
+          if (printerF === '__every' ? !unprinted(it, c) : printerF === '__none' ? !receiptOnly(it, c) : printerF && (receiptOnly(it, c) || eff !== printerF)) return false;
           if (outOnly && it.in_stock) return false;
           if (noPrinterOnly && !unprinted(it, c)) return false;
           return true;
@@ -597,10 +597,11 @@
       <select id="f-printer" class="field !w-auto" bind:value={printerF}>
         <option value="">Any printer</option>
         {#each printers as p (p.id)}<option value={p.id}>{printerLabel(p, printers)}</option>{/each}
-        <option value="__none">No kitchen printer</option>
+        <option value="__none">No printer (receipt only)</option>
+        <option value="__every">Not set (every station)</option>
       </select>
       <button type="button" class="fchip" aria-pressed={outOnly} onclick={() => (outOnly = !outOnly)}>Out of stock</button>
-      <button type="button" class="fchip" aria-pressed={noPrinterOnly} onclick={() => (noPrinterOnly = !noPrinterOnly)}>No kitchen printer</button>
+      <button type="button" class="fchip" aria-pressed={noPrinterOnly} onclick={() => (noPrinterOnly = !noPrinterOnly)}>Every station</button>
       <button type="button" class="fchip" aria-pressed={zeroOnly} onclick={() => (zeroOnly = !zeroOnly)}>$0 price</button>
       {#if filtering}<Button size="sm" variant="ghost" onclick={clearFilters}>Clear</Button>{/if}
     </div>
@@ -718,8 +719,8 @@
                       </button>
                       {#if isQuickAdd(it)}<span class="block text-xs text-muted truncate" data-testid="quick-add-row">The terminal's Quick add (typed items): never on a menu</span>{/if}
                       {#if subtitle(it)}<span class="block text-xs text-muted truncate">{subtitle(it)}</span>{/if}
-                      <span class="sm:hidden block text-xs truncate {eff ? 'text-text2' : 'text-warn font-medium'}">
-                        {eff ? `Prints on ${printerName(eff)}` : 'No printer — prints on every station'}
+                      <span class="sm:hidden block text-xs truncate {eff || receiptOnly(it, c) ? 'text-text2' : 'text-warn font-medium'}">
+                        {receiptOnly(it, c) ? 'No printer: customer receipt only' : eff ? `Prints on ${printerName(eff)}` : 'Not set: prints on every station'}
                       </span>
                     </span>
                     <span class="text-right">
@@ -740,7 +741,10 @@
                       />
                     </span>
                     <span class="c-printer min-w-0">
-                      {#if !eff}
+                      {#if receiptOnly(it, c)}
+                        <span class="text-text2 truncate block" title="No station ticket: the customer receipt only">No printer</span>
+                        <span class="block text-[11px] text-muted truncate">{it.no_kitchen_ticket ? 'receipt only' : `receipt only, from ${c.name}`}</span>
+                      {:else if !eff}
                         <Badge tone="warn" title="No printer on the item or its category — prints on every station">Every station</Badge>
                       {:else if it.printer_id}
                         <span class="text-text2 truncate block">{printerName(it.printer_id)}</span>

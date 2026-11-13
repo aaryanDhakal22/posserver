@@ -36,7 +36,7 @@ func (d deletes) Get(ctx context.Context, id uuid.UUID) (repositories.SquareConn
 	return repositories.SquareConnection{}, pgx.ErrNoRows
 }
 
-// A sandbox token pasted in Store › Payments is a connection like OAuth's:
+// A sandbox token pasted in Store › Settings › Payments is a connection like OAuth's:
 // the reader's session, keyed payments, no refresh, no revoke; never in
 // production.
 func TestPasteSandboxToken(t *testing.T) {

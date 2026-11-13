@@ -191,6 +191,9 @@ func (s *Service) CreateCategory(ctx context.Context, tenantID, locationID, menu
 	if name == "" {
 		return nil, errors.New("name is required")
 	}
+	if noKitchen { // "No printer": the receipt only, no default printer
+		defaultPrinter = nil
+	}
 	if err := s.validatePrinter(ctx, locationID, defaultPrinter); err != nil {
 		return nil, err
 	}
@@ -216,6 +219,7 @@ func (s *Service) UpdateCategory(ctx context.Context, tenantID, locationID, id u
 	if err := s.validatePrinter(ctx, locationID, defaultPrinter); err != nil {
 		return nil, err
 	}
+	defaultPrinter, noKitchen = menuDom.NormalizeRouting(defaultPrinter, noKitchen)
 	nk := false
 	if noKitchen != nil {
 		nk = *noKitchen
@@ -321,6 +325,7 @@ func (s *Service) AssignItemPrinter(ctx context.Context, tenantID, locationID, i
 	if err := s.ownItem(ctx, tenantID, locationID, id); err != nil {
 		return err
 	}
+	printerID, noKitchen = menuDom.NormalizeRouting(printerID, noKitchen)
 	if err := s.validatePrinter(ctx, locationID, printerID); err != nil {
 		return err
 	}

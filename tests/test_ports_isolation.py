@@ -115,6 +115,7 @@ def test_no_store_reaches_another_by_id(admin, two) -> None:
         ("PATCH", f"{MENU}/views/{web['id']}", {"name": "x"}),
         ("GET", f"{MENU}/views/{web['id']}/build", None),
         ("GET", f"{MENU}/views/{web['id']}/entries", None),
+        ("POST", f"{MENU}/views/{web['id']}/layout/remove", {"flows": [item["id"]]}),
         ("POST", f"{MENU}/views/{web['id']}/entries", {"kind": "item", "anchor": {"item_ids": [item["id"]]}}),
         ("PUT", f"{MENU}/entries/{entry['id']}", {"anchor": {"item_ids": [item["id"]]}, "hidden": True}),
         ("DELETE", f"{MENU}/entries/{entry['id']}", None),

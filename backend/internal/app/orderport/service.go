@@ -339,8 +339,20 @@ func (s *Service) work(ctx context.Context, ch channelDom.Channel, req Request, 
 	if err != nil {
 		return parked("retry", tryAgain, err)
 	}
+	// A delivery's address, checked once: its distance prices the delivery
+	// fee by distance (the owner, 2026-11-13) and, below, the website must
+	// reach it. Never the client's distance.
+	var dc *storestatusApp.DeliveryCheck
+	var dcErr error
+	if req.Type == "delivery" {
+		dc, dcErr = s.deliveryCheck(ctx, ch, req)
+		if dcErr != nil && resume && len(pctx.Settings.DeliveryBands) > 1 {
+			// The fee may depend on it: price it again when the address can be checked.
+			return parked("retry", tryAgain, dcErr)
+		}
+	}
 	cart := pricing.Cart{Type: req.Type, Payment: req.Payment.Method, Lines: req.Lines, Code: req.Code, TipCents: req.TipCents,
-		TipPct: req.TipPct, FirstOrder: req.FirstOrder, Coupons: req.Coupons}
+		TipPct: req.TipPct, FirstOrder: req.FirstOrder, Coupons: req.Coupons, DistanceM: distanceOf(dc)}
 	q := pricing.Price(*pctx, cart, s.now())
 	if resume && (len(q.Errors) > 0 || q.TotalCents != pl.ChargeCents) {
 		// The menu moved since the card call: don't save a different order.
@@ -363,8 +375,7 @@ func (s *Service) work(ctx context.Context, ch channelDom.Channel, req Request, 
 	// A delivery address the store reaches (the website must; the call
 	// center and counter may send it anyway — the tablet flags it).
 	if req.Type == "delivery" && !resume {
-		a := req.Address
-		dc, err := s.status.DeliveryCheck(ctx, ch.TenantID, ch.LocationID, geo.Address{Line1: a.Line1, City: a.City, State: a.State, Zip: a.Zip})
+		err := dcErr
 		strict := ch.Kind == channelDom.KindWeb
 		switch {
 		case err != nil && strict:
@@ -996,4 +1007,21 @@ func (s *Service) Reorder(ctx context.Context, ch channelDom.Channel, link repos
 		out.Quote, out.Issues = &q, q.Errors
 	}
 	return out, nil
+}
+
+// deliveryCheck checks a delivery request's address against the store's
+// area (and finds its distance).
+func (s *Service) deliveryCheck(ctx context.Context, ch channelDom.Channel, req Request) (*storestatusApp.DeliveryCheck, error) {
+	a := req.Address
+	return s.status.DeliveryCheck(ctx, ch.TenantID, ch.LocationID, geo.Address{Line1: a.Line1, City: a.City, State: a.State, Zip: a.Zip})
+}
+
+// distanceOf is a checked address's distance from the store in meters (nil
+// = not located: the delivery fee by distance then charges its first row).
+func distanceOf(dc *storestatusApp.DeliveryCheck) *int64 {
+	if dc == nil || dc.DistanceM == nil {
+		return nil
+	}
+	d := int64(*dc.DistanceM)
+	return &d
 }

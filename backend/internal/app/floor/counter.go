@@ -388,5 +388,5 @@ func (s *Service) flagged(ctx context.Context, sc order.Scope, eid uuid.UUID, ty
 	}
 	s.flagPages.Add(key)
 	_ = s.notifier.Notify(context.WithoutCancel(ctx), notify.Notice{LocationID: uuid.UUID(sc.LocationID), Kind: notify.KindPaymentProblem,
-		Title: "Money to check", Message: fmt.Sprintf("main stored a %s it doesn't agree with (%s). See Store > Reports > Flags.", typ, strings.Join(codes, ", "))})
+		Title: "Money to check", Message: fmt.Sprintf("main stored a %s it doesn't agree with (%s). See Store › Reports › Money notes.", typ, strings.Join(codes, ", "))})
 }

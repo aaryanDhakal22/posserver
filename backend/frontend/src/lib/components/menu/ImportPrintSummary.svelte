@@ -19,7 +19,7 @@
     {#if noKitchen}
       <li class="flex items-center gap-2 text-text2">
         <Icon name="printer" size={14} class="text-muted shrink-0" />
-        <span><b class="text-text">{plural(noKitchen, 'item')}</b> print on the receipt only (no kitchen ticket)</span>
+        <span><b class="text-text">{plural(noKitchen, 'item')}</b> print on the customer receipt only (No printer)</span>
       </li>
     {/if}
     {#if noPrinter}

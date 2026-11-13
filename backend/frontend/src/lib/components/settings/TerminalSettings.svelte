@@ -188,6 +188,7 @@
       <Section title="Numbers and phone numbers">
         <div class="stack">
           {@render num('counterStart')}
+          {@render num('kitchenStart')}
           {@render text('areaCodes', 'Local area codes', `Separated by commas. The terminal uses them to fill in phone numbers. Default ${D.area_codes.join(', ')}.`)}
         </div>
       </Section>
@@ -255,6 +256,20 @@
       </Section>
       <Section title="Cash drawers">
         {@render num('drawerStart')}
+      </Section>
+    {:else if group === 'receipts'}
+      <Section
+        title="Customer copies"
+        description="The customer’s receipt for a takeout (pickup) order: the one a counter terminal prints when it rings the takeout, and the one the Pi prints for an online, website or call-center pickup."
+      >
+        <div class="stack">
+          <label class="sw-row"><Switch bind:checked={sf.takeoutTwoCopies} label="Takeout: print 2 customer copies" />Takeout: print 2 customer copies</label>
+          <p class="help !mt-0 max-w-[60ch]">
+            On: every takeout order prints two Customer Copies, each cut, one for the bag. A reprint still prints one. Counter orders and
+            deliveries don’t change (a delivery already prints its Merchant Copy and Customer Copy). The Pi’s own receipt copies
+            (Quibase › Settings) still count: a pickup the Pi prints takes the larger of the two. Default off.
+          </p>
+        </div>
       </Section>
     {/if}
   {/if}

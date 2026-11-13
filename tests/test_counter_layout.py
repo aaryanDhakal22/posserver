@@ -278,6 +278,78 @@ def test_build_flags_what_went_away(mgr):
     assert soda["action"]["missing"] is True
 
 
+def test_broken_buttons_and_entries_are_named_and_removable(mgr):
+    """The owner deleted items that counter buttons and a website change still name (prod, 2026-11-13):
+    every needs-attention line says what it is by what is left (a button's caption, its tab or screen and
+    cell, the item id; an entry's id, name and what it changed); Remove takes one button off the layout
+    while others stay broken (a whole-layout PUT refuses until all are fixed), the deleted item's flow
+    goes with its last button, and Find problems lists them under `broken`."""
+    ids, views = _setup(mgr)
+    counter, web = views[("counter", "Counter")], views[("web", "Web")]
+    url = f"{MENU}/views/{counter['id']}/layout"
+    _ok(mgr.put(url, json=ids.layout(_names_layout()), timeout=10))
+    entry = _ok(mgr.post(f"{MENU}/views/{web['id']}/entries", json={
+        "kind": "item", "anchor": {"item_ids": [ids.item["Can Soda"]]}, "display_name": "Fountain Soda",
+        "price_override_cents": 199}, timeout=5), 201)
+    pizza, soda = ids.item["Cheese Pizza"], ids.item["Can Soda"]
+    _ok(mgr.delete(f"{MENU}/items/{pizza}", timeout=5), 204)
+    _ok(mgr.delete(f"{MENU}/items/{soda}", timeout=5), 204)
+
+    def lines() -> dict:
+        build = _ok(mgr.get(f"{MENU}/views/{counter['id']}/build", timeout=5))
+        return {(n["where_kind"], n["where"], n["cell"]["page"], n["cell"]["row"], n["cell"]["col"]): n
+                for n in build["needs_attention"] if n["code"] == "layout_item_missing"}
+
+    got = lines()
+    # One line per button; Cheese Pizza's flow adds none (its buttons name it already).
+    assert set(got) == {("tab", "Pizza & Calzones", 0, 0, 0), ("tab", "Pizza & Calzones", 1, 0, 0),
+                        ("screen", "Beverage Options", 0, 0, 0)}, got
+    med = got[("tab", "Pizza & Calzones", 0, 0, 0)]
+    assert med["caption"] == "12\" Med Regular Cheese" and med["item_id"] == pizza and med["cell"]["page_name"] == "12\" Med"
+    assert "name" not in med  # the bank's name went with the item
+    assert got[("tab", "Pizza & Calzones", 1, 0, 0)]["caption"] == "16\" XL Cheese"
+    pick = got[("screen", "Beverage Options", 0, 0, 0)]
+    assert pick["item_id"] == soda and "caption" not in pick
+
+    gone = [n for n in _ok(mgr.get(f"{MENU}/views/{web['id']}/build", timeout=5))["needs_attention"] if n["code"] == "anchor_gone"]
+    assert len(gone) == 1, gone
+    assert gone[0]["entry_id"] == entry["id"] and gone[0]["item_id"] == soda and gone[0]["name"] == "Fountain Soda"
+    assert gone[0]["entry_kind"] == "item" and gone[0]["change"] == "$1.99" and gone[0]["price_cents"] == 199
+
+    probs = _ok(mgr.get(f"{MENU}/problems", timeout=10))
+    broken = [p for p in probs["problems"] if p["check"] == "broken"]
+    assert probs["counts"]["broken"] == 4 and len(broken) == 4, broken
+    named = {p["message"] for p in broken}
+    assert "Button “12\" Med Regular Cheese” on tab “Pizza & Calzones” (page “12\" Med”, row 1, column 1): its item was deleted (item " + pizza[:8] + ")." in named
+    assert "Change “Fountain Soda” ($1.99): its item was deleted (item " + soda[:8] + ")." in named
+    assert {p["view_name"] for p in broken} == {"Counter", "Web"} and all(p["attention"] for p in broken)
+
+    # A whole-layout PUT is refused while any button is broken; one button comes off on its own.
+    assert _ok(mgr.put(url, json=_ok(mgr.get(url, timeout=5)), timeout=10), 422)["code"] == "invalid_layout"
+    v = _version(mgr)
+    ref = lambda k: {"where_kind": k[0], "where": k[1], "page": k[2], "row": k[3], "col": k[4]}  # noqa: E731
+    assert _ok(mgr.post(f"{url}/remove", json={"buttons": [ref(("tab", "Pizza & Calzones", 0, 0, 0))]}, timeout=10)) == {"buttons": 1, "flows": 0}
+    assert _version(mgr) > v
+    assert set(lines()) == {("tab", "Pizza & Calzones", 1, 0, 0), ("screen", "Beverage Options", 0, 0, 0)}
+    assert pizza in _ok(mgr.get(url, timeout=5))["flows"]  # a button still sells it
+    # Naming nothing that is there writes nothing; an empty body is a 400.
+    v = _version(mgr)
+    assert _ok(mgr.post(f"{url}/remove", json={"buttons": [ref(("tab", "Nowhere", 0, 0, 0))]}, timeout=10)) == {"buttons": 0, "flows": 0}
+    assert _version(mgr) == v
+    assert _ok(mgr.post(f"{url}/remove", json={}, timeout=5), 400)["code"] == "bad_request"
+    # The rest: Cheese Pizza's flow goes with its last button, and the layout is clean again.
+    assert _ok(mgr.post(f"{url}/remove", json={"buttons": [ref(k) for k in lines()]}, timeout=10)) == {"buttons": 2, "flows": 1}
+    assert lines() == {}
+    lay = _ok(mgr.get(url, timeout=5))
+    assert pizza not in lay["flows"]
+    _ok(mgr.put(url, json=lay, timeout=10))
+
+    # The website change comes off its view.
+    _ok(mgr.delete(f"{MENU}/entries/{entry['id']}", timeout=5), 204)
+    assert not [n for n in _ok(mgr.get(f"{MENU}/views/{web['id']}/build", timeout=5))["needs_attention"] if n["code"] == "anchor_gone"]
+    assert _ok(mgr.get(f"{MENU}/problems", timeout=10))["counts"]["broken"] == 0
+
+
 def test_bad_layout_is_422_with_every_problem(mgr):
     ids, views = _setup(mgr)
     counter = views[("counter", "Counter")]

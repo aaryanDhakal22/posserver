@@ -82,6 +82,46 @@ func (s *Service) SetLayout(ctx context.Context, locationID, viewID uuid.UUID, l
 	return l, nil
 }
 
+// Removed is what RemoveFromLayout took out of a layout.
+type Removed struct {
+	Buttons int `json:"buttons"`
+	Flows   int `json:"flows"`
+}
+
+// RemoveFromLayout takes buttons and flows out of a counter view's layout
+// (menuview.RemoveFromLayout) and saves it when that adds no problem: a
+// layout that still names other deleted rows can lose its broken buttons one
+// at a time, which a whole-layout PUT refuses until every one is fixed. A
+// *LayoutError lists the new problems (nothing is saved then); nothing
+// removed = nothing saved.
+func (s *Service) RemoveFromLayout(ctx context.Context, locationID, viewID uuid.UUID, buttons []menuview.ButtonRef, flows []string) (Removed, error) {
+	l, err := s.Layout(ctx, locationID, viewID)
+	if err != nil {
+		return Removed{}, err
+	}
+	bank, err := s.repo.LoadBank(ctx, locationID)
+	if err != nil {
+		return Removed{}, err
+	}
+	deals, err := s.repo.DealNames(ctx, locationID)
+	if err != nil {
+		return Removed{}, err
+	}
+	refs := menuview.LayoutRefs{Bank: bank, Deals: deals}
+	menuview.NormalizeLayout(l)
+	before := menuview.ValidateLayout(l, refs)
+	var r Removed
+	r.Buttons, r.Flows = menuview.RemoveFromLayout(l, bank, buttons, flows)
+	if r.Buttons == 0 && r.Flows == 0 {
+		return r, nil
+	}
+	after := menuview.ValidateLayout(l, refs)
+	if !menuview.NoNewProblems(before, after) {
+		return Removed{}, &LayoutError{Problems: after}
+	}
+	return r, s.repo.SetLayout(ctx, viewID, l)
+}
+
 // ClearLayout removes a counter view's layout (no layout is not an error).
 func (s *Service) ClearLayout(ctx context.Context, locationID, viewID uuid.UUID) error {
 	v, err := s.View(ctx, locationID, viewID)

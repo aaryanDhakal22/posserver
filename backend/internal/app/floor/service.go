@@ -88,6 +88,9 @@ type event struct {
 	EarlierDay bool            `json:"earlier_day"`
 	StaffID    string          `json:"staff_id"`
 	Entries    json.RawMessage `json:"entries"`
+	// order.printed (agent 2.5.5, §2.10ag): the print job and its tickets.
+	Mode    string          `json:"mode"`
+	Tickets json.RawMessage `json:"tickets"`
 	// customer.upsert (terminal 1d): the customer + which fields it sets.
 	Customer json.RawMessage `json:"customer"`
 	Set      []string        `json:"set"`
@@ -164,6 +167,7 @@ type Service struct {
 	repo      order.FloorRepository
 	runs      DeliveryRunStore
 	holds     CardHolds
+	prints    PrintStore
 	onCancel  func(ctx context.Context, orderID uuid.UUID)
 	logger    zerolog.Logger
 	meters    observability.Meters
@@ -360,6 +364,8 @@ func (s *Service) apply(ctx context.Context, sc order.Scope, ev event) (string, 
 			BatchID: ev.BatchID, DriverID: ev.DriverID, DriverName: ev.DriverName, PlanID: ev.PlanID,
 			SuggestedIDs: ev.SuggestedIDs, SentIDs: ev.SentIDs, Stops: stops, At: ev.At,
 		})
+	case EventOrderPrinted:
+		return s.applyPrinted(ctx, sc, eid, ev)
 	case "order.placed":
 		return s.applyPlaced(ctx, sc, eid, ev)
 	case "order.payment":

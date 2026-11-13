@@ -503,3 +503,33 @@ func (r *DayCloseRepository) MoneyFlags(ctx context.Context, locationID uuid.UUI
 	}
 	return out, rows.Err()
 }
+
+// CardPayments lists the batch's card payments (counter origin: the Pi's
+// terminal, keyed and Square app payments and their refunds), oldest first,
+// with the brand and the order's number.
+func (r *DayCloseRepository) CardPayments(ctx context.Context, locationID uuid.UUID, batch int64) ([]dayclose.CardPayment, error) {
+	rows, err := r.pool.Query(ctx, `SELECT p.id::text, COALESCE(p.order_id::text, ''), p.processor, p.card_brand, p.last4,
+		       p.amount_cents, p.tip_cents, COALESCE(p.captured_at, p.received_at), o.kitchen_order_number
+		FROM payments p LEFT JOIN orders o ON o.id = p.order_id
+		WHERE p.location_id = $1 AND p.batch_id = $2 AND p.origin = 'counter'
+		  AND p.processor IN ('card', 'manual_card', 'square_app')
+		ORDER BY COALESCE(p.captured_at, p.received_at), p.id LIMIT 1000`, locationID, batch)
+	if err != nil {
+		return nil, fmt.Errorf("card payments: %w", err)
+	}
+	defer rows.Close()
+	out := []dayclose.CardPayment{}
+	for rows.Next() {
+		var c dayclose.CardPayment
+		var num *int32
+		if err := rows.Scan(&c.ID, &c.OrderID, &c.Method, &c.Brand, &c.Last4, &c.AmountCents, &c.TipCents, &c.At, &num); err != nil {
+			return nil, err
+		}
+		if num != nil {
+			n := int64(*num)
+			c.OrderNumber = &n
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}

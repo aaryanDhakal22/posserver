@@ -3,14 +3,18 @@
 // it came (half_topping_price etc. would reset otherwise — main/CLAUDE.md "Half and half").
 // Delivery fee = the store's share + the driver's share (TERMINAL-PLAN "Delivery fee"); the customer
 // pays the total (delivery_fee_cents), the split feeds the driver reports.
-import { centsInput, dollars, toCents, type PricingBody, type PricingFees, type PricingTips } from '$lib/api';
+import { centsInput, dollars, toCents, type DeliveryBand, type PricingBody, type PricingFees, type PricingTips } from '$lib/api';
 
 /** main's default driver share, capped at the fee. */
 export const DEFAULT_DRIVER_CENTS = 300;
 /** The channel kinds that may have their own fees and tips (the vendor's are kept as they are). */
 export const KINDS = ['web', 'operator', 'counter'];
 
-export type FeesForm = { service: string; servicePct: string; storeShare: string; driverShare: string; freeOver: string; min: string };
+export type FeesForm = {
+  service: string; servicePct: string; storeShare: string; driverShare: string; freeOver: string; min: string;
+  /** The delivery fee by distance, edited on Map and delivery area (kept as it is here). */
+  bands: DeliveryBand[] | null;
+};
 export type TipsForm = { enabled: boolean; presets: string; def: string };
 export type KindForm = { ownFees: boolean; fees: FeesForm; ownTips: boolean; tips: TipsForm };
 
@@ -20,8 +24,16 @@ export function feesForm(f: PricingFees | null): FeesForm {
   return {
     service: centsInput(f?.service_fee_cents ?? 0), servicePct: String((f?.service_fee_bps ?? 0) / 100),
     storeShare: centsInput(total - driver), driverShare: centsInput(driver),
-    freeOver: f?.free_delivery_over_cents == null ? '' : centsInput(f.free_delivery_over_cents), min: centsInput(f?.delivery_min_cents ?? 0)
+    freeOver: f?.free_delivery_over_cents == null ? '' : centsInput(f.free_delivery_over_cents), min: centsInput(f?.delivery_min_cents ?? 0),
+    bands: f?.delivery_bands?.length ? f.delivery_bands.map((b) => ({ ...b })) : null
   };
+}
+/** "$3.00–$6.50" for a fee by distance (null = a flat fee). */
+export function bandsRange(bands: DeliveryBand[] | null | undefined): string | null {
+  if (!bands?.length) return null;
+  const fees = bands.map((b) => b.fee_cents);
+  const lo = Math.min(...fees), hi = Math.max(...fees);
+  return lo === hi ? dollars(lo) : `${dollars(lo)}–${dollars(hi)}`;
 }
 export function feeTotal(f: FeesForm): string {
   const a = f.storeShare.trim() ? toCents(f.storeShare) : 0;
@@ -46,12 +58,18 @@ export function feesOf(f: FeesForm, where: string): PricingFees {
     if (v === null || v < 0) throw new Error(`${where}: “${s}” isn't a valid ${what}.`);
     return v;
   };
-  return {
+  const out: PricingFees = {
     service_fee_cents: c(f.service, 'online fee'), service_fee_bps: Math.round((parseFloat(f.servicePct) || 0) * 100),
     delivery_fee_cents: c(f.storeShare, 'store share') + c(f.driverShare, 'driver share'),
     delivery_driver_cents: c(f.driverShare, 'driver share'), free_delivery_over_cents: f.freeOver.trim() ? c(f.freeOver, 'amount') : null,
     delivery_min_cents: c(f.min, 'minimum')
   };
+  if (f.bands?.length) {
+    // The fee by distance stays (Map and delivery area edits it); the flat fee is its first row's.
+    out.delivery_bands = f.bands;
+    out.delivery_fee_cents = f.bands[0].fee_cents;
+  }
+  return out;
 }
 export function tipsOf(t: TipsForm): PricingTips {
   return {
@@ -78,7 +96,7 @@ export function feesSummary(b: PricingBody): string {
   const t = b.store.tips;
   const own = KINDS.filter((k) => b.kinds[k]?.fees || b.kinds[k]?.tips).length;
   return [
-    `Delivery ${dollars(f?.delivery_fee_cents ?? 0)}`,
+    f?.delivery_bands?.length ? `Delivery ${bandsRange(f.delivery_bands)} by distance` : `Delivery ${dollars(f?.delivery_fee_cents ?? 0)}`,
     f?.service_fee_cents || f?.service_fee_bps ? `online fee ${dollars(f.service_fee_cents)}${f.service_fee_bps ? ` + ${f.service_fee_bps / 100}%` : ''}` : 'no online fee',
     t?.enabled ? 'asks for tips' : 'no tips',
     own ? `${own} channel${own === 1 ? '' : 's'} with their own` : ''

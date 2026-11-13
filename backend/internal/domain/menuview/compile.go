@@ -15,8 +15,10 @@ import (
 // channel of the view's kind shows (web / operator / counter) or how a
 // vendor's names map to the bank (vendor).
 // BuildFormat is the shape of a Build; a cached build of another format is
-// compiled again (2: modifier groups listed once, items refer to them).
-const BuildFormat = 2
+// compiled again (2: modifier groups listed once, items refer to them; 3:
+// needs-attention lines say where a broken layout button sits and what a
+// gone entry changed).
+const BuildFormat = 3
 
 type Build struct {
 	Format     int             `json:"build_format"`
@@ -127,6 +129,31 @@ type NeedsAttention struct {
 	Name    string `json:"name,omitempty"`
 	Orders  int64  `json:"orders,omitempty"`
 	Message string `json:"message"`
+	// EntryKind, Change and PriceCents describe the entry of an anchor_gone
+	// line (its kind; what it changes, e.g. "hidden, $12.99, moved to
+	// “Salads”"; its price override), so a gone item's entry can be told
+	// apart with no name.
+	EntryKind  string `json:"entry_kind,omitempty"`
+	Change     string `json:"change,omitempty"`
+	PriceCents *int64 `json:"price_cents,omitempty"`
+	// A counter layout line (layout_*_missing) says where it is: WhereKind
+	// tab | screen | flow, Where the tab's or screen's name, Cell the
+	// button's place (absent for a flow), Caption the button's own caption
+	// ("" = it showed the bank's name, which Name has while the bank still
+	// knows it).
+	WhereKind string      `json:"where_kind,omitempty"`
+	Where     string      `json:"where,omitempty"`
+	Cell      *ButtonCell `json:"cell,omitempty"`
+	Caption   string      `json:"caption,omitempty"`
+}
+
+// ButtonCell is a button's place on its tab or screen: page (index and
+// name), row and column, all from 0.
+type ButtonCell struct {
+	Page     int    `json:"page"`
+	PageName string `json:"page_name,omitempty"`
+	Row      int    `json:"row"`
+	Col      int    `json:"col"`
 }
 
 // UnmatchedName is a vendor item name orders carried that no menu item or
@@ -238,8 +265,7 @@ func (c *compiler) run(entries []Entry) {
 				continue
 			}
 			if _, _, ok := c.bank.Item(e.Anchor.ItemIDs[0]); !ok {
-				c.attention(NeedsAttention{Code: "anchor_gone", EntryID: e.ID.String(), ItemID: e.Anchor.ItemIDs[0].String(),
-					Name: e.DisplayName, Message: "the bank item this entry changes is gone"})
+				c.attention(goneEntry(e, e.Anchor.ItemIDs[0], "the bank item this entry changes is gone"))
 				continue
 			}
 			byItem[e.Anchor.ItemIDs[0]] = e
@@ -364,8 +390,7 @@ func (c *compiler) merge(e *Entry) {
 	for _, id := range e.Anchor.ItemIDs {
 		it, cat, ok := c.bank.Item(id)
 		if !ok {
-			c.attention(NeedsAttention{Code: "anchor_gone", EntryID: e.ID.String(), ItemID: id.String(), Name: e.DisplayName,
-				Message: "a bank item in this merge is gone"})
+			c.attention(goneEntry(e, id, "a bank item in this merge is gone"))
 			continue
 		}
 		if !c.sellable[id] || c.viewHidden[id] {
@@ -411,8 +436,7 @@ func (c *compiler) augment(e *Entry) {
 	for _, id := range e.Anchor.ItemIDs {
 		it, cat, ok := c.bank.Item(id)
 		if !ok {
-			c.attention(NeedsAttention{Code: "anchor_gone", EntryID: e.ID.String(), ItemID: id.String(), Name: e.DisplayName,
-				Message: "a bank item in this added item is gone"})
+			c.attention(goneEntry(e, id, "a bank item in this added item is gone"))
 			return
 		}
 		if !c.sellable[id] {
@@ -561,4 +585,31 @@ func compileVendor(b *Build, bank *menu.Bank, entries []Entry, unmatched []Unmat
 // collapsed (the same rule as the kitchen routing's name match).
 func NormName(s string) string {
 	return strings.Join(strings.FieldsFunc(strings.ToLower(s), unicode.IsSpace), " ")
+}
+
+// goneEntry is the anchor_gone line of an entry whose bank item id is gone:
+// everything the entry still says about it (the item's own name went with
+// the item).
+func goneEntry(e *Entry, id uuid.UUID, msg string) NeedsAttention {
+	var parts []string
+	if e.Hidden {
+		parts = append(parts, "hidden")
+	}
+	if e.PriceOverrideCents != nil {
+		parts = append(parts, fmt.Sprintf("$%d.%02d", *e.PriceOverrideCents/100, *e.PriceOverrideCents%100))
+	}
+	if len(e.Extra.SizePrices) > 0 {
+		parts = append(parts, "size prices")
+	}
+	if c := strings.TrimSpace(e.Category); c != "" {
+		parts = append(parts, "moved to “"+c+"”")
+	}
+	if strings.TrimSpace(e.Description) != "" {
+		parts = append(parts, "description")
+	}
+	if strings.TrimSpace(e.Photo) != "" {
+		parts = append(parts, "photo")
+	}
+	return NeedsAttention{Code: "anchor_gone", EntryID: e.ID.String(), ItemID: id.String(), Name: strings.TrimSpace(e.DisplayName),
+		EntryKind: e.Kind, Change: strings.Join(parts, ", "), PriceCents: e.PriceOverrideCents, Message: msg}
 }

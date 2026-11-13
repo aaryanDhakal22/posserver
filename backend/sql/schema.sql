@@ -1011,6 +1011,18 @@ CREATE SEQUENCE public.order_money_changes_id_seq
 -- sequence owned by order_money_changes_id_seq
 ALTER SEQUENCE public.order_money_changes_id_seq OWNED BY public.order_money_changes.id;
 
+-- table order_prints
+CREATE TABLE public.order_prints (
+    event_id uuid NOT NULL,
+    tenant_id uuid NOT NULL,
+    location_id uuid NOT NULL,
+    order_id uuid NOT NULL,
+    mode text NOT NULL,
+    tickets jsonb NOT NULL,
+    at timestamp with time zone NOT NULL,
+    received_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
 -- table order_placements
 CREATE TABLE public.order_placements (
     channel_id uuid NOT NULL,
@@ -1136,6 +1148,7 @@ CREATE TABLE public.payments (
     approved_by text DEFAULT ''::text NOT NULL,
     flags text[] DEFAULT '{}'::text[] NOT NULL,
     reason text DEFAULT ''::text NOT NULL,
+    card_brand text DEFAULT ''::text NOT NULL,
     CONSTRAINT payments_refund_sign_ck CHECK (((status = 'refunded'::text) = (amount_cents < 0))),
     CONSTRAINT payments_status_ck CHECK ((status = ANY (ARRAY['pending'::text, 'authorized'::text, 'captured'::text, 'failed'::text, 'refunded'::text, 'voided'::text]))),
     CONSTRAINT payments_tip_ck CHECK ((tip_cents >= 0)),
@@ -1695,6 +1708,10 @@ ALTER TABLE ONLY public.order_geo
 ALTER TABLE ONLY public.order_money_changes
     ADD CONSTRAINT order_money_changes_pkey PRIMARY KEY (id);
 
+-- constraint order_prints order_prints_pkey
+ALTER TABLE ONLY public.order_prints
+    ADD CONSTRAINT order_prints_pkey PRIMARY KEY (event_id);
+
 -- constraint order_placements order_placements_pkey
 ALTER TABLE ONLY public.order_placements
     ADD CONSTRAINT order_placements_pkey PRIMARY KEY (channel_id, client_order_id);
@@ -2037,6 +2054,9 @@ CREATE INDEX idx_order_geo_location ON public.order_geo USING btree (location_id
 
 -- index idx_order_money_changes_order
 CREATE INDEX idx_order_money_changes_order ON public.order_money_changes USING btree (order_id, id);
+
+-- index idx_order_prints_order
+CREATE INDEX idx_order_prints_order ON public.order_prints USING btree (order_id, at);
 
 -- index idx_order_placements_age
 CREATE INDEX idx_order_placements_age ON public.order_placements USING btree (created_at);
@@ -2577,6 +2597,10 @@ ALTER TABLE ONLY public.operator_tokens
 -- fk constraint order_geo order_geo_order_id_fkey
 ALTER TABLE ONLY public.order_geo
     ADD CONSTRAINT order_geo_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(id) ON DELETE CASCADE;
+
+-- fk constraint order_prints order_prints_order_id_fkey
+ALTER TABLE ONLY public.order_prints
+    ADD CONSTRAINT order_prints_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(id) ON DELETE CASCADE;
 
 -- fk constraint order_placements order_placements_channel_id_fkey
 ALTER TABLE ONLY public.order_placements

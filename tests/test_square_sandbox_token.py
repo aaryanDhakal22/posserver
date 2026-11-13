@@ -1,4 +1,4 @@
-"""Paste a Square sandbox token (staging / dev only, 2026-11-12; contract §2.5za): Store › Payments takes a
+"""Paste a Square sandbox token (staging / dev only, 2026-11-12; contract §2.5za): Store › Settings › Payments takes a
 sandbox access token + location instead of the OAuth round trip, stored like an OAuth connection. Dev main runs
 the fake Square, which takes it too (production refuses it: 403, `squarepay/sandbox_token_test.go`)."""
 

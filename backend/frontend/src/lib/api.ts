@@ -763,7 +763,12 @@ export interface PricingFees {
   free_delivery_over_cents: number | null; delivery_min_cents: number;
   /** The driver's share of delivery_fee_cents (the rest is the store's); null/absent = $3, capped at the fee. */
   delivery_driver_cents?: number | null;
+  /** The customer's delivery fee by distance (Store › Settings › Map and delivery area); absent = the flat fee.
+   *  main keeps delivery_fee_cents = the first row's fee. Never the driver's pay. */
+  delivery_bands?: DeliveryBand[] | null;
 }
+/** A delivery up to up_to_m meters (straight line from the store) costs fee_cents; the last row covers farther too. */
+export interface DeliveryBand { up_to_m: number; fee_cents: number }
 export interface PricingTips { enabled: boolean; presets: number[]; default_pct: number }
 export interface PricingStore {
   tax_bps: number; stacking: 'best' | 'stack' | 'single'; fees: PricingFees; tips: PricingTips; card_fee: { mode: string; bps: number };
@@ -918,6 +923,8 @@ export type ButtonFont =
   | 'fira_sans_condensed' | 'ibm_plex_sans_condensed' | 'atkinson_hyperlegible';
 export interface TerminalSettings {
   cashier_refund_cents: number; cashier_discount_pct: number; auto_lock_minutes: number; counter_start: number;
+  /** Where the online / kitchen numbers start (default 1100); counter_start stays below it. Both restart once a business day (agent §2.10ae). */
+  kitchen_start: number;
   receipt_auto_done_seconds: number; auto_close_batch_at: string;
   default_tab: TerminalTabName; show_history: boolean; button_font: ButtonFont; cashier_price_drop_pct: number;
   click_sound: boolean; prices_on_buttons: boolean; out_of_area_margin_mi: number; name_on_paid_counter: boolean;
@@ -933,6 +940,8 @@ export interface TerminalSettings {
   quibase_counter_min_cents: number;
   /** A forced close / the auto-close: unpaid counter checks written off as waste, or carried (agent §2.10s §4). */
   close_unpaid_counter_action: 'waste' | 'carry';
+  /** Every takeout / pickup order prints two Customer Copies: Centurion's and the Pi's (Receipts and printing; default off). */
+  takeout_two_copies: boolean;
 }
 /** A browser the store's login opened the call-center app on. */
 export interface CallcenterDevice {
@@ -951,7 +960,7 @@ export interface CallcenterReport {
 }
 /** The owner's defaults (main's staff.DefaultSettings): a field main doesn't send yet shows these. */
 export const TERMINAL_DEFAULTS: TerminalSettings = {
-  cashier_refund_cents: 2000, cashier_discount_pct: 20, auto_lock_minutes: 5, counter_start: 1, receipt_auto_done_seconds: 15,
+  cashier_refund_cents: 2000, cashier_discount_pct: 20, auto_lock_minutes: 5, counter_start: 1, kitchen_start: 1100, receipt_auto_done_seconds: 15,
   auto_close_batch_at: '04:00', default_tab: 'info', show_history: false, button_font: 'barlow', cashier_price_drop_pct: 20,
   click_sound: false, prices_on_buttons: false, out_of_area_margin_mi: 1, name_on_paid_counter: false, card_tips: false,
   card_tip_percents: [15, 18, 20], employee_meal_pct: 20, topping_max_count: 3,
@@ -961,5 +970,6 @@ export const TERMINAL_DEFAULTS: TerminalSettings = {
   phone_charge_timeout_seconds: 180,
   callcenter_idle_lock_minutes: 15,
   quibase_counter_min_cents: 500,
-  close_unpaid_counter_action: 'waste'
+  close_unpaid_counter_action: 'waste',
+  takeout_two_copies: false
 };

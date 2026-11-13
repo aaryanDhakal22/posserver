@@ -24,6 +24,7 @@
   import Icon from '$lib/ui/Icon.svelte';
   import EmptyState from '$lib/ui/EmptyState.svelte';
   import SearchInput from '$lib/ui/SearchInput.svelte';
+  import { describe, isBrokenButton, removableEntry, removeButtons, removeEntries, type Attention } from '$lib/store/menuAttention';
 
   // Menu views (main 3.0): every sales channel reads its own view of the
   // menu above (the bank). A view can mark prices up, hide categories, and
@@ -39,7 +40,10 @@
   const items = $derived(
     (bank?.menus ?? []).flatMap((m) => m.categories.flatMap((c) => c.items.map((it) => ({ it, cat: c.name, catId: c.id }))))
   );
-  const categories = $derived((bank?.menus ?? []).flatMap((m) => m.categories));
+  // The Quick add category (the terminal's typed lines) is on no menu: not a choice here.
+  const categories = $derived(
+    (bank?.menus ?? []).flatMap((m) => m.categories).filter((c) => !(c.items.length && c.items.every((it) => (it as { quick_add?: boolean }).quick_add)))
+  );
   const itemName = (id: string) => items.find((x) => x.it.id === id)?.it.name ?? 'a deleted item';
   const kindLabel = (k: ViewKind) => VIEW_KINDS.find((x) => x.kind === k)?.label ?? k;
 
@@ -203,11 +207,84 @@
       toast.error(err);
     }
   }
+  /** What an entry changes, in words (the owner can't tell 200 "item" rows apart otherwise). */
+  function entryChanges(e: ViewEntry): string {
+    const out: string[] = [];
+    if (e.hidden) out.push('hidden');
+    if (e.kind === 'item' && e.display_name) out.push('renamed');
+    if (e.description) out.push('description');
+    if (e.photo) out.push('photo');
+    if (e.category) out.push(`in “${e.category}”`);
+    const sp = Object.keys(e.extra?.size_prices ?? {}).length;
+    if (sp) out.push(`${sp} size price${sp === 1 ? '' : 's'}`);
+    const lb = Object.keys(e.extra?.labels ?? {}).length;
+    if (lb) out.push(`${lb} label${lb === 1 ? '' : 's'}`);
+    return out.join(' · ');
+  }
+  let entryQ = $state('');
+  const shownEntries = $derived.by(() => {
+    const q = entryQ.trim().toLowerCase();
+    return q ? entries.filter((e) => (entryTitle(e) + ' ' + entryChanges(e)).toLowerCase().includes(q)) : entries;
+  });
   function entryTitle(e: ViewEntry): string {
     if (e.kind === 'map') return `“${e.extra.vendor_name}” → ${itemName(e.anchor.item_ids[0])}`;
     const names = e.anchor.item_ids.map(itemName).join(' + ');
     if (e.kind === 'item') return e.hidden ? `${names} — hidden` : e.display_name ? `${names} → “${e.display_name}”` : names;
     return `“${e.display_name}” = ${names}`;
+  }
+
+  // --- needs attention: entries and counter buttons whose item was deleted --------------
+  const attention = $derived((build?.needs_attention ?? []) as Attention[]);
+  const goneEntries = $derived(attention.filter(removableEntry));
+  const goneEntryCount = $derived(new Set(goneEntries.map((n) => n.entry_id)).size);
+  const brokenButtons = $derived(attention.filter(isBrokenButton));
+  let fixing = $state(false);
+  async function fix(what: () => Promise<string>) {
+    if (fixing) return;
+    fixing = true;
+    try {
+      toast.success(await what());
+      await refresh();
+    } catch (err) {
+      toast.error(err);
+    } finally {
+      fixing = false;
+    }
+  }
+  const removeEntryLine = (n: Attention) =>
+    fix(async () => {
+      await removeEntries([n]);
+      return 'Change removed';
+    });
+  async function removeAllEntries() {
+    const ok = await confirmDialog({
+      title: `Remove ${goneEntryCount} change${goneEntryCount === 1 ? '' : 's'}?`,
+      body: 'Each changes an item that was deleted, so none of them shows anywhere.',
+      confirmLabel: 'Remove all',
+      danger: true
+    });
+    if (ok) await fix(async () => `${await removeEntries(goneEntries)} changes removed`);
+  }
+  const removeButtonLine = (n: Attention) =>
+    fix(async () => {
+      const r = await removeButtons(sel!.id, [n]);
+      return n.where_kind === 'flow' ? 'Flow removed' : r.buttons ? 'Button removed' : 'That button was already gone';
+    });
+  async function removeAllButtons() {
+    const ok = await confirmDialog({
+      title: `Remove ${brokenButtons.length} counter button${brokenButtons.length === 1 ? '' : 's'}?`,
+      body: 'They come off the counter layout; the terminal gets the change with the menu.',
+      confirmLabel: 'Remove all',
+      danger: true
+    });
+    if (ok) await fix(async () => {
+      const r = await removeButtons(sel!.id, brokenButtons);
+      return `${r.buttons} button${r.buttons === 1 ? '' : 's'} removed`;
+    });
+  }
+  function editEntryById(id?: string) {
+    const e = entries.find((x) => x.id === id);
+    if (e) editEntry(e);
   }
 
   // --- Brygid mappings (vendor views) ----------------------------------------------
@@ -274,13 +351,20 @@
       </div>
 
       {#if build?.needs_attention.length}
-        <div class="rounded-r12 bg-warn-bg text-warn px-3.5 py-2.5 flex flex-col gap-2" role="status">
-          <div class="flex items-center gap-2 font-medium">
-            <Icon name="alert" size={18} />{build.needs_attention.length} thing{build.needs_attention.length === 1 ? '' : 's'} need{build.needs_attention.length === 1 ? 's' : ''} attention
+        <div class="rounded-r12 bg-warn-bg text-warn px-3.5 py-2.5 flex flex-col gap-2" role="status" data-testid="view-attention">
+          <div class="flex flex-wrap items-center gap-2 font-medium">
+            <Icon name="alert" size={18} /><span class="flex-1">{build.needs_attention.length} thing{build.needs_attention.length === 1 ? '' : 's'} need{build.needs_attention.length === 1 ? 's' : ''} attention</span>
+            {#if goneEntryCount > 1}
+              <Button size="sm" variant="danger-ghost" icon="trash" disabled={fixing} onclick={removeAllEntries}>Remove all {goneEntryCount} changes</Button>
+            {/if}
+            {#if brokenButtons.length > 1}
+              <Button size="sm" variant="danger-ghost" icon="trash" disabled={fixing} onclick={removeAllButtons}>Remove all {brokenButtons.length} buttons</Button>
+            {/if}
           </div>
           <ul class="flex flex-col gap-1.5 text-text2">
-            {#each build.needs_attention as n, i (i)}
-              <li class="flex flex-wrap items-center gap-2">
+            {#each attention as n, i (i)}
+              {@const d = describe(n, sel ? kindLabel(sel.kind) : '')}
+              <li class="flex flex-wrap items-center gap-2" data-testid="attention-row" data-code={n.code}>
                 {#if n.code === 'unmatched' && n.name}
                   <span class="flex-1 min-w-[180px]"><b>{n.name}</b> · {n.orders ?? 0} order{n.orders === 1 ? '' : 's'} · prints on every station</span>
                   <label for="map-{i}" class="sr-only">Your item for {n.name}</label>
@@ -290,7 +374,14 @@
                   </select>
                   <Button size="sm" variant="primary" disabled={!mapPick[n.name]} onclick={() => mapName(n.name!)}>Match</Button>
                 {:else}
-                  <span>{n.name ? `${n.name}: ` : ''}{n.message}</span>
+                  <span class="flex-1 min-w-[180px]">{d.title}{#if d.detail}<span class="text-muted"> · {d.detail}</span>{/if}</span>
+                  {#if removableEntry(n)}
+                    <Button size="sm" variant="ghost" icon="trash" disabled={fixing} aria-label="Remove: {d.title}" onclick={() => removeEntryLine(n)}>Remove</Button>
+                  {:else if n.code === 'anchor_gone' && entries.some((e) => e.id === n.entry_id)}
+                    <Button size="sm" variant="ghost" icon="pencil" aria-label="Edit: {d.title}" onclick={() => editEntryById(n.entry_id)}>Edit</Button>
+                  {:else if isBrokenButton(n)}
+                    <Button size="sm" variant="ghost" icon="trash" disabled={fixing} aria-label="Remove: {d.title}" onclick={() => removeButtonLine(n)}>{n.where_kind === 'flow' ? 'Remove flow' : 'Remove button'}</Button>
+                  {/if}
                 {/if}
               </li>
             {/each}
@@ -354,16 +445,19 @@
             <Button size="sm" icon="layers" onclick={() => newEntry('merge')}>Combine items</Button>
             <Button size="sm" icon="plus" onclick={() => newEntry('augment')}>Add a deal</Button>
           </div>
+          {#if entries.length > 8}
+            <SearchInput id="vw-entry-q" label="Find a change" placeholder="Find a change ({entries.length})" bind:value={entryQ} class="max-w-[360px]" />
+          {/if}
           <ul class="flex flex-col gap-1.5">
-            {#each entries as e (e.id)}
+            {#each shownEntries as e (e.id)}
               <li class="subcard flex items-center gap-2 px-3 py-2">
                 <Badge tone="mute">{e.kind === 'item' ? 'item' : e.kind === 'merge' ? 'combined' : 'deal'}</Badge>
-                <button type="button" class="flex-1 min-w-0 truncate text-left hover:text-accent" onclick={() => editEntry(e)}>{entryTitle(e)}</button>
+                <button type="button" class="flex-1 min-w-0 truncate text-left hover:text-accent" onclick={() => editEntry(e)}>{entryTitle(e)}{#if entryChanges(e)}<span class="text-muted text-[12.5px]">{` · ${entryChanges(e)}`}</span>{/if}</button>
                 {#if e.price_override_cents != null}<span class="mono text-text2">{dollars(e.price_override_cents)}</span>{/if}
                 <Button size="xs" variant="ghost" icon="x" aria-label="Remove this change" onclick={() => deleteEntry(e)} />
               </li>
             {:else}
-              <li class="text-[13px] text-muted">None — this view shows your menu as it is (with the rules above).</li>
+              <li class="text-[13px] text-muted">{entries.length ? 'No change matches.' : 'None — this view shows your menu as it is (with the rules above).'}</li>
             {/each}
           </ul>
         </section>

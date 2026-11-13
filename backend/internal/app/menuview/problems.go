@@ -31,14 +31,23 @@ func (s *Service) Problems(ctx context.Context, tenantID, locationID uuid.UUID) 
 		if err != nil {
 			return menucheck.Report{}, err
 		}
-		in.Views = append(in.Views, menucheck.View{View: v, Build: menuview.Compile(bank, v, entries, nil)})
+		b := menuview.Compile(bank, v, entries, nil)
 		if v.Kind == menuview.KindCounter && v.HasLayout && in.Layout == nil {
 			l, err := s.repo.Layout(ctx, v.ID)
 			if err != nil {
 				return menucheck.Report{}, err
 			}
 			in.Layout = l
+			// Its build gets the layout too: broken buttons are lines of it.
+			if l != nil {
+				deals, err := s.repo.DealNames(ctx, locationID)
+				if err != nil {
+					return menucheck.Report{}, err
+				}
+				menuview.ResolveLayout(&b, bank, v, deals, l)
+			}
 		}
+		in.Views = append(in.Views, menucheck.View{View: v, Build: b})
 	}
 	return menucheck.Run(in), nil
 }

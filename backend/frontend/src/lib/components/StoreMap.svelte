@@ -14,8 +14,18 @@
   let {
     loc,
     onsave,
-    idPrefix = 'sm'
-  }: { loc: Location; onsave: (lat: number, lng: number) => Promise<void>; idPrefix?: string } = $props();
+    idPrefix = 'sm',
+    radiusM,
+    ringsM = []
+  }: {
+    loc: Location;
+    onsave: (lat: number, lng: number) => Promise<void>;
+    idPrefix?: string;
+    /** The delivery circle while it is being edited (default: the saved radius). */
+    radiusM?: number;
+    /** Dashed rings inside it: where the delivery fee by distance changes. */
+    ringsM?: number[];
+  } = $props();
 
   const FALLBACK = { lat: 40.6687, lng: -74.1143 }; // Bayonne, NJ — before the store has a position
   const TILES = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
@@ -25,6 +35,7 @@
   let map: L.Map | undefined;
   let marker: L.Marker | undefined;
   let circle: L.Circle | undefined;
+  let rings: L.Circle[] = [];
   let pin = $state<{ lat: number; lng: number } | null>(null); // moved, not saved yet
   let saving = $state(false);
 
@@ -36,13 +47,15 @@
         ? 'Found from the address. Drag it to the door if it is off.'
         : 'Not placed yet. Save the address above, or drag the pin and press Use this spot.'
   );
-  const miles = $derived((loc.delivery_radius_m / 1609.344).toFixed(1).replace(/\.0$/, ''));
+  const radius = $derived(radiusM && radiusM > 0 ? radiusM : loc.delivery_radius_m);
+  const miles = $derived((radius / 1609.344).toFixed(1).replace(/\.0$/, ''));
 
   const round6 = (n: number) => Math.round(n * 1e6) / 1e6;
 
   function place(p: L.LatLng, dirty = true) {
     marker?.setLatLng(p);
     circle?.setLatLng(p);
+    for (const r of rings) r.setLatLng(p);
     if (dirty) pin = { lat: round6(p.lat), lng: round6(p.lng) };
   }
 
@@ -59,10 +72,25 @@
       fillOpacity: 0.05,
       interactive: false
     }).addTo(map);
-    marker.on('drag', () => circle?.setLatLng(marker!.getLatLng()));
+    marker.on('drag', () => {
+      circle?.setLatLng(marker!.getLatLng());
+      for (const r of rings) r.setLatLng(marker!.getLatLng());
+    });
     marker.on('dragend', () => place(marker!.getLatLng()));
     map.on('click', (e: L.LeafletMouseEvent) => place(e.latlng));
     return () => map?.remove();
+  });
+
+  // The radius being edited, and the fee rings inside it.
+  $effect(() => {
+    const r = radius;
+    const want = ringsM.filter((m) => m > 0 && m < r);
+    if (!map || !circle) return;
+    circle.setRadius(r);
+    for (const x of rings) x.remove();
+    const at = circle.getLatLng();
+    const color = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim() || '#6d4fd4';
+    rings = want.map((m) => L.circle(at, { radius: m, color, weight: 1, dashArray: '4 6', fill: false, interactive: false }).addTo(map!));
   });
 
   // A new saved position (geocoded in the background, or saved elsewhere)

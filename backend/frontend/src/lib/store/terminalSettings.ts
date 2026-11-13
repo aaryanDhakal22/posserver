@@ -7,24 +7,26 @@ import type { PiLink } from '$lib/store/pi';
 import type { Tone } from '$lib/ui/Badge.svelte';
 
 export type SettingsForm = {
-  refund: string; discount: string; lock: string; counterStart: string; receiptDone: string;
+  refund: string; discount: string; lock: string; counterStart: string; kitchenStart: string; receiptDone: string;
   autoClose: boolean; autoCloseAt: string; defaultTab: string; showHistory: boolean; font: string;
   priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean; toppingMax: string;
   cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string; drawerStart: string;
   wasteReasons: string; voidReasons: string; phoneTimeout: string; quibaseMin: string; closeUnpaid: string; // 'waste' | 'carry'
+  takeoutTwoCopies: boolean;
 };
 export type FormKey = keyof SettingsForm;
 export type TextKey = { [K in FormKey]: SettingsForm[K] extends string ? K : never }[FormKey];
 
 /** The settings pages that edit the terminal settings, one group of fields each. */
-export type TerminalGroup = 'cashier' | 'screen' | 'counter' | 'voids' | 'card' | 'endofday';
+export type TerminalGroup = 'cashier' | 'screen' | 'counter' | 'voids' | 'card' | 'endofday' | 'receipts';
 export const GROUP_KEYS: Record<TerminalGroup, FormKey[]> = {
   cashier: ['refund', 'discount', 'priceDrop', 'payout'],
   screen: ['lock', 'defaultTab', 'receiptDone', 'font', 'showHistory', 'pricesOnButtons', 'clickSound'],
-  counter: ['meal', 'pickupMinutes', 'counterStart', 'toppingMax', 'quibaseMin', 'areaCodes', 'nameOnPaid', 'margin'],
+  counter: ['meal', 'pickupMinutes', 'counterStart', 'kitchenStart', 'toppingMax', 'quibaseMin', 'areaCodes', 'nameOnPaid', 'margin'],
   voids: ['wasteReasons', 'voidReasons'],
   card: ['cardTips', 'tipPercents', 'phoneTimeout'],
-  endofday: ['autoClose', 'autoCloseAt', 'closeUnpaid', 'drawerStart']
+  endofday: ['autoClose', 'autoCloseAt', 'closeUnpaid', 'drawerStart'],
+  receipts: ['takeoutTwoCopies']
 };
 
 export const TABS = [
@@ -64,7 +66,7 @@ export function settingsForm(raw: Partial<TerminalSettings>): SettingsForm {
   const s = { ...TERMINAL_DEFAULTS, ...raw };
   return {
     refund: centsInput(s.cashier_refund_cents), discount: String(s.cashier_discount_pct), lock: String(s.auto_lock_minutes),
-    counterStart: String(s.counter_start), receiptDone: String(s.receipt_auto_done_seconds),
+    counterStart: String(s.counter_start), kitchenStart: String(s.kitchen_start), receiptDone: String(s.receipt_auto_done_seconds),
     phoneTimeout: String(s.phone_charge_timeout_seconds || TERMINAL_DEFAULTS.phone_charge_timeout_seconds),
     autoClose: s.auto_close_batch_at !== '', autoCloseAt: s.auto_close_batch_at || '04:00',
     defaultTab: s.default_tab, showHistory: s.show_history, font: s.button_font, priceDrop: String(s.cashier_price_drop_pct),
@@ -77,7 +79,8 @@ export function settingsForm(raw: Partial<TerminalSettings>): SettingsForm {
     quibaseMin: centsInput(s.quibase_counter_min_cents),
     wasteReasons: (s.waste_reasons ?? []).join('\n'),
     voidReasons: (s.void_reasons ?? []).join('\n'),
-    closeUnpaid: s.close_unpaid_counter_action === 'carry' ? 'carry' : 'waste'
+    closeUnpaid: s.close_unpaid_counter_action === 'carry' ? 'carry' : 'waste',
+    takeoutTwoCopies: !!s.takeout_two_copies
   };
 }
 
@@ -127,13 +130,18 @@ export function settingsOf(f: SettingsForm, keep: Partial<TerminalSettings> = {}
   const voids = reasons(f.voidReasons);
   if (voids.length < 1 || voids.length > 20 || voids.some((x) => x.length > 40))
     throw new FieldError('voidReasons', 'Void reasons: 1 to 20 reasons, one per line, up to 40 characters each.');
+  const counterStart = int(f, 'counterStart', 'Counter numbers start at', 1, 999_998);
+  const kitchenStart = int(f, 'kitchenStart', 'Online and kitchen numbers start at', 2, 999_999);
+  if (counterStart >= kitchenStart)
+    throw new FieldError('counterStart', `Counter numbers start at: below the online and kitchen numbers (${kitchenStart}), so the two never look alike.`);
   return {
     ...TERMINAL_DEFAULTS,
     ...keep, // fields these pages don't edit (the call center's idle lock) go back as they were
     cashier_refund_cents: money(f, 'refund', 'Refunds up to', 1_000_000),
     cashier_discount_pct: int(f, 'discount', 'Discounts up to', 0, 100),
     auto_lock_minutes: int(f, 'lock', 'Lock the terminal after', 1, 240),
-    counter_start: int(f, 'counterStart', 'Counter numbers start at', 1, 999_999),
+    counter_start: counterStart,
+    kitchen_start: kitchenStart,
     receipt_auto_done_seconds: int(f, 'receiptDone', 'Close the receipt screen after', 0, 600),
     phone_charge_timeout_seconds: int(f, 'phoneTimeout', 'A charge sent to a phone expires after', 30, 1800),
     auto_close_batch_at: f.autoClose ? f.autoCloseAt : '',
@@ -156,7 +164,8 @@ export function settingsOf(f: SettingsForm, keep: Partial<TerminalSettings> = {}
     area_codes: codes,
     waste_reasons: waste,
     void_reasons: voids,
-    close_unpaid_counter_action: f.closeUnpaid === 'carry' ? 'carry' : 'waste'
+    close_unpaid_counter_action: f.closeUnpaid === 'carry' ? 'carry' : 'waste',
+    takeout_two_copies: f.takeoutTwoCopies
   };
 }
 
@@ -179,7 +188,10 @@ export const NUM_FIELDS: Partial<Record<TextKey, NumField>> = Object.fromEntries
       help: `Send to phone: nobody finished it in Square by then, it expires (a late tap is still recorded). 30–1800. Default ${D.phone_charge_timeout_seconds} sec.` },
     { key: 'meal', label: 'Employee meal', unit: '% off', help: `The Employee meal button. A cashier can give it without a manager. Default ${D.employee_meal_pct}%.` },
     { key: 'pickupMinutes', label: 'Pickups are ready in', unit: 'min', help: `The time a pickup is quoted. Default ${D.default_pickup_minutes} min.` },
-    { key: 'counterStart', label: 'Counter numbers start at', unit: '#', help: `Counter orders count up from here, again after Close batch. Default ${D.counter_start}.` },
+    { key: 'counterStart', label: 'Counter numbers start at', unit: '#',
+      help: `Counter orders count up from here. They start again once a day: with the first order of a new business day after Close batch (a second close the same day carries on). Below the online and kitchen numbers. Default ${D.counter_start}.` },
+    { key: 'kitchenStart', label: 'Online and kitchen numbers start at', unit: '#',
+      help: `Online and website orders get their kitchen number from here when the counter accepts them (the call center’s and the terminals’ orders take counter numbers). They start again once a day like the counter numbers. Default ${D.kitchen_start}.` },
     { key: 'toppingMax', label: 'Most of one topping', unit: '×', help: `Tapping a topping again adds one more (2×, 3×). 1 = no doubles. Default ${D.topping_max_count}.` },
     { key: 'quibaseMin', label: 'Counter orders on Quibase over', unit: '$', prefix: true, decimal: true,
       help: `An order rung at a terminal shows on the counter tablet only when its total is over this and something on it goes to a kitchen station (a drink-only sale stays off). It still counts on every report. Call-center, online and website orders always show. 0 = any total. Default ${dollars(D.quibase_counter_min_cents)}.` },
@@ -210,5 +222,7 @@ export function terminalSummary(group: TerminalGroup, raw: Partial<TerminalSetti
       return s.card_tips ? `Asks for a tip: ${s.card_tip_percents.join(', ')}%` : 'No tip on the card reader';
     case 'endofday':
       return `${s.auto_close_batch_at ? `Closes the batch at ${clock(s.auto_close_batch_at)}` : 'Batch closed by hand'} · unpaid counter checks ${s.close_unpaid_counter_action === 'carry' ? 'carried' : 'wasted'} · drawers start ${dollars(s.drawer_start_cents)}`;
+    case 'receipts':
+      return s.takeout_two_copies ? 'Takeout prints 2 customer copies' : 'Takeout prints 1 customer copy';
   }
 }

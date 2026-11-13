@@ -87,10 +87,10 @@ func storeGeneralRefund(ctx context.Context, tx pgx.Tx, sc order.Scope, eventID 
 	// p.Flags from the floor service (order.GeneralRefundFlags).
 	flags := append([]order.MoneyFlag(nil), p.Flags...)
 	if _, err := tx.Exec(ctx, `INSERT INTO payments (id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code,
-			tip_cents, staff_id, location_id, client_key, origin, batch_id, approved_by, flags, reason)
-		VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'counter', $13, $14, $15, $16)`,
+			tip_cents, staff_id, location_id, client_key, origin, batch_id, approved_by, flags, reason, card_brand)
+		VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'counter', $13, $14, $15, $16, $17)`,
 		p.ID, p.Method, string(order.PaymentRefunded), int64(p.Amount), p.Ref, p.Last4, p.At, p.AuthCode, int64(p.Tip), p.StaffID,
-		loc, p.ClientKey, p.BatchID, p.ApprovedBy, flagCodes(flags), reason); err != nil {
+		loc, p.ClientKey, p.BatchID, p.ApprovedBy, flagCodes(flags), reason, p.Brand); err != nil {
 		return "", nil, fmt.Errorf("insert general refund: %w", err)
 	}
 	if err := insertMoneyFlags(ctx, tx, sc, eventID, typ, "refund:"+p.ID.String(), flags); err != nil {

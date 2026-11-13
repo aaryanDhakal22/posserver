@@ -8,7 +8,7 @@ code exactly as its own callback does (tokens sealed with SQUARE_TOKEN_KEY:
 the Go test `squarepay/oauth_test.go` opens the stored rows), and answers
 {result, redirect} for the manager's browser.
 
-  * a relayed callback connects the store; the redirect is Store › Payments
+  * a relayed callback connects the store; the redirect is Store › Settings › Payments
   * no platform key, a wrong / revoked one, a channel key: 401, nothing used
     (the same code + state still connect afterwards)
   * a forged, damaged or re-signed-for-another-store state: 400 bad_state

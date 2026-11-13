@@ -25,7 +25,8 @@
   function printers(r: StoreRow): string {
     if (r.printersUp === null && r.printersDown === null) return '—';
     const up = r.printersUp ?? 0;
-    return `${up} / ${up + (r.printersDown ?? 0)} up`;
+    // An offline Pi's counts are its last report: say so instead of looking live.
+    return `${up} / ${up + (r.printersDown ?? 0)} up${r.pi === 'offline' ? ' (last report)' : ''}`;
   }
   function seen(r: StoreRow): string {
     if (r.pi === 'online') return r.lastSeen ? `seen ${timeAgo(r.lastSeen)}` : 'connected';
@@ -86,7 +87,7 @@
             <tr class="clickable" onclick={() => goto(href(r))}>
               <td>
                 <a class="rowlink" href={href(r)} onclick={(e) => e.stopPropagation()}>{r.tenant.name}</a>
-                <div class="text-xs text-muted">{r.location?.name ?? 'no location'}</div>
+                {#if !r.location || r.location.name !== r.tenant.name}<div class="text-xs text-muted">{r.location?.name ?? 'no location'}</div>{/if}
               </td>
               <td class="mono">{r.tenant.store_id ?? '—'}</td>
               <td>

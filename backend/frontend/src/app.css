@@ -611,3 +611,27 @@
     word-break: break-word;
   }
 }
+
+/* A setting reached by a deep link or the Settings search (lib/settings/map.ts showField): lit up for a
+   moment. Kept outside the layers so a page's own styles never hide it. */
+.setting-hit {
+  border-radius: 10px;
+  animation: setting-hit 2.4s ease-out;
+}
+@keyframes setting-hit {
+  0%,
+  45% {
+    box-shadow: 0 0 0 3px var(--brand);
+    background-color: color-mix(in srgb, var(--brand) 10%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 3px transparent;
+    background-color: transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .setting-hit {
+    animation: none;
+    box-shadow: 0 0 0 3px var(--brand);
+  }
+}

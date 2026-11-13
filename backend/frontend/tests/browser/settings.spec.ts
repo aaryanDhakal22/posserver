@@ -30,7 +30,8 @@ const TILES: [string, string][] = [
   ['card', 'Card payments'],
   ['voids', 'Void and waste reasons'],
   ['end-of-day', 'End of day'],
-  ['callcenter', 'Call center']
+  ['callcenter', 'Call center'],
+  ['receipts', 'Receipts and printing']
 ];
 
 test('the tiles: every category with a one-line summary opens its own page; the old Details & hours link lands here', async ({
@@ -183,6 +184,26 @@ test('terminal settings: one group per page, the defaults, every field saves, a 
   await expect.poll(async () => (await saved()).auto_close_batch_at).toBe('');
   await shot(page, info, 'end-of-day');
 
+  // Receipts and printing (the owner, 2026-11-13): takeout prints 2 customer copies, off by default; the tile says so.
+  await open('/store/settings/receipts');
+  const two = page.getByRole('switch', { name: 'Takeout: print 2 customer copies' });
+  await expect(two).toHaveAttribute('aria-checked', 'false');
+  expect((await saved()).takeout_two_copies).toBe(false);
+  await two.click();
+  await save(page).click();
+  await expect(bar(page)).toContainText('All changes saved');
+  await expect.poll(async () => (await saved()).takeout_two_copies).toBe(true);
+  // the rest of the settings went back as they were
+  await expect.poll(saved).toMatchObject({ close_unpaid_counter_action: 'carry', drawer_start_cents: 15000, auto_close_batch_at: '' });
+  await shot(page, info, 'receipts');
+  await open('/store/settings');
+  await expect(page.getByTestId('tile-receipts')).toContainText('Takeout prints 2 customer copies');
+  await open('/store/settings/receipts');
+  await expect(page.getByRole('switch', { name: 'Takeout: print 2 customer copies' })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('switch', { name: 'Takeout: print 2 customer copies' }).click();
+  await save(page).click();
+  await expect.poll(async () => (await saved()).takeout_two_copies).toBe(false);
+
   // Fill in defaults touches only this page's fields (saved on Save).
   await open('/store/settings/cashier');
   await page.getByRole('button', { name: 'Fill in defaults' }).click();
@@ -290,4 +311,52 @@ test('ordering, tax and deals, fees and tips: each page sends the rest of the pr
 
   await page.reload();
   await expect(field(page, 'Delivery: driver share ($)')).toHaveValue('3.50');
+});
+
+test('map and delivery area: the radius and the delivery fee by distance save in main; the driver share stays; Fees and tips shows the range', async ({
+  page,
+  store,
+  open
+}, info) => {
+  const loc = async () => (await store.me('GET', '/location', undefined, 200)).data;
+  const fees = async () => (await store.me('GET', '/pricing', undefined, 200)).data.store.fees;
+  await open('/store/settings/map');
+  const radius = page.locator('#map-radius');
+  await expect(radius).toHaveValue(String(Math.round(((await loc()).delivery_radius_m / 1609.344) * 10) / 10));
+  // One row = the flat fee (a new store's $4).
+  await expect(page.getByTestId('delivery-bands')).toContainText('Every delivery');
+  await expect(page.locator('#band-fee-0')).toHaveValue('4.00');
+  await radius.fill('80');
+  await save(page).click();
+  await expect(bar(page).getByRole('alert')).toContainText('Delivers up to: 0.4 to 50 miles');
+  await radius.fill('4.5');
+  await page.getByRole('button', { name: 'Add a distance' }).click();
+  await page.locator('#band-upto-0').fill('2');
+  await page.locator('#band-fee-0').fill('3');
+  await page.locator('#band-fee-1').fill('6');
+  await save(page).click();
+  await expect(bar(page)).toContainText('All changes saved');
+  await expect.poll(async () => (await loc()).delivery_radius_m).toBe(7242);
+  expect(await fees()).toMatchObject({
+    delivery_fee_cents: 300, delivery_driver_cents: 300,
+    delivery_bands: [{ up_to_m: 3219, fee_cents: 300 }, { up_to_m: 7242, fee_cents: 600 }]
+  });
+  await shot(page, info, 'map-bands');
+
+  // Fees and tips keeps the bands on its own save and shows the range.
+  await open('/store/settings/fees');
+  await expect(page.getByTestId('pr-st-del-total')).toHaveText('$3.00–$6.00 by distance');
+  await field(page, 'Delivery: driver share ($)').fill('2.50');
+  await save(page).click();
+  await expect(bar(page)).toContainText('All changes saved');
+  expect(await fees()).toMatchObject({ delivery_driver_cents: 250, delivery_bands: [{ fee_cents: 300 }, { fee_cents: 600 }] });
+
+  // Back to one row: a flat fee again.
+  await open('/store/settings/map');
+  await page.getByRole('button', { name: 'Remove' }).click();
+  await save(page).click();
+  await expect(bar(page)).toContainText('All changes saved');
+  const f = await fees();
+  expect(f.delivery_fee_cents).toBe(600);
+  expect(f.delivery_bands ?? null).toBeNull();
 });

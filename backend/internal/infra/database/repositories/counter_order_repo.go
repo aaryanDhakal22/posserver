@@ -189,10 +189,10 @@ func storeCounterPayment(ctx context.Context, tx pgx.Tx, sc order.Scope, eventID
 		batch = o.batch
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO payments (id, order_id, processor, status, amount_cents, token, last4, captured_at, auth_code,
-			tip_cents, staff_id, location_id, client_key, origin, batch_id, approved_by, refund_of, flags)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'counter', $14, $15, $16, $17)`,
+			tip_cents, staff_id, location_id, client_key, origin, batch_id, approved_by, refund_of, flags, card_brand)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'counter', $14, $15, $16, $17, $18)`,
 		p.ID, orderID, p.Method, string(p.Status), amount, p.Ref, p.Last4, p.At, p.AuthCode, tip, p.StaffID,
-		uuid.UUID(sc.LocationID), p.ClientKey, batch, p.ApprovedBy, refundOf, flagCodes(flags)); err != nil {
+		uuid.UUID(sc.LocationID), p.ClientKey, batch, p.ApprovedBy, refundOf, flagCodes(flags), p.Brand); err != nil {
 		return "", nil, fmt.Errorf("insert payment: %w", err)
 	}
 	if err := insertMoneyFlags(ctx, tx, sc, eventID, typ, "payment:"+p.ID.String(), flags); err != nil {
@@ -480,7 +480,7 @@ func (r *OrderRepository) ChangeCounterOrder(ctx context.Context, sc order.Scope
 // (agent 2.10aa: an online / website order changed below what it arrived
 // paid with): the whole in source_metadata.refund_owed_cents (every read of
 // the order shows it), this change's part as a refund_owed money flag (Store
-// > Reports > Flags). A note for the manager, never a payment: no money
+// › Reports › Money notes). A note for the manager, never a payment: no money
 // moved. Not returned with the event's flags (nothing to page about).
 func keepRefundOwed(ctx context.Context, tx pgx.Tx, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, extra order.ChangeExtra) error {
 	if extra.RefundOwedCents != nil {
