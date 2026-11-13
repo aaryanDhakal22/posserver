@@ -664,10 +664,6 @@ class Engine {
         problem('coupon_fit', `${d.name} doesn't fit the order.`);
         return;
       }
-      if (f.saved <= 0) {
-        problem('coupon_fit', `${d.name} costs more than its items on this order.`);
-        return;
-      }
       for (const u of f.units) {
         const c = clines[u.line];
         c.used++;
@@ -693,7 +689,7 @@ class Engine {
     for (const d of deals) {
       if (d.kind !== 'coupon' || !live(d, ctx.timezone, at, type)) continue;
       const f = this.fit(d, free, clines);
-      if (!f || f.saved <= 0) continue;
+      if (!f) continue; // offered even when it costs more than its units (the owner, 2026-11-13)
       offers.push({ id: d.id, name: d.name, card: cardOf(d), price_cents: d.price_cents ?? 0, lines: f.lines, regular_cents: f.regular, total_cents: f.total });
     }
     // The cheapest order first (the most off the units' own prices; a tie: the deal order).

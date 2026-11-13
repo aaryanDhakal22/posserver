@@ -21,3 +21,14 @@ for (const f of files) {
     assert.deepEqual(got, c.quote);
   });
 }
+
+// Lombardi's real coupons and prices (lombardis_test.go): every case's quote must equal the Go engine's.
+const lombardis = JSON.parse(readFileSync(join(dir, '../lombardis_coupons.json'), 'utf8'));
+test("Lombardi's coupons: there are cases", () => assert.ok(lombardis.cases.length >= 18, `only ${lombardis.cases.length}`));
+for (const c of lombardis.cases) {
+  test(`Lombardi's: ${c.name}`, () => {
+    assert.ok(c.quote, 'no recorded quote: run the Go test with -update');
+    const got = JSON.parse(JSON.stringify(price(lombardis.context, c.cart, new Date(lombardis.at))));
+    assert.deepEqual(got, c.quote);
+  });
+}
