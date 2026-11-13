@@ -739,8 +739,16 @@ func (s *Service) DevOrphan(ctx context.Context, channelID uuid.UUID, req Reques
 	if err != nil {
 		return "", err
 	}
+	var dist *int64 // the delivery fee by distance: main's own check of the address
+	if req.Type == "delivery" {
+		dc, err := s.deliveryCheck(ctx, ch, req)
+		if err != nil && len(pctx.Settings.DeliveryBands) > 1 {
+			return "", err
+		}
+		dist = distanceOf(dc)
+	}
 	q := pricing.Price(*pctx, pricing.Cart{Type: req.Type, Payment: req.Payment.Method, Lines: req.Lines, Code: req.Code,
-		TipCents: req.TipCents, TipPct: req.TipPct, FirstOrder: req.FirstOrder, Coupons: req.Coupons}, s.now())
+		TipCents: req.TipCents, TipPct: req.TipPct, FirstOrder: req.FirstOrder, Coupons: req.Coupons, DistanceM: dist}, s.now())
 	charge, cerr := s.chargeFor(ctx, ch, req, q)
 	if cerr != nil {
 		return "", cerr

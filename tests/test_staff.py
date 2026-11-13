@@ -231,6 +231,22 @@ def test_close_unpaid_counter_action_setting(store, mgr) -> None:
     assert _config(store.key)["settings"]["close_unpaid_counter_action"] == "waste"
 
 
+def test_kitchen_start_setting(store, mgr) -> None:
+    """kitchen_start (the owner's X, 2026-11-13; agent contract 2.10ae): where the online / kitchen numbers start
+    (default 1100), counter_start below it (S-6), kept when a save leaves it out, sent to the Pi in terminal-config."""
+    got = _ok(mgr.get(SETTINGS, timeout=5))
+    assert got["kitchen_start"] == 1100 and got["counter_start"] == 1
+    assert _config(store.key)["settings"]["kitchen_start"] == 1100
+    saved = _ok(mgr.put(SETTINGS, json={"counter_start": 20, "kitchen_start": 300}, timeout=5))
+    assert (saved["counter_start"], saved["kitchen_start"]) == (20, 300)
+    assert _ok(mgr.put(SETTINGS, json={"auto_lock_minutes": 6}, timeout=5))["kitchen_start"] == 300
+    assert _config(store.key)["settings"]["kitchen_start"] == 300
+    for bad in ({"counter_start": 300}, {"counter_start": 301}, {"kitchen_start": 20}, {"kitchen_start": 1},
+                {"kitchen_start": 1_000_000}):
+        assert _code(mgr.put(SETTINGS, json=bad, timeout=5), 400) == "bad_settings", bad
+    assert _config(store.key)["settings"]["kitchen_start"] == 300
+
+
 def test_driver_claim_setting_retired(store, mgr) -> None:
     """driver_claim_after_minutes is gone (the owner, 2026-11-12: drivers claim once an order is past its promised
     time on the Pi; migration 00042 dropped it from saved rows): not served, not sent to the Pi, refused on a save."""

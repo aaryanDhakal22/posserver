@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { CHANNEL_KIND_LABELS, errText, storeApi, type PricingBody } from '$lib/api';
-  import { KINDS, feeTotal, feesForm, feesOf, kindsForm, tipsForm, tipsOf, type FeesForm, type KindForm, type TipsForm } from '$lib/store/pricingForm';
+  import { base } from '$app/paths';
+  import { KINDS, bandsRange, feeTotal, feesForm, feesOf, kindsForm, tipsForm, tipsOf, type FeesForm, type KindForm, type TipsForm } from '$lib/store/pricingForm';
   import { toast } from '$lib/toast.svelte';
   import Icon from '$lib/ui/Icon.svelte';
   import Switch from '$lib/ui/Switch.svelte';
@@ -61,9 +62,17 @@
 
 {#snippet feeFields(f: FeesForm, p: string)}
   <div class="fgrid">
-    <div><label class="lbl" for="{p}-dels">Delivery: store share ($)</label><input id="{p}-dels" class="field mono text-right" inputmode="decimal" bind:value={f.storeShare} /></div>
-    <div><label class="lbl" for="{p}-deld">Delivery: driver share ($)</label><input id="{p}-deld" class="field mono text-right" inputmode="decimal" bind:value={f.driverShare} /></div>
-    <div class="total"><span class="lbl">Delivery fee total</span><span class="mono font-semibold text-[15px]" data-testid="{p}-del-total">{feeTotal(f)}</span></div>
+    {#if f.bands?.length}
+      <!-- A fee by distance: the customer's fee is edited on Map and delivery area; the driver's pay stays here. -->
+      <div class="total"><span class="lbl">Delivery fee</span><span class="mono font-semibold text-[15px]" data-testid="{p}-del-total">{bandsRange(f.bands)} by distance</span>
+        <a class="text-[13px]" href="{base}/store/settings/map#delivery_fee_bands">Change it on Map and delivery area</a></div>
+      <div><label class="lbl" for="{p}-deld">Delivery: driver share ($)</label><input id="{p}-deld" class="field mono text-right" inputmode="decimal" bind:value={f.driverShare} /></div>
+      <div></div>
+    {:else}
+      <div><label class="lbl" for="{p}-dels">Delivery: store share ($)</label><input id="{p}-dels" class="field mono text-right" inputmode="decimal" bind:value={f.storeShare} /></div>
+      <div><label class="lbl" for="{p}-deld">Delivery: driver share ($)</label><input id="{p}-deld" class="field mono text-right" inputmode="decimal" bind:value={f.driverShare} /></div>
+      <div class="total"><span class="lbl">Delivery fee total</span><span class="mono font-semibold text-[15px]" data-testid="{p}-del-total">{feeTotal(f)}</span></div>
+    {/if}
     <div><label class="lbl" for="{p}-free">Free delivery over ($)</label><input id="{p}-free" class="field mono text-right" inputmode="decimal" placeholder="never" bind:value={f.freeOver} /></div>
     <div><label class="lbl" for="{p}-min">Delivery minimum ($)</label><input id="{p}-min" class="field mono text-right" inputmode="decimal" bind:value={f.min} /></div>
     <div></div>

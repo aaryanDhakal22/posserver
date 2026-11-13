@@ -188,6 +188,7 @@
       <Section title="Numbers and phone numbers">
         <div class="stack">
           {@render num('counterStart')}
+          {@render num('kitchenStart')}
           {@render text('areaCodes', 'Local area codes', `Separated by commas. The terminal uses them to fill in phone numbers. Default ${D.area_codes.join(', ')}.`)}
         </div>
       </Section>

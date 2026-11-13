@@ -18,6 +18,7 @@
 
 from __future__ import annotations
 
+import json
 import secrets
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -249,6 +250,51 @@ def test_brygid_orders_get_the_builtin_channel(admin, store, publish) -> None:
     chans = wait_until(lambda: [c for c in admin.get(f"{ADMIN_V1}/channels", params={"location_id": store.location_id}, timeout=5).json()
                                 if c["builtin"]], timeout=10, what="the built-in vendor channel")
     assert chans[0]["kind"] == "vendor" and chans[0]["name"] == "Brygid" and chans[0]["active"] is False
+
+
+@pytest.mark.xdist_group("geo")
+def test_delivery_fee_by_distance(admin, store, mgr, fake_geo) -> None:
+    """The owner, 2026-11-13: the delivery fee by distance (fees.delivery_bands, Store › Settings › Map and delivery
+    area). main prices a channel's order with ITS check of the address (never the client's distance); a quote takes
+    the distance the storefront got from delivery-check (cart.distance_m); unknown = the first row. The flat fee
+    follows the first row (older readers); the driver's share never moves."""
+    m = _menu(mgr)
+    _pin_store(admin, store)
+    assert mgr.put(f"{STORE_V1}/me/location/radius", json={"radius_m": 10000}, timeout=10).status_code == 200
+    body = _ok(mgr.get(f"{ME}/pricing", timeout=5))
+    body["store"]["fees"]["delivery_bands"] = [{"up_to_m": 3219, "fee_cents": 300}, {"up_to_m": 10000, "fee_cents": 650}]
+    body["store"]["fees"]["delivery_fee_cents"] = 999  # main keeps it equal to the first row
+    saved = _ok(mgr.put(f"{ME}/pricing", json=body, timeout=5))
+    assert saved["store"]["fees"]["delivery_fee_cents"] == 300 and len(saved["store"]["fees"]["delivery_bands"]) == 2
+    bad = json.loads(json.dumps(body))
+    bad["store"]["fees"]["delivery_bands"] = [{"up_to_m": 10000, "fee_cents": 650}, {"up_to_m": 3219, "fee_cents": 300}]
+    assert mgr.put(f"{ME}/pricing", json=bad, timeout=5).status_code == 400
+
+    web = _channel(admin, store, "web")
+    near, mid = _street(), _street()
+    fake_geo.add(near, 40.6690, -74.1143)  # ~0.3 km from the pin
+    fake_geo.add(mid, 40.7200, -74.1158)   # ~5.9 km north
+    addr = lambda st: {"line1": st, "city": "Bayonne", "state": "NJ", "zip": "07002"}  # noqa: E731
+
+    def quote(**cart) -> dict:
+        return check(requests.post(f"{CH_V1}/quote", json={"type": "delivery", "lines": [_pizza(m)], **cart}, headers=web, timeout=5), "quote")
+
+    dist = check(requests.post(f"{CH_V1}/store/delivery-check", json=addr(mid), headers=web, timeout=10), "checkDelivery")["distance_m"]
+    assert 5000 < dist < 7000
+    assert quote()["delivery_fee_cents"] == 300, "an unknown distance is the first row"
+    assert quote(distance_m=dist)["delivery_fee_cents"] == 650
+    assert quote(distance_m=20000)["delivery_fee_cents"] == 650, "past the last row: the last row's fee"
+    q_mid, q_near = quote(distance_m=dist), quote(distance_m=100)
+    o = check(_place(web, _order([_pizza(m)], method="card", token="tok_visa", type="delivery", address=addr(mid),
+                                 expected_total_cents=q_mid["total_cents"])), "placeOrder")
+    assert o["money"]["total_cents"] == q_mid["total_cents"]
+    # A client claiming a near distance for a far address: main prices its own check, so the total moved.
+    r = _place(web, _order([_pizza(m)], method="card", token="tok_visa", type="delivery", address=addr(mid),
+                           expected_total_cents=q_near["total_cents"]))
+    assert r.status_code == 409 and check(r, "placeOrder")["code"] == "price_changed"
+    o = check(_place(web, _order([_pizza(m)], method="card", token="tok_visa", type="delivery", address=addr(near),
+                                 expected_total_cents=q_near["total_cents"])), "placeOrder")
+    assert o["money"]["total_cents"] == q_near["total_cents"]
 
 
 @pytest.mark.xdist_group("geo")

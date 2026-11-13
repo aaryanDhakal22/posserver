@@ -3102,6 +3102,13 @@
               },
               "additionalProperties": false
             }
+          },
+          "distance_m": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "A delivery's straight-line distance from the store in meters (DeliveryCheck's distance_m), for the delivery fee by distance in the quote. An order's own distance is main's check of its address."
           }
         },
         "additionalProperties": false
@@ -3688,6 +3695,26 @@
           },
           "delivery_min_cents": {
             "type": "integer"
+          },
+          "delivery_bands": {
+            "type": "array",
+            "description": "The customer's delivery fee by distance (absent = the flat delivery_fee_cents): ascending rows, a delivery up to up_to_m meters (straight line from the store) costs fee_cents; past the last row, the last row's fee; an unknown distance, the first row's fee. delivery_fee_cents is then the first row's fee.",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "up_to_m",
+                "fee_cents"
+              ],
+              "properties": {
+                "up_to_m": {
+                  "type": "integer"
+                },
+                "fee_cents": {
+                  "type": "integer"
+                }
+              }
+            }
           },
           "delivery_driver_cents": {
             "type": "integer",

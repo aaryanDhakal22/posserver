@@ -103,3 +103,24 @@ def test_radius_reflags_open_deliveries(admin, store, publish, fake_geo) -> None
         assert _radius(store.key, {"radius_m": 600}).status_code == 200
         g = _next_geos(s, [nid, fid])
         assert g[nid]["outside_area"] is True and g[fid]["outside_area"] is True
+
+
+def test_radius_set_in_main(make_store) -> None:
+    """The owner, 2026-11-13: main is the one place to change the delivery radius — Store › Settings › Map and
+    delivery area saves it with PUT /store/v1/me/location/radius {radius_m} (500–80467 m, else 400). The same
+    column the Pi's RPC sets; store_config carries it to the Pi (and on to its tablets, terminals and the call center)."""
+    a, b = make_store(), make_store()
+    mgr = a.manager_session()
+    before_b = _my_radius(b)
+    with SSEStream(a.key) as s:
+        assert s.next()["event"] == "store_config"
+        r = mgr.put(f"{STORE_V1}/me/location/radius", json={"radius_m": 9656}, timeout=10)
+        assert r.status_code == 200, r.text
+        assert r.json()["delivery_radius_m"] == 9656
+        assert s.wait_event("store_config", lambda d: d["location"]["delivery_radius_m"] == 9656, timeout=10)
+    assert _my_radius(a) == 9656 and _my_radius(b) == before_b
+    for body in [{}, {"radius_m": 499}, {"radius_m": 80468}, {"radius_m": 1200.5}, {"radius_m": "far"}]:
+        r = mgr.put(f"{STORE_V1}/me/location/radius", json=body, timeout=10)
+        assert r.status_code == 400, (body, r.status_code, r.text)
+    assert _my_radius(a) == 9656
+    assert requests.put(f"{STORE_V1}/me/location/radius", json={"radius_m": 5000}, timeout=10).status_code == 401

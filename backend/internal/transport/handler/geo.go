@@ -2,12 +2,14 @@ package handler
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	geoApp "quiccpos/main/internal/app/geo"
 	tenancyApp "quiccpos/main/internal/app/tenancy"
 	"quiccpos/main/internal/domain/tenancy"
+	sseBroker "quiccpos/main/internal/infra/sse"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -65,6 +67,40 @@ func (h *GeoHandler) setPin(c *echo.Context, tenantID, locationID uuid.UUID) err
 func (h *GeoHandler) MeSetPin(c *echo.Context) error {
 	tid, lid, _ := meScope(c)
 	return h.setPin(c, tid, lid)
+}
+
+// PUT /store/v1/me/location/radius {radius_m} — the delivery radius (Store ›
+// Settings › Map and delivery area; the owner, 2026-11-13: main is the one
+// place to change it). 500 m to 50 miles. Re-flags outside_area on the open
+// located deliveries, pushes store_config (the Pi, its tablets, terminals and
+// the call center follow) and answers the location.
+func (h *GeoHandler) MeSetRadius(c *echo.Context) error {
+	tid, lid, _ := meScope(c)
+	var req struct {
+		RadiusM *int64 `json:"radius_m"`
+	}
+	if err := echo.BindBody(c, &req); err != nil || req.RadiusM == nil {
+		return c.JSON(http.StatusBadRequest, errResp("body must be {radius_m}"))
+	}
+	if r := *req.RadiusM; r < geoApp.MinRadiusM || r > geoApp.MaxRadiusM {
+		return c.JSON(http.StatusBadRequest, errResp(fmt.Sprintf("radius_m must be %d-%d (0.3 to 50 miles)", geoApp.MinRadiusM, geoApp.MaxRadiusM)))
+	}
+	if h.geo == nil {
+		return c.JSON(http.StatusServiceUnavailable, errResp("the delivery area can't be changed right now"))
+	}
+	ctx := c.Request().Context()
+	if _, err := h.geo.SetRadius(ctx, sseBroker.Scope{TenantID: tid, LocationID: lid}, int(*req.RadiusM)); err != nil {
+		if errors.Is(err, geoApp.ErrNoLocation) {
+			return c.JSON(http.StatusNotFound, errResp("location not found"))
+		}
+		return err
+	}
+	l, err := h.svc.GetLocation(ctx, lid)
+	if err != nil {
+		return c.JSON(http.StatusNotFound, errResp("location not found"))
+	}
+	h.logger.Info().Ctx(ctx).Str("location_id", lid.String()).Int64("radius_m", *req.RadiusM).Msg("delivery radius set in main")
+	return c.JSON(http.StatusOK, toLocationJSON(*l))
 }
 
 // PUT /admin/v1/locations/:id/pin {lat, lng}
