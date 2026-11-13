@@ -37,9 +37,11 @@ type SSEHandler struct {
 	broker  SSEBroker
 	tenancy *tenancyApp.Service
 	logos   ReceiptLogoSource
-	logger  zerolog.Logger
-	tracer  trace.Tracer
-	meters  observability.Meters
+	// ownerOffline: store_config's owner_offline_alert_by_main (nil = false).
+	ownerOffline func() bool
+	logger       zerolog.Logger
+	tracer       trace.Tracer
+	meters       observability.Meters
 }
 
 func NewSSEHandler(broker SSEBroker, tenancy *tenancyApp.Service, logger zerolog.Logger, meters observability.Meters) *SSEHandler {
@@ -59,6 +61,10 @@ type ReceiptLogoSource interface {
 
 // SetReceiptLogos adds receipt_logo to the store_config handshake.
 func (h *SSEHandler) SetReceiptLogos(src ReceiptLogoSource) { h.logos = src }
+
+// SetOwnerOfflineByMain sets store_config's owner_offline_alert_by_main
+// (main pages the owner when the Pi goes offline; agentsync).
+func (h *SSEHandler) SetOwnerOfflineByMain(f func() bool) { h.ownerOffline = f }
 
 // StreamOrders streams orders for the authenticated device's (tenant_id,
 // location_id) scope. On every connect, it sends a single `store_config`
@@ -155,7 +161,7 @@ func (h *SSEHandler) writeStoreConfig(ctx context.Context, w http.ResponseWriter
 	if dev == nil {
 		return fmt.Errorf("no device in context")
 	}
-	body, printerCount, err := loadStoreConfig(ctx, h.tenancy, h.logos, dev.TenantID, dev.LocationID)
+	body, printerCount, err := loadStoreConfig(ctx, h.tenancy, h.logos, h.ownerOffline, dev.TenantID, dev.LocationID)
 	if err != nil {
 		return err
 	}
@@ -171,7 +177,8 @@ func (h *SSEHandler) writeStoreConfig(ctx context.Context, w http.ResponseWriter
 
 // loadStoreConfig loads + marshals the StoreContext for one scope. Shared by
 // the connect handshake and the live push (StoreConfigPublisher).
-func loadStoreConfig(ctx context.Context, svc *tenancyApp.Service, logos ReceiptLogoSource, tenantID, locationID uuid.UUID) ([]byte, int, error) {
+func loadStoreConfig(ctx context.Context, svc *tenancyApp.Service, logos ReceiptLogoSource, ownerOffline func() bool,
+	tenantID, locationID uuid.UUID) ([]byte, int, error) {
 	tenant, err := svc.GetTenant(ctx, tenantID)
 	if err != nil {
 		return nil, 0, fmt.Errorf("load tenant: %w", err)
@@ -192,6 +199,7 @@ func loadStoreConfig(ctx context.Context, svc *tenancyApp.Service, logos Receipt
 		}
 		sc.ReceiptLogo = receiptLogoContext(logo)
 	}
+	sc.OwnerOfflineAlertByMain = ownerOffline != nil && ownerOffline()
 	body, err := json.Marshal(sc)
 	if err != nil {
 		return nil, 0, fmt.Errorf("marshal store_config: %w", err)
@@ -210,10 +218,11 @@ type FramePublisher interface {
 // reconnect. Best-effort: if no agent is connected, or its buffer is full, the
 // next connect's handshake carries the same config anyway.
 type StoreConfigPublisher struct {
-	broker  FramePublisher
-	tenancy *tenancyApp.Service
-	logos   ReceiptLogoSource
-	logger  zerolog.Logger
+	broker       FramePublisher
+	tenancy      *tenancyApp.Service
+	logos        ReceiptLogoSource
+	ownerOffline func() bool
+	logger       zerolog.Logger
 }
 
 func NewStoreConfigPublisher(broker FramePublisher, tenancy *tenancyApp.Service, logger zerolog.Logger) *StoreConfigPublisher {
@@ -227,12 +236,19 @@ func (p *StoreConfigPublisher) SetReceiptLogos(src ReceiptLogoSource) {
 	}
 }
 
+// SetOwnerOfflineByMain sets store_config's owner_offline_alert_by_main.
+func (p *StoreConfigPublisher) SetOwnerOfflineByMain(f func() bool) {
+	if p != nil {
+		p.ownerOffline = f
+	}
+}
+
 // Publish is nil-safe so handlers can call it unconditionally.
 func (p *StoreConfigPublisher) Publish(ctx context.Context, tenantID, locationID uuid.UUID) {
 	if p == nil || p.broker == nil {
 		return
 	}
-	body, _, err := loadStoreConfig(ctx, p.tenancy, p.logos, tenantID, locationID)
+	body, _, err := loadStoreConfig(ctx, p.tenancy, p.logos, p.ownerOffline, tenantID, locationID)
 	if err != nil {
 		p.logger.Warn().Ctx(ctx).Err(err).Str("location_id", locationID.String()).Msg("store_config push: load failed")
 		return

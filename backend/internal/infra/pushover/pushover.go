@@ -128,6 +128,55 @@ func (c *Client) SendAlso(ctx context.Context, extra []string, title, message, s
 	return firstErr
 }
 
+// ErrNoAdminDevices: SendAdmin without the admin's device names. An unscoped
+// page would ring every phone on the account, the store owner's too.
+var ErrNoAdminDevices = errors.New("pushover: no admin devices")
+
+// ErrNoRecipient: SendOwner had nobody to page (no owner devices and no
+// separate boss key). Never the whole account.
+var ErrNoRecipient = errors.New("pushover: no owner devices and no boss key")
+
+// SendAdmin pages only the admin's devices on the user key (SetDevices);
+// never the boss key. ErrNotConfigured without a token or key,
+// ErrNoAdminDevices without admin devices (main 4.0.2: the store owner gets
+// main's plain-English owner page instead, never the technical one).
+func (c *Client) SendAdmin(ctx context.Context, title, message, sound string) error {
+	if !c.Enabled() {
+		return ErrNotConfigured
+	}
+	if len(c.devices) == 0 {
+		return ErrNoAdminDevices
+	}
+	return c.post(ctx, c.recipients[0], strings.Join(c.devices, ","), title, message, sound)
+}
+
+// SendOwner pages the store owner: the named devices on the user key (only
+// those, never the admin's and never the whole account) plus every further
+// recipient (the boss key, its own account, no device). ErrNotConfigured
+// without a token or key; ErrNoRecipient when there is nobody to page. The
+// first send error is returned (the rest still go).
+func (c *Client) SendOwner(ctx context.Context, devices []string, title, message, sound string) error {
+	if !c.Enabled() {
+		return ErrNotConfigured
+	}
+	if len(devices) == 0 && len(c.recipients) < 2 {
+		return ErrNoRecipient
+	}
+	var firstErr error
+	keep := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if len(devices) > 0 {
+		keep(c.post(ctx, c.recipients[0], strings.Join(devices, ","), title, message, sound))
+	}
+	for _, user := range c.recipients[1:] {
+		keep(c.post(ctx, user, "", title, message, sound))
+	}
+	return firstErr
+}
+
 // SendDevices sends one message to the named devices (Pushover's comma list)
 // of the first recipient's account. ErrNotConfigured without a token or key;
 // a *RejectedError for a non-200 answer; anything else is a network error.

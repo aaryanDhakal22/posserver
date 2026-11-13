@@ -316,6 +316,9 @@ func main() {
 	requester.RegisterInbound(rpc.MsgPrinterAdd, agentSync.HandlePrinterAdd)
 	requester.RegisterInbound(rpc.MsgPrinterWidth, agentSync.HandlePrinterWidth)
 	storeConfigPub := handler.NewStoreConfigPublisher(broker, tenancyService, lgr)
+	// main pages the store owner when a Pi goes offline (4.0.2): store_config
+	// says so and the Pi skips its own owner offline alert.
+	storeConfigPub.SetOwnerOfflineByMain(agentSync.OwnerOfflineAlertByMain)
 	agentSync.OnPrintersChanged(storeConfigPub.Publish)
 	safego.Loop(ctx, "agentsync.redeliver", agentSync.RunRedeliver)
 	safego.Loop(ctx, "agentsync.offline_pager", agentSync.RunOfflinePager)
@@ -568,6 +571,7 @@ func main() {
 		Broker:            broker,
 		Publisher:         broker,
 		AdminAPIKey:       cfg.AppConfig.AdminAPIKey,
+		OwnerOffline:      agentSync.OwnerOfflineAlertByMain,
 		Version:           version,
 		Commit:            commit,
 		Pool:              pool,

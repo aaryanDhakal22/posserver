@@ -29,6 +29,13 @@ type StoreContext struct {
 	// none or it is an SVG, so the frame stays byte-identical for older
 	// agents (golden).
 	ReceiptLogo *ReceiptLogoContext `json:"receipt_logo,omitempty"`
+	// OwnerOfflineAlertByMain (main 4.0.2): main pages the store owner when
+	// this Pi goes offline (contract §2.5d), so the Pi skips its own "store
+	// offline" owner alert (agent §2.1e) and the owner gets one, never two.
+	// Left out (= false) when main can't page (no Pushover): the Pi then
+	// alerts itself. Omitted when false so older frames stay byte-identical
+	// (golden).
+	OwnerOfflineAlertByMain bool `json:"owner_offline_alert_by_main,omitempty"`
 }
 
 // ReceiptLogoContext names the receipt logo: ETag is the quoted HTTP ETag
