@@ -36,6 +36,7 @@ import (
 	familiesApp "quiccpos/main/internal/app/families"
 	geoApp "quiccpos/main/internal/app/geo"
 	menuApp "quiccpos/main/internal/app/menu"
+	menubulkApp "quiccpos/main/internal/app/menubulk"
 	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
 	"quiccpos/main/internal/app/optionflags"
@@ -170,6 +171,8 @@ type RouterDeps struct {
 	Staff *staffApp.Service
 	// Families backs Store › Menu › Families (00045).
 	Families *familiesApp.Service
+	// MenuBulk backs Store › Menu's bulk edit (POST /me/menu/items/bulk).
+	MenuBulk *menubulkApp.Service
 	// OptionFlags backs the options' "Show on driver ticket" / "Counts for
 	// coupons" switches (00046).
 	OptionFlags *optionflags.Service
@@ -301,6 +304,7 @@ func routeTable(d RouterDeps) []routeDef {
 	guest := appMiddleware.CustomerAuth(d.Customers.Authenticate, false)
 	member := appMiddleware.CustomerAuth(d.Customers.Authenticate, true)
 	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
+	bulkH := handler.NewMenuBulkHandler(d.MenuBulk, d.Logger)
 	bankDocH := handler.NewBankImportHandler(d.BankImport, d.Logger)
 	famH := handler.NewFamiliesHandler(d.Families, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
@@ -527,6 +531,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", storePrefix+"/me/menu/categories/:id", "store-session", "Delete a category", menuH.MeDeleteCategory, storeSession),
 		def("GET", storePrefix+"/me/menu/categories/:id/items", "store-session", "List a category's items", menuH.MeListItems, storeSession),
 		def("POST", storePrefix+"/me/menu/categories/:id/items", "store-session", "Add an item", menuH.MeCreateItem, storeSession),
+		def("POST", storePrefix+"/me/menu/items/bulk", "store-session", "Bulk edit: several items' category / printer / no kitchen ticket / stock / prices / tax in one transaction {changes}", bulkH.MeApply, storeSession),
 		def("POST", storePrefix+"/me/menu/items/reorder", "store-session", "Reorder items", menuH.MeReorderItems, storeSession),
 		def("PATCH", storePrefix+"/me/menu/items/:id", "store-session", "Edit an item", menuH.MeUpdateItem, storeSession),
 		def("DELETE", storePrefix+"/me/menu/items/:id", "store-session", "Delete an item", menuH.MeDeleteItem, storeSession),

@@ -31,12 +31,9 @@ test('call center: an agent with a 4-digit PIN, the idle lock, computers signed 
   store,
   open
 }, info) => {
+  // The agents are people on Store › Staff; the call center's own card is Store › Settings › Call center.
   await open('/store/staff');
   const card = page.getByTestId('callcenter-card');
-  await expect(card).toBeVisible();
-  await expect(card.getByText('None yet.')).toBeVisible();
-  await expect(card.getByText('No call-center orders in these days.')).toBeVisible();
-  await expect(card.getByLabel('Ask for the PIN again after')).toHaveValue('15');
 
   // The role: explained, a 4-digit PIN only, no own limits.
   await page.getByRole('button', { name: 'Add a person' }).click();
@@ -67,6 +64,13 @@ test('call center: an agent with a 4-digit PIN, the idle lock, computers signed 
   await expect(page.getByRole('dialog').getByRole('radio', { name: 'Cashier' })).toBeVisible();
   await expect(page.getByRole('dialog').getByRole('radio', { name: 'Call center' })).toHaveCount(0);
   await page.keyboard.press('Escape');
+
+  await open('/store/settings/callcenter');
+  await expect(card).toBeVisible();
+  await expect(page.getByText(/^1 agent ·/)).toBeVisible();
+  await expect(card.getByText('None yet.')).toBeVisible();
+  await expect(card.getByText('No call-center orders in these days.')).toBeVisible();
+  await expect(card.getByLabel('Ask for the PIN again after')).toHaveValue('15');
 
   // The idle lock: a bad value in words, a good one saved on main (the other terminal settings untouched).
   const idle = card.getByLabel('Ask for the PIN again after');

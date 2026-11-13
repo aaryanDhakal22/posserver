@@ -194,7 +194,7 @@
     {#if err}<p class="field-error !mt-0" role="alert">{err}</p>{/if}
     <p class="help !mt-0">
       The call center takes phone orders in its own app (callcenter.quiccpos.com). A computer there is opened once with the
-      call-center login below; each agent then uses their own 4-digit PIN (add them above with the role Call center).
+      call-center login below; each agent then uses their own 4-digit PIN (add them on Staff with the role Call center).
     </p>
 
     <section class="flex flex-col gap-2" aria-labelledby="cc-login-title">

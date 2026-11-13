@@ -284,12 +284,20 @@
 </script>
 
 <Drawer bind:open title={it0.name} eyebrow={categoryName} {onclose} {beforeClose}>
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions (Ctrl+S inside the form saves) -->
   <form
     id="item-form"
     class="flex flex-col gap-4"
     onsubmit={(e) => {
       e.preventDefault();
       save();
+    }}
+    onkeydown={(e) => {
+      // Ctrl/Cmd+S saves the item (the browser's own save page stays out of the way).
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (!saving) save();
+      }
     }}
   >
     {#if quickAdd}
@@ -299,6 +307,7 @@
         station. It is never on a menu, and it can't be deleted.
       </p>
     {/if}
+    <h3 class="ie-sec">Basics</h3>
     <div>
       <label class="lbl" for="ie-name">Name</label>
       <input id="ie-name" class="field" bind:value={name} />
@@ -308,6 +317,7 @@
       <label class="lbl" for="ie-desc">Description</label>
       <textarea id="ie-desc" class="field" rows="2" bind:value={description} placeholder="Shown to call-center operators"></textarea>
     </div>
+    <h3 class="ie-sec">Price and sizes</h3>
     <div class="grid grid-cols-2 gap-3">
       <div>
         <label class="lbl" for="ie-price">Price ($)</label>
@@ -372,6 +382,7 @@
       {/if}
     </div>
     {#if priceErr}<p class="field-error !-mt-2" role="alert">{priceErr}</p>{/if}
+    <h3 class="ie-sec">Kitchen</h3>
     <div class="grid grid-cols-2 gap-3">
       <div>
         <label class="lbl" for="ie-kitchen">Kitchen name</label>
@@ -410,6 +421,7 @@
       </p>
       {#if piState === 'offline'}<p class="help !text-warn">The Pi is offline — printer status may be stale.</p>{/if}
     </div>
+    <h3 class="ie-sec">Tags and stock</h3>
     <div>
       <label class="lbl" for="ie-tags">Tags (comma-separated)</label>
       <input id="ie-tags" class="field" bind:value={tagsStr} placeholder="High protein, Spicy" />
@@ -454,6 +466,21 @@
 
   {#snippet footer()}
     <Button type="submit" form="item-form" variant="primary" class="flex-1" loading={saving}>Save item</Button>
+    {#if dirty}<Button variant="ghost" onclick={() => (open = false)}>Discard</Button>{/if}
     {#if !quickAdd}<Button variant="danger-ghost" onclick={del}><Icon name="trash" size={16} />Delete</Button>{/if}
   {/snippet}
 </Drawer>
+
+<style>
+  .ie-sec {
+    margin: 6px 0 -6px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text2);
+  }
+  .ie-sec:first-of-type {
+    margin-top: 0;
+  }
+</style>

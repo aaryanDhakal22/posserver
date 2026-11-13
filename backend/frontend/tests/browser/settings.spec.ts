@@ -11,8 +11,10 @@ async function shot(page: Page, info: TestInfo, name: string) {
 }
 
 const bar = (page: Page) => page.getByTestId('settings-savebar');
-const save = (page: Page) => bar(page).getByRole('button', { name: 'Save', exact: true });
-const field = (page: Page, label: string) => page.getByLabel(label, { exact: false }).first();
+const save = (page: Page) => bar(page).getByRole('button', { name: /^Save/ });
+// A form control by its label (the page's sections are labelled by their headings too: never those).
+const field = (page: Page, label: string) =>
+  page.locator('input, textarea, select').and(page.getByLabel(label, { exact: false })).first();
 
 const TILES: [string, string][] = [
   ['details', 'Store details'],
@@ -95,8 +97,8 @@ test('terminal settings: one group per page, the defaults, every field saves, a 
 
   // Login and screen.
   await open('/store/settings/screen');
-  await expect(page.getByLabel('After login, open')).toHaveValue('info');
-  await expect(page.getByLabel('Menu button font')).toHaveValue('barlow');
+  await expect(field(page, 'After login, open')).toHaveValue('info');
+  await expect(field(page, 'Menu button font')).toHaveValue('barlow');
   await field(page, 'Lock the terminal after').fill('0');
   await save(page).click();
   // A bad value never leaves the page: the message says which field, and that field is marked + focused.
@@ -105,8 +107,8 @@ test('terminal settings: one group per page, the defaults, every field saves, a 
   await expect(field(page, 'Lock the terminal after')).toBeFocused();
   await shot(page, info, 'screen-error');
   await field(page, 'Lock the terminal after').fill('7');
-  await page.getByLabel('After login, open').selectOption('takeout');
-  await page.getByLabel('Menu button font').selectOption('barlow_condensed');
+  await field(page, 'After login, open').selectOption('takeout');
+  await field(page, 'Menu button font').selectOption('barlow_condensed');
   await field(page, 'Close the receipt screen after').fill('0');
   await page.getByRole('switch', { name: 'Show the History tab' }).click();
   await page.getByRole('switch', { name: 'Prices on menu buttons' }).click();
@@ -149,9 +151,9 @@ test('terminal settings: one group per page, the defaults, every field saves, a 
 
   // Card payments.
   await open('/store/settings/card');
-  await expect(page.getByLabel('Tip choices')).toBeDisabled();
+  await expect(field(page, 'Tip choices')).toBeDisabled();
   await page.getByRole('switch', { name: 'Ask for a tip on the card reader' }).click();
-  await page.getByLabel('Tip choices').fill('10, 15, 20, 25');
+  await field(page, 'Tip choices').fill('10, 15, 20, 25');
   await field(page, 'A charge sent to a phone expires after').fill('240');
   await save(page).click();
   await expect(bar(page)).toContainText('All changes saved');
@@ -166,7 +168,7 @@ test('terminal settings: one group per page, the defaults, every field saves, a 
 
   // End of day: auto-close at 03:30, then off ("").
   await open('/store/settings/end-of-day');
-  await page.getByLabel('At (store time)').fill('03:30');
+  await field(page, 'At (store time)').fill('03:30');
   await field(page, 'Cash left in each drawer at opening').fill('150');
   await save(page).click();
   await expect(bar(page)).toContainText('All changes saved');
@@ -196,7 +198,7 @@ test('store details, hours, alerts: each saves its own part of the location; a b
   await save(page).click();
   await expect(bar(page).getByRole('alert')).toContainText('Store email');
   await field(page, 'Store email').fill('owner@example.com');
-  await page.getByLabel('New day starts at').selectOption('4');
+  await field(page, 'New day starts at').selectOption('4');
   await save(page).click();
   await expect(bar(page)).toContainText('All changes saved');
   await expect.poll(loc).toMatchObject({ phone: '410-555-0100', daily_reset_hour: 4 });
@@ -205,16 +207,16 @@ test('store details, hours, alerts: each saves its own part of the location; a b
 
   await open('/store/settings/hours');
   await page.getByRole('checkbox', { name: 'Monday' }).check();
-  await page.getByLabel('Monday opens').fill('10:30');
-  await page.getByLabel('Monday closes').fill('22:00');
+  await field(page, 'Monday opens').fill('10:30');
+  await field(page, 'Monday closes').fill('22:00');
   await save(page).click();
   await expect(bar(page)).toContainText('All changes saved');
   await expect.poll(async () => (await loc()).config.opening_hours?.mon).toEqual([{ open: '10:30', close: '22:00' }]);
   // The phone and day saved above stayed (the PATCH is a full replace).
   expect(await loc()).toMatchObject({ phone: '410-555-0100', daily_reset_hour: 4 });
   // A special day saves on its own.
-  await page.getByLabel('Date').fill('2026-12-25');
-  await page.getByLabel('Note').fill('Christmas');
+  await field(page, 'Date').fill('2026-12-25');
+  await field(page, 'Note').fill('Christmas');
   await page.getByRole('button', { name: 'Add', exact: true }).click();
   await expect(page.getByText('Christmas')).toBeVisible();
   await shot(page, info, 'hours');
@@ -254,8 +256,8 @@ test('ordering, tax and deals, fees and tips: each page sends the rest of the pr
 
   await open('/store/settings/tax');
   await field(page, 'Sales tax').fill('7.25');
-  await page.getByLabel('Deals in one order').selectOption('single');
-  await page.getByLabel('A topping on half a pizza').selectOption('half');
+  await field(page, 'Deals in one order').selectOption('single');
+  await field(page, 'A topping on half a pizza').selectOption('half');
   await save(page).click();
   await expect(bar(page)).toContainText('All changes saved');
   await expect.poll(async () => (await pricing()).store).toMatchObject({ tax_bps: 725, stacking: 'single', half_topping_price: 'half' });
@@ -263,12 +265,14 @@ test('ordering, tax and deals, fees and tips: each page sends the rest of the pr
 
   // A new store delivers for $4: $1 the store's + $3 the driver's (the owner's default).
   await open('/store/settings/fees');
-  await expect(page.getByLabel('Delivery: store share ($)').first()).toHaveValue('1.00');
-  await expect(page.getByLabel('Delivery: driver share ($)').first()).toHaveValue('3.00');
-  await page.getByLabel('Delivery: driver share ($)').first().fill('3.50');
+  await expect(field(page, 'Delivery: store share ($)')).toHaveValue('1.00');
+  await expect(field(page, 'Delivery: driver share ($)')).toHaveValue('3.00');
+  await field(page, 'Delivery: driver share ($)').fill('3.50');
   await expect(page.getByTestId('pr-st-del-total')).toHaveText('$4.50');
   // A channel that differs opens to its own fees.
-  await page.locator('details.kind summary').filter({ hasText: 'Website' }).click();
+  // (A new store's website already has its own tips, so it may start open.)
+  const web = page.locator('details.kind').filter({ hasText: 'Website' });
+  if ((await web.getAttribute('open')) === null) await web.locator('summary').click();
   await page.getByRole('switch', { name: 'Website has its own fees' }).click();
   await page.locator('#pr-web-svc').fill('1.25');
   await save(page).click();
@@ -280,5 +284,5 @@ test('ordering, tax and deals, fees and tips: each page sends the rest of the pr
   await shot(page, info, 'fees');
 
   await page.reload();
-  await expect(page.getByLabel('Delivery: driver share ($)').first()).toHaveValue('3.50');
+  await expect(field(page, 'Delivery: driver share ($)')).toHaveValue('3.50');
 });

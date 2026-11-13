@@ -40,10 +40,14 @@
   import ViewsTab from '$lib/components/menu/ViewsTab.svelte';
   import DealsTab from '$lib/components/menu/DealsTab.svelte';
   import FamiliesTab from '$lib/components/menu/FamiliesTab.svelte';
+  import BulkBar from '$lib/components/menu/BulkBar.svelte';
+  import ProblemsTab, { type ProblemsReport } from '$lib/components/menu/ProblemsTab.svelte';
+  import type { Picked } from '$lib/store/menuBulk';
   import { loadPiStatus, type PiLink } from '$lib/store/pi';
 
   // Menu editor: items grouped by category (inline price + stock, side panel
-  // for the rest), modifier groups, categories/menus, CSV import/export.
+  // for the rest, select several for a bulk edit), modifier groups,
+  // categories/menus, CSV import/export, and Find problems (what to fix).
   // Kitchen routing is stamped on each online order at ingest, so changes
   // apply to the next order.
 
@@ -91,7 +95,64 @@
   let printerF = $state(''); // '' any · '__none' no kitchen printer · printer id
   let outOnly = $state(false);
   let noPrinterOnly = $state(false);
+  let zeroOnly = $state(false);
   let collapsed = $state<Record<string, boolean>>({});
+
+  // Bulk edit: the selected item ids (kept while filters change).
+  let selected = $state<Set<string>>(new Set());
+  function toggleSel(id: string) {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    selected = next;
+  }
+  function setSel(ids: string[], on: boolean) {
+    const next = new Set(selected);
+    for (const id of ids) on ? next.add(id) : next.delete(id);
+    selected = next;
+  }
+  const allItemsById = $derived(new Map(categories.flatMap((c) => (itemsByCat[c.id] || []).map((it) => [it.id, it] as const))));
+  const picked = $derived<Picked[]>(
+    [...selected].map((id) => allItemsById.get(id)).filter((it): it is Item => !!it).map((it) => ({ item: it, bank: bankItems.get(it.id) }))
+  );
+  const allCategories = $derived((bank?.menus ?? []).flatMap((m) => m.categories.map((c) => ({ id: c.id, name: c.name, menu: m.name }))));
+  async function afterBulk() {
+    selected = new Set();
+    await Promise.all([loadCategories(), loadBank()]).catch((e) => toast.error(e));
+    loadProblemCount();
+  }
+
+  // Find problems: the count on its tab (the tab itself loads the list).
+  let problemCount = $state<number | null>(null);
+  function loadProblemCount() {
+    storeApi<ProblemsReport>('/me/menu/problems')
+      .then((r) => (problemCount = Object.values(r.counts).reduce((a, b) => a + b, 0)))
+      .catch(() => (problemCount = null));
+  }
+  // Open an item from anywhere (Find problems): its menu, then its panel.
+  async function openItem(itemId: string) {
+    const m = (bank?.menus ?? []).find((x) => x.categories.some((c) => c.items.some((it) => it.id === itemId)));
+    if (!m) return toast.error('That item is gone. Check again.');
+    clearFilters();
+    tab = 'items';
+    if (activeMenu?.id !== m.id) await selectMenu(menus.find((x) => x.id === m.id) ?? (m as Menu));
+    editing = allItemsById.get(itemId) ?? null;
+  }
+  let openGroupId = $state('');
+  function openGroup(groupId: string) {
+    openGroupId = groupId;
+    tab = 'modifiers';
+  }
+  // "/" jumps to the item search (not while typing somewhere).
+  function onKey(e: KeyboardEvent) {
+    const t = e.target as HTMLElement | null;
+    if (e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+    if (t && (t.closest('input, textarea, select, [contenteditable]') || t.closest('dialog'))) return;
+    const box = document.getElementById('item-search');
+    if (tab !== 'items' || !box) return;
+    e.preventDefault();
+    box.focus();
+  }
 
   const printerName = (id: string | null) => {
     const p = id ? printers.find((x) => x.id === id) : undefined;
@@ -154,6 +215,7 @@
       await Promise.all([loadPrinters(), loadMenus(), loadBank()]);
       ({ live, pi: piState } = await loadPiStatus());
       await loadUnmatched();
+      loadProblemCount();
     } catch (e) {
       toast.error(e);
     } finally {
@@ -173,7 +235,15 @@
   }
 
   // --- derived views --------------------------------------------------------
-  const filtering = $derived(!!q.trim() || !!catF || !!printerF || outOnly || noPrinterOnly);
+  const filtering = $derived(!!q.trim() || !!catF || !!printerF || outOnly || noPrinterOnly || zeroOnly);
+  /** Search: the name, description, kitchen name, SKU and tags. */
+  function matches(it: Item, s: string): boolean {
+    if (!s) return true;
+    const b = bankItems.get(it.id);
+    return [it.name, it.description, b?.kitchen_name, b?.sku, ...(it.tags ?? [])].some((x) => x?.toLowerCase().includes(s));
+  }
+  /** $0: no price and no priced size. */
+  const zeroPriced = (it: Item) => !it.price_cents && !(bankItems.get(it.id)?.sizes ?? []).some((z) => z.price_cents > 0);
   const allItems = $derived(categories.flatMap((c) => (itemsByCat[c.id] || []).map((it) => ({ it, c }))));
   const itemCount = $derived(allItems.length);
   const noPrinterCount = $derived(allItems.filter(({ it, c }) => unprinted(it, c)).length);
@@ -185,7 +255,8 @@
         cat: c,
         items: (itemsByCat[c.id] || []).filter((it) => {
           const eff = effective(it, c);
-          if (s && !it.name.toLowerCase().includes(s)) return false;
+          if (!matches(it, s)) return false;
+          if (zeroOnly && !zeroPriced(it)) return false;
           if (printerF === '__none' ? !!eff : printerF && eff !== printerF) return false;
           if (outOnly && it.in_stock) return false;
           if (noPrinterOnly && !unprinted(it, c)) return false;
@@ -202,6 +273,7 @@
     printerF = '';
     outOnly = false;
     noPrinterOnly = false;
+    zeroOnly = false;
   }
   function showNoPrinter() {
     clearFilters();
@@ -377,18 +449,20 @@
   }
   const editCat = $derived(editing ? categories.find((c) => c.id === editing!.category_id) : undefined);
 
-  const TABS = [
+  const TABS = $derived([
     { id: 'items', label: 'Items' },
     { id: 'modifiers', label: 'Modifier groups' },
     { id: 'categories', label: 'Categories' },
     { id: 'sizes', label: 'Sizes' },
     { id: 'families', label: 'Families' },
     { id: 'views', label: 'Views' },
-    { id: 'deals', label: 'Deals' }
-  ];
+    { id: 'deals', label: 'Deals' },
+    { id: 'problems', label: 'Find problems', badge: problemCount || undefined }
+  ]);
 </script>
 
 <svelte:head><title>Menu — quicc</title></svelte:head>
+<svelte:window onkeydown={onKey} />
 
 <PageHeader
   title="Menu"
@@ -423,7 +497,9 @@
   {#if loading}
     <div class="card p-5"><Skeleton lines={8} /></div>
   {:else if tab === 'modifiers'}
-    <ModifiersTab {sizes} />
+    {#key openGroupId}<ModifiersTab {sizes} {openGroupId} />{/key}
+  {:else if tab === 'problems'}
+    <ProblemsTab {bank} {printers} {sizes} onopenitem={openItem} onopengroup={openGroup} onchanged={afterBulk} />
   {:else if tab === 'sizes'}
     <SizesTab {sizes} onreload={loadBank} />
   {:else if tab === 'families'}
@@ -511,7 +587,7 @@
     {/if}
 
     <div class="flex flex-wrap items-center gap-2" role="search" aria-label="Filter items">
-      <SearchInput id="item-search" label="Search items" placeholder="Search items" bind:value={q} class="flex-[1_1_240px] max-w-[360px]" />
+      <SearchInput id="item-search" label="Search items" placeholder="Search name, kitchen name, SKU  ( / )" bind:value={q} class="flex-[1_1_240px] max-w-[360px]" />
       <label for="f-cat" class="sr-only">Category</label>
       <select id="f-cat" class="field !w-auto" bind:value={catF}>
         <option value="">All categories</option>
@@ -525,24 +601,43 @@
       </select>
       <button type="button" class="fchip" aria-pressed={outOnly} onclick={() => (outOnly = !outOnly)}>Out of stock</button>
       <button type="button" class="fchip" aria-pressed={noPrinterOnly} onclick={() => (noPrinterOnly = !noPrinterOnly)}>No kitchen printer</button>
+      <button type="button" class="fchip" aria-pressed={zeroOnly} onclick={() => (zeroOnly = !zeroOnly)}>$0 price</button>
       {#if filtering}<Button size="sm" variant="ghost" onclick={clearFilters}>Clear</Button>{/if}
     </div>
 
     <section class="card overflow-hidden" aria-label="Items">
       <div class="overflow-x-auto">
         <div class="sm:min-w-[620px]">
-          <div class="irow head" aria-hidden="true">
-            <span class="c-grip"><span class="sr-only">Reorder</span></span>
-            <span>Item</span>
-            <span class="text-right">Price</span>
-            <span class="c-printer">Prints on</span>
-            <span class="whitespace-nowrap">In stock</span>
+          <div class="irow head">
+            <span class="c-sel">
+              <input
+                type="checkbox"
+                class="check"
+                aria-label="Select every item shown"
+                checked={shownCount > 0 && groups.every((g) => g.items.every((it) => selected.has(it.id)))}
+                onchange={(e) => setSel(groups.flatMap((g) => g.items.map((it) => it.id)), e.currentTarget.checked)}
+              />
+            </span>
+            <span class="c-grip" aria-hidden="true"><span class="sr-only">Reorder</span></span>
+            <span aria-hidden="true">Item</span>
+            <span class="text-right" aria-hidden="true">Price</span>
+            <span class="c-printer" aria-hidden="true">Prints on</span>
+            <span class="whitespace-nowrap" aria-hidden="true">In stock</span>
             <span><span class="sr-only">Open</span></span>
           </div>
           {#each groups as g (g.cat.id)}
             {@const c = g.cat}
             <div>
               <div class="cat">
+                {#if g.items.length}
+                  <input
+                    type="checkbox"
+                    class="check"
+                    aria-label="Select the items of {c.name}"
+                    checked={g.items.every((it) => selected.has(it.id))}
+                    onchange={(e) => setSel(g.items.map((it) => it.id), e.currentTarget.checked)}
+                  />
+                {/if}
                 <button
                   type="button"
                   class="flex items-center gap-2 flex-1 min-w-0 text-left font-semibold py-2.5 -my-2.5"
@@ -606,6 +701,16 @@
                     }}
                     onclick={() => (editing = it)}
                   >
+                    <span class="c-sel">
+                      <input
+                        type="checkbox"
+                        class="check"
+                        aria-label="Select {it.name}"
+                        checked={selected.has(it.id)}
+                        onclick={(e) => e.stopPropagation()}
+                        onchange={() => toggleSel(it.id)}
+                      />
+                    </span>
                     <span class="c-grip text-muted cursor-grab" title="Drag to reorder"><Icon name="grip" size={14} /></span>
                     <span class="min-w-0">
                       <button type="button" class="block w-full text-left font-semibold truncate hover:text-accent py-1.5 -my-1.5" onclick={(e) => { e.stopPropagation(); editing = it; }}>
@@ -670,6 +775,7 @@
       </div>
     </section>
     {#if filtering}<p class="text-xs text-muted -mt-2">Showing {shownCount} of {itemCount} items.</p>{/if}
+    <BulkBar {picked} {printers} categories={allCategories} {sizes} onapplied={afterBulk} onclear={() => (selected = new Set())} />
   {/if}
 </div>
 
@@ -749,7 +855,7 @@
 <style>
   .irow {
     display: grid;
-    grid-template-columns: 20px minmax(0, 1fr) 100px 150px 64px 20px;
+    grid-template-columns: 22px 20px minmax(0, 1fr) 100px 150px 64px 20px;
     gap: 12px;
     align-items: center;
     padding: 10px 16px;
@@ -784,7 +890,7 @@
   /* Phones: name (+ sizes / printer line) · price · in stock · chevron. */
   @media (max-width: 639px) {
     .irow {
-      grid-template-columns: minmax(0, 1fr) 76px 48px 16px;
+      grid-template-columns: 22px minmax(0, 1fr) 76px 48px 16px;
       gap: 8px;
       padding: 10px 12px 10px 16px;
     }
