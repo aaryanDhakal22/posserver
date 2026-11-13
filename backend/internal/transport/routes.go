@@ -497,7 +497,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", storePrefix+"/me/location", "store-session", "This manager's location", storeH.MeGetLocation, storeSession),
 		def("PATCH", storePrefix+"/me/location", "store-session", "Edit this manager's location (full replace incl. config; pushes store_config; bad Pushover device name → 400 bad_device)", storeH.MeUpdateLocation, storeSession),
 		def("POST", storePrefix+"/me/alerts/test", "store-session", "Send one test Pushover to the saved owner phones (location config pushover_owner_devices; 1 per 10 s)", alertsH.MeTest, storeSession),
-		def("PUT", storePrefix+"/me/location/pin", "store-session", "Place the store pin by hand {lat, lng} (Store › Details map)", geoH.MeSetPin, storeSession),
+		def("PUT", storePrefix+"/me/location/pin", "store-session", "Place the store pin by hand {lat, lng} (Store › Settings › Map and delivery area)", geoH.MeSetPin, storeSession),
 		def("GET", storePrefix+"/me/orders", "store-session", "Recent orders with the agent-synced floor status (?limit)", floorH.MeListOrders, storeSession),
 		def("GET", storePrefix+"/me/delivery-runs", "store-session", "Driver runs sent (AUTO suggestion vs sent), newest first (?limit=50)", floorH.MeDeliveryRuns, storeSession),
 		def("GET", storePrefix+"/me/floor", "store-session", "Driver roster + last agent floor sync", floorH.MeGetFloor, storeSession),

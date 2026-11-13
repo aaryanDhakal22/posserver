@@ -359,7 +359,7 @@
             }
           },
           "422": {
-            "description": "cart_invalid (issues), outside_area, address_unknown; card_not_found (a saved card no longer on the account); tip_too_big (the tip is over the store's tip limit, tip_max_cents on Store › Details, default $50: the message names it)",
+            "description": "cart_invalid (issues), outside_area, address_unknown; card_not_found (a saved card no longer on the account); tip_too_big (the tip is over the store's tip limit, tip_max_cents on Store › Settings › Ordering, default $50: the message names it)",
             "content": {
               "application/json": {
                 "schema": {
