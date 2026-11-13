@@ -30,7 +30,8 @@ const TILES: [string, string][] = [
   ['card', 'Card payments'],
   ['voids', 'Void and waste reasons'],
   ['end-of-day', 'End of day'],
-  ['callcenter', 'Call center']
+  ['callcenter', 'Call center'],
+  ['receipts', 'Receipts and printing']
 ];
 
 test('the tiles: every category with a one-line summary opens its own page; the old Details & hours link lands here', async ({
@@ -182,6 +183,26 @@ test('terminal settings: one group per page, the defaults, every field saves, a 
   await save(page).click();
   await expect.poll(async () => (await saved()).auto_close_batch_at).toBe('');
   await shot(page, info, 'end-of-day');
+
+  // Receipts and printing (the owner, 2026-11-13): takeout prints 2 customer copies, off by default; the tile says so.
+  await open('/store/settings/receipts');
+  const two = page.getByRole('switch', { name: 'Takeout: print 2 customer copies' });
+  await expect(two).toHaveAttribute('aria-checked', 'false');
+  expect((await saved()).takeout_two_copies).toBe(false);
+  await two.click();
+  await save(page).click();
+  await expect(bar(page)).toContainText('All changes saved');
+  await expect.poll(async () => (await saved()).takeout_two_copies).toBe(true);
+  // the rest of the settings went back as they were
+  await expect.poll(saved).toMatchObject({ close_unpaid_counter_action: 'carry', drawer_start_cents: 15000, auto_close_batch_at: '' });
+  await shot(page, info, 'receipts');
+  await open('/store/settings');
+  await expect(page.getByTestId('tile-receipts')).toContainText('Takeout prints 2 customer copies');
+  await open('/store/settings/receipts');
+  await expect(page.getByRole('switch', { name: 'Takeout: print 2 customer copies' })).toHaveAttribute('aria-checked', 'true');
+  await page.getByRole('switch', { name: 'Takeout: print 2 customer copies' }).click();
+  await save(page).click();
+  await expect.poll(async () => (await saved()).takeout_two_copies).toBe(false);
 
   // Fill in defaults touches only this page's fields (saved on Save).
   await open('/store/settings/cashier');

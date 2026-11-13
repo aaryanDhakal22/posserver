@@ -940,6 +940,8 @@ export interface TerminalSettings {
   quibase_counter_min_cents: number;
   /** A forced close / the auto-close: unpaid counter checks written off as waste, or carried (agent §2.10s §4). */
   close_unpaid_counter_action: 'waste' | 'carry';
+  /** Every takeout / pickup order prints two Customer Copies: Centurion's and the Pi's (Receipts and printing; default off). */
+  takeout_two_copies: boolean;
 }
 /** A browser the store's login opened the call-center app on. */
 export interface CallcenterDevice {
@@ -968,5 +970,6 @@ export const TERMINAL_DEFAULTS: TerminalSettings = {
   phone_charge_timeout_seconds: 180,
   callcenter_idle_lock_minutes: 15,
   quibase_counter_min_cents: 500,
-  close_unpaid_counter_action: 'waste'
+  close_unpaid_counter_action: 'waste',
+  takeout_two_copies: false
 };

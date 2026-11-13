@@ -144,6 +144,16 @@ type Settings struct {
 	// always carried. A manual close without force is refused either way.
 	// Edited on Store › Settings › End of day.
 	CloseUnpaidCounterAction string `json:"close_unpaid_counter_action"`
+
+	// TakeoutTwoCopies (the owner, 2026-11-13; main 4.0.6, agent 2.5.5,
+	// terminal 1.0.6): every takeout / pickup order, from any source,
+	// prints two Customer Copies (each cut): Centurion's own receipt for a
+	// takeout it rang, the Pi's customer receipt for an online, website or
+	// call-center pickup. The Pi's own receipt Copies (Quibase Settings)
+	// still applies: a pickup on the Pi prints max(copies, 2). Reprints,
+	// counter (dine-in) and delivery are unchanged. Default off. Edited on
+	// Store › Settings › Receipts and printing.
+	TakeoutTwoCopies bool `json:"takeout_two_copies"`
 }
 
 // The close_unpaid_counter_action choices (default CloseUnpaidWaste).

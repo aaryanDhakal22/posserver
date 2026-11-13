@@ -231,6 +231,22 @@ def test_close_unpaid_counter_action_setting(store, mgr) -> None:
     assert _config(store.key)["settings"]["close_unpaid_counter_action"] == "waste"
 
 
+def test_takeout_two_copies_setting(store, mgr) -> None:
+    """takeout_two_copies (the owner, 2026-11-13; Store › Settings › Receipts and printing): every takeout / pickup
+    order prints two Customer Copies (Centurion's own receipt, the Pi's customer receipt). Off by default, kept when a
+    save leaves it out, a non-boolean refused, sent to the Pi in terminal-config (the terminals get it from there)."""
+    assert _ok(mgr.get(SETTINGS, timeout=5))["takeout_two_copies"] is False
+    assert _config(store.key)["settings"]["takeout_two_copies"] is False
+    assert _ok(mgr.put(SETTINGS, json={"takeout_two_copies": True}, timeout=5))["takeout_two_copies"] is True
+    assert _ok(mgr.put(SETTINGS, json={"auto_lock_minutes": 6}, timeout=5))["takeout_two_copies"] is True
+    assert _config(store.key)["settings"]["takeout_two_copies"] is True
+    for bad in ("yes", 2):
+        assert _code(mgr.put(SETTINGS, json={"takeout_two_copies": bad}, timeout=5), 400) in ("bad_settings", "bad_request"), bad
+    assert _config(store.key)["settings"]["takeout_two_copies"] is True
+    assert _ok(mgr.put(SETTINGS, json={"takeout_two_copies": False}, timeout=5))["takeout_two_copies"] is False
+    assert _config(store.key)["settings"]["takeout_two_copies"] is False
+
+
 def test_kitchen_start_setting(store, mgr) -> None:
     """kitchen_start (the owner's X, 2026-11-13; agent contract 2.10ae): where the online / kitchen numbers start
     (default 1100), counter_start below it (S-6), kept when a save leaves it out, sent to the Pi in terminal-config."""

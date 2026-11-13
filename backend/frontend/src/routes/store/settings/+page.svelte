@@ -148,6 +148,7 @@
             const n = staff.filter((p) => p.role === 'callcenter' && p.active).length;
             return `${plural(n, 'agent')}${term ? ` · locks after ${term.callcenter_idle_lock_minutes ?? 15} min` : ''}`;
           } },
+        { slug: 'receipts', title: 'Receipts and printing', icon: 'receipt', summary: t('receipts') },
         { slug: 'printers', title: 'Printers', icon: 'printer', href: base + '/store/printers',
           summary: () => (printers ? (printers.length ? plural(printers.length, 'printer') : 'No printers yet') : null) },
         { slug: 'devices', title: 'Devices', icon: 'tablet', href: base + '/store/devices', summary: () => 'The Pi, tablets and terminals' },

@@ -31,6 +31,16 @@ test('search: a word finds the setting, Enter opens its page with the field lit 
   await expect(hits.getByRole('option', { selected: true })).toBeVisible();
   await box.press('Escape');
   await expect(box).toHaveValue('');
+
+  // "copies", "takeout", "receipt" find Receipts and printing's switch (the owner, 2026-11-13).
+  for (const word of ['copies', 'takeout', 'receipt']) {
+    await box.fill(word);
+    await expect(hits, word).toContainText('Takeout: print 2 customer copies');
+  }
+  await box.fill('copies');
+  await box.press('Enter');
+  await expect(page).toHaveURL(/\/app\/store\/settings\/receipts#takeout_two_copies$/);
+  await expect(page.locator('.setting-hit', { hasText: 'Takeout: print 2 customer copies' })).toBeVisible();
 });
 
 test('a deep link lands on its field: on load, and when only the hash changes', async ({ page, open }) => {
