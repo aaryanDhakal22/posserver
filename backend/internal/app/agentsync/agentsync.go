@@ -96,6 +96,7 @@ type Service struct {
 	ackLatency  metric.Float64Histogram
 	links       metric.Int64Counter
 	pages       metric.Int64Counter
+	ownerPages  metric.Int64Counter
 
 	// RedeliverAfter is how long an order may stay unacked before it is
 	// re-sent (and between re-sends). OfflineAfter is how long an agent may
@@ -103,9 +104,13 @@ type Service struct {
 	RedeliverAfter time.Duration
 	OfflineAfter   time.Duration
 
-	offMu     sync.Mutex
-	offSince  map[uuid.UUID]time.Time // location → first seen offline
-	offPaged  map[uuid.UUID]bool
+	offMu    sync.Mutex
+	offSince map[uuid.UUID]time.Time // location → first seen offline (admin page)
+	offPaged map[uuid.UUID]bool
+	owner    map[uuid.UUID]*ownerOffline // location → the owner page's state
+	// ownerSend pages the store owner (pushover.Client.SendOwner: the owner's
+	// devices + the boss key); tests swap it.
+	ownerSend func(ctx context.Context, devices []string, title, message, sound string) error
 	linkLimit *ratelimit.LoginGuard // failed link attempts
 	// printersChanged pushes a fresh store_config after the agent changed
 	// the printers (OnPrintersChanged); nil = no push.
@@ -127,13 +132,18 @@ func New(pool *pgxpool.Pool, orders OrderLoader, drivers DriverMirror, broker Br
 		OfflineAfter:   2 * time.Minute,
 		offSince:       map[uuid.UUID]time.Time{},
 		offPaged:       map[uuid.UUID]bool{},
+		owner:          map[uuid.UUID]*ownerOffline{},
 		linkLimit:      ratelimit.NewLoginGuard(),
+	}
+	if pager != nil {
+		s.ownerSend = pager.SendOwner
 	}
 	s.redelivered, _ = m.Int64Counter("orders.redelivered", metric.WithDescription("Orders re-sent to an agent that had not acked them"))
 	s.acked, _ = m.Int64Counter("orders.agent_acked", metric.WithDescription("Orders acknowledged by an agent"))
 	s.ackLatency, _ = observability.NewHopHistogram(m, "orders.ack.latency", "Order persisted → acked by the agent (order.ack)")
 	s.links, _ = m.Int64Counter("agents.linked", metric.WithDescription("Agents linked with a manager login (Pi set up / replaced)"))
 	s.pages, _ = m.Int64Counter("agents.offline_pages", metric.WithDescription("Agent-offline pages sent during opening hours"))
+	s.ownerPages = ownerPagesCounter(m)
 	unacked, _ := m.Int64ObservableGauge("orders.unacked", metric.WithDescription("Orders an agent has not acked for over a minute (should be 0)"))
 	_, _ = m.RegisterCallback(func(ctx context.Context, o metric.Observer) error {
 		// One series per store (0 when none), so a store's series never goes stale.

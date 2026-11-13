@@ -12,8 +12,10 @@ import (
 	"quiccpos/main/internal/domain/order"
 	"quiccpos/main/internal/domain/tenancy"
 	"quiccpos/main/internal/infra/database/models"
+	"quiccpos/main/internal/infra/pushover"
 	sseBroker "quiccpos/main/internal/infra/sse"
 	"quiccpos/main/internal/observability"
+	"quiccpos/main/internal/shared/safego"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -183,10 +185,17 @@ func (s *Service) BackupData(ctx context.Context, id uuid.UUID) ([]byte, time.Ti
 
 // --- offline pager -------------------------------------------------------------
 
-// RunOfflinePager checks every 30 s, for each location that has opening
-// hours set and an active agent device, whether its agent is connected; one
-// that has been gone OfflineAfter during opening hours (±15 min) pages the
-// owner + boss once, and again when it is back.
+// RunOfflinePager checks every 30 s, for each location with an active agent
+// device, whether its agent is connected. Two pages come out of it:
+//
+//   - the admin's (technical): gone OfflineAfter (2 min) inside the
+//     location's opening hours (±15 min; only stores with hours set), once
+//     per outage and again when back, to the admin's devices only;
+//   - the store owner's (main 4.0.2, checkOwnerOffline): plain English after
+//     owner_alert_offline_minutes (5) inside opening hours (else 09:00-02:00),
+//     once per outage + one "back online", to the owner's devices + the boss
+//     key. The Pi skips its own owner offline alert (store_config
+//     owner_offline_alert_by_main), so the owner gets one, never two.
 func (s *Service) RunOfflinePager(ctx context.Context) {
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
@@ -206,10 +215,6 @@ func (s *Service) checkOffline(ctx context.Context, now time.Time) {
 		return
 	}
 	for _, l := range locs {
-		hours, ok, err := tenancy.HoursFromConfig(l.Config)
-		if err != nil || !ok {
-			continue
-		}
 		devs, err := s.tenancy.ListDevicesByLocation(ctx, l.ID)
 		if err != nil {
 			continue
@@ -220,7 +225,14 @@ func (s *Service) checkOffline(ctx context.Context, now time.Time) {
 				hasAgent = true
 			}
 		}
-		if !hasAgent {
+		if !hasAgent { // no Pi to miss: forget any outage
+			s.offMu.Lock()
+			delete(s.offSince, l.ID)
+			delete(s.offPaged, l.ID)
+			if st := s.owner[l.ID]; st != nil && !st.inflight {
+				delete(s.owner, l.ID)
+			}
+			s.offMu.Unlock()
 			continue
 		}
 		tz, err := time.LoadLocation(l.Timezone)
@@ -228,40 +240,53 @@ func (s *Service) checkOffline(ctx context.Context, now time.Time) {
 			tz = time.UTC
 		}
 		connected := s.broker.SubscribersFor(sseBroker.Scope{TenantID: l.TenantID, LocationID: l.ID}) > 0
-		s.offMu.Lock()
-		since, wasOff := s.offSince[l.ID]
-		paged := s.offPaged[l.ID]
-		switch {
-		case connected:
-			delete(s.offSince, l.ID)
-			delete(s.offPaged, l.ID)
-		case !wasOff:
-			s.offSince[l.ID] = now
-		}
-		s.offMu.Unlock()
-
-		open := hours.IsOpen(now, tz, 15*time.Minute)
-		switch {
-		case !connected && wasOff && !paged && open && now.Sub(since) >= s.OfflineAfter:
-			s.offMu.Lock()
-			s.offPaged[l.ID] = true
-			s.offMu.Unlock()
-			s.pages.Add(ctx, 1, observability.WithStore(ctx, l.TenantID))
-			msg := fmt.Sprintf("%s: the Pi (agent) has been offline for %d min during opening hours — orders are not printing. Check its power/network; if it doesn't come back, swap in the spare SD card.",
-				l.Name, int(now.Sub(since).Minutes()))
-			s.page(ctx, "Agent offline", msg, "siren", tenancy.OwnerDevices(l.Config))
-		case connected && paged:
-			s.page(ctx, "Agent back online", l.Name+": the Pi is connected again.", "classical", tenancy.OwnerDevices(l.Config))
-		}
+		s.checkAdminOffline(ctx, l, tz, connected, now)
+		s.checkOwnerOffline(ctx, l, tz, connected, now)
 	}
 }
 
-// page sends a floor page: the admin's devices plus the store owner's.
-func (s *Service) page(ctx context.Context, title, msg, sound string, owner []string) {
+// checkAdminOffline is the admin's technical page (stores with opening hours).
+func (s *Service) checkAdminOffline(ctx context.Context, l tenancy.Location, tz *time.Location, connected bool, now time.Time) {
+	hours, ok, err := tenancy.HoursFromConfig(l.Config)
+	if err != nil || !ok {
+		return
+	}
+	s.offMu.Lock()
+	since, wasOff := s.offSince[l.ID]
+	paged := s.offPaged[l.ID]
+	switch {
+	case connected:
+		delete(s.offSince, l.ID)
+		delete(s.offPaged, l.ID)
+	case !wasOff:
+		s.offSince[l.ID] = now
+	}
+	s.offMu.Unlock()
+
+	open := hours.IsOpen(now, tz, 15*time.Minute)
+	switch {
+	case !connected && wasOff && !paged && open && now.Sub(since) >= s.OfflineAfter:
+		s.offMu.Lock()
+		s.offPaged[l.ID] = true
+		s.offMu.Unlock()
+		s.pages.Add(ctx, 1, observability.WithStore(ctx, l.TenantID))
+		msg := fmt.Sprintf("%s: the Pi (agent) has been offline for %d min during opening hours — orders are not printing. Check its power/network; if it doesn't come back, swap in the spare SD card.",
+			l.Name, int(now.Sub(since).Minutes()))
+		s.page(ctx, "Agent offline", msg, "siren")
+	case connected && paged:
+		s.page(ctx, "Agent back online", l.Name+": the Pi is connected again.", "classical")
+	}
+}
+
+// page sends the admin's page: the admin's devices only (never the owner's
+// phones or the boss key — the owner gets main's own plain-English page).
+// Without admin devices nothing goes out: an unscoped page would ring the
+// owner's phones too.
+func (s *Service) page(ctx context.Context, title, msg, sound string) {
 	s.logger.Warn().Ctx(ctx).Str("title", title).Msg(msg)
-	go func(ctx context.Context) {
-		if err := s.pager.SendAlso(ctx, owner, title, msg, sound); err != nil {
-			s.logger.Warn().Err(err).Msg("page failed")
+	safego.Go(context.WithoutCancel(ctx), "agentsync.admin_page", func(ctx context.Context) {
+		if err := s.pager.SendAdmin(ctx, title, msg, sound); err != nil && !errors.Is(err, pushover.ErrNotConfigured) {
+			s.logger.Warn().Err(err).Msg("admin page not sent")
 		}
-	}(context.WithoutCancel(ctx))
+	})
 }

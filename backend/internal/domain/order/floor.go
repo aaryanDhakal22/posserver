@@ -65,8 +65,13 @@ type FloorUpdate struct {
 	KitchenNumber    *int
 	EstimatedReadyAt *time.Time
 	DriverName       string
-	At               time.Time
-	Auto             bool // close-batch auto-finish
+	// DriverKnown: DriverName is the agent's whole truth (read from the
+	// event's agent_status), so "" clears the driver — an order moved back to
+	// Unassigned (4.0.2). False (an older agent with no agent_status): ""
+	// means "not said" and keeps the driver main has.
+	DriverKnown bool
+	At          time.Time
+	Auto        bool // close-batch auto-finish
 	// Reason marks a manual cancel from the floor (weborder stage 3: a
 	// website order cancelled on Quibase, even after it was accepted):
 	// customer_asked | couldnt_deliver | other.
@@ -134,7 +139,7 @@ func (o *Order) ApplyFloorUpdate(u FloorUpdate) string {
 		o.estimatedReadyAt = &t
 		changed = true
 	}
-	if u.DriverName != "" && u.DriverName != o.driverName {
+	if (u.DriverKnown || u.DriverName != "") && u.DriverName != o.driverName {
 		o.driverName = u.DriverName
 		changed = true
 	}

@@ -92,6 +92,9 @@ type RouterDeps struct {
 	// after location/printer edits). The concrete *sse.Broker satisfies it.
 	Publisher   handler.FramePublisher
 	AdminAPIKey string
+	// OwnerOffline: store_config's owner_offline_alert_by_main (main
+	// pages the store owner when the Pi goes offline; nil = false).
+	OwnerOffline func() bool
 	// Version + Commit are injected from cmd/api/main.go's ldflags-set vars.
 	// Surfaced via GET /api/v1/version so ops can `curl` and confirm what's
 	// actually running.
@@ -285,6 +288,8 @@ func routeTable(d RouterDeps) []routeDef {
 	operatorH := handler.NewOperatorHandler(d.OperatorService, d.MenuService, d.Meters, d.Logger)
 	channelH := handler.NewChannelHandler(d.ChannelService, d.TenancyService, d.Logger)
 	siteH := handler.NewSiteHandler(d.Site, d.Logger)
+	sseH.SetOwnerOfflineByMain(d.OwnerOffline)
+	cfgPub.SetOwnerOfflineByMain(d.OwnerOffline)
 	if d.Site != nil { // store_config carries the store's receipt logo
 		sseH.SetReceiptLogos(d.Site)
 		cfgPub.SetReceiptLogos(d.Site)

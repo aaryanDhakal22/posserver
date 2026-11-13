@@ -125,3 +125,63 @@ func TestScopedPagesNameTheAdminAndOwnerDevices(t *testing.T) {
 		t.Fatalf("unscoped = %v", last)
 	}
 }
+
+func TestSendAdminOnlyTheAdminDevices(t *testing.T) {
+	srv, forms := fake(t, 200, `{"status":1}`)
+	c := New("app", "user", "boss")
+	c.SetEndpoint(srv.URL)
+	if err := c.SendAdmin(context.Background(), "T", "M", ""); !errors.Is(err, ErrNoAdminDevices) {
+		t.Fatalf("unscoped admin page = %v, want ErrNoAdminDevices (it would ring the owner's phones)", err)
+	}
+	c.SetDevices([]string{"AaryanPhone"})
+	if err := c.SendAdmin(context.Background(), "T", "M", "siren"); err != nil {
+		t.Fatal(err)
+	}
+	got := forms()
+	if len(got) != 1 || got[0].Get("user") != "user" || got[0].Get("device") != "AaryanPhone" {
+		t.Fatalf("admin page = %v (never the boss key)", got)
+	}
+	if err := New("", "user").SendAdmin(context.Background(), "T", "M", ""); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("not configured = %v", err)
+	}
+}
+
+func TestSendOwnerTheOwnerDevicesAndTheBoss(t *testing.T) {
+	srv, forms := fake(t, 200, `{"status":1}`)
+	c := New("app", "user", "boss")
+	c.SetEndpoint(srv.URL)
+	c.SetDevices([]string{"AaryanPhone"})
+	if err := c.SendOwner(context.Background(), []string{"OwnerPhone", "OwnerTab"}, "Lombardi's", "M", ""); err != nil {
+		t.Fatal(err)
+	}
+	got := forms()
+	if len(got) != 2 {
+		t.Fatalf("posts = %v", got)
+	}
+	if got[0].Get("user") != "user" || got[0].Get("device") != "OwnerPhone,OwnerTab" {
+		t.Fatalf("owner devices = %v (never the admin's)", got[0])
+	}
+	if got[1].Get("user") != "boss" || got[1].Has("device") {
+		t.Fatalf("boss = %v", got[1])
+	}
+	// No owner devices: the boss key alone, never the whole account.
+	if err := c.SendOwner(context.Background(), nil, "T", "M", ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := forms(); len(got) != 3 || got[2].Get("user") != "boss" {
+		t.Fatalf("boss only = %v", got)
+	}
+	// Nobody: no devices and no boss key.
+	u := New("app", "user")
+	u.SetEndpoint(srv.URL)
+	if err := u.SendOwner(context.Background(), nil, "T", "M", ""); !errors.Is(err, ErrNoRecipient) {
+		t.Fatalf("nobody = %v", err)
+	}
+	if len(forms()) != 3 {
+		t.Fatal("nothing may be posted for nobody")
+	}
+	var nilClient *Client
+	if err := nilClient.SendOwner(context.Background(), []string{"x"}, "T", "M", ""); !errors.Is(err, ErrNotConfigured) {
+		t.Fatalf("nil client = %v", err)
+	}
+}

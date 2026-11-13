@@ -15,6 +15,7 @@ the target env has Pushover keys.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -88,6 +89,30 @@ def test_owner_devices_saved_normalized_and_pushed(store) -> None:
     r = _save_devices(mgr, "")
     assert r.status_code == 200, r.text
     assert r.json()["config"]["pushover_owner_devices"] == ""
+
+
+def test_owner_offline_flag_follows_mains_pager(store) -> None:
+    """main 4.0.2: main pages the store owner when the Pi goes offline, so
+    store_config says `owner_offline_alert_by_main: true` and the Pi skips its
+    own owner offline alert — but only when main can page (its Pushover app
+    token + user key are set, the same ones /agent/secrets hands the Pi).
+    Without them the key is left out (the Pi alerts itself; golden-exact)."""
+    sec = _secrets(store.key).json()
+    main_pages = bool(sec["pushover_app_token"] and sec["pushover_user_key"])
+    with SSEStream(store.key) as s:
+        first = s.next()
+        assert first["event"] == "store_config"
+        cfg = json.loads(first["data"])
+        if main_pages:
+            assert cfg.get("owner_offline_alert_by_main") is True, cfg.keys()
+        else:
+            assert "owner_offline_alert_by_main" not in cfg, "left out when main can't page"
+        # A live push (a manager edit) says the same.
+        mgr = store.manager_session()
+        assert _save_devices(mgr, _phone()).status_code == 200
+        pushed = s.wait_event("store_config", lambda d: bool(d["location"]["config"].get("pushover_owner_devices")), timeout=10)
+        assert pushed, "no store_config push after the edit"
+        assert pushed.get("owner_offline_alert_by_main", False) is main_pages
 
 
 @pytest.mark.parametrize("bad", ["my phone", "x" * 26, "ok,phone!", 42])
