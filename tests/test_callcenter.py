@@ -631,7 +631,6 @@ def test_relay_refuses_what_the_call_center_may_not_carry(store) -> None:
         ("POST", "orders", {**place, "manager_pin": "9876"}, 403, "manager"),
         ("POST", "orders", {**place, "approvals": ["a1"]}, 403, "manager"),
         ("POST", "orders", {**place, "cart": {"lines": [], "discount": {"pct": 10, "reason": "x"}}}, 403, "discount"),
-        ("POST", "orders", {**place, "cart": {"lines": [{"custom": True, "name": "Thing", "price_cents": 500, "qty": 1}]}}, 403, "open_price"),
         ("POST", "orders", {**place, "cart": {"lines": [{"item_id": "i1", "qty": 1, "price_cents": 100}]}}, 403, "price_change"),
         ("POST", "quote", {"type": "pickup", "cart": {"lines": [], "discount": {"amount_cents": 100, "reason": "x"}}}, 403, "discount"),
         ("PUT", "orders/o1/cart", {"client_key": "c-12345678", "cart": {"lines": [], "discount": {"pct": 5, "reason": "x"}}}, 403, "discount"),
@@ -670,8 +669,11 @@ def test_relay_refuses_what_the_call_center_may_not_carry(store) -> None:
             assert r.status_code == 403 and r.json()["what"] == what, (path, raw, r.text)
         assert pi.seen == [], "a refused call reached the Pi"
 
-        # What is allowed: a typed card, a coupon code, lines an order already holds on a change, a quote of them.
+        # What is allowed: a typed card, a coupon code, a Quick add line (owner 2026-11-13: a custom line, like the
+        # terminal's), lines an order already holds on a change, a quote of them.
         ok = [
+            ("POST", "orders", {**place, "client_key": "cc-0003-abcd",
+                                "cart": {"lines": [{"custom": True, "name": "Thing", "price_cents": 500, "qty": 1}]}}),
             ("POST", "orders", {**place, "cart": {"lines": [{"item_id": "i1", "qty": 1}], "code": "SAVE5"},
                                 "payments": [{"tender": "manual_card", "amount_cents": 500, "ref": "sq"}]}),
             ("POST", "orders/o1/payments", {"tender": "manual_card", "amount_cents": 500, "tip_cents": 100, "client_key": "p-1"}),

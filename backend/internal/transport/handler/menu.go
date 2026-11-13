@@ -54,6 +54,9 @@ func (h *MenuHandler) mErr(c *echo.Context, err error) error {
 	if menuApp.IsNotFound(err) {
 		return c.JSON(http.StatusNotFound, errResp("not found"))
 	}
+	if errors.Is(err, menuApp.ErrQuickAddKept) {
+		return c.JSON(http.StatusConflict, errCode(err.Error(), "quick_add_kept"))
+	}
 	return c.JSON(http.StatusBadRequest, errResp(err.Error()))
 }
 
@@ -86,6 +89,18 @@ func parseIDs(raw []string) ([]uuid.UUID, error) {
 }
 
 // --- Menus -----------------------------------------------------------------
+
+// GET /store/v1/me/menu/quick-add — the store's Quick add item (made the
+// first time): {item_id, category_id, menu_id}. Its printer / "no kitchen
+// ticket" decide where the terminal's typed (Quicc Add) lines print.
+func (h *MenuHandler) MeQuickAdd(c *echo.Context) error {
+	tid, lid, _ := meScope(c)
+	qa, err := h.svc.QuickAdd(c.Request().Context(), tid, lid)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, errResp("quick add failed"))
+	}
+	return c.JSON(http.StatusOK, qa)
+}
 
 func (h *MenuHandler) MeListMenus(c *echo.Context) error {
 	_, lid, _ := meScope(c)
@@ -424,7 +439,7 @@ func (h *MenuHandler) MeListOptions(c *echo.Context) error {
 	out := make([]optionOut, 0, len(rows))
 	for _, o := range rows {
 		f := flags[o.ID]
-		out = append(out, optionOut{ModifierOption: o, ShowOnDriverTicket: f.ShowOnDriverTicket, CountsForCoupons: f.CountsForCoupons})
+		out = append(out, optionOutOf(o, f))
 	}
 	return c.JSON(http.StatusOK, out)
 }
@@ -442,6 +457,7 @@ func (h *MenuHandler) MeCreateOption(c *echo.Context) error {
 		// options is in a regular family), else no family.
 		CountsForCoupons   *bool `json:"counts_for_coupons"`
 		ShowOnDriverTicket *bool `json:"show_on_driver_ticket"`
+		NeverIncluded      *bool `json:"never_included"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
@@ -459,11 +475,16 @@ func (h *MenuHandler) MeCreateOption(c *echo.Context) error {
 			return h.flagErr(c, err)
 		}
 	}
+	if req.NeverIncluded != nil && *req.NeverIncluded {
+		if err := h.flags.SetNeverIncluded(ctx, lid, o.ID, true); err != nil {
+			return h.flagErr(c, err)
+		}
+	}
 	f, err := h.flags.NewOption(ctx, tid, lid, gid, o.ID, req.CountsForCoupons)
 	if err != nil {
 		return h.flagErr(c, err)
 	}
-	return c.JSON(http.StatusCreated, optionOut{ModifierOption: *o, ShowOnDriverTicket: f.ShowOnDriverTicket, CountsForCoupons: f.CountsForCoupons})
+	return c.JSON(http.StatusCreated, optionOutOf(*o, f))
 }
 
 func (h *MenuHandler) MeUpdateOption(c *echo.Context) error {
@@ -476,8 +497,9 @@ func (h *MenuHandler) MeUpdateOption(c *echo.Context) error {
 		Name            string `json:"name"`
 		PriceDeltaCents int64  `json:"price_delta_cents"`
 		InStock         bool   `json:"in_stock"`
-		// ShowOnDriverTicket: absent keeps it.
+		// ShowOnDriverTicket / NeverIncluded: absent keeps it.
 		ShowOnDriverTicket *bool `json:"show_on_driver_ticket"`
+		NeverIncluded      *bool `json:"never_included"`
 	}
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, errResp("invalid body"))
@@ -495,19 +517,29 @@ func (h *MenuHandler) MeUpdateOption(c *echo.Context) error {
 			return h.flagErr(c, err)
 		}
 	}
+	if req.NeverIncluded != nil {
+		if err := h.flags.SetNeverIncluded(ctx, lid, o.ID, *req.NeverIncluded); err != nil {
+			return h.flagErr(c, err)
+		}
+	}
 	f, err := h.flags.Option(ctx, lid, o.GroupID, o.ID)
 	if err != nil {
 		return h.flagErr(c, err)
 	}
-	return c.JSON(http.StatusOK, optionOut{ModifierOption: *o, ShowOnDriverTicket: f.ShowOnDriverTicket, CountsForCoupons: f.CountsForCoupons})
+	return c.JSON(http.StatusOK, optionOutOf(*o, f))
 }
 
 // optionOut is an option as Store › Menu's option routes answer it: the
-// legacy fields plus its two switches (00046).
+// legacy fields plus its switches (00046, never_included 00009).
 type optionOut struct {
 	menuDom.ModifierOption
 	ShowOnDriverTicket bool `json:"show_on_driver_ticket"`
 	CountsForCoupons   bool `json:"counts_for_coupons"`
+	NeverIncluded      bool `json:"never_included"`
+}
+
+func optionOutOf(o menuDom.ModifierOption, f optionflags.Flags) optionOut {
+	return optionOut{ModifierOption: o, ShowOnDriverTicket: f.ShowOnDriverTicket, CountsForCoupons: f.CountsForCoupons, NeverIncluded: f.NeverIncluded}
 }
 
 func (h *MenuHandler) flagErr(c *echo.Context, err error) error {

@@ -105,7 +105,22 @@ type RouteEntry struct {
 	// NoKitchen: "no kitchen ticket" (the item's, or its category's for an
 	// item without its own printer); PrinterID is nil then.
 	NoKitchen bool
+	// QuickAdd: the location's "Quick add" item (00008): the counter menu
+	// routes the terminal's typed lines by it; never matched by name.
+	QuickAdd bool
 }
+
+// QuickAdd is a location's "Quick add" item (00008) and where it sits: the
+// terminal's Quicc Add lines print where this item routes (its printer, else
+// its category's default; "no kitchen ticket" = receipt only).
+type QuickAdd struct {
+	ItemID     uuid.UUID `json:"item_id"`
+	CategoryID uuid.UUID `json:"category_id"`
+	MenuID     uuid.UUID `json:"menu_id"`
+}
+
+// QuickAddName names the item, its category and its menu when main makes them.
+const QuickAddName = "Quick add"
 
 type Repository interface {
 	// ListRoutingByLocation returns the location's menu items with their
@@ -164,4 +179,9 @@ type Repository interface {
 
 	// Read API
 	GetFullMenu(ctx context.Context, locationID uuid.UUID) (*FullMenu, error)
+
+	// Quick add (00008): the location's item (nil = none yet), and making it
+	// (its own "Quick add" menu + category) when there is none.
+	QuickAdd(ctx context.Context, locationID uuid.UUID) (*QuickAdd, error)
+	EnsureQuickAdd(ctx context.Context, tenantID, locationID uuid.UUID) (*QuickAdd, error)
 }

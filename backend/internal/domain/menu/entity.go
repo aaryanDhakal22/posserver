@@ -61,6 +61,9 @@ type Item struct {
 	Attributes      map[string]any `json:"attributes"`
 	CreatedAt       time.Time      `json:"created_at"`
 	UpdatedAt       time.Time      `json:"updated_at"`
+	// QuickAdd (00008): the location's "Quick add" item, the route of the
+	// terminal's typed lines; never sold from a menu, never deleted.
+	QuickAdd bool `json:"quick_add,omitempty"`
 }
 
 type ModifierGroup struct {

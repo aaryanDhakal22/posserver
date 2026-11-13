@@ -77,7 +77,7 @@ func TestGuard(t *testing.T) {
 		{"POST", "orders", `{"client_key":"k","type":"pickup","approvals":["a"]}`, "manager", CodeNotAllowed},
 		{"POST", "orders", `{"client_key":"k","type":"pickup","cart":{"discount":{"pct":5}}}`, "discount", CodeNotAllowed},
 		{"POST", "orders", `{"client_key":"k","type":"pickup","cart":{"discount":null}}`, "", ""},
-		{"POST", "orders", `{"client_key":"k","type":"pickup","cart":{"lines":[{"custom":true,"price_cents":5}]}}`, "open_price", CodeNotAllowed},
+		{"POST", "orders", `{"client_key":"k","type":"pickup","cart":{"lines":[{"custom":true,"name":"Extra cup","price_cents":5}]}}`, "", ""}, // Quick add (owner 2026-11-13)
 		{"POST", "orders", `{"client_key":"k","type":"pickup","cart":{"lines":[{"item_id":"i","price_cents":5}]}}`, "price_change", CodeNotAllowed},
 		{"POST", "quote", `{"cart":{"lines":[{"custom":true,"price_cents":5}]}}`, "", ""},
 		{"POST", "quote", `{"cart":{"discount":{"amount_cents":5}}}`, "discount", CodeNotAllowed},

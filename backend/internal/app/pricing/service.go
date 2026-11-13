@@ -231,7 +231,8 @@ func (s *Service) validDeal(ctx context.Context, locationID uuid.UUID, d *pricin
 	return nil
 }
 
-// itemFacts are the bank's item facts (category, tax, plain pizza), cached per version.
+// itemFacts are the bank's item facts (category, tax, plain pizza, included
+// toppings) and option facts (family, never included), cached per version.
 func (s *Service) itemFacts(ctx context.Context, locationID uuid.UUID) (factsAt, error) {
 	ver, err := s.views.Version(ctx, locationID)
 	if err != nil {
@@ -266,14 +267,18 @@ func (s *Service) itemFacts(ctx context.Context, locationID uuid.UUID) (factsAt,
 				if it.FamilyID != nil {
 					facts.Family = it.FamilyID.String()
 				}
+				facts.IncludedToppings, facts.IncludedSizes = pricing.IncludedOf(it.Attributes)
 				f.items[it.ID.String()] = facts
 			}
 		}
 	}
 	for _, g := range bank.Groups {
 		for _, o := range g.Options {
-			if o.FamilyID != nil {
-				f.opts[o.ID.String()] = pricing.OptionFacts{Family: o.FamilyID.String(), Class: class[*o.FamilyID]}
+			switch {
+			case o.FamilyID != nil:
+				f.opts[o.ID.String()] = pricing.OptionFacts{Family: o.FamilyID.String(), Class: class[*o.FamilyID], NeverIncluded: o.NeverIncluded}
+			case o.NeverIncluded:
+				f.opts[o.ID.String()] = pricing.OptionFacts{NeverIncluded: true}
 			}
 		}
 	}

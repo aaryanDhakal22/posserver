@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { onMount, tick } from 'svelte';
-  import { beforeNavigate, goto } from '$app/navigation';
+  import { onMount } from 'svelte';
+  import { base } from '$app/paths';
   import {
     ApiError,
     centsInput,
@@ -25,7 +25,7 @@
   import Switch from '$lib/ui/Switch.svelte';
   import Skeleton from '$lib/ui/Skeleton.svelte';
   import EmptyState from '$lib/ui/EmptyState.svelte';
-  import CallcenterCard from '$lib/components/store/CallcenterCard.svelte';
+  import Icon from '$lib/ui/Icon.svelte';
   import SegmentedControl from '$lib/ui/SegmentedControl.svelte';
   import MenuButton from '$lib/ui/MenuButton.svelte';
 
@@ -80,12 +80,16 @@
     none: { tone: 'mute', badge: 'No Pi linked', text: 'Changes are saved here; the terminals get them once the store’s Pi is set up.' },
     unknown: { tone: 'mute', badge: 'Checking the Pi…', text: 'Changes here are sent to the store’s Pi.' }
   };
-  const SAVED_TO: Record<PiLink, string> = {
-    online: 'sent to the terminals',
-    offline: 'the terminals get them when the Pi is back online',
-    none: 'the terminals get them once a Pi is linked',
-    unknown: 'sent to the store’s Pi'
-  };
+  // Store › Settings pages for the terminal settings (they moved there, 2026-11-13).
+  const SETTINGS_LINKS = [
+    { slug: 'cashier', label: 'Cashier limits' },
+    { slug: 'counter', label: 'Counter orders' },
+    { slug: 'screen', label: 'Login and screen' },
+    { slug: 'card', label: 'Card payments' },
+    { slug: 'voids', label: 'Void and waste reasons' },
+    { slug: 'end-of-day', label: 'End of day' },
+    { slug: 'callcenter', label: 'Call center' }
+  ];
 
   // --- PINs ----------------------------------------------------------------------
   const PIN_RE = /^\d{2,4}$/;
@@ -161,7 +165,7 @@
       case 'callcenter':
         return 'Takes phone orders in the call-center app only (their 4-digit PIN doesn’t work on the store’s terminals). No refunds, discounts or price changes; orders show “Call center - Name”.';
       default:
-        return `Takes orders and payments. Without a manager: refunds up to ${dollars(d.refund ?? 0)}, discounts up to ${d.discount}% (Cashier limits below).`;
+        return `Takes orders and payments. Without a manager: refunds up to ${dollars(d.refund ?? 0)}, discounts up to ${d.discount}% (Settings › Cashier limits).`;
     }
   }
 
@@ -309,248 +313,21 @@
   }
   const hasOwn = (p: Staff) => p.limits.refund_cents != null || p.limits.discount_pct != null;
 
-  // --- terminal settings -------------------------------------------------------
-  type SettingsForm = {
-    refund: string; discount: string; lock: string; counterStart: string; receiptDone: string;
-    autoClose: boolean; autoCloseAt: string; defaultTab: string; showHistory: boolean; font: string;
-    priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean; toppingMax: string;
-    cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string; drawerStart: string;
-    wasteReasons: string; voidReasons: string; phoneTimeout: string;
-  };
-  type TextKey = { [K in keyof SettingsForm]: SettingsForm[K] extends string ? K : never }[keyof SettingsForm];
+  // --- terminal settings (read only here: Store › Settings edits them) --------------
+  // The cashier limits a person without their own get, shown in the person dialog.
   let saved = $state<TerminalSettings | null>(null);
-  let sf = $state<SettingsForm | null>(null);
-  let savedForm = $state('');
-  let sErr = $state('');
-  let sErrField = $state<TextKey | ''>('');
-  let sSaving = $state(false);
-  const dirty = $derived(!!sf && JSON.stringify(sf) !== savedForm);
-
-  function settingsForm(raw: Partial<TerminalSettings>): SettingsForm {
-    const s = { ...TERMINAL_DEFAULTS, ...raw };
-    return {
-      refund: centsInput(s.cashier_refund_cents), discount: String(s.cashier_discount_pct), lock: String(s.auto_lock_minutes),
-      counterStart: String(s.counter_start), receiptDone: String(s.receipt_auto_done_seconds),
-      phoneTimeout: String(s.phone_charge_timeout_seconds || TERMINAL_DEFAULTS.phone_charge_timeout_seconds),
-      autoClose: s.auto_close_batch_at !== '', autoCloseAt: s.auto_close_batch_at || '04:00',
-      defaultTab: s.default_tab, showHistory: s.show_history, font: s.button_font, priceDrop: String(s.cashier_price_drop_pct),
-      clickSound: s.click_sound, pricesOnButtons: s.prices_on_buttons, margin: String(s.out_of_area_margin_mi),
-      toppingMax: String(s.topping_max_count),
-      nameOnPaid: s.name_on_paid_counter, cardTips: s.card_tips, tipPercents: (s.card_tip_percents ?? []).join(', '),
-      meal: String(s.employee_meal_pct), payout: centsInput(s.cashier_payout_cents),
-      pickupMinutes: String(s.default_pickup_minutes), areaCodes: (s.area_codes ?? []).join(', '),
-      drawerStart: centsInput(s.drawer_start_cents),
-      wasteReasons: (s.waste_reasons ?? []).join('\n'),
-      voidReasons: (s.void_reasons ?? []).join('\n')
-    };
-  }
-  function useSaved(s: TerminalSettings) {
-    saved = { ...TERMINAL_DEFAULTS, ...s };
-    sf = settingsForm(s);
-    savedForm = JSON.stringify(sf);
-  }
-
-  /** A settings problem tied to one field (focused + marked in the form). */
-  class FieldError extends Error {
-    field: TextKey;
-    constructor(field: TextKey, message: string) {
-      super(message);
-      this.field = field;
-    }
-  }
-  function int(f: SettingsForm, key: TextKey, what: string, lo: number, hi: number): number {
-    const v = f[key];
-    const n = Number(v.trim());
-    if (!v.trim() || !Number.isInteger(n) || n < lo || n > hi) throw new FieldError(key, `${what}: a whole number from ${lo} to ${hi}.`);
-    return n;
-  }
-  function money(f: SettingsForm, key: TextKey, what: string, hiCents: number): number {
-    const c = toCents(f[key]);
-    if (c === null || c < 0 || c > hiCents)
-      throw new FieldError(key, `${what}: a dollar amount from $0 to $${(hiCents / 100).toLocaleString('en-US')}.`);
-    return c;
-  }
-
-  function settingsOf(f: SettingsForm): TerminalSettings {
-    const margin = Number(f.margin.trim());
-    if (!f.margin.trim() || !Number.isFinite(margin) || margin < 0 || margin > 10 || Math.round(margin * 10) !== margin * 10)
-      throw new FieldError('margin', 'Past the delivery area: 0 to 10 miles (one decimal, like 1.5).');
-    const tips = f.tipPercents.split(',').map((x) => x.trim()).filter(Boolean);
-    if (tips.length < 1 || tips.length > 6 || tips.some((x) => !/^\d+$/.test(x) || Number(x) > 100))
-      throw new FieldError('tipPercents', 'Tip choices: 1 to 6 percentages from 0 to 100, separated by commas.');
-    if (f.autoClose && !/^([01]\d|2[0-3]):[0-5]\d$/.test(f.autoCloseAt)) throw new FieldError('autoCloseAt', 'Close the batch at: a time like 04:00.');
-    const codes = [...new Set(f.areaCodes.split(',').map((x) => x.trim()).filter(Boolean))];
-    if (codes.length < 1 || codes.length > 20 || codes.some((c) => !/^[2-9]\d\d$/.test(c)))
-      throw new FieldError('areaCodes', 'Area codes: 1 to 20 three-digit codes, separated by commas.');
-    const reasons = (text: string) => {
-      const seen = new Set<string>();
-      return text
-        .split('\n')
-        .map((x) => x.trim().replace(/\s+/g, ' '))
-        .filter((x) => x && !seen.has(x.toLowerCase()) && seen.add(x.toLowerCase()));
-    };
-    const waste = reasons(f.wasteReasons);
-    if (waste.length < 1 || waste.length > 20 || waste.some((x) => x.length > 40))
-      throw new FieldError('wasteReasons', 'Waste reasons: 1 to 20 reasons, one per line, up to 40 characters each.');
-    const voids = reasons(f.voidReasons);
-    if (voids.length < 1 || voids.length > 20 || voids.some((x) => x.length > 40))
-      throw new FieldError('voidReasons', 'Void reasons: 1 to 20 reasons, one per line, up to 40 characters each.');
-    return {
-      cashier_refund_cents: money(f, 'refund', 'Refunds up to', 1_000_000),
-      cashier_discount_pct: int(f, 'discount', 'Discounts up to', 0, 100),
-      auto_lock_minutes: int(f, 'lock', 'Lock the terminal after', 1, 240),
-      counter_start: int(f, 'counterStart', 'Counter numbers start at', 1, 999_999),
-      receipt_auto_done_seconds: int(f, 'receiptDone', 'Close the receipt screen after', 0, 600),
-      phone_charge_timeout_seconds: int(f, 'phoneTimeout', 'A charge sent to a phone expires after', 30, 1800),
-      auto_close_batch_at: f.autoClose ? f.autoCloseAt : '',
-      default_tab: f.defaultTab as TerminalSettings['default_tab'],
-      show_history: f.showHistory,
-      button_font: f.font as TerminalSettings['button_font'],
-      cashier_price_drop_pct: int(f, 'priceDrop', 'Lower a price by up to', 0, 100),
-      click_sound: f.clickSound,
-      prices_on_buttons: f.pricesOnButtons,
-      out_of_area_margin_mi: margin,
-      name_on_paid_counter: f.nameOnPaid,
-      card_tips: f.cardTips,
-      card_tip_percents: tips.map(Number),
-      employee_meal_pct: int(f, 'meal', 'Employee meal', 0, 100),
-      topping_max_count: int(f, 'toppingMax', 'Most of one topping', 1, 10),
-      cashier_payout_cents: money(f, 'payout', 'Pay out of the drawer up to', 100_000),
-      drawer_start_cents: money(f, 'drawerStart', 'Cash left in each drawer at opening', 1_000_000),
-      default_pickup_minutes: int(f, 'pickupMinutes', 'Pickups are ready in', 0, 240),
-      area_codes: codes,
-      waste_reasons: waste,
-      void_reasons: voids
-    };
-  }
-
-  async function saveSettings(e: SubmitEvent) {
-    e.preventDefault();
-    if (!sf || sSaving) return;
-    sErr = sErrField = '';
-    let body: TerminalSettings;
-    try {
-      body = settingsOf(sf);
-    } catch (x) {
-      sErr = errText(x);
-      if (x instanceof FieldError) {
-        sErrField = x.field;
-        await tick();
-        document.getElementById('ts-' + x.field)?.focus();
-      }
-      return;
-    }
-    sSaving = true;
-    try {
-      useSaved(await storeApi<TerminalSettings>('/me/terminal/settings', { method: 'PUT', body: JSON.stringify(body) }));
-      toast.success(`Terminal settings saved — ${SAVED_TO[pi]}`);
-      if (staff) await load(); // the cashiers' limits follow the settings
-    } catch (x) {
-      sErr = errText(x);
-    } finally {
-      sSaving = false;
-    }
-  }
-
-  function undoSettings() {
-    sf = JSON.parse(savedForm);
-    sErr = sErrField = '';
-  }
-  async function fillDefaults() {
-    const ok = await confirmDialog({
-      title: 'Fill in the defaults?',
-      body: 'Every terminal setting below goes back to the QuiccPOS default. Nothing is saved until you press Save.',
-      confirmLabel: 'Fill in defaults'
-    });
-    if (!ok || !sf) return;
-    sf = settingsForm(TERMINAL_DEFAULTS);
-    sErr = sErrField = '';
-  }
-
-  // Leaving with unsaved settings asks first.
-  let leaving = false;
-  beforeNavigate((nav) => {
-    if (!dirty || leaving) return;
-    if (nav.type === 'leave') {
-      nav.cancel(); // the browser asks
-      return;
-    }
-    nav.cancel();
-    const to = nav.to?.url;
-    confirmDialog({
-      title: 'Leave without saving?',
-      body: 'Your terminal settings changes aren’t saved yet.',
-      confirmLabel: 'Leave',
-      cancelLabel: 'Stay',
-      danger: true
-    }).then((ok) => {
-      if (ok && to) {
-        leaving = true;
-        goto(to);
-      }
-    });
-  });
 
   onMount(() => {
     load().catch((e) => toast.error(e));
     storeApi<TerminalSettings>('/me/terminal/settings')
-      .then(useSaved)
+      .then((t) => (saved = { ...TERMINAL_DEFAULTS, ...t }))
       .catch((e) => toast.error(e));
     loadPiStatus().then((r) => (pi = r.pi));
   });
 
-  // The settings' number fields: label, unit, help (with the default).
-  type NumField = { key: TextKey; label: string; unit: string; prefix?: boolean; help: string; decimal?: boolean };
-  const D = TERMINAL_DEFAULTS;
-  const CASHIER: NumField[] = [
-    { key: 'refund', label: 'Refunds up to', unit: '$', prefix: true, decimal: true,
-      help: `Cash given back on one order, in all, without a manager (card refunds and older days’ orders always need one). 0 = every refund needs a manager. Default ${dollars(D.cashier_refund_cents)}.` },
-    { key: 'discount', label: 'Discounts up to', unit: '%', help: `A discount the cashier types on an order. Default ${D.cashier_discount_pct}%.` },
-    { key: 'priceDrop', label: 'Lower an item’s price by up to', unit: '%', help: `Raising a price is always allowed. Default ${D.cashier_price_drop_pct}%.` },
-    { key: 'payout', label: 'Pay out of the drawer up to', unit: '$', prefix: true, decimal: true,
-      help: `Paying cash in is always allowed. Default ${dollars(D.cashier_payout_cents)}.` },
-    { key: 'drawerStart', label: 'Cash left in each drawer at opening', unit: '$', prefix: true, decimal: true,
-      help: `Every terminal's drawer starts the day with this; the drawer report's Expected in Drawer counts from it. Default ${dollars(D.drawer_start_cents)}.` }
-  ];
-  const SCREEN: NumField[] = [
-    { key: 'lock', label: 'Lock the terminal after', unit: 'min', help: `Idle this long, the terminal goes back to the PIN pad. Default ${D.auto_lock_minutes} min.` },
-    { key: 'receiptDone', label: 'Close the receipt screen after', unit: 'sec', help: `0 = it stays until Done is pressed. Default ${D.receipt_auto_done_seconds} sec.` },
-    { key: 'phoneTimeout', label: 'A charge sent to a phone expires after', unit: 'sec',
-      help: `Send to phone: nobody finished it in Square by then, it expires (a late tap is still recorded). 30–1800. Default ${D.phone_charge_timeout_seconds} sec.` }
-  ];
-  const ORDERS: NumField[] = [
-    { key: 'meal', label: 'Employee meal', unit: '% off', help: `The Employee meal button. A cashier can give it without a manager. Default ${D.employee_meal_pct}%.` },
-    { key: 'pickupMinutes', label: 'Pickups are ready in', unit: 'min', help: `The time a pickup is quoted. Default ${D.default_pickup_minutes} min.` },
-    { key: 'counterStart', label: 'Counter numbers start at', unit: '#', help: `Counter orders count up from here, again after Close batch. Default ${D.counter_start}.` },
-    { key: 'toppingMax', label: 'Most of one topping', unit: '×', help: `Tapping a topping again adds one more (2×, 3×). 1 = no doubles. Default ${D.topping_max_count}.` }
-  ];
-  const DELIVERY: NumField[] = [
-    { key: 'margin', label: 'Deliver past the delivery area by up to', unit: 'mi', decimal: true,
-      help: `Up to this far past your delivery area the cashier just sees a warning; farther needs a manager’s PIN. Default ${D.out_of_area_margin_mi} mi.` }
-  ];
 </script>
 
 <svelte:head><title>Staff — quicc</title></svelte:head>
-
-{#snippet numField(f: NumField)}
-  {@const bad = sErrField === f.key}
-  <div class="nf">
-    <label class="lbl" for="ts-{f.key}">{f.label}<span class="sr-only"> ({f.unit})</span></label>
-    <div class="unit-field" class:prefix={f.prefix}>
-      <input
-        id="ts-{f.key}"
-        class="field mono"
-        inputmode={f.decimal ? 'decimal' : 'numeric'}
-        autocomplete="off"
-        bind:value={() => sf![f.key], (v) => (sf![f.key] = v)}
-        aria-invalid={bad || undefined}
-        aria-describedby="ts-{f.key}-help"
-      />
-      <span class="unit" aria-hidden="true">{f.unit}</span>
-    </div>
-    <p class="help" id="ts-{f.key}-help">{f.help}</p>
-  </div>
-{/snippet}
 
 {#snippet pinFields(pin: string, setPin: (v: string) => void, pin2: string, setPin2: (v: string) => void, err: string, idp: string)}
   <div class="grid gap-3 grid-cols-2">
@@ -599,7 +376,7 @@
   </p>
 {/snippet}
 
-<PageHeader title="Staff" subtitle="The people who log in to the counter terminal with a PIN, and how the terminal behaves.">
+<PageHeader title="Staff" subtitle="The people who log in to the counter terminal with a PIN.">
   {#snippet actions()}
     <Button variant="primary" icon="plus" onclick={add}>Add a person</Button>
   {/snippet}
@@ -661,7 +438,7 @@
         </table>
       </div>
       <p class="help px-5 pb-4 !mt-2">
-        Managers can do everything; their PIN approves what a cashier can’t. Cashiers work within the Cashier limits below. Drivers get the
+        Managers can do everything; their PIN approves what a cashier can’t. Cashiers work within Settings › Cashier limits. Drivers get the
         driver view.
       </p>
     {:else}
@@ -675,170 +452,13 @@
     {/if}
   </Card>
 
-  <form onsubmit={saveSettings} novalidate>
-    <Card title="Terminal settings" subtitle="How the counter terminals behave. Every store starts with the defaults shown under each field.">
-      {#snippet actions()}
-        <Button size="sm" variant="ghost" icon="refresh" onclick={fillDefaults} disabled={!sf}>Fill in defaults</Button>
-      {/snippet}
-      {#if !sf}
-        <Skeleton lines={4} />
-      {:else}
-        <div class="flex flex-col gap-4">
-          <section class="subcard sec" aria-labelledby="ts-sec-1">
-            <h3 class="sec-title" id="ts-sec-1">Cashier limits</h3>
-            <p class="help !mt-0">What a cashier can do without a manager’s PIN. Managers have no limits.</p>
-            <div class="grid-f">
-              {#each CASHIER as f (f.key)}{@render numField(f)}{/each}
-            </div>
-          </section>
-
-          <section class="subcard sec" aria-labelledby="ts-sec-2">
-            <h3 class="sec-title" id="ts-sec-2">Login and screen</h3>
-            <div class="grid-f">
-              {@render numField(SCREEN[0])}
-              <div class="nf">
-                <label class="lbl" for="ts-tab">After login, open</label>
-                <select id="ts-tab" class="field" bind:value={sf.defaultTab}>
-                  {#each TABS as t (t.value)}<option value={t.value}>{t.label}</option>{/each}
-                </select>
-                <p class="help">The tab a cashier lands on. Default Info.</p>
-              </div>
-              {@render numField(SCREEN[1])}
-              <div class="nf">
-                <label class="lbl" for="ts-font">Menu button font</label>
-                <select id="ts-font" class="field" bind:value={sf.font}>
-                  {#each FONTS as f (f.value)}<option value={f.value}>{f.label}</option>{/each}
-                </select>
-                <p class="help">Default Barlow.</p>
-              </div>
-              {@render numField(SCREEN[2])}
-            </div>
-            <div class="switches">
-              <label class="sw-row"><Switch bind:checked={sf.showHistory} label="Show the History tab" />Show the History tab</label>
-              <label class="sw-row"><Switch bind:checked={sf.pricesOnButtons} label="Prices on menu buttons" />Prices on menu buttons</label>
-              <label class="sw-row"><Switch bind:checked={sf.clickSound} label="Click sound" />Click sound on buttons</label>
-            </div>
-          </section>
-
-          <section class="subcard sec" aria-labelledby="ts-sec-3">
-            <h3 class="sec-title" id="ts-sec-3">Orders</h3>
-            <div class="grid-f">
-              {#each ORDERS as f (f.key)}{@render numField(f)}{/each}
-              <div class="nf wide">
-                <label class="lbl" for="ts-areaCodes">Local area codes</label>
-                <input
-                  id="ts-areaCodes"
-                  class="field mono"
-                  inputmode="numeric"
-                  autocomplete="off"
-                  bind:value={sf.areaCodes}
-                  aria-invalid={sErrField === 'areaCodes' || undefined}
-                />
-                <p class="help">Separated by commas. The terminal uses them to fill in phone numbers. Default {D.area_codes.join(', ')}.</p>
-              </div>
-              <div class="nf wide">
-                <label class="lbl" for="ts-wasteReasons">Waste reasons</label>
-                <textarea
-                  id="ts-wasteReasons"
-                  class="field"
-                  rows="4"
-                  autocomplete="off"
-                  bind:value={sf.wasteReasons}
-                  aria-invalid={sErrField === 'wasteReasons' || undefined}
-                ></textarea>
-                <p class="help">One per line. A cashier picks one to void an order that was already made (it goes on the report; nothing prints). Default: {D.waste_reasons.join(', ')}.</p>
-              </div>
-              <div class="nf wide">
-                <label class="lbl" for="ts-voidReasons">Void reasons</label>
-                <textarea
-                  id="ts-voidReasons"
-                  class="field"
-                  rows="4"
-                  autocomplete="off"
-                  bind:value={sf.voidReasons}
-                  aria-invalid={sErrField === 'voidReasons' || undefined}
-                ></textarea>
-                <p class="help">One per line. A cashier picks one to void a sent order (the kitchen gets a void ticket); nobody types a reason, so keep an "Other". Default: {D.void_reasons.join(', ')}.</p>
-              </div>
-            </div>
-            <div class="switches">
-              <label class="sw-row"
-                ><Switch bind:checked={sf.nameOnPaid} label="Ask a name for a paid counter order" />Ask a name for a paid counter order</label
-              >
-            </div>
-          </section>
-
-          <section class="subcard sec" aria-labelledby="ts-sec-4">
-            <h3 class="sec-title" id="ts-sec-4">Deliveries and drivers</h3>
-            <div class="grid-f">
-              {#each DELIVERY as f (f.key)}{@render numField(f)}{/each}
-            </div>
-            <p class="help !mt-0">A delivery nobody took shows in the drivers’ Dispatch list once it is past the time promised to the customer; the driver who claims it gets it as delivered.</p>
-            <p class="help !mt-0">The delivery fee (store share + driver share) is on Store › Details, with the website’s prices.</p>
-          </section>
-
-          <section class="subcard sec" aria-labelledby="ts-sec-5">
-            <h3 class="sec-title" id="ts-sec-5">Card tips at the counter</h3>
-            <div class="flex flex-wrap items-start gap-x-6 gap-y-3">
-              <label class="sw-row"><Switch bind:checked={sf.cardTips} label="Ask for a tip on the card reader" />Ask for a tip on the card reader</label>
-              <div class="nf">
-                <label class="lbl" for="ts-tipPercents">Tip choices<span class="sr-only"> (%)</span></label>
-                <div class="unit-field">
-                  <input
-                    id="ts-tipPercents"
-                    class="field mono !w-48"
-                    autocomplete="off"
-                    bind:value={sf.tipPercents}
-                    disabled={!sf.cardTips}
-                    aria-invalid={sErrField === 'tipPercents' || undefined}
-                  />
-                </div>
-                <p class="help">Percentages, separated by commas. Default {D.card_tip_percents.join(', ')}.</p>
-              </div>
-            </div>
-          </section>
-
-          <section class="subcard sec" aria-labelledby="ts-sec-6">
-            <h3 class="sec-title" id="ts-sec-6">Close the batch by itself</h3>
-            <div class="flex flex-wrap items-start gap-x-6 gap-y-3">
-              <label class="sw-row"><Switch bind:checked={sf.autoClose} label="Close the batch by itself" />Close a batch nobody closed</label>
-              {#if sf.autoClose}
-                <div class="nf">
-                  <label class="lbl" for="ts-autoCloseAt">At (store time)</label>
-                  <input
-                    id="ts-autoCloseAt"
-                    class="field mono !w-36"
-                    type="time"
-                    bind:value={sf.autoCloseAt}
-                    aria-invalid={sErrField === 'autoCloseAt' || undefined}
-                  />
-                </div>
-              {/if}
-            </div>
-            <p class="help !mt-0">If nobody pressed Close batch by then, the Pi closes it and prints the driver reports. Default on, at 4:00 am.</p>
-          </section>
-        </div>
-      {/if}
-    </Card>
-
-    {#if sf}
-      <div class="savebar" class:is-dirty={dirty} data-testid="settings-savebar">
-        <div class="min-w-0 flex-1">
-          {#if sErr}
-            <p class="field-error !m-0" role="alert">{sErr}</p>
-          {:else if dirty}
-            <span class="text-warn font-medium text-[13px]">Unsaved changes</span>
-          {:else}
-            <span class="text-muted text-[13px]">All changes saved</span>
-          {/if}
-        </div>
-        {#if dirty}<Button variant="ghost" onclick={undoSettings}>Undo changes</Button>{/if}
-        <Button type="submit" variant="primary" loading={sSaving}>Save terminal settings</Button>
-      </div>
-    {/if}
-  </form>
-
-  <CallcenterCard agents={staff?.filter((p) => p.role === 'callcenter' && p.active).length ?? 0} />
+  <Card title="How the terminals behave" subtitle="Limits, the screen, orders, card tips and the end of the day are in Settings.">
+    <ul class="links">
+      {#each SETTINGS_LINKS as l (l.slug)}
+        <li><a href="{base}/store/settings/{l.slug}" class="link-row"><span>{l.label}</span><Icon name="chevron-right" size={16} class="text-muted" /></a></li>
+      {/each}
+    </ul>
+  </Card>
 </div>
 
 <Dialog bind:open title={!editing ? 'Add a person' : `Edit ${editing.first_name}`} width={500}>
@@ -920,38 +540,6 @@
     align-items: center;
     gap: 8px 10px;
   }
-  .sec {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 14px;
-    min-width: 0;
-  }
-  .sec-title {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--text);
-    margin: 0;
-  }
-  .grid-f {
-    display: grid;
-    gap: 14px 16px;
-    grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
-  }
-  .nf {
-    min-width: 0;
-  }
-  .nf.wide {
-    grid-column: span 2;
-  }
-  @media (max-width: 520px) {
-    .nf.wide {
-      grid-column: auto;
-    }
-  }
-  .nf .help {
-    margin-top: 4px;
-  }
   .unit-field {
     position: relative;
     max-width: 200px; /* a number sits next to its label, not across the screen */
@@ -984,11 +572,6 @@
     padding-right: 12px;
     text-align: left;
   }
-  .switches {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 24px;
-  }
   .sw-row {
     display: inline-flex;
     align-items: center;
@@ -1018,25 +601,26 @@
   tr.inactive td {
     color: var(--muted);
   }
-  /* At the end of the form; while something is unsaved it follows the screen's bottom edge. */
-  .savebar {
-    position: static;
-    z-index: 5;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 10px;
-    margin-top: 12px;
-    padding: 10px 14px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    box-shadow: var(--shadow);
+  .links {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 2px 16px;
+    grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
   }
-  .savebar.is-dirty {
-    position: sticky;
-    bottom: 12px;
-    border-color: var(--warn);
+  .link-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 9px 4px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text);
+    text-decoration: none;
+    font-weight: 500;
+  }
+  .link-row:hover {
+    color: var(--brand);
   }
 </style>

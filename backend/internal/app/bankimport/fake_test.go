@@ -281,11 +281,23 @@ func (f *fakeStore) UpdateOption(_ context.Context, o bankdoc.OptionRow) error {
 		if g.Options[i].ID == o.ID {
 			prices := g.Options[i].Prices
 			g.Options[i] = menu.BankOption{ModifierOption: o.ModifierOption, IsDefault: o.IsDefault, KitchenName: o.KitchenName,
-				Prices: prices, ShowOnDriverTicket: o.ShowOnDriverTicket}
+				Prices: prices, ShowOnDriverTicket: o.ShowOnDriverTicket, NeverIncluded: g.Options[i].NeverIncluded}
 		}
 	}
 	sort.SliceStable(g.Options, func(i, j int) bool { return g.Options[i].Position < g.Options[j].Position })
 	f.groups[o.GroupID] = g
+	return nil
+}
+func (f *fakeStore) SetOptionNeverIncluded(_ context.Context, id uuid.UUID, on bool) error {
+	f.version++
+	for gid, g := range f.groups {
+		for i := range g.Options {
+			if g.Options[i].ID == id {
+				g.Options[i].NeverIncluded = on
+			}
+		}
+		f.groups[gid] = g
+	}
 	return nil
 }
 func (f *fakeStore) SetOptionPrices(_ context.Context, id uuid.UUID, prices []menu.OptionPrice) error {

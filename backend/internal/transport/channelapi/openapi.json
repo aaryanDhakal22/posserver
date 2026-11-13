@@ -359,7 +359,7 @@
             }
           },
           "422": {
-            "description": "cart_invalid (issues), outside_area, address_unknown; card_not_found (a saved card no longer on the account); tip_too_big (the tip is over the store's tip limit, tip_max_cents on Store › Details, default $50: the message names it)",
+            "description": "cart_invalid (issues), outside_area, address_unknown; card_not_found (a saved card no longer on the account); tip_too_big (the tip is over the store's tip limit, tip_max_cents on Store › Settings › Ordering, default $50: the message names it)",
             "content": {
               "application/json": {
                 "schema": {
@@ -3802,6 +3802,17 @@
                 "family": {
                   "type": "string",
                   "description": "The item's family (an item family id); absent = none (never in a coupon)"
+                },
+                "included_toppings": {
+                  "type": "integer",
+                  "description": "How many of the line's charged options the item's price includes, the cheapest first (a build-your-own pizza's 5); absent = none"
+                },
+                "included_toppings_sizes": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "description": "Size id → the included toppings at that size (wins over included_toppings)"
                 }
               },
               "additionalProperties": false
@@ -3838,7 +3849,7 @@
           },
           "options": {
             "type": "object",
-            "description": "Modifier option id → its family and class (only options with a family; coupons)",
+            "description": "Modifier option id → its family and class (coupons) and never_included (only options with a family or never_included)",
             "additionalProperties": {
               "type": "object",
               "properties": {
@@ -3851,6 +3862,10 @@
                     "premium",
                     "unpriced"
                   ]
+                },
+                "never_included": {
+                  "type": "boolean",
+                  "description": "Always charged, even on an item with included toppings"
                 }
               },
               "additionalProperties": false

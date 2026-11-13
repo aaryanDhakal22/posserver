@@ -252,3 +252,29 @@ func TestVoidReasons(t *testing.T) {
 		t.Fatalf("nil = the defaults: %q", old.VoidReasons)
 	}
 }
+
+// The owner's X of 2026-11-13: a forced close writes unpaid counter checks
+// off as waste (default) or carries them.
+func TestCloseUnpaidCounterAction(t *testing.T) {
+	d := DefaultSettings()
+	if d.CloseUnpaidCounterAction != CloseUnpaidWaste {
+		t.Fatalf("default %q", d.CloseUnpaidCounterAction)
+	}
+	for _, v := range []string{CloseUnpaidWaste, CloseUnpaidCarry} {
+		s := DefaultSettings()
+		s.CloseUnpaidCounterAction = v
+		if err := s.Validate(); err != nil {
+			t.Fatalf("%s: %v", v, err)
+		}
+	}
+	s := DefaultSettings()
+	s.CloseUnpaidCounterAction = "keep"
+	if err := s.Validate(); err == nil {
+		t.Fatal("keep accepted")
+	}
+	s.CloseUnpaidCounterAction = ""
+	s.Normalize()
+	if s.CloseUnpaidCounterAction != CloseUnpaidWaste || s.Validate() != nil {
+		t.Fatalf("a row saved before the field: %q", s.CloseUnpaidCounterAction)
+	}
+}

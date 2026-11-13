@@ -44,6 +44,7 @@ import (
 	familiesApp "quiccpos/main/internal/app/families"
 	"quiccpos/main/internal/app/kitchen"
 	menuApp "quiccpos/main/internal/app/menu"
+	menubulkApp "quiccpos/main/internal/app/menubulk"
 	menuviewApp "quiccpos/main/internal/app/menuview"
 	"quiccpos/main/internal/app/onlinectl"
 	operatorApp "quiccpos/main/internal/app/operator"
@@ -597,6 +598,7 @@ func main() {
 		MenuViewService:   menuViewService,
 		BankImport:        bankImportService,
 		Families:          familiesApp.NewService(repositories.NewFamilyRepository(pool)),
+		MenuBulk:          menubulkApp.NewService(repositories.NewMenuBulkRepository(pool)),
 		OptionFlags:       optionflags.NewService(repositories.NewOptionFlagsRepository(pool)),
 		StoreStatus:       storeStatusService,
 		Kitchen:           kitchenLiveness,

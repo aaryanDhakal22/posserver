@@ -97,8 +97,12 @@ type Option struct {
 	// ShowOnDriverTicket: the choice prints on the delivery (driver) ticket
 	// even at $0 (drinks, desserts, sides). nil = keep, new rows false;
 	// export writes it only when true.
-	ShowOnDriverTicket *bool    `json:"show_on_driver_ticket,omitempty"`
-	Was                []string `json:"was,omitempty"` // older names within its group
+	ShowOnDriverTicket *bool `json:"show_on_driver_ticket,omitempty"`
+	// NeverIncluded: always charged, even on an item whose price includes N
+	// toppings (Shrimp on a build-your-own pizza). nil = keep, new rows
+	// false; export writes it only when true.
+	NeverIncluded *bool    `json:"never_included,omitempty"`
+	Was           []string `json:"was,omitempty"` // older names within its group
 }
 
 // Menu → Category → Item is the bank's tree.
@@ -150,15 +154,24 @@ type Item struct {
 	// false.
 	NoKitchenTicket *bool `json:"no_kitchen_ticket,omitempty"`
 	// Family: an item family's name (absent keeps, "" = none).
-	Family *string  `json:"family,omitempty"`
-	Was    []string `json:"was,omitempty"`
+	Family *string `json:"family,omitempty"`
+	// IncludedToppings: how many toppings the item's price includes, the
+	// cheapest charged options first (item attribute included_toppings;
+	// nil = keep, 0 = none). A size's own count (ItemSize.IncludedToppings)
+	// wins at that size.
+	IncludedToppings *int     `json:"included_toppings,omitempty"`
+	Was              []string `json:"was,omitempty"`
 }
 
-// ItemSize is a size an item comes in.
+// ItemSize is a size an item comes in. IncludedToppings: the item's included
+// toppings at this size (attribute included_toppings_sizes; nil = the
+// item's count). When a document item names sizes, the sizes' counts are
+// replaced: a size without one has none of its own.
 type ItemSize struct {
-	Size        string `json:"size"`
-	PriceCents  int64  `json:"price_cents"`
-	KitchenName string `json:"kitchen_name"`
+	Size             string `json:"size"`
+	PriceCents       int64  `json:"price_cents"`
+	KitchenName      string `json:"kitchen_name"`
+	IncludedToppings *int   `json:"included_toppings,omitempty"`
 }
 
 // View is a view of the bank and its entries (replaced as a whole). Layout
@@ -294,6 +307,7 @@ type Tx interface {
 	CreateOption(ctx context.Context, o OptionRow) (uuid.UUID, error)
 	UpdateOption(ctx context.Context, o OptionRow) error // + position, default, kitchen name
 	SetOptionPrices(ctx context.Context, id uuid.UUID, prices []menu.OptionPrice) error
+	SetOptionNeverIncluded(ctx context.Context, id uuid.UUID, on bool) error
 	DeleteOption(ctx context.Context, id uuid.UUID) error
 
 	CreateView(ctx context.Context, kind menuview.Kind, name string, rules menuview.Rules) (uuid.UUID, error)

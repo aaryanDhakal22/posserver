@@ -23,9 +23,9 @@
     { href: base + '/store/printers', label: 'Printers', icon: 'printer', match: base + '/store/printers' },
     { href: base + '/store/devices', label: 'Devices', icon: 'tablet', match: base + '/store/devices' },
     { href: base + '/store/staff', label: 'Staff', icon: 'users', match: base + '/store/staff' },
-    { href: base + '/store/details', label: 'Details & hours', icon: 'clock', match: base + '/store/details' },
-    { href: base + '/store/payments', label: 'Payments', icon: 'card', match: base + '/store/payments' },
-    { href: base + '/store/website', label: 'Website', icon: 'layers', match: base + '/store/website' }
+    { href: base + '/store/website', label: 'Website', icon: 'layers', match: base + '/store/website' },
+    // Store settings: a grid of categories, each its own short page (Payments lives there too).
+    { href: base + '/store/settings', label: 'Settings', icon: 'settings', match: [base + '/store/settings', base + '/store/payments'] }
   ];
 
   onMount(async () => {

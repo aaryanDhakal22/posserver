@@ -1,6 +1,8 @@
-// Package optionflags is a modifier option's two plain switches in Store ›
+// Package optionflags is a modifier option's plain switches in Store ›
 // Menu (MENU-PLAN, the owner 2026-11-12, migration 00046): "Show on driver
-// ticket" (a column) and "Counts for coupons" (the option's mod family
+// ticket" (a column), "Never included" (a column, 00009, the owner
+// 2026-11-13: always charged on an item with toppings included) and
+// "Counts for coupons" (the option's mod family
 // class: the switch moves the option between the group's regular and
 // premium families; no new pricing data).
 package optionflags
@@ -21,6 +23,7 @@ var ErrNotFound = errors.New("no such modifier group or option in this store")
 type Repo interface {
 	GroupOptions(ctx context.Context, locationID, groupID uuid.UUID) ([]menu.GroupOption, []menu.Family, bool, error)
 	SetDriverTicket(ctx context.Context, locationID, optionID uuid.UUID, on bool) (bool, error)
+	SetNeverIncluded(ctx context.Context, locationID, optionID uuid.UUID, on bool) (bool, error)
 	SetOptionFamily(ctx context.Context, tenantID, locationID, groupID, optionID uuid.UUID,
 		decide func(opts []menu.GroupOption, fams []menu.Family) (bool, *uuid.UUID, *menu.Family, error)) (*menu.Family, bool, error)
 }
@@ -34,6 +37,7 @@ type Flags struct {
 	OptionID           uuid.UUID  `json:"option_id"`
 	ShowOnDriverTicket bool       `json:"show_on_driver_ticket"`
 	CountsForCoupons   bool       `json:"counts_for_coupons"`
+	NeverIncluded      bool       `json:"never_included"`
 	FamilyID           *uuid.UUID `json:"family_id"`
 	FamilyName         string     `json:"family_name,omitempty"`
 }
@@ -56,7 +60,7 @@ func (s *Service) Group(ctx context.Context, locationID, groupID uuid.UUID) (map
 
 func flagsOf(o menu.GroupOption, fams []menu.Family) Flags {
 	f := Flags{OptionID: o.ID, ShowOnDriverTicket: o.ShowOnDriverTicket, CountsForCoupons: menu.CountsForCoupons(o.FamilyID, fams),
-		FamilyID: o.FamilyID}
+		NeverIncluded: o.NeverIncluded, FamilyID: o.FamilyID}
 	if o.FamilyID != nil {
 		for _, x := range fams {
 			if x.ID == *o.FamilyID {
@@ -83,6 +87,16 @@ func (s *Service) Option(ctx context.Context, locationID, groupID, optionID uuid
 // SetDriverTicket sets an option's "Show on driver ticket".
 func (s *Service) SetDriverTicket(ctx context.Context, locationID, optionID uuid.UUID, on bool) error {
 	ok, err := s.repo.SetDriverTicket(ctx, locationID, optionID, on)
+	if err == nil && !ok {
+		return ErrNotFound
+	}
+	return err
+}
+
+// SetNeverIncluded sets an option's "Never included" (00009: always charged,
+// even on an item whose price includes N toppings).
+func (s *Service) SetNeverIncluded(ctx context.Context, locationID, optionID uuid.UUID, on bool) error {
+	ok, err := s.repo.SetNeverIncluded(ctx, locationID, optionID, on)
 	if err == nil && !ok {
 		return ErrNotFound
 	}

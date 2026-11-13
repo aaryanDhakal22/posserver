@@ -30,13 +30,22 @@
     value = $bindable(),
     showName = true,
     showReset = true,
-    idPrefix = 'loc'
-  }: { value: LocationForm; showName?: boolean; showReset?: boolean; idPrefix?: string } = $props();
+    idPrefix = 'loc',
+    only = 'all'
+  }: {
+    value: LocationForm;
+    showName?: boolean;
+    showReset?: boolean;
+    idPrefix?: string;
+    /** Part of the fields: contact = name, phone, address; day = time zone + when the day starts. */
+    only?: 'all' | 'contact' | 'day';
+  } = $props();
 
   const tzs = $derived(TIMEZONES.includes(value.timezone) || !value.timezone ? TIMEZONES : [value.timezone, ...TIMEZONES]);
 </script>
 
-<div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+<div class="grid grid-cols-1 {only === 'day' ? '' : 'sm:grid-cols-2'} gap-4">
+  {#if only !== 'day'}
   {#if showName}
     <div>
       <label class="lbl" for="{idPrefix}-name">Location name</label>
@@ -55,6 +64,8 @@
     <label class="lbl" for="{idPrefix}-a2">City, state, ZIP</label>
     <input id="{idPrefix}-a2" class="field" bind:value={value.address_line2} autocomplete="off" />
   </div>
+  {/if}
+  {#if only !== 'contact'}
   <div>
     <label class="lbl" for="{idPrefix}-tz">Time zone</label>
     <select id="{idPrefix}-tz" class="field" bind:value={value.timezone}>
@@ -68,5 +79,6 @@
         {#each Array(24) as _, h}<option value={h}>{hourLabel(h)}</option>{/each}
       </select>
     </div>
+  {/if}
   {/if}
 </div>

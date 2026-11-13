@@ -283,7 +283,7 @@ func (c *compiler) run(entries []Entry) {
 			}
 			c.catPos[cat.ID] = pos
 			for _, it := range cat.Items {
-				if merged[it.ID] {
+				if merged[it.ID] || it.QuickAdd { // Quick add (00008) is sold from no menu
 					continue
 				}
 				e := byItem[it.ID]

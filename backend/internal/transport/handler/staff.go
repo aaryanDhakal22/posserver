@@ -248,6 +248,17 @@ func (h *StaffHandler) CounterMenu(c *echo.Context) error {
 		return c.JSON(http.StatusUnauthorized, errResp("device required"))
 	}
 	ctx := c.Request().Context()
+	// The store's Quick add item (00008), made on the first pull (that bumps
+	// the menu version, so the body below already carries it): the Pi routes
+	// the terminal's typed lines by it.
+	var quickAdd string
+	if h.menu != nil {
+		qa, err := h.menu.QuickAdd(ctx, scope.TenantID, scope.LocationID)
+		if err != nil {
+			return h.err(c, err)
+		}
+		quickAdd = qa.ItemID.String()
+	}
 	ver, err := h.views.Version(ctx, scope.LocationID)
 	if err != nil {
 		return h.err(c, err)
@@ -291,6 +302,7 @@ func (h *StaffHandler) CounterMenu(c *echo.Context) error {
 		"routes":       routes,
 		"pricing": CounterPricing{Items: pc.Items, Options: pc.Options, Settings: pc.Settings, Deals: pc.Deals, Timezone: pc.Timezone,
 			OpenPrices: true},
-		"families": fams,
+		"families":          fams,
+		"quick_add_item_id": quickAdd,
 	})
 }

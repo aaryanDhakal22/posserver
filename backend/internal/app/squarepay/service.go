@@ -446,7 +446,7 @@ func (s *Service) refresh(ctx context.Context, c repositories.SquareConnection) 
 	if err != nil {
 		if code := square.StatusOf(err); code == 401 || code == 400 {
 			_ = s.repo.SetStatus(ctx, c.LocationID, "error", "refresh failed: "+err.Error())
-			s.page(ctx, c.LocationID, "Square disconnected", "main couldn't renew this store's Square connection — reconnect Square in Store › Details, or card orders stop.")
+			s.page(ctx, c.LocationID, "Square disconnected", "main couldn't renew this store's Square connection — reconnect Square in Store › Settings › Payments, or card orders stop.")
 		}
 		return "", err
 	}
@@ -590,7 +590,7 @@ func (s *Service) Webhook(ctx context.Context, ev Event, onPayment func(context.
 	case "oauth.authorization.revoked":
 		for _, c := range conns {
 			_ = s.repo.SetStatus(ctx, c.LocationID, "revoked", "revoked in Square")
-			s.page(ctx, c.LocationID, "Square disconnected", "This store's Square access was revoked in Square. Card orders are off until Square is connected again (Store › Details).")
+			s.page(ctx, c.LocationID, "Square disconnected", "This store's Square access was revoked in Square. Card orders are off until Square is connected again (Store › Settings › Payments).")
 		}
 	case "dispute.created":
 		d := ev.Data.Object.Dispute

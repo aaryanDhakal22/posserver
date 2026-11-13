@@ -90,6 +90,10 @@ func loadBank(ctx context.Context, q *models.Queries, locationID uuid.UUID) (*me
 	if err != nil {
 		return nil, err
 	}
+	qa, err := quickAddOf(ctx, q.Raw(), locationID)
+	if err != nil {
+		return nil, err
+	}
 	regular := map[uuid.UUID]bool{}
 	for _, f := range fams {
 		if f.Kind == menu.FamilyMod && f.Class == menu.ClassRegular {
@@ -123,6 +127,15 @@ func loadBank(ctx context.Context, q *models.Queries, locationID uuid.UUID) (*me
 			KitchenName: o.KitchenName, Prices: prices, FamilyID: fam, ShowOnDriverTicket: driverTicket[idOf(o.ID)],
 			CountsForCoupons: fam != nil && regular[*fam]})
 	}
+	never, err := optionsNeverIncluded(ctx, q.Raw(), locationID) // 00009
+	if err != nil {
+		return nil, err
+	}
+	for _, os := range optsByGroup {
+		for k := range os {
+			os[k].NeverIncluded = never[os[k].ID]
+		}
+	}
 	for _, g := range groups {
 		o := optsByGroup[idOf(g.ID)]
 		if o == nil {
@@ -143,6 +156,7 @@ func loadBank(ctx context.Context, q *models.Queries, locationID uuid.UUID) (*me
 	for _, it := range items {
 		bi := menu.BankItem{Item: toDomainItem(it), KitchenName: it.KitchenName, SKU: it.Sku,
 			Sizes: sizesByItem[idOf(it.ID)], GroupIDs: groupIDs[idOf(it.ID)], FamilyID: famOf(itemFam, idOf(it.ID))}
+		bi.QuickAdd = qa != nil && bi.ID == qa.ItemID
 		if bi.Sizes == nil {
 			bi.Sizes = []menu.ItemSize{}
 		}

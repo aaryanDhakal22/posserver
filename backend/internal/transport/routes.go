@@ -36,6 +36,7 @@ import (
 	familiesApp "quiccpos/main/internal/app/families"
 	geoApp "quiccpos/main/internal/app/geo"
 	menuApp "quiccpos/main/internal/app/menu"
+	menubulkApp "quiccpos/main/internal/app/menubulk"
 	menuviewApp "quiccpos/main/internal/app/menuview"
 	operatorApp "quiccpos/main/internal/app/operator"
 	"quiccpos/main/internal/app/optionflags"
@@ -170,6 +171,8 @@ type RouterDeps struct {
 	Staff *staffApp.Service
 	// Families backs Store › Menu › Families (00045).
 	Families *familiesApp.Service
+	// MenuBulk backs Store › Menu's bulk edit (POST /me/menu/items/bulk).
+	MenuBulk *menubulkApp.Service
 	// OptionFlags backs the options' "Show on driver ticket" / "Counts for
 	// coupons" switches (00046).
 	OptionFlags *optionflags.Service
@@ -301,6 +304,7 @@ func routeTable(d RouterDeps) []routeDef {
 	guest := appMiddleware.CustomerAuth(d.Customers.Authenticate, false)
 	member := appMiddleware.CustomerAuth(d.Customers.Authenticate, true)
 	viewH := handler.NewMenuViewHandler(d.MenuViewService, d.Logger)
+	bulkH := handler.NewMenuBulkHandler(d.MenuBulk, d.Logger)
 	bankDocH := handler.NewBankImportHandler(d.BankImport, d.Logger)
 	famH := handler.NewFamiliesHandler(d.Families, d.Logger)
 	statusH := handler.NewStoreStatusHandler(d.StoreStatus, d.AppEnv, d.Logger)
@@ -493,7 +497,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", storePrefix+"/me/location", "store-session", "This manager's location", storeH.MeGetLocation, storeSession),
 		def("PATCH", storePrefix+"/me/location", "store-session", "Edit this manager's location (full replace incl. config; pushes store_config; bad Pushover device name → 400 bad_device)", storeH.MeUpdateLocation, storeSession),
 		def("POST", storePrefix+"/me/alerts/test", "store-session", "Send one test Pushover to the saved owner phones (location config pushover_owner_devices; 1 per 10 s)", alertsH.MeTest, storeSession),
-		def("PUT", storePrefix+"/me/location/pin", "store-session", "Place the store pin by hand {lat, lng} (Store › Details map)", geoH.MeSetPin, storeSession),
+		def("PUT", storePrefix+"/me/location/pin", "store-session", "Place the store pin by hand {lat, lng} (Store › Settings › Map and delivery area)", geoH.MeSetPin, storeSession),
 		def("GET", storePrefix+"/me/orders", "store-session", "Recent orders with the agent-synced floor status (?limit)", floorH.MeListOrders, storeSession),
 		def("GET", storePrefix+"/me/delivery-runs", "store-session", "Driver runs sent (AUTO suggestion vs sent), newest first (?limit=50)", floorH.MeDeliveryRuns, storeSession),
 		def("GET", storePrefix+"/me/floor", "store-session", "Driver roster + last agent floor sync", floorH.MeGetFloor, storeSession),
@@ -514,6 +518,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", storePrefix+"/me/menu/unmatched", "store-session", "Recent vendor item names that don't route to a printer (?days=14)", menuH.MeUnmatched, storeSession),
 		def("GET", storePrefix+"/me/menu/export.csv", "store-session", "Download the menu as CSV (menu,category,item,price,printer,description)", menuH.MeExportCSV, storeSession),
 		def("POST", storePrefix+"/me/menu/import", "store-session", "Import a menu CSV (?dry_run=1 previews, ?replace=1 deletes existing menus first)", menuH.MeImportCSV, storeSession),
+		def("GET", storePrefix+"/me/menu/quick-add", "store-session", "The store's Quick add item (made the first time): where the terminal's typed items print", menuH.MeQuickAdd, storeSession),
 		def("GET", storePrefix+"/me/menu/menus", "store-session", "List this location's menus", menuH.MeListMenus, storeSession),
 		def("POST", storePrefix+"/me/menu/menus", "store-session", "Create a menu", menuH.MeCreateMenu, storeSession),
 		def("POST", storePrefix+"/me/menu/menus/reorder", "store-session", "Reorder menus", menuH.MeReorderMenus, storeSession),
@@ -526,6 +531,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("DELETE", storePrefix+"/me/menu/categories/:id", "store-session", "Delete a category", menuH.MeDeleteCategory, storeSession),
 		def("GET", storePrefix+"/me/menu/categories/:id/items", "store-session", "List a category's items", menuH.MeListItems, storeSession),
 		def("POST", storePrefix+"/me/menu/categories/:id/items", "store-session", "Add an item", menuH.MeCreateItem, storeSession),
+		def("POST", storePrefix+"/me/menu/items/bulk", "store-session", "Bulk edit: several items' category / printer / no kitchen ticket / stock / prices / tax in one transaction {changes}", bulkH.MeApply, storeSession),
 		def("POST", storePrefix+"/me/menu/items/reorder", "store-session", "Reorder items", menuH.MeReorderItems, storeSession),
 		def("PATCH", storePrefix+"/me/menu/items/:id", "store-session", "Edit an item", menuH.MeUpdateItem, storeSession),
 		def("DELETE", storePrefix+"/me/menu/items/:id", "store-session", "Delete an item", menuH.MeDeleteItem, storeSession),
@@ -616,6 +622,7 @@ func routeTable(d RouterDeps) []routeDef {
 		def("GET", storePrefix+"/me/menu/views/:id", "store-session", "One view", viewH.MeGetView, storeSession),
 		def("PATCH", storePrefix+"/me/menu/views/:id", "store-session", "Rename a view / set its rules", viewH.MeUpdateView, storeSession),
 		def("DELETE", storePrefix+"/me/menu/views/:id", "store-session", "Delete a view", viewH.MeDeleteView, storeSession),
+		def("GET", storePrefix+"/me/menu/problems", "store-session", "Find problems: items not on the counter, no printer, prices that look missing, broken modifier groups", viewH.MeProblems, storeSession),
 		def("GET", storePrefix+"/me/menu/views/:id/build", "store-session", "A view as its channels see it + needs attention", viewH.MeBuildView, storeSession),
 		def("GET", storePrefix+"/me/menu/views/:id/layout", "store-session", "A counter view's layout (tabs, screens, flows, functions)", viewH.MeGetLayout, storeSession),
 		def("PUT", storePrefix+"/me/menu/views/:id/layout", "store-session", "Replace a counter view's layout (422 lists every problem)", viewH.MePutLayout, storeSession),

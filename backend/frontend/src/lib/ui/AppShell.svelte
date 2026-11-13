@@ -5,8 +5,8 @@
     href: string;
     label: string;
     icon: IconName;
-    /** Path prefix that marks this item current (defaults to exact href). */
-    match?: string;
+    /** Path prefix(es) that mark this item current (defaults to exact href). */
+    match?: string | string[];
     badge?: string | number;
   }
 </script>
@@ -42,7 +42,7 @@
 
   function current(n: NavItem): boolean {
     const p = page.url.pathname.replace(/\/$/, '');
-    if (n.match) return p === n.match || p.startsWith(n.match + '/');
+    if (n.match) return (Array.isArray(n.match) ? n.match : [n.match]).some((m) => p === m || p.startsWith(m + '/'));
     return p === n.href;
   }
 </script>

@@ -160,6 +160,9 @@ func (s *Service) DeleteMenu(ctx context.Context, tenantID, locationID, id uuid.
 	if err := s.ownMenu(ctx, tenantID, locationID, id); err != nil {
 		return err
 	}
+	if err := s.keepQuickAdd(ctx, locationID, func(qa *menuDom.QuickAdd) bool { return qa.MenuID == id }); err != nil {
+		return err
+	}
 	err := s.repo.DeleteMenu(ctx, id, tenantID)
 	s.recordMutation(ctx, span, "menu", "delete", err)
 	return err
@@ -229,6 +232,9 @@ func (s *Service) DeleteCategory(ctx context.Context, tenantID, locationID, id u
 	ctx, span := s.mutateSpan(ctx, "category", "delete")
 	defer span.End()
 	if err := s.ownCategory(ctx, tenantID, locationID, id); err != nil {
+		return err
+	}
+	if err := s.keepQuickAdd(ctx, locationID, func(qa *menuDom.QuickAdd) bool { return qa.CategoryID == id }); err != nil {
 		return err
 	}
 	err := s.repo.DeleteCategory(ctx, id, tenantID)
@@ -331,6 +337,9 @@ func (s *Service) DeleteItem(ctx context.Context, tenantID, locationID, id uuid.
 	ctx, span := s.mutateSpan(ctx, "item", "delete")
 	defer span.End()
 	if err := s.ownItem(ctx, tenantID, locationID, id); err != nil {
+		return err
+	}
+	if err := s.keepQuickAdd(ctx, locationID, func(qa *menuDom.QuickAdd) bool { return qa.ItemID == id }); err != nil {
 		return err
 	}
 	err := s.repo.DeleteItem(ctx, id, tenantID)
@@ -538,6 +547,31 @@ func (s *Service) validatePrinter(ctx context.Context, locationID uuid.UUID, pri
 // IsNotFound lets handlers map ownership failures to 404.
 func IsNotFound(err error) bool { return errors.Is(err, errNotFound) }
 
+// --- Quick add (00008) ---------------------------------------------------------
+
+// ErrQuickAddKept: the Quick add item, or the category / menu that holds it,
+// can't be deleted (409 quick_add_kept): it routes the terminal's typed lines.
+var ErrQuickAddKept = errors.New("quick add is kept: it decides where the terminal's typed items print")
+
+// QuickAdd is the location's Quick add item, made (in its own "Quick add" menu
+// + category, no printer: every station, as before) when there is none yet.
+// The Pi's counter menu and Store › Menu call it, so the owner finds it there.
+func (s *Service) QuickAdd(ctx context.Context, tenantID, locationID uuid.UUID) (*menuDom.QuickAdd, error) {
+	return s.repo.EnsureQuickAdd(ctx, tenantID, locationID)
+}
+
+// keepQuickAdd refuses a delete that would take the Quick add item with it.
+func (s *Service) keepQuickAdd(ctx context.Context, locationID uuid.UUID, hits func(*menuDom.QuickAdd) bool) error {
+	qa, err := s.repo.QuickAdd(ctx, locationID)
+	if err != nil {
+		return err
+	}
+	if qa != nil && hits(qa) {
+		return ErrQuickAddKept
+	}
+	return nil
+}
+
 // --- Kitchen routing ----------------------------------------------------------
 
 // ItemPrinter is one bank item's kitchen printer for the Pi's counter menu:
@@ -638,6 +672,9 @@ func (s *Service) routingTable(ctx context.Context, locationID uuid.UUID) (map[s
 	}
 	byName := make(map[string]menuDom.RouteEntry, len(entries))
 	for _, e := range entries {
+		if e.QuickAdd {
+			continue // the terminal's Quick add route (00008): never an online item's
+		}
 		k := normalizeItemName(e.Name)
 		if _, seen := byName[k]; !seen { // rows are best-first
 			byName[k] = e

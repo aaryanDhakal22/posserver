@@ -25,6 +25,8 @@ type memRepo struct {
 	calls int // writes
 }
 
+func (r *memRepo) QuickAdd(context.Context, uuid.UUID) (*menuDom.QuickAdd, error) { return nil, nil }
+
 func (r *memRepo) ListMenusByLocation(_ context.Context, loc uuid.UUID) ([]menuDom.Menu, error) {
 	var out []menuDom.Menu
 	for _, m := range r.menus {
@@ -110,7 +112,7 @@ func (r *memRepo) UpdateItem(_ context.Context, p menuDom.UpdateItemParams) (*me
 	r.calls++
 	for _, it := range r.items {
 		if it.ID == p.ID {
-			it.Name, it.Description, it.PriceCents = p.Name, p.Description, p.PriceCents
+			it.Name, it.Description, it.PriceCents, it.Attributes = p.Name, p.Description, p.PriceCents, p.Attributes
 			return it, nil
 		}
 	}
@@ -267,8 +269,8 @@ func TestImportCSV(t *testing.T) {
 	if err := svc.ExportCSV(ctx, lid, &buf); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(buf.String(), "Main,Pizza,Cheese Pizza,10.00,Pizza,,no,\n") ||
-		!strings.Contains(buf.String(), "Main,Pizza,Garlic Knots,4.00,Sub,,no,\n") {
+	if !strings.Contains(buf.String(), "Main,Pizza,Cheese Pizza,10.00,Pizza,,no,,\n") ||
+		!strings.Contains(buf.String(), "Main,Pizza,Garlic Knots,4.00,Sub,,no,,\n") {
 		t.Errorf("export =\n%s", buf.String())
 	}
 	rt, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, buf.String()), false, false)
@@ -390,7 +392,7 @@ func TestImportCSVNoKitchen(t *testing.T) {
 	// Ranch + Napkins have the category default (Wings) as their printer:
 	// the category's flag only reaches items with no printer of their own
 	// - here every item inherits, so every one is receipt only.
-	for _, want := range []string{"Main,Misc,Coke,2.00,,,yes,\n", "Main,Misc,Ranch,0.75,,,yes,\n"} {
+	for _, want := range []string{"Main,Misc,Coke,2.00,,,yes,,\n", "Main,Misc,Ranch,0.75,,,yes,,\n"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("export lacks %q:\n%s", want, out)
 		}
@@ -466,7 +468,7 @@ func TestImportCSVFamily(t *testing.T) {
 	if err := svc.ExportCSV(ctx, lid, &buf); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{",Coke Can,1.50,,,no,Can Soda\n", ",Water,1.00,,,no,\n"} {
+	for _, want := range []string{",Coke Can,1.50,,,no,Can Soda,\n", ",Water,1.00,,,no,,\n"} {
 		if !strings.Contains(buf.String(), want) {
 			t.Errorf("export lacks %q:\n%s", want, buf.String())
 		}
@@ -522,5 +524,47 @@ func TestExportCSVNeutralisesFormulas(t *testing.T) {
 	rows := mustParse(t, out)
 	if rows[0].Category != "=Deals" || !strings.HasPrefix(rows[0].Item, "=HYPERLINK(") || rows[1].Item != "@SUM(A1:A9)" || rows[1].Description != "-10% today" {
 		t.Errorf("parsed back = %+v", rows[:2])
+	}
+}
+
+// TestImportCSVIncludedToppings: the included_toppings column sets an item's
+// count (attribute included_toppings), 0 clears it, blank leaves it alone,
+// a bad count is the file's error; export writes it (blank = none).
+func TestImportCSVIncludedToppings(t *testing.T) {
+	ctx := context.Background()
+	svc, _, _ := newImportSvc(t, "Pizza")
+	tid, lid := uuid.New(), uuid.New()
+	in := "category,item,price,included_toppings\nPizza,Build Your Own,15.99,5\nPizza,Cheese,11.99,\n"
+	if _, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, in), false, false); err != nil {
+		t.Fatal(err)
+	}
+	var buf strings.Builder
+	if err := svc.ExportCSV(ctx, lid, &buf); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{",Build Your Own,15.99,,,no,,5\n", ",Cheese,11.99,,,no,,\n"} {
+		if !strings.Contains(buf.String(), want) {
+			t.Errorf("export lacks %q:\n%s", want, buf.String())
+		}
+	}
+	again, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, in), false, false)
+	if err != nil || again.ItemsUpdated != 0 {
+		t.Fatalf("again = %+v, %v", again, err)
+	}
+	clear, err := svc.ImportCSV(ctx, tid, lid, mustParse(t, "category,item,included_toppings\nPizza,Build Your Own,0\n"), false, false)
+	if err != nil || clear.ItemsUpdated != 1 {
+		t.Fatalf("clear = %+v, %v", clear, err)
+	}
+	buf.Reset()
+	if err := svc.ExportCSV(ctx, lid, &buf); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(buf.String(), ",Build Your Own,15.99,,,no,,\n") {
+		t.Errorf("cleared export:\n%s", buf.String())
+	}
+	for _, bad := range []string{"x", "-1", "51"} {
+		if _, err := ParseMenuCSV(strings.NewReader("category,item,included_toppings\nX,Y," + bad + "\n")); !IsCSVError(err) {
+			t.Fatalf("included_toppings %q: %v", bad, err)
+		}
 	}
 }

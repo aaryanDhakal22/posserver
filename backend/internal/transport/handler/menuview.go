@@ -267,6 +267,18 @@ func (h *MenuViewHandler) MeBuildView(c *echo.Context) error {
 	return c.Blob(http.StatusOK, "application/json", raw)
 }
 
+// MeProblems is Store › Menu › Find problems: items the counter can't ring,
+// items that print nowhere, prices that look missing and broken modifier
+// groups (domain/menucheck).
+func (h *MenuViewHandler) MeProblems(c *echo.Context) error {
+	tid, lid, _ := meScope(c)
+	out, err := h.svc.Problems(c.Request().Context(), tid, lid)
+	if err != nil {
+		return h.vErr(c, err)
+	}
+	return c.JSON(http.StatusOK, out)
+}
+
 // --- entries --------------------------------------------------------------------
 
 func (h *MenuViewHandler) MeListEntries(c *echo.Context) error {

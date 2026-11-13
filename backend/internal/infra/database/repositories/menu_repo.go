@@ -266,7 +266,7 @@ func (r *MenuRepository) GetItem(ctx context.Context, id, tenantID uuid.UUID) (*
 		return nil, err
 	}
 	it := toDomainItem(row)
-	return &it, nil
+	return &it, r.markQuickAdd(ctx, []*menu.Item{&it})
 }
 
 func (r *MenuRepository) ListItemsByCategory(ctx context.Context, categoryID uuid.UUID) ([]menu.Item, error) {
@@ -278,7 +278,11 @@ func (r *MenuRepository) ListItemsByCategory(ctx context.Context, categoryID uui
 	for _, row := range rows {
 		out = append(out, toDomainItem(row))
 	}
-	return out, nil
+	ptrs := make([]*menu.Item, len(out))
+	for i := range out {
+		ptrs[i] = &out[i]
+	}
+	return out, r.markQuickAdd(ctx, ptrs)
 }
 
 func (r *MenuRepository) UpdateItem(ctx context.Context, p menu.UpdateItemParams) (*menu.Item, error) {
@@ -295,7 +299,7 @@ func (r *MenuRepository) UpdateItem(ctx context.Context, p menu.UpdateItemParams
 		return nil, fmt.Errorf("update item: %w", err)
 	}
 	it := toDomainItem(row)
-	return &it, nil
+	return &it, r.markQuickAdd(ctx, []*menu.Item{&it})
 }
 
 func (r *MenuRepository) SetItemPrinter(ctx context.Context, id, tenantID uuid.UUID, printerID *uuid.UUID) error {
@@ -512,9 +516,18 @@ func (r *MenuRepository) GetFullMenu(ctx context.Context, locationID uuid.UUID) 
 		it := idOf(l.ItemID)
 		groupIDsByItem[it] = append(groupIDsByItem[it], idOf(l.GroupID))
 	}
+	// The Quick add item (00008) is no menu item to sell: left out, and its
+	// category / menu with it when that leaves them empty.
+	qa, err := quickAddOf(ctx, r.pool, locationID)
+	if err != nil {
+		return nil, err
+	}
 	itemsByCat := map[uuid.UUID][]menu.ItemTree{}
 	for _, i := range itemRows {
 		item := toDomainItem(i)
+		if qa != nil && item.ID == qa.ItemID {
+			continue
+		}
 		gts := make([]menu.GroupTree, 0)
 		for _, gid := range groupIDsByItem[item.ID] {
 			if g, ok := groupsByID[gid]; ok {
@@ -526,12 +539,18 @@ func (r *MenuRepository) GetFullMenu(ctx context.Context, locationID uuid.UUID) 
 	catsByMenu := map[uuid.UUID][]menu.CategoryTree{}
 	for _, c := range catRows {
 		cat := toDomainCategory(c)
+		if qa != nil && cat.ID == qa.CategoryID && len(itemsByCat[cat.ID]) == 0 {
+			continue
+		}
 		catsByMenu[cat.MenuID] = append(catsByMenu[cat.MenuID], menu.CategoryTree{Category: cat, Items: itemsByCat[cat.ID]})
 	}
 
 	out := &menu.FullMenu{LocationID: locationID, Menus: make([]menu.MenuTree, 0, len(menuRows))}
 	for _, m := range menuRows {
 		mm := toDomainMenu(m)
+		if qa != nil && mm.ID == qa.MenuID && len(catsByMenu[mm.ID]) == 0 {
+			continue
+		}
 		out.Menus = append(out.Menus, menu.MenuTree{Menu: mm, Categories: catsByMenu[mm.ID]})
 	}
 	return out, nil
@@ -586,6 +605,15 @@ func (r *MenuRepository) ListRoutingByLocation(ctx context.Context, locationID u
 			e.PrinterID = &pid
 		}
 		out = append(out, e)
+	}
+	qa, err := quickAddOf(ctx, r.pool, locationID)
+	if err != nil {
+		return nil, err
+	}
+	if qa != nil {
+		for i := range out {
+			out[i].QuickAdd = out[i].ItemID == qa.ItemID
+		}
 	}
 	return out, nil
 }

@@ -55,7 +55,7 @@ func (h *SquareHandler) sErr(c *echo.Context, err error) error {
 	return c.JSON(http.StatusBadGateway, errCode("Square didn't answer — try again", "square_error"))
 }
 
-// --- the store manager (Store › Details › Square) ----------------------------------
+// --- the store manager (Store › Settings › Payments) ----------------------------------
 
 // GET /store/v1/me/square
 func (h *SquareHandler) MeStatus(c *echo.Context) error {

@@ -31,7 +31,7 @@ type LocationLoader interface {
 	GetLocation(ctx context.Context, id uuid.UUID) (*tenancy.Location, error)
 }
 
-// AlertsHandler backs the store owner's alert phones on Store › Details: the
+// AlertsHandler backs the store owner's alert phones on Store › Settings › Alerts: the
 // device names are saved in the location config (PATCH /me/location); this
 // sends one test Pushover to them from main.
 type AlertsHandler struct {

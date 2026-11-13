@@ -19,9 +19,14 @@ export interface BuildGroup {
 }
 export interface Menu { categories: { items: BuildItem[] }[]; modifier_groups: BuildGroup[] }
 /** no_tax: the item isn't taxed (tax_bps 0 = the store rate); open_price: the line carries its own price_cents (the counter only). */
-export interface ItemFacts { category_id: string; tax_bps: number; half_base?: string; no_tax?: boolean; open_price?: boolean; family?: string }
-/** A modifier option's family and its class (regular: a coupon may make it free; premium / unpriced: never). */
-export interface OptionFacts { family?: string; class?: string }
+/** included_toppings: this many of the line's charged options are in the item's price, the cheapest first (included_toppings_sizes: per size id). */
+export interface ItemFacts {
+  category_id: string; tax_bps: number; half_base?: string; no_tax?: boolean; open_price?: boolean; family?: string;
+  included_toppings?: number; included_toppings_sizes?: Record<string, number> | null;
+}
+/** A modifier option's family and its class (regular: a coupon may make it free; premium / unpriced: never); never_included: always charged,
+ *  even on an item with toppings included. */
+export interface OptionFacts { family?: string; class?: string; never_included?: boolean }
 export interface Settings {
   tax_bps: number; service_fee_cents: number; service_fee_bps: number;
   delivery_fee_cents: number; free_delivery_over_cents: number | null; delivery_min_cents: number;
@@ -178,7 +183,7 @@ interface Priced {
   soft?: Issue[];
   /** A price change: the price the line's own replaced. */
   list?: number;
-  /** Charged picks (price > 0) for coupons, in pick order. */
+  /** Charged picks (price > 0, not an included topping) for coupons, in pick order. */
   cmods?: { price: number; option: string; label: string }[];
 }
 
@@ -370,7 +375,7 @@ class Engine {
     }
     const halfPrice = this.ctx.settings.half_topping_price === 'half';
     const only = [false, false, false];
-    const extras: number[] = [];
+    const charged: { price: number; option: string; label: string; half: boolean; included: boolean }[] = []; // priced picks, in option order
     const opts = sel.options ?? [];
     for (const gid of groupIds) {
       const g = this.groups.get(gid);
@@ -420,10 +425,7 @@ class Engine {
         // A kept option price (the Pi's kept line): the pick as it was rung.
         const kp = pk.price_cents;
         if (kp != null && this.ctx.price_overrides && mode !== 'no' && Number.isInteger(kp) && kp >= 0 && kp <= MAX_OPEN_PRICE_CENTS) price = kp;
-        if (price > 0) {
-          extras.push(price);
-          (p.cmods ??= []).push({ price, option: pk.option_id, label });
-        }
+        if (price > 0) charged.push({ price, option: pk.option_id, label, half: por !== '', included: false });
         if (mode === 'only') {
           if (por === '') only[1] = only[2] = true;
           else only[por === 'second' ? 2 : 1] = true;
@@ -453,6 +455,28 @@ class Engine {
         break;
       }
     }
+    // The item's included toppings first (the cheapest charged picks, a tie: option order; a half takes half a place when halves cost half,
+    // a whole place otherwise; a whole topping never takes a lone half place; never_included options are always charged), then a bundle
+    // slot's `free` priciest of the options left.
+    const n = this.includedAt(p.bankItem, p.size);
+    if (n > 0) {
+      const cand = charged.filter((c) => !this.ctx.options?.[c.option]?.never_included);
+      cand.sort((a, b) => a.price - b.price); // stable
+      let places = 2 * n;
+      for (const c of cand) {
+        const need = halfPrice && c.half ? 1 : 2;
+        if (need > places) continue;
+        places -= need;
+        c.included = true;
+        if (places === 0) break;
+      }
+    }
+    const extras: number[] = [];
+    for (const c of charged) {
+      if (c.included) continue;
+      extras.push(c.price);
+      (p.cmods ??= []).push({ price: c.price, option: c.option, label: c.label });
+    }
     extras.sort((a, b) => b - a);
     extras.forEach((x, i) => {
       if (i >= free) p.extras += x;
@@ -468,6 +492,16 @@ class Engine {
     p.extras += p.halfUp;
     p.unit = base + p.extras;
     return p;
+  }
+
+  /** How many toppings a bank item includes at a size (0 = none; an added item: none). */
+  includedAt(bankItem: string, size: string): number {
+    if (!bankItem) return 0;
+    const f = this.ctx.items?.[bankItem];
+    if (!f) return 0;
+    const per = f.included_toppings_sizes ?? null;
+    const n = per && Object.prototype.hasOwnProperty.call(per, size) ? per[size] : f.included_toppings ?? 0;
+    return Math.max(Math.trunc(n ?? 0), 0);
   }
 
   couponLine(p: Priced, qty: number): CLine {
