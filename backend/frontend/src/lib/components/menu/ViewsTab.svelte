@@ -40,7 +40,10 @@
   const items = $derived(
     (bank?.menus ?? []).flatMap((m) => m.categories.flatMap((c) => c.items.map((it) => ({ it, cat: c.name, catId: c.id }))))
   );
-  const categories = $derived((bank?.menus ?? []).flatMap((m) => m.categories));
+  // The Quick add category (the terminal's typed lines) is on no menu: not a choice here.
+  const categories = $derived(
+    (bank?.menus ?? []).flatMap((m) => m.categories).filter((c) => !(c.items.length && c.items.every((it) => (it as { quick_add?: boolean }).quick_add)))
+  );
   const itemName = (id: string) => items.find((x) => x.it.id === id)?.it.name ?? 'a deleted item';
   const kindLabel = (k: ViewKind) => VIEW_KINDS.find((x) => x.kind === k)?.label ?? k;
 
