@@ -104,6 +104,27 @@
   }
   let saving = $state(false);
 
+  // Included toppings (the owner, 2026-11-13): attributes included_toppings (any size) and
+  // included_toppings_sizes (size id → count, wins at that size). Blank = none / the item's count.
+  const incl0 = untrack(() => {
+    const a = (it0.attributes || {}) as Record<string, unknown>;
+    const per = (a.included_toppings_sizes || {}) as Record<string, unknown>;
+    return {
+      all: typeof a.included_toppings === 'number' && a.included_toppings > 0 ? String(a.included_toppings) : '',
+      sizes: Object.fromEntries(Object.entries(per).filter(([, v]) => typeof v === 'number').map(([k, v]) => [k, String(v)]))
+    };
+  });
+  let inclAll = $state(incl0.all);
+  let inclSizes = $state<Record<string, string>>({ ...incl0.sizes });
+  const inclKey = (all: string, per: Record<string, string>) =>
+    JSON.stringify([all.trim(), Object.entries(per).filter(([, v]) => v.trim() !== '').map(([k, v]) => [k, v.trim()]).sort()]);
+  const inclDirty = $derived(inclKey(inclAll, inclSizes) !== inclKey(incl0.all, incl0.sizes));
+  const inclCount = (raw: string): number | null | undefined => {
+    const t = raw.trim();
+    if (t === '') return undefined;
+    return /^\d+$/.test(t) && Number(t) <= 50 ? Number(t) : null;
+  };
+
   let attached = $state<ItemGroupLink[]>([]);
   let allGroups = $state<ModifierGroup[]>([]);
   let addGroupId = $state('');
@@ -121,7 +142,8 @@
       tagsStr !== (it0.tags || []).join(', ') ||
       printerId !== it0.printer_id ||
       noKitchen !== !!it0.no_kitchen_ticket ||
-      bankDirty
+      bankDirty ||
+      inclDirty
   );
   async function beforeClose(): Promise<boolean> {
     if (!dirty || saving) return !saving;
@@ -168,6 +190,25 @@
       priceErr = `${sizeName(sizeRows[badSize].size_id)}: “${sizeRows[badSize].price}” isn't a valid price.`;
       return;
     }
+    const attributes: Record<string, unknown> = { ...(it0.attributes || {}) };
+    const all = inclCount(inclAll);
+    if (all === null) {
+      priceErr = `Toppings included: “${inclAll}” isn't a whole number from 0 to 50.`;
+      return;
+    }
+    if (all) attributes.included_toppings = all;
+    else delete attributes.included_toppings;
+    const per: Record<string, number> = {};
+    for (const r of sizeRows) {
+      const n = inclCount(inclSizes[r.size_id] ?? '');
+      if (n === null) {
+        priceErr = `Toppings included at ${sizeName(r.size_id)}: “${inclSizes[r.size_id]}” isn't a whole number from 0 to 50.`;
+        return;
+      }
+      if (n !== undefined) per[r.size_id] = n;
+    }
+    if (Object.keys(per).length) attributes.included_toppings_sizes = per;
+    else delete attributes.included_toppings_sizes;
     saving = true;
     try {
       if (bankDirty) {
@@ -189,7 +230,7 @@
             .split(',')
             .map((t) => t.trim())
             .filter(Boolean),
-          attributes: it0.attributes || {}
+          attributes
         })
       });
       if (printerId !== it0.printer_id || noKitchen !== !!it0.no_kitchen_ticket) {
@@ -302,6 +343,32 @@
         </div>
       {:else if !sizes.length}
         <p class="help !mt-0">Sold in one size. Add the store's sizes on the Sizes tab to price this by size.</p>
+      {/if}
+    </div>
+    <div data-testid="included-toppings">
+      <label class="lbl" for="ie-incl">Toppings included</label>
+      <input id="ie-incl" class="field mono text-right !w-24" inputmode="numeric" bind:value={inclAll} placeholder="None" />
+      <p class="help">
+        How many toppings the price includes (a build-your-own pizza: 5). The cheapest ones picked are free; options set to
+        <b>Never included</b> (shrimp) are always charged. A half topping counts as a whole one unless halves cost half.
+      </p>
+      {#if sizeRows.length}
+        <ul class="flex flex-col gap-1.5 mt-1.5" aria-label="Toppings included per size">
+          {#each sizeRows as r (r.size_id)}
+            <li class="flex items-center gap-2">
+              <span class="flex-1 min-w-0 truncate text-[13px]">{sizeName(r.size_id)}</span>
+              <input
+                class="field mono text-right !w-24"
+                inputmode="numeric"
+                value={inclSizes[r.size_id] ?? ''}
+                oninput={(e) => (inclSizes[r.size_id] = e.currentTarget.value)}
+                placeholder={inclAll.trim() || 'None'}
+                aria-label="Toppings included at {sizeName(r.size_id)}"
+              />
+            </li>
+          {/each}
+        </ul>
+        <p class="help">Blank = the count above. A size's own count wins at that size.</p>
       {/if}
     </div>
     {#if priceErr}<p class="field-error !-mt-2" role="alert">{priceErr}</p>{/if}

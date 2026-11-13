@@ -47,6 +47,43 @@ func setDriverTicket(ctx context.Context, db models.DBTX, locationID, optionID u
 	return found, err
 }
 
+// optionsNeverIncluded is the set of the location's options flagged
+// never_included (00009: always charged, even on an item whose price
+// includes N toppings).
+func optionsNeverIncluded(ctx context.Context, db models.DBTX, locationID uuid.UUID) (map[uuid.UUID]bool, error) {
+	rows, err := db.Query(ctx, `SELECT id FROM modifier_options WHERE location_id = $1 AND never_included`, locationID)
+	if err != nil {
+		return nil, fmt.Errorf("never included options: %w", err)
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]bool{}
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out[id] = true
+	}
+	return out, rows.Err()
+}
+
+// setNeverIncluded sets one option's never_included flag (only written when
+// it differs). Reports whether the location has that option.
+func setNeverIncluded(ctx context.Context, db models.DBTX, locationID, optionID uuid.UUID, on bool) (bool, error) {
+	var found bool
+	err := db.QueryRow(ctx, `WITH o AS (SELECT id FROM modifier_options WHERE location_id = $1 AND id = $2),
+		u AS (UPDATE modifier_options SET never_included = $3, updated_at = now()
+			WHERE location_id = $1 AND id = $2 AND never_included IS DISTINCT FROM $3)
+		SELECT EXISTS (SELECT 1 FROM o)`, locationID, optionID, on).Scan(&found)
+	return found, err
+}
+
+// SetNeverIncluded sets one option's never_included flag (ok false: no such
+// option in the location).
+func (r *OptionFlagsRepository) SetNeverIncluded(ctx context.Context, locationID, optionID uuid.UUID, on bool) (bool, error) {
+	return setNeverIncluded(ctx, r.pool, locationID, optionID, on)
+}
+
 // OptionFlagsRepository backs app/optionflags.
 type OptionFlagsRepository struct {
 	pool *pgxpool.Pool
@@ -71,7 +108,7 @@ func groupOptions(ctx context.Context, db models.DBTX, locationID, groupID uuid.
 	if n == 0 {
 		return nil, nil, false, nil
 	}
-	sel := `SELECT id, name, family_id, show_on_driver_ticket FROM modifier_options
+	sel := `SELECT id, name, family_id, show_on_driver_ticket, never_included FROM modifier_options
 		WHERE location_id = $1 AND group_id = $2 ORDER BY position, created_at, id`
 	if lock {
 		sel += ` FOR UPDATE`
@@ -83,7 +120,7 @@ func groupOptions(ctx context.Context, db models.DBTX, locationID, groupID uuid.
 	opts := []GroupOption{}
 	for rows.Next() {
 		var o GroupOption
-		if err := rows.Scan(&o.ID, &o.Name, &o.FamilyID, &o.ShowOnDriverTicket); err != nil {
+		if err := rows.Scan(&o.ID, &o.Name, &o.FamilyID, &o.ShowOnDriverTicket, &o.NeverIncluded); err != nil {
 			rows.Close()
 			return nil, nil, false, err
 		}

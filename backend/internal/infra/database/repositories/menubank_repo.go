@@ -127,6 +127,15 @@ func loadBank(ctx context.Context, q *models.Queries, locationID uuid.UUID) (*me
 			KitchenName: o.KitchenName, Prices: prices, FamilyID: fam, ShowOnDriverTicket: driverTicket[idOf(o.ID)],
 			CountsForCoupons: fam != nil && regular[*fam]})
 	}
+	never, err := optionsNeverIncluded(ctx, q.Raw(), locationID) // 00009
+	if err != nil {
+		return nil, err
+	}
+	for _, os := range optsByGroup {
+		for k := range os {
+			os[k].NeverIncluded = never[os[k].ID]
+		}
+	}
 	for _, g := range groups {
 		o := optsByGroup[idOf(g.ID)]
 		if o == nil {

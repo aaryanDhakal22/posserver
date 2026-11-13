@@ -11,8 +11,11 @@
   // Reusable modifier groups (attach them to items in the item panel).
   // `sizes` = the store's sizes; each group's bank data (halves, defaults,
   // kitchen names, per-size prices) is read from the bank on select.
-  let { sizes = [] }: { sizes?: MenuSize[] } = $props();
+  // openGroupId: open this group first (Find problems' Open group).
+  let { sizes = [], openGroupId = '' }: { sizes?: MenuSize[]; openGroupId?: string } = $props();
 
+  /** An option with its never_included switch (00009: always charged on an item with toppings included). */
+  type Opt = ModifierOption & { never_included?: boolean };
   type BankRow = { option_id: string; name: string; is_default: boolean; kitchen_name: string; prices: Record<string, string> };
   let portions = $state(false);
   let bankRows = $state<BankRow[]>([]);
@@ -70,7 +73,14 @@
     newOpt = { name: '', price: '0.00', counts: options.some((o) => o.counts_for_coupons) };
     await loadBank(g.id);
   }
-  onMount(() => load().catch((e) => toast.error(e)));
+  onMount(() =>
+    load()
+      .then(() => {
+        const g = openGroupId ? groups.find((x) => x.id === openGroupId) : undefined;
+        if (g) return selectGroup(g);
+      })
+      .catch((e) => toast.error(e))
+  );
 
   async function createGroup(e: SubmitEvent) {
     e.preventDefault();
@@ -158,6 +168,8 @@
     try {
       const body: Record<string, unknown> = { name: o.name, price_delta_cents: o.price_delta_cents, in_stock: o.in_stock };
       if (o.show_on_driver_ticket !== undefined) body.show_on_driver_ticket = o.show_on_driver_ticket;
+      const never = (o as Opt).never_included;
+      if (never !== undefined) body.never_included = never;
       await storeApi(`/me/menu/modifier-groups/${o.group_id}/options/${o.id}`, { method: 'PATCH', body: JSON.stringify(body) });
       toast.success(msg);
     } catch (err) {
@@ -238,6 +250,8 @@
             <dd class="m-0">Print this choice on the delivery ticket even when it costs $0 (drinks, desserts, sides). Notes stay off the driver's copy.</dd>
             <dt class="font-semibold">Counts for coupons</dt>
             <dd class="m-0">A coupon's free toppings can include this one. Off for premium toppings like steak or shrimp.</dd>
+            <dt class="font-semibold">Never included</dt>
+            <dd class="m-0">Always charged, even on an item whose price includes toppings (a build-your-own pizza's 5): shrimp.</dd>
           </dl>
           <ul class="flex flex-col gap-3" aria-labelledby="mg-opts">
             {#each options as o (o.id)}
@@ -282,6 +296,16 @@
                         setCoupons(o, v);
                       }}
                     />Counts for coupons
+                  </label>
+                  <label class="flex items-center gap-2">
+                    <Switch
+                      checked={(o as Opt).never_included ?? false}
+                      label="{o.name} never included"
+                      onchange={(v) => {
+                        (o as Opt).never_included = v;
+                        saveOption(o, v ? `“${o.name}” is always charged` : `“${o.name}” can be an included topping`);
+                      }}
+                    />Never included
                   </label>
                 </div>
               </li>

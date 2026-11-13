@@ -346,7 +346,7 @@ def test_csv_family_column(mgr) -> None:
     assert _by_name(got["items"], "Water")["family_id"] == water["id"]
     assert _by_name(got["items"], "Coke Can")["family_id"] == _by_name(got["families"], "Can Soda")["id"]  # blank keeps
     out = mgr.get(f"{MENU}/export.csv", timeout=10).text
-    assert out.splitlines()[0].endswith(",family") and ",Water,1.00,,,no,Bottled Water" in out, out
+    assert out.splitlines()[0].endswith(",family,included_toppings") and ",Water,1.00,,,no,Bottled Water," in out, out
 
 
 def test_coupons_on_the_web_and_call_center(admin, store, mgr) -> None:

@@ -100,6 +100,9 @@ type BankOption struct {
 	// ShowOnDriverTicket (00046): the choice prints on the delivery (driver)
 	// ticket even at $0 (drinks, desserts, sides); notes stay off it.
 	ShowOnDriverTicket bool `json:"show_on_driver_ticket"`
+	// NeverIncluded (00009): always charged, even on an item whose price
+	// includes N toppings (Shrimp on a build-your-own pizza).
+	NeverIncluded bool `json:"never_included,omitempty"`
 	// CountsForCoupons: its mod family's class is regular, so a coupon's
 	// free toppings can include it (read-only here; set through the
 	// option's coupons route, which moves it between families).

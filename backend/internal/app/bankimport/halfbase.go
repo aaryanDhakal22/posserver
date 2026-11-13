@@ -94,7 +94,7 @@ func (a *applier) applyHalfBases(ctx context.Context) error {
 			}
 		}
 	}
-	return nil
+	return a.applyIncluded(ctx)
 }
 
 // attrsChanged records the change; an item already counted as unchanged
@@ -117,6 +117,7 @@ func (a *applier) attrsChanged(what, fields string) {
 // exportHalfBases names each item's plain pizza (doc items are in the bank's
 // order; item = bank item id → name).
 func exportHalfBases(bank *menu.Bank, doc *bankdoc.Document, item map[string]string) {
+	exportIncluded(bank, doc)
 	for i, m := range bank.Menus {
 		for j, c := range m.Categories {
 			for k, it := range c.Items {

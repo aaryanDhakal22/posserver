@@ -316,6 +316,12 @@ func (t *bankTx) UpdateOption(ctx context.Context, o bankdoc.OptionRow) error {
 	return t.q.SetOptionPosition(ctx, models.SetOptionPositionParams{ID: pgID(o.ID), TenantID: t.T(), Position: i32(o.Position)})
 }
 
+// SetOptionNeverIncluded sets an option's never_included flag (00009).
+func (t *bankTx) SetOptionNeverIncluded(ctx context.Context, id uuid.UUID, on bool) error {
+	_, err := setNeverIncluded(ctx, t.q.Raw(), t.loc, id, on)
+	return err
+}
+
 func (t *bankTx) SetOptionPrices(ctx context.Context, id uuid.UUID, prices []menu.OptionPrice) error {
 	if err := t.q.DeleteOptionPrices(ctx, models.DeleteOptionPricesParams{OptionID: pgID(id), TenantID: t.T()}); err != nil {
 		return err

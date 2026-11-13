@@ -16,6 +16,9 @@ import (
 //     coupon's free toppings can be this option (premium / unpriced / no
 //     family: never). It is not a column: the editor's toggle moves the
 //     option between the group's regular and premium families.
+//   - never_included (00009, the owner 2026-11-13): always charged, even on
+//     an item whose price includes N toppings (item attribute
+//     included_toppings).
 
 // GroupOption is one option of a modifier group with its family and flag.
 type GroupOption struct {
@@ -23,6 +26,9 @@ type GroupOption struct {
 	Name               string
 	FamilyID           *uuid.UUID
 	ShowOnDriverTicket bool
+	// NeverIncluded (00009): always charged, even on an item whose price
+	// includes N toppings (Shrimp on a build-your-own pizza).
+	NeverIncluded bool
 }
 
 // Default family names a counts-for-coupons toggle creates when the group

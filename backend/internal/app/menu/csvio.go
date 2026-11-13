@@ -20,6 +20,12 @@ package menuApp
 //	family       the item's family (00045; optional): blank leaves it alone, a
 //	             name sets it (a family the store doesn't have is created).
 //	             Export writes each item's family.
+//	included_toppings  how many toppings the item's price includes (the
+//	             owner, 2026-11-13: a build-your-own pizza's 5; optional, 0 to
+//	             50): blank leaves it alone, 0 clears it. The count for every
+//	             size (per-size counts are set in Store › Menu or the bank
+//	             document; a CSV count keeps them). Export writes it (blank
+//	             = none).
 //
 // Rules: menus, categories and items are matched by normalized name and
 // reused, so a re-import is idempotent. A blank price/printer/description cell
@@ -42,6 +48,7 @@ import (
 	"strings"
 
 	menuDom "quiccpos/main/internal/domain/menu"
+	"quiccpos/main/internal/domain/pricing"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
@@ -55,7 +62,7 @@ const DefaultImportMenu = "Main"
 // MaxImportRows bounds one import.
 const MaxImportRows = 5000
 
-var exportHeader = []string{"menu", "category", "item", "price", "printer", "description", "no_kitchen_ticket", "family"}
+var exportHeader = []string{"menu", "category", "item", "price", "printer", "description", "no_kitchen_ticket", "family", "included_toppings"}
 
 // Formula injection (security review): a spreadsheet runs a cell that starts
 // with = + - or @ (also after a tab or carriage return) as a formula, and a
@@ -99,6 +106,8 @@ type CSVRow struct {
 	NoKitchen *bool
 	// Family: the family cell ("" = blank, leave it alone).
 	Family string
+	// Included: the included_toppings cell (nil = blank, leave it alone).
+	Included *int
 }
 
 // CSVError is a parse or validation failure the caller should fix in the file.
@@ -188,6 +197,13 @@ func ParseMenuCSV(r io.Reader) ([]CSVRow, error) {
 		row.Family, _ = cell(rec, "family")
 		if len([]rune(row.Family)) > menuDom.MaxFamilyName {
 			return nil, &CSVError{Line: line, Msg: "a family name is up to 60 characters"}
+		}
+		if v, ok := cell(rec, "included_toppings"); ok {
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil || n < 0 || n > pricing.MaxIncluded {
+				return nil, &CSVError{Line: line, Msg: fmt.Sprintf("included_toppings %q: a whole number from 0 to %d", v, pricing.MaxIncluded)}
+			}
+			row.Included = &n
 		}
 		if v, ok := cell(rec, "no_kitchen_ticket"); ok {
 			b, err := parseYesNo(v)
@@ -553,6 +569,35 @@ func (s *Service) ImportCSV(ctx context.Context, tenantID, locationID uuid.UUID,
 					fileItems = append(fileItems, it)
 				}
 
+				if r.Included != nil {
+					cur, _ := pricing.IncludedOf(it.Attributes)
+					if cur != *r.Included {
+						res.ItemsUpdated++
+						res.note("  ~ %q %d toppings included", it.Name, *r.Included)
+						attrs := map[string]any{}
+						for k, v := range it.Attributes {
+							attrs[k] = v
+						}
+						if *r.Included == 0 {
+							delete(attrs, pricing.IncludedAttr)
+						} else {
+							attrs[pricing.IncludedAttr] = *r.Included
+						}
+						if !dryRun && it.ID != uuid.Nil {
+							updated, err := s.repo.UpdateItem(ctx, menuDom.UpdateItemParams{
+								ID: it.ID, TenantID: tenantID, Name: it.Name, Description: it.Description,
+								PriceCents: it.PriceCents, TaxRateBps: it.TaxRateBps, InStock: it.InStock,
+								OutUntil: it.OutUntil, Tags: it.Tags, Attributes: attrs,
+							})
+							if err != nil {
+								return res, fmt.Errorf("line %d: set included toppings for %q: %w", r.Line, it.Name, err)
+							}
+							*it = *updated
+						} else {
+							it.Attributes = attrs
+						}
+					}
+				}
 				if r.NoKitchen != nil && *r.NoKitchen != it.NoKitchenTicket {
 					res.ItemNoKitchenChanged++
 					if *r.NoKitchen {
@@ -725,7 +770,11 @@ func (s *Service) ExportCSV(ctx context.Context, locationID uuid.UUID, w io.Writ
 				if f, ok := itemFam[it.ID]; ok {
 					family = famName[f]
 				}
-				if err := cw.Write([]string{csvSafe(m.Name), csvSafe(c.Name), csvSafe(it.Name), formatPrice(it.PriceCents), csvSafe(printer), csvSafe(it.Description), noKitchen, csvSafe(family)}); err != nil {
+				included := ""
+				if n, _ := pricing.IncludedOf(it.Attributes); n > 0 {
+					included = strconv.Itoa(n)
+				}
+				if err := cw.Write([]string{csvSafe(m.Name), csvSafe(c.Name), csvSafe(it.Name), formatPrice(it.PriceCents), csvSafe(printer), csvSafe(it.Description), noKitchen, csvSafe(family), included}); err != nil {
 					return err
 				}
 			}

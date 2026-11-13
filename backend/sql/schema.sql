@@ -2763,3 +2763,7 @@ ALTER TABLE public.tenants ADD COLUMN session_epoch bigint DEFAULT 0 NOT NULL;
 -- typed lines print where it routes; never sold from a menu).
 ALTER TABLE public.menu_items ADD COLUMN quick_add boolean DEFAULT false NOT NULL;
 CREATE UNIQUE INDEX menu_items_quick_add_uq ON public.menu_items USING btree (location_id) WHERE quick_add;
+
+-- 00009_option_never_included: an option always charged, even on an item whose
+-- price includes N toppings (item attribute included_toppings).
+ALTER TABLE public.modifier_options ADD COLUMN never_included boolean DEFAULT false NOT NULL;
