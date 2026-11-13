@@ -295,8 +295,14 @@ func main() {
 	}
 	// PUSHOVER_API_URL points main's Pushover at a test fake (default: the real API).
 	pushoverURL := os.Getenv("PUSHOVER_API_URL")
+	// Pushover leaves only a prod main (4.0.6, pushover/guard.go): anywhere
+	// else every page is logged at info and dropped.
+	pushover.SetLogger(lgr)
 	pager := pushover.New(agentSecrets.PushoverAppToken, agentSecrets.PushoverUserKey, agentSecrets.PushoverBossKey)
 	pager.SetEndpoint(pushoverURL)
+	if !pager.Sends() {
+		lgr.Info().Str("app_env", cfg.AppConfig.AppEnv).Msg("Pushover off: only APP_ENV=prod sends (pages are logged)")
+	}
 	// The admin's phones only (drivers + the store owner share the account).
 	adminDevices := tenancyDomain.SplitDevices(agentSecrets.PushoverAdminDevices)
 	tenancyService.SetReservedDevices(adminDevices) // no store's manager may save one of ours as an owner phone
