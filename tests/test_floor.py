@@ -65,6 +65,45 @@ def test_delivery_states_and_driver(store, publish) -> None:
     assert wait_order(store.key, o["order_id"])["status"] == "completed"
 
 
+def test_unassigned_delivery_clears_the_driver(store, publish) -> None:
+    """4.0.2: a delivered order moved back to Unassigned on the Pi (the
+    driver-report flow) clears its driver in main. The wire's driver_name is
+    left out when empty, so the agent's whole status (agent_status) says it:
+    no driver_name there = no driver. An older agent's event without
+    agent_status that just doesn't name a driver keeps it."""
+    o = store.order()
+    publish(o)
+    oid = wait_order(store.key, o["order_id"])["id"]
+    t0 = datetime.now(timezone.utc)
+    at = lambda s: (t0 + timedelta(seconds=s)).isoformat()  # noqa: E731
+    out = _status(oid, "on_delivery", driver_name="Juma D.", at=at(0),
+                  agent_status={"state": "on_delivery", "driver_id": "drv-1", "driver_name": "Juma D.", "batch_id": 1})
+    done = _status(oid, "delivered", driver_name="Juma D.", at=at(1),
+                   agent_status={"state": "delivered", "driver_id": "drv-1", "driver_name": "Juma D.", "batch_id": 1},
+                   batch_id=1)
+    assert set(_results(_send(store.key, [out, done])).values()) == {"applied"}
+    assert wait_order(store.key, o["order_id"])["driver_name"] == "Juma D."
+
+    # An older agent (no agent_status) not naming the driver: kept.
+    quiet = _status(oid, "delivered", at=at(2))
+    assert _results(_send(store.key, [quiet])) == {quiet["event_id"]: "stale"}
+    assert wait_order(store.key, o["order_id"])["driver_name"] == "Juma D."
+
+    # Moved to Unassigned on the Pi: agent_status has no driver.
+    unassigned = _status(oid, "delivered", at=at(3), batch_id=1,
+                         agent_status={"state": "delivered", "batch_id": 1})
+    assert _results(_send(store.key, [unassigned])) == {unassigned["event_id"]: "applied"}
+    assert not wait_order(store.key, o["order_id"]).get("driver_name")
+    mine = next(x for x in store.manager_session().get(f"{STORE_V1}/me/orders", timeout=5).json() if x["id"] == oid)
+    assert not mine.get("driver_name"), mine
+
+    # A late event naming the old driver can't bring him back.
+    late = _status(oid, "delivered", driver_name="Juma D.", at=at(2.5),
+                   agent_status={"state": "delivered", "driver_name": "Juma D.", "batch_id": 1})
+    assert _results(_send(store.key, [late])) == {late["event_id"]: "stale"}
+    assert not wait_order(store.key, o["order_id"]).get("driver_name")
+
+
 def test_cancel_from_batch_close(store, publish) -> None:
     """An order nobody accepted is cancelled when the agent closes its batch;
     an accepted one can't be cancelled that way."""

@@ -264,3 +264,34 @@ func TestApplyNotDelivered(t *testing.T) {
 		t.Fatalf("rejected: %s %s", r, rejected.Status())
 	}
 }
+
+// 4.0.2: a delivered order moved back to Unassigned on the Pi clears main's
+// driver when the event knows the driver (agent_status); an older agent's
+// event that just doesn't name one keeps it.
+func TestApplyFloorUpdateClearsTheDriverOnlyWhenKnown(t *testing.T) {
+	o, _ := NewOrder(stubInput())
+	t0 := time.Now().UTC()
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusCompleted, DriverName: "Juma D.", DriverKnown: true, At: t0}); r != FloorApplied || o.DriverName() != "Juma D." {
+		t.Fatalf("delivered by Juma: %s %q", r, o.DriverName())
+	}
+	// "Not said" (no agent_status): kept.
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusCompleted, At: t0.Add(time.Second)}); r != FloorStale || o.DriverName() != "Juma D." {
+		t.Fatalf("not said: %s %q", r, o.DriverName())
+	}
+	// Moved to Unassigned: cleared, and an order.status_changed goes out.
+	o.PullEvents()
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusCompleted, DriverKnown: true, At: t0.Add(2 * time.Second)}); r != FloorApplied || o.DriverName() != "" {
+		t.Fatalf("unassigned: %s %q", r, o.DriverName())
+	}
+	if evs := o.PullEvents(); len(evs) != 1 {
+		t.Fatalf("events = %d", len(evs))
+	}
+	// An older event naming the driver can't bring him back.
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusCompleted, DriverName: "Juma D.", DriverKnown: true, At: t0.Add(time.Second)}); r != FloorStale || o.DriverName() != "" {
+		t.Fatalf("late event: %s %q", r, o.DriverName())
+	}
+	// Assigned again later: set.
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusCompleted, DriverName: "Abdul", DriverKnown: true, At: t0.Add(3 * time.Second)}); r != FloorApplied || o.DriverName() != "Abdul" {
+		t.Fatalf("reassigned: %s %q", r, o.DriverName())
+	}
+}

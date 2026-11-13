@@ -387,11 +387,12 @@ func (s *Service) applyStatus(ctx context.Context, sc order.Scope, eid uuid.UUID
 	if !ok || err != nil {
 		return s.seen(ctx, sc, eid, nil, ev.Type, order.FloorInvalid)
 	}
+	driverName, driverKnown := eventDriver(ev)
 	var newStatus order.Status
 	out, err := s.repo.ApplyFloorUpdate(ctx, sc, order.ID(oid), eid, ev.Type, func(o *order.Order) string {
 		res := o.ApplyFloorUpdate(order.FloorUpdate{
 			Status: status, KitchenNumber: ev.KitchenNumber, EstimatedReadyAt: ev.EstimatedReadyAt,
-			DriverName: ev.DriverName, At: ev.At, Auto: ev.Auto, Reason: ev.Reason,
+			DriverName: driverName, DriverKnown: driverKnown, At: ev.At, Auto: ev.Auto, Reason: ev.Reason,
 		})
 		newStatus = o.Status()
 		return res
@@ -408,6 +409,24 @@ func (s *Service) applyStatus(ctx context.Context, sc order.Scope, eid uuid.UUID
 		s.cancelled(ctx, sc, oid, newStatus)
 	}
 	return out, s.keepAgentStatus(ctx, sc, oid, ev)
+}
+
+// eventDriver is the order's driver as the event says it. The wire's
+// driver_name is left out when empty (omitempty), so "" can't tell "no
+// driver" from "not said"; the agent's whole status (agent_status, sent by
+// every agent since 2.0.x) can: its driver_name is the truth, absent = none
+// (an order moved back to Unassigned). Without agent_status (an older agent)
+// the driver is known only when named.
+func eventDriver(ev event) (name string, known bool) {
+	if len(ev.AgentStatus) > 0 && string(ev.AgentStatus) != "null" {
+		var st struct {
+			DriverName string `json:"driver_name"`
+		}
+		if json.Unmarshal(ev.AgentStatus, &st) == nil {
+			return st.DriverName, true
+		}
+	}
+	return ev.DriverName, ev.DriverName != ""
 }
 
 // keepAgentStatus stores the agent's own view of the order (even for a
