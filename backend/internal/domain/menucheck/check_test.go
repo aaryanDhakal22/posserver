@@ -13,19 +13,18 @@ import (
 // A small store shaped like Lombardi's, with the real cases of
 // .dev/notes/mod-prices-vs-softtouch-2026-11-13.md planted in it.
 type fixture struct {
-	bank       *menu.Bank
-	sizes      map[string]uuid.UUID
-	groups     map[string]uuid.UUID
-	items      map[string]*menu.BankItem
-	options    map[string]uuid.UUID // "group/option"
-	menuMain   uuid.UUID
-	menuCount  uuid.UUID
-	catering   uuid.UUID
-	printer    uuid.UUID
-	layout     *menuview.Layout
-	counterVw  menuview.View
-	webVw      menuview.View
-	hiddenCats []uuid.UUID
+	bank      *menu.Bank
+	sizes     map[string]uuid.UUID
+	groups    map[string]uuid.UUID
+	items     map[string]*menu.BankItem
+	options   map[string]uuid.UUID // "group/option"
+	menuMain  uuid.UUID
+	menuCount uuid.UUID
+	catering  uuid.UUID
+	printer   uuid.UUID
+	layout    *menuview.Layout
+	counterVw menuview.View
+	webVw     menuview.View
 }
 
 func newFixture() *fixture {
@@ -54,9 +53,8 @@ func (f *fixture) group(name string, required bool, opts ...menu.BankOption) uui
 	return id
 }
 
-func opt(name string, cents int64, sized ...any) menu.BankOption {
+func opt(name string, cents int64) menu.BankOption {
 	o := menu.BankOption{ModifierOption: menu.ModifierOption{Name: name, PriceDeltaCents: cents, InStock: true}}
-	_ = sized
 	return o
 }
 
