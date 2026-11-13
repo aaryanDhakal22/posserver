@@ -210,7 +210,9 @@ func Guard(method, path string, body []byte) *Refusal {
 				case l.Comp:
 					return refuse("comp", "The call center can't comp a line.")
 				case l.Custom:
-					return refuse("open_price", "The call center can't add an open-price item.")
+					// Quick add (owner 2026-11-13): the call center types a name +
+					// price like the terminal's Quicc Add; the Pi checks it and
+					// prints it where the store's Quick add item routes.
 				case l.PriceCents != nil:
 					return refuse("price_change", "The call center can't change a price.")
 				}
