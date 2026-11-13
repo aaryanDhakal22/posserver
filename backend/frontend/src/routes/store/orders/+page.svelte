@@ -41,8 +41,16 @@
       .catch((e) => toast.error(e))
       .finally(() => (loading = false));
   }
+  // The two number ranges are the store's own settings (Settings › Counter orders): read, never assumed.
+  let starts = $state({ counter: 1, kitchen: 1100 });
   onMount(() => {
     reload();
+    storeApi<{ settings?: { counter_start?: number; kitchen_start?: number }; counter_start?: number; kitchen_start?: number }>('/me/terminal/settings')
+      .then((r) => {
+        const st = r.settings ?? r;
+        starts = { counter: st.counter_start || 1, kitchen: st.kitchen_start || 1100 };
+      })
+      .catch(() => {});
     loadPiStatus().then((r) => (pi = r.pi));
     const t = setInterval(() => {
       if (!day || day === today()) load().catch(() => {});
@@ -123,7 +131,7 @@
   {/if}
 </section>
 <p class="text-xs text-muted -mt-3">
-  Two kinds of numbers: <b>tickets</b> (1, 2, 3… each day) are the counter's and the call center's; <b>kitchen</b> numbers (from 1100) are online and website orders, given when the kitchen accepts them.
+  Two kinds of numbers: <b>tickets</b> (from {starts.counter}, each day) are the counter's and the call center's; <b>kitchen</b> numbers (from {starts.kitchen}) are online and website orders, given when the kitchen accepts them.
   {day ? `All ${orders.length} orders placed that day.` : `The latest ${orders.length} orders. Pick a day for older ones.`}</p>
 
 <OrderDetail
