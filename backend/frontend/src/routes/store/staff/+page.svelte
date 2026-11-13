@@ -315,7 +315,7 @@
     autoClose: boolean; autoCloseAt: string; defaultTab: string; showHistory: boolean; font: string;
     priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean; toppingMax: string;
     cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string; drawerStart: string;
-    wasteReasons: string; voidReasons: string; phoneTimeout: string;
+    wasteReasons: string; voidReasons: string; phoneTimeout: string; quibaseMin: string;
   };
   type TextKey = { [K in keyof SettingsForm]: SettingsForm[K] extends string ? K : never }[keyof SettingsForm];
   let saved = $state<TerminalSettings | null>(null);
@@ -340,6 +340,7 @@
       meal: String(s.employee_meal_pct), payout: centsInput(s.cashier_payout_cents),
       pickupMinutes: String(s.default_pickup_minutes), areaCodes: (s.area_codes ?? []).join(', '),
       drawerStart: centsInput(s.drawer_start_cents),
+      quibaseMin: centsInput(s.quibase_counter_min_cents),
       wasteReasons: (s.waste_reasons ?? []).join('\n'),
       voidReasons: (s.void_reasons ?? []).join('\n')
     };
@@ -418,6 +419,7 @@
       cashier_payout_cents: money(f, 'payout', 'Pay out of the drawer up to', 100_000),
       drawer_start_cents: money(f, 'drawerStart', 'Cash left in each drawer at opening', 1_000_000),
       default_pickup_minutes: int(f, 'pickupMinutes', 'Pickups are ready in', 0, 240),
+      quibase_counter_min_cents: money(f, 'quibaseMin', 'Counter orders on Quibase over', 100_000),
       area_codes: codes,
       waste_reasons: waste,
       void_reasons: voids
@@ -522,7 +524,9 @@
     { key: 'meal', label: 'Employee meal', unit: '% off', help: `The Employee meal button. A cashier can give it without a manager. Default ${D.employee_meal_pct}%.` },
     { key: 'pickupMinutes', label: 'Pickups are ready in', unit: 'min', help: `The time a pickup is quoted. Default ${D.default_pickup_minutes} min.` },
     { key: 'counterStart', label: 'Counter numbers start at', unit: '#', help: `Counter orders count up from here, again after Close batch. Default ${D.counter_start}.` },
-    { key: 'toppingMax', label: 'Most of one topping', unit: '×', help: `Tapping a topping again adds one more (2×, 3×). 1 = no doubles. Default ${D.topping_max_count}.` }
+    { key: 'toppingMax', label: 'Most of one topping', unit: '×', help: `Tapping a topping again adds one more (2×, 3×). 1 = no doubles. Default ${D.topping_max_count}.` },
+    { key: 'quibaseMin', label: 'Counter orders on Quibase over', unit: '$', prefix: true, decimal: true,
+      help: `An order rung at a terminal shows on the counter tablet only when its total is over this and something on it goes to a kitchen station (a drink-only sale stays off). It still counts on every report. Call-center, online and website orders always show. 0 = any total. Default ${dollars(D.quibase_counter_min_cents)}.` }
   ];
   const DELIVERY: NumField[] = [
     { key: 'margin', label: 'Deliver past the delivery area by up to', unit: 'mi', decimal: true,

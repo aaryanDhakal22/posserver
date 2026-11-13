@@ -117,7 +117,23 @@ type Settings struct {
 	// after this long idle, and main ends the agent's session (the owner's X,
 	// default 15).
 	CallcenterIdleLockMinutes int `json:"callcenter_idle_lock_minutes"`
+
+	// QuibaseCounterMinCents (the owner's X, 2026-11-13; agent 2.5.4): an
+	// order rung at a counter terminal (Centurion; not the call center's)
+	// shows on the counter tablet (Quibase) only when its total is over
+	// this AND a line of it goes to a kitchen station (not every line "No
+	// kitchen ticket"). The Pi applies it to what it hands Quibase; the
+	// order still counts everywhere else. 0 = any total. Edited on Store ›
+	// Staff (Orders). Default DefaultQuibaseCounterMinCents ($5).
+	QuibaseCounterMinCents int64 `json:"quibase_counter_min_cents"`
 }
+
+// DefaultQuibaseCounterMinCents: a terminal order shows on Quibase over $5
+// (the owner, 2026-11-13). MaxQuibaseCounterMinCents bounds the setting.
+const (
+	DefaultQuibaseCounterMinCents = 500
+	MaxQuibaseCounterMinCents     = 100_000
+)
 
 // DefaultCallcenterIdleLock is the call center's idle lock (minutes).
 const DefaultCallcenterIdleLock = 15
@@ -210,7 +226,7 @@ func DefaultSettings() Settings {
 		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: DefaultEmployeeMealPct, ToppingMaxCount: 3,
 		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes(), DrawerStartCents: 10000,
 		WasteReasons: DefaultWasteReasons(), VoidReasons: DefaultVoidReasons(), PhoneChargeTimeoutSeconds: DefaultPhoneChargeTimeoutS,
-		CallcenterIdleLockMinutes: DefaultCallcenterIdleLock}
+		CallcenterIdleLockMinutes: DefaultCallcenterIdleLock, QuibaseCounterMinCents: DefaultQuibaseCounterMinCents}
 }
 
 // Ranges.
@@ -335,6 +351,8 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: topping_max_count must be 1–%d", ErrBadSettings, MaxToppingCount)
 	case s.CashierPayoutCents < 0 || s.CashierPayoutCents > MaxPayoutCents:
 		return fmt.Errorf("%w: cashier_payout_cents must be 0–%d", ErrBadSettings, MaxPayoutCents)
+	case s.QuibaseCounterMinCents < 0 || s.QuibaseCounterMinCents > MaxQuibaseCounterMinCents:
+		return fmt.Errorf("%w: quibase_counter_min_cents must be 0–%d", ErrBadSettings, MaxQuibaseCounterMinCents)
 	case s.DrawerStartCents < 0 || s.DrawerStartCents > MaxDrawerStartCents:
 		return fmt.Errorf("%w: drawer_start_cents must be 0–%d", ErrBadSettings, MaxDrawerStartCents)
 	case s.DefaultPickupMinutes < 0 || s.DefaultPickupMinutes > MaxPickupMinutes:

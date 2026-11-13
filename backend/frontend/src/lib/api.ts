@@ -929,6 +929,8 @@ export interface TerminalSettings {
   phone_charge_timeout_seconds: number;
   /** The call-center app asks for the PIN again after this long idle (contract §2.5zh). */
   callcenter_idle_lock_minutes?: number;
+  /** A counter terminal's order shows on Quibase only over this total AND with a kitchen line (agent 2.5.4). */
+  quibase_counter_min_cents: number;
 }
 /** A browser the store's login opened the call-center app on. */
 export interface CallcenterDevice {
@@ -955,5 +957,6 @@ export const TERMINAL_DEFAULTS: TerminalSettings = {
   waste_reasons: ['Never picked up', 'Made wrong / remade', 'Customer complaint', 'Burnt / dropped'],
   void_reasons: ['Customer cancelled', 'Wrong order', 'Duplicate', 'Took too long', 'Other'],
   phone_charge_timeout_seconds: 180,
-  callcenter_idle_lock_minutes: 15
+  callcenter_idle_lock_minutes: 15,
+  quibase_counter_min_cents: 500
 };

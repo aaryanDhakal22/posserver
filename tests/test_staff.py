@@ -201,6 +201,20 @@ def test_drawer_start_setting(store, mgr) -> None:
     assert _config(store.key)["settings"]["drawer_start_cents"] == 15000
 
 
+def test_quibase_counter_min_setting(store, mgr) -> None:
+    """quibase_counter_min_cents (the owner's X, 2026-11-13, agent 2.5.4: a terminal order shows on Quibase only over $X
+    with a kitchen line; default $5): saved, ranged, 0 allowed, kept when a save leaves it out, sent to the Pi."""
+    assert _ok(mgr.get(SETTINGS, timeout=5))["quibase_counter_min_cents"] == 500
+    assert _config(store.key)["settings"]["quibase_counter_min_cents"] == 500
+    assert _ok(mgr.put(SETTINGS, json={"quibase_counter_min_cents": 750}, timeout=5))["quibase_counter_min_cents"] == 750
+    assert _ok(mgr.put(SETTINGS, json={"auto_lock_minutes": 6}, timeout=5))["quibase_counter_min_cents"] == 750
+    for bad in (-1, 100_001):
+        assert _code(mgr.put(SETTINGS, json={"quibase_counter_min_cents": bad}, timeout=5), 400) == "bad_settings", bad
+    assert _config(store.key)["settings"]["quibase_counter_min_cents"] == 750
+    assert _ok(mgr.put(SETTINGS, json={"quibase_counter_min_cents": 0}, timeout=5))["quibase_counter_min_cents"] == 0
+    assert _config(store.key)["settings"]["quibase_counter_min_cents"] == 0
+
+
 def test_driver_claim_setting_retired(store, mgr) -> None:
     """driver_claim_after_minutes is gone (the owner, 2026-11-12: drivers claim once an order is past its promised
     time on the Pi; migration 00042 dropped it from saved rows): not served, not sent to the Pi, refused on a save."""

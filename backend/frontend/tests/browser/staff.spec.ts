@@ -175,6 +175,7 @@ test('terminal settings: the defaults, plain labels with units, every field save
   await expect(field('Pay out of the drawer up to')).toHaveValue('20.00');
   await expect(field('Pickups are ready in')).toHaveValue('15');
   await expect(field('Local area codes')).toHaveValue('410, 443, 667');
+  await expect(field('Counter orders on Quibase over')).toHaveValue('5.00'); // the owner's X, 2026-11-13
   await expect(field('Drivers may claim after')).toHaveCount(0); // retired 2026-11-12: past the promised time
   await expect(page.getByLabel('After login, open')).toHaveValue('info');
   await expect(page.getByLabel('Menu button font')).toHaveValue('barlow');
@@ -210,6 +211,7 @@ test('terminal settings: the defaults, plain labels with units, every field save
   await field('Pay out of the drawer up to').fill('35');
   await field('Pickups are ready in').fill('241');
   await field('Local area codes').fill('410, 443, 410, 202');
+  await field('Counter orders on Quibase over').fill('7.50');
   await bar.getByRole('button', { name: 'Save terminal settings' }).click();
   // A bad value never leaves the page: the message says which field, and that field is marked + focused.
   await expect(bar.getByRole('alert')).toContainText('Pickups are ready in: a whole number from 0 to 240.');
@@ -236,7 +238,7 @@ test('terminal settings: the defaults, plain labels with units, every field save
     prices_on_buttons: true, click_sound: true, counter_start: 100, employee_meal_pct: 40, out_of_area_margin_mi: 1.5,
     name_on_paid_counter: true, card_tips: true, card_tip_percents: [10, 15, 20, 25], auto_close_batch_at: '03:30',
     cashier_payout_cents: 3500, default_pickup_minutes: 20, area_codes: ['410', '443', '202'],
-    topping_max_count: 4, phone_charge_timeout_seconds: 240
+    topping_max_count: 4, phone_charge_timeout_seconds: 240, quibase_counter_min_cents: 750
   };
   await expect.poll(async () => (await store.me('GET', '/terminal/settings', undefined, 200)).data).toMatchObject(want);
   await expect(field('Local area codes')).toHaveValue('410, 443, 202'); // as main saved it
