@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { base } from '$app/paths';
+  import { goto } from '$app/navigation';
+  import { searchSettings, type Hit } from '$lib/settings/map';
   import {
     storeApi,
     type HoursException,
@@ -41,6 +43,29 @@
     quiet(storeApi<SquareStatus>('/me/square'), (v) => (square = v));
     quiet(storeApi<{ reply_email: string }>('/me/site/contact'), (v) => (email = v.reply_email));
   });
+
+  // Search: any page or setting by its name or a word people use for it ("radius", "tip", "ticket"),
+  // from the settings map; picking one opens its page with that setting lit up.
+  let query = $state('');
+  let active = $state(0);
+  const hits = $derived(searchSettings(query));
+  function open(h: Hit | undefined) {
+    if (h) goto(h.href);
+  }
+  function searchKey(e: KeyboardEvent) {
+    if (e.key === 'ArrowDown' && hits.length) {
+      e.preventDefault();
+      active = (active + 1) % hits.length;
+    } else if (e.key === 'ArrowUp' && hits.length) {
+      e.preventDefault();
+      active = (active - 1 + hits.length) % hits.length;
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      open(hits[active]);
+    } else if (e.key === 'Escape') {
+      query = '';
+    }
+  }
 
   type Tile = { slug: string; title: string; icon: IconName; href?: string; summary: () => string | null };
   type Group = { title: string; blurb: string; tiles: Tile[] };
@@ -137,6 +162,40 @@
 <PageHeader title="Settings" subtitle="Pick what you want to change. Each one opens on its own page." />
 
 <div class="flex flex-col gap-8 max-w-[1100px]">
+  <div class="search" role="search">
+    <label class="sr-only" for="settings-search">Search settings</label>
+    <span class="search-ico" aria-hidden="true"><Icon name="search" size={18} /></span>
+    <input
+      id="settings-search"
+      class="field"
+      type="search"
+      placeholder="Search settings: radius, tip, ticket numbers, printer…"
+      autocomplete="off"
+      spellcheck="false"
+      role="combobox"
+      aria-expanded={hits.length > 0}
+      aria-controls="settings-search-list"
+      aria-activedescendant={hits.length ? `ss-hit-${active}` : undefined}
+      bind:value={query}
+      oninput={() => (active = 0)}
+      onkeydown={searchKey}
+      data-testid="settings-search"
+    />
+    {#if query.trim()}
+      <ul class="hits" id="settings-search-list" role="listbox" aria-label="Settings found" data-testid="settings-search-hits">
+        {#each hits as h, i (h.href)}
+          <li id="ss-hit-{i}" role="option" aria-selected={i === active}>
+            <a class="hit" class:on={i === active} href={h.href} onmouseenter={() => (active = i)}>
+              <span class="hit-title">{h.field ? h.field.label : h.page.title}</span>
+              <span class="hit-crumb">{h.field ? h.page.crumb : h.page.group}</span>
+            </a>
+          </li>
+        {:else}
+          <li class="hit-none">Nothing called that. Try another word.</li>
+        {/each}
+      </ul>
+    {/if}
+  </div>
   {#each groups as g (g.title)}
     <section aria-labelledby="sg-{g.title.replace(/\W+/g, '-')}">
       <h2 class="grp" id="sg-{g.title.replace(/\W+/g, '-')}">{g.title}</h2>
@@ -161,6 +220,60 @@
 </div>
 
 <style>
+  .search {
+    position: relative;
+    max-width: 560px;
+  }
+  .search .field {
+    padding-left: 38px;
+  }
+  .search-ico {
+    position: absolute;
+    left: 12px;
+    top: 11px;
+    color: var(--muted);
+    pointer-events: none;
+  }
+  .hits {
+    position: absolute;
+    z-index: 20;
+    left: 0;
+    right: 0;
+    top: calc(100% + 6px);
+    margin: 0;
+    padding: 6px;
+    list-style: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-pop, var(--shadow));
+    max-height: min(60vh, 440px);
+    overflow-y: auto;
+  }
+  .hit {
+    display: flex;
+    flex-direction: column;
+    padding: 8px 10px;
+    border-radius: 8px;
+    color: var(--text);
+    text-decoration: none;
+  }
+  .hit.on {
+    background: var(--elev);
+  }
+  .hit-title {
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .hit-crumb {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .hit-none {
+    padding: 10px;
+    font-size: 13px;
+    color: var(--muted);
+  }
   .grp {
     font-size: 13px;
     font-weight: 700;

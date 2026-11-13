@@ -467,6 +467,7 @@ func routeTable(d RouterDeps) []routeDef {
 		// screen (verified by a device-authed GET here), so the old username/
 		// password mint login is gone.
 		def("GET", storePrefix+"/store-config", "device", "This store's config (scope from the key) — agent keys only", storeH.GetStoreConfig, device, agentOnly),
+		def("GET", storePrefix+"/settings-map", "none", "main's settings map: every store page + setting {version, pages[{id, title, group, path, crumb, synonyms, fields[{id, anchor, label, api, synonyms}]}]} — deep link = main URL + path + '#' + anchor (§2.5zm)", handler.SettingsMap),
 		def("POST", storePrefix+"/agent/link", "none", "Link a blank agent with the store manager login → agent key + secrets (revokes the old agent; throttled)", agentLinkH.Link),
 		def("GET", storePrefix+"/agent/whoami", "device-key", "Is this key still good? (F-4) 200 {device_id, agent_id, kind, tenant_id, location_id, tenant, location, revoked:false} · 401 {code: device_revoked|unknown_key|missing_key, revoked}", whoamiH.Whoami),
 		def("GET", storePrefix+"/agent/restore", "device", "Open batch for a replacement agent (state + orders + drivers) — agent keys only", agentLinkH.Restore, device, agentOnly),

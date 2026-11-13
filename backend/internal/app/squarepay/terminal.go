@@ -138,7 +138,7 @@ type KeyedPayment struct {
 
 func notLinked(msg string) TerminalReply {
 	if msg == "" {
-		msg = "This store hasn't connected Square: the owner connects it in Store › Payments."
+		msg = "This store hasn't connected Square: the owner connects it in Store › Settings › Payments."
 	}
 	return TerminalReply{Code: CodeNotLinked, Error: msg}
 }
@@ -155,7 +155,7 @@ func (s *Service) terminalConn(ctx context.Context, locationID uuid.UUID) (tok, 
 		return "", "", time.Time{}, nil, err
 	}
 	if sqLoc == "" {
-		r := notLinked("Square is connected but no Square location is picked: the owner picks it in Store › Payments.")
+		r := notLinked("Square is connected but no Square location is picked: the owner picks it in Store › Settings › Payments.")
 		return "", "", time.Time{}, &r, nil
 	}
 	if c, gerr := s.repo.Get(ctx, locationID); gerr == nil { // after a refresh: the new expiry
@@ -191,7 +191,7 @@ func (s *Service) HandleSession(ctx context.Context, scope sseBroker.Scope, _ js
 		if !in {
 			log.Warn().Msg("terminal square session refused: the grant has no PAYMENTS_WRITE_IN_PERSON")
 			return TerminalReply{Code: CodeReconnect, InPerson: &in, Error: "Square was connected before the card reader was allowed: " +
-				"the owner reconnects Square once in Store › Payments."}, nil
+				"the owner reconnects Square once in Store › Settings › Payments."}, nil
 		}
 	}
 	log.Info().Str("square_location_id", sqLoc).Msg("terminal square session handed to the Pi") // never the token

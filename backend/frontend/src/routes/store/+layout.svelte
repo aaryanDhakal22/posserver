@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { goto } from '$app/navigation';
+  import { afterNavigate, goto } from '$app/navigation';
   import { base } from '$app/paths';
   import { ApiError, errText, storeApi, storeSignOut, type Whoami } from '$lib/api';
   import { storeSession } from '$lib/session.svelte';
@@ -8,6 +8,7 @@
   import AppShell, { type NavItem } from '$lib/ui/AppShell.svelte';
   import Icon from '$lib/ui/Icon.svelte';
   import Skeleton from '$lib/ui/Skeleton.svelte';
+  import { landHash } from '$lib/settings/map';
 
   // Store area: needs a manager session (whoami; a 401 → login?next=…). An
   // admin's "Open as store" session shows the lavender banner with Exit.
@@ -28,6 +29,22 @@
     // Store settings: a grid of categories, each its own short page (Payments lives there too).
     { href: base + '/store/settings', label: 'Settings', icon: 'settings', match: [base + '/store/settings', base + '/store/payments'] }
   ];
+
+  // A deep link to a setting (path#anchor, lib/settings/settings-map.json): scroll to it and light it up,
+  // on load, after an in-app navigation and when only the hash changes.
+  let stopLanding = () => {};
+  const land = () => {
+    stopLanding();
+    stopLanding = location.hash ? landHash(location.pathname, location.hash) : () => {};
+  };
+  afterNavigate(land);
+  onMount(() => {
+    addEventListener('hashchange', land);
+    return () => {
+      removeEventListener('hashchange', land);
+      stopLanding();
+    };
+  });
 
   onMount(async () => {
     // Never show a previous session's store while the new whoami loads.

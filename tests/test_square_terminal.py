@@ -5,7 +5,7 @@ Square: the Pi's RPCs square.session / square.keyed_payment / square.refund with
   * square.keyed_payment: MOTO (seller_keyed_in), tip, reference_id; the same key = the same payment;
     declines are answers (card_declined + Square's code); Square away = 500 (outcome unknown)
   * square.refund: partial, the same key = the same refund, over the rest = refund_failed
-  * Store › Payments says in_person
+  * Store › Settings › Payments says in_person
 """
 
 from __future__ import annotations

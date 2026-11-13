@@ -50,7 +50,7 @@ const (
 const ScopeInPerson = "PAYMENTS_WRITE_IN_PERSON"
 
 // Scopes main asks a store for. A store that connected before ScopeInPerson
-// was added reconnects once (Store › Payments says so).
+// was added reconnects once (Store › Settings › Payments says so).
 var Scopes = []string{"PAYMENTS_WRITE", "PAYMENTS_READ", ScopeInPerson, "MERCHANT_PROFILE_READ", "CUSTOMERS_WRITE", "CUSTOMERS_READ", "DISPUTES_READ"}
 
 // Client talks to one Square environment for one app.

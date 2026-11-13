@@ -228,7 +228,7 @@ func (s *Service) Callback(ctx context.Context, code, state, errParam string) (u
 	return lid, s.ReturnURL(result), err
 }
 
-// OAuth results: the ?square= flag Store › Payments shows.
+// OAuth results: the ?square= flag Store › Settings › Payments shows.
 const (
 	ResultConnected = "connected"
 	ResultExpired   = "expired" // a forged, damaged or > 15 min old state
@@ -236,7 +236,7 @@ const (
 	ResultError     = "error"
 )
 
-// ReturnURL is Store › Payments with the result flag (SQUARE_APP_URL + the SPA path).
+// ReturnURL is Store › Settings › Payments with the result flag (SQUARE_APP_URL + the SPA path).
 func (s *Service) ReturnURL(result string) string {
 	return strings.TrimRight(s.cfg.AppURL, "/") + "/app/store/payments?square=" + result
 }
@@ -296,7 +296,7 @@ func (s *Service) Finish(ctx context.Context, code, state, errParam string) (uui
 	return lid, ResultConnected, nil
 }
 
-// Status is the Square card on Store › Payments.
+// Status is the Square card on Store › Settings › Payments.
 type Status struct {
 	Enabled          bool              `json:"enabled"`
 	Env              string            `json:"env"`
@@ -314,7 +314,7 @@ type Status struct {
 	// for: reconnect once. null = not connected, or Square couldn't say.
 	InPerson *bool    `json:"in_person"`
 	Scopes   []string `json:"scopes"`
-	// SandboxPaste: this server runs Square's sandbox, so Store › Payments
+	// SandboxPaste: this server runs Square's sandbox, so Store › Settings › Payments
 	// offers "Paste a Square sandbox token" (never in production).
 	// Pasted: the connection is such a pasted sandbox token.
 	SandboxPaste bool `json:"sandbox_paste"`

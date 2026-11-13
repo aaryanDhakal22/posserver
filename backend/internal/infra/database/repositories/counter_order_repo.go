@@ -480,7 +480,7 @@ func (r *OrderRepository) ChangeCounterOrder(ctx context.Context, sc order.Scope
 // (agent 2.10aa: an online / website order changed below what it arrived
 // paid with): the whole in source_metadata.refund_owed_cents (every read of
 // the order shows it), this change's part as a refund_owed money flag (Store
-// > Reports > Flags). A note for the manager, never a payment: no money
+// › Reports › Money notes). A note for the manager, never a payment: no money
 // moved. Not returned with the event's flags (nothing to page about).
 func keepRefundOwed(ctx context.Context, tx pgx.Tx, sc order.Scope, eventID uuid.UUID, typ string, orderID uuid.UUID, extra order.ChangeExtra) error {
 	if extra.RefundOwedCents != nil {
