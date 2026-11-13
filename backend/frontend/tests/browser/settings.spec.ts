@@ -172,7 +172,12 @@ test('terminal settings: one group per page, the defaults, every field saves, a 
   await field(page, 'Cash left in each drawer at opening').fill('150');
   await save(page).click();
   await expect(bar(page)).toContainText('All changes saved');
-  await expect.poll(saved).toMatchObject({ auto_close_batch_at: '03:30', drawer_start_cents: 15000 });
+  await expect.poll(saved).toMatchObject({ auto_close_batch_at: '03:30', drawer_start_cents: 15000, close_unpaid_counter_action: 'waste' });
+  // Unpaid counter checks at close (the owner's X, 2026-11-13): waste by default, carry the other choice.
+  await expect(page.getByRole('radio', { name: /Write them off as waste/ })).toBeChecked();
+  await page.getByRole('radio', { name: /Carry them over/ }).check();
+  await save(page).click();
+  await expect.poll(async () => (await saved()).close_unpaid_counter_action).toBe('carry');
   await page.getByRole('switch', { name: 'Close the batch by itself' }).click();
   await save(page).click();
   await expect.poll(async () => (await saved()).auto_close_batch_at).toBe('');

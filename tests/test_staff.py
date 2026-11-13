@@ -215,6 +215,22 @@ def test_quibase_counter_min_setting(store, mgr) -> None:
     assert _config(store.key)["settings"]["quibase_counter_min_cents"] == 0
 
 
+def test_close_unpaid_counter_action_setting(store, mgr) -> None:
+    """close_unpaid_counter_action (the owner's X, 2026-11-13, agent contract 2.10s §4: what a forced close of the day
+    and the auto-close do with an unpaid counter check): waste by default, carry the other choice, anything else
+    refused, kept when a save leaves it out, sent to the Pi in terminal-config."""
+    assert _ok(mgr.get(SETTINGS, timeout=5))["close_unpaid_counter_action"] == "waste"
+    assert _config(store.key)["settings"]["close_unpaid_counter_action"] == "waste"
+    assert _ok(mgr.put(SETTINGS, json={"close_unpaid_counter_action": "carry"}, timeout=5))["close_unpaid_counter_action"] == "carry"
+    assert _ok(mgr.put(SETTINGS, json={"auto_lock_minutes": 6}, timeout=5))["close_unpaid_counter_action"] == "carry"
+    assert _config(store.key)["settings"]["close_unpaid_counter_action"] == "carry"
+    for bad in ("keep", "Carry", 1):
+        assert _code(mgr.put(SETTINGS, json={"close_unpaid_counter_action": bad}, timeout=5), 400) in ("bad_settings", "bad_request"), bad
+    assert _config(store.key)["settings"]["close_unpaid_counter_action"] == "carry"
+    assert _ok(mgr.put(SETTINGS, json={"close_unpaid_counter_action": "waste"}, timeout=5))["close_unpaid_counter_action"] == "waste"
+    assert _config(store.key)["settings"]["close_unpaid_counter_action"] == "waste"
+
+
 def test_driver_claim_setting_retired(store, mgr) -> None:
     """driver_claim_after_minutes is gone (the owner, 2026-11-12: drivers claim once an order is past its promised
     time on the Pi; migration 00042 dropped it from saved rows): not served, not sent to the Pi, refused on a save."""

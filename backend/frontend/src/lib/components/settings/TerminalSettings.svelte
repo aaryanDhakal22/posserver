@@ -238,6 +238,21 @@
           {/if}
         </div>
       </Section>
+      <Section
+        title="Unpaid counter checks at close"
+        description="Closing the day by hand stops while a counter check is unpaid: take the payment or void it. Force close (and the batch closing by itself) then does this. A check with part of it paid is always carried over."
+      >
+        <div class="choices" role="radiogroup" aria-label="Unpaid counter checks at close">
+          <label class="choice">
+            <input type="radio" name="ts-closeUnpaid" value="waste" bind:group={sf.closeUnpaid} />
+            <span><b>Write them off as waste</b><span class="help !mt-0 block">Each one goes on the report’s Waste section as “Unpaid at close” and a list of them prints. Nothing prints in the kitchen. Default.</span></span>
+          </label>
+          <label class="choice">
+            <input type="radio" name="ts-closeUnpaid" value="carry" bind:group={sf.closeUnpaid} />
+            <span><b>Carry them over</b><span class="help !mt-0 block">They stay open like unpaid pickups: payable or voidable the next day, on the Unsettled Check List.</span></span>
+          </label>
+        </div>
+      </Section>
       <Section title="Cash drawers">
         {@render num('drawerStart')}
       </Section>
@@ -256,6 +271,24 @@
     display: flex;
     flex-direction: column;
     gap: 22px;
+  }
+  .choices {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  .choice {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+  .choice input {
+    margin-top: 3px;
+    width: 18px;
+    height: 18px;
+    flex: none;
   }
   .switches {
     display: flex;

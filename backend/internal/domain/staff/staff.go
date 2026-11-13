@@ -126,7 +126,23 @@ type Settings struct {
 	// order still counts everywhere else. 0 = any total. Edited on Store ›
 	// Staff (Orders). Default DefaultQuibaseCounterMinCents ($5).
 	QuibaseCounterMinCents int64 `json:"quibase_counter_min_cents"`
+
+	// CloseUnpaidCounterAction (the owner's X, 2026-11-13; agent contract
+	// §2.10s §4): what a forced close of the day and the Pi's auto-close do
+	// with an unpaid counter check. "waste" (default): written off as Void
+	// waste "Unpaid at close" (nothing prints in the kitchen, the Z's Waste
+	// section, an Unpaid at close list prints); "carry": kept open like an
+	// unpaid pickup (payable or voidable later). A partly paid check is
+	// always carried. A manual close without force is refused either way.
+	// Edited on Store › Settings › End of day.
+	CloseUnpaidCounterAction string `json:"close_unpaid_counter_action"`
 }
+
+// The close_unpaid_counter_action choices (default CloseUnpaidWaste).
+const (
+	CloseUnpaidWaste = "waste"
+	CloseUnpaidCarry = "carry"
+)
 
 // DefaultQuibaseCounterMinCents: a terminal order shows on Quibase over $5
 // (the owner, 2026-11-13). MaxQuibaseCounterMinCents bounds the setting.
@@ -226,7 +242,8 @@ func DefaultSettings() Settings {
 		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: DefaultEmployeeMealPct, ToppingMaxCount: 3,
 		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes(), DrawerStartCents: 10000,
 		WasteReasons: DefaultWasteReasons(), VoidReasons: DefaultVoidReasons(), PhoneChargeTimeoutSeconds: DefaultPhoneChargeTimeoutS,
-		CallcenterIdleLockMinutes: DefaultCallcenterIdleLock, QuibaseCounterMinCents: DefaultQuibaseCounterMinCents}
+		CallcenterIdleLockMinutes: DefaultCallcenterIdleLock, QuibaseCounterMinCents: DefaultQuibaseCounterMinCents,
+		CloseUnpaidCounterAction: CloseUnpaidWaste}
 }
 
 // Ranges.
@@ -353,6 +370,8 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: cashier_payout_cents must be 0–%d", ErrBadSettings, MaxPayoutCents)
 	case s.QuibaseCounterMinCents < 0 || s.QuibaseCounterMinCents > MaxQuibaseCounterMinCents:
 		return fmt.Errorf("%w: quibase_counter_min_cents must be 0–%d", ErrBadSettings, MaxQuibaseCounterMinCents)
+	case s.CloseUnpaidCounterAction != CloseUnpaidWaste && s.CloseUnpaidCounterAction != CloseUnpaidCarry:
+		return fmt.Errorf("%w: close_unpaid_counter_action must be waste or carry", ErrBadSettings)
 	case s.DrawerStartCents < 0 || s.DrawerStartCents > MaxDrawerStartCents:
 		return fmt.Errorf("%w: drawer_start_cents must be 0–%d", ErrBadSettings, MaxDrawerStartCents)
 	case s.DefaultPickupMinutes < 0 || s.DefaultPickupMinutes > MaxPickupMinutes:
@@ -417,6 +436,9 @@ func (s *Settings) Normalize() {
 	}
 	if s.CallcenterIdleLockMinutes == 0 {
 		s.CallcenterIdleLockMinutes = DefaultCallcenterIdleLock
+	}
+	if s.CloseUnpaidCounterAction == "" {
+		s.CloseUnpaidCounterAction = CloseUnpaidWaste
 	}
 }
 

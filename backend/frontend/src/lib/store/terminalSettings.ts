@@ -11,7 +11,7 @@ export type SettingsForm = {
   autoClose: boolean; autoCloseAt: string; defaultTab: string; showHistory: boolean; font: string;
   priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean; toppingMax: string;
   cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string; drawerStart: string;
-  wasteReasons: string; voidReasons: string; phoneTimeout: string; quibaseMin: string;
+  wasteReasons: string; voidReasons: string; phoneTimeout: string; quibaseMin: string; closeUnpaid: string; // 'waste' | 'carry'
 };
 export type FormKey = keyof SettingsForm;
 export type TextKey = { [K in FormKey]: SettingsForm[K] extends string ? K : never }[FormKey];
@@ -24,7 +24,7 @@ export const GROUP_KEYS: Record<TerminalGroup, FormKey[]> = {
   counter: ['meal', 'pickupMinutes', 'counterStart', 'toppingMax', 'quibaseMin', 'areaCodes', 'nameOnPaid', 'margin'],
   voids: ['wasteReasons', 'voidReasons'],
   card: ['cardTips', 'tipPercents', 'phoneTimeout'],
-  endofday: ['autoClose', 'autoCloseAt', 'drawerStart']
+  endofday: ['autoClose', 'autoCloseAt', 'closeUnpaid', 'drawerStart']
 };
 
 export const TABS = [
@@ -76,7 +76,8 @@ export function settingsForm(raw: Partial<TerminalSettings>): SettingsForm {
     drawerStart: centsInput(s.drawer_start_cents),
     quibaseMin: centsInput(s.quibase_counter_min_cents),
     wasteReasons: (s.waste_reasons ?? []).join('\n'),
-    voidReasons: (s.void_reasons ?? []).join('\n')
+    voidReasons: (s.void_reasons ?? []).join('\n'),
+    closeUnpaid: s.close_unpaid_counter_action === 'carry' ? 'carry' : 'waste'
   };
 }
 
@@ -154,7 +155,8 @@ export function settingsOf(f: SettingsForm, keep: Partial<TerminalSettings> = {}
     quibase_counter_min_cents: money(f, 'quibaseMin', 'Counter orders on Quibase over', 100_000),
     area_codes: codes,
     waste_reasons: waste,
-    void_reasons: voids
+    void_reasons: voids,
+    close_unpaid_counter_action: f.closeUnpaid === 'carry' ? 'carry' : 'waste'
   };
 }
 
@@ -207,6 +209,6 @@ export function terminalSummary(group: TerminalGroup, raw: Partial<TerminalSetti
     case 'card':
       return s.card_tips ? `Asks for a tip: ${s.card_tip_percents.join(', ')}%` : 'No tip on the card reader';
     case 'endofday':
-      return `${s.auto_close_batch_at ? `Closes the batch at ${clock(s.auto_close_batch_at)}` : 'Batch closed by hand'} · drawers start ${dollars(s.drawer_start_cents)}`;
+      return `${s.auto_close_batch_at ? `Closes the batch at ${clock(s.auto_close_batch_at)}` : 'Batch closed by hand'} · unpaid counter checks ${s.close_unpaid_counter_action === 'carry' ? 'carried' : 'wasted'} · drawers start ${dollars(s.drawer_start_cents)}`;
   }
 }
