@@ -60,12 +60,15 @@ test('bulk edit: select, change prices with a preview, undo, move, printer, stoc
   await page.getByRole('dialog').getByLabel('Category').selectOption({ label: 'Pizza' });
   await page.getByRole('dialog').getByRole('button', { name: 'Move' }).click();
   await expect.poll(async () => (await item(store, pz.id, 'Fries'))?.category_id).toBe(pz.id);
+  // A save clears the selection once the page has its answer (the API can show the change a moment sooner).
+  await expect(bar(page)).toHaveCount(0);
 
   await select(page, 'Fries').check();
   await bar(page).getByRole('button', { name: 'Printer…' }).click();
   await page.getByRole('dialog').getByLabel('Kitchen printer').selectOption('__none');
   await page.getByRole('dialog').getByRole('button', { name: 'Save 1 item' }).click();
   await expect.poll(async () => (await item(store, pz.id, 'Fries'))?.no_kitchen_ticket).toBe(true);
+  await expect(bar(page)).toHaveCount(0);
 
   // A whole category at once.
   await page.getByRole('checkbox', { name: 'Select the items of Pizza' }).check();

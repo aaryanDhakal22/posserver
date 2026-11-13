@@ -116,8 +116,8 @@
     [...selected].map((id) => allItemsById.get(id)).filter((it): it is Item => !!it).map((it) => ({ item: it, bank: bankItems.get(it.id) }))
   );
   const allCategories = $derived((bank?.menus ?? []).flatMap((m) => m.categories.map((c) => ({ id: c.id, name: c.name, menu: m.name }))));
-  async function afterBulk() {
-    selected = new Set();
+  async function afterBulk(undo = false) {
+    if (!undo) selected = new Set();
     await Promise.all([loadCategories(), loadBank()]).catch((e) => toast.error(e));
     loadProblemCount();
   }
@@ -499,7 +499,7 @@
   {:else if tab === 'modifiers'}
     {#key openGroupId}<ModifiersTab {sizes} {openGroupId} />{/key}
   {:else if tab === 'problems'}
-    <ProblemsTab {bank} {printers} {sizes} onopenitem={openItem} onopengroup={openGroup} onchanged={afterBulk} />
+    <ProblemsTab {bank} {printers} {sizes} onopenitem={openItem} onopengroup={openGroup} onchanged={() => afterBulk(true)} />
   {:else if tab === 'sizes'}
     <SizesTab {sizes} onreload={loadBank} />
   {:else if tab === 'families'}

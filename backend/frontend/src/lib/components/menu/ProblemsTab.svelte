@@ -123,8 +123,8 @@
     selected = new Set();
     q = '';
   }
-  async function afterFix() {
-    selected = new Set();
+  async function afterFix(undo = false) {
+    if (!undo) selected = new Set();
     await onchanged();
     await load();
   }

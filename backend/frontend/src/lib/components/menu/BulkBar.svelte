@@ -21,7 +21,8 @@
     /** Every category of every menu (the "Move to" list). */
     categories: { id: string; name: string; menu: string }[];
     sizes: MenuSize[];
-    onapplied: () => void | Promise<void>;
+    /** After a save (undo: true after its Undo, which keeps the selection made since). */
+    onapplied: (undo?: boolean) => void | Promise<void>;
     onclear: () => void;
   } = $props();
 
@@ -44,7 +45,7 @@
           run: async () => {
             try {
               await applyBulk(undo);
-              await onapplied();
+              await onapplied(true);
               toast.success(`Undone: ${items(undo.length)} back as they were`);
             } catch (e) {
               toast.error(e);
