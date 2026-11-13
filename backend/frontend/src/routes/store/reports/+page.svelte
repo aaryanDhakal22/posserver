@@ -122,7 +122,7 @@
           {#each zs as r (r.id)}
             <tr>
               <td>{r.business_date}</td>
-              <td class="text-text2">{whenText(r.closed_at)}{r.close_kind === 'auto' ? ' (automatic)' : ''}</td>
+              <td class="text-text2">{new Date(r.closed_at).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}{r.close_kind === 'auto' ? ' (automatic)' : ''}</td>
               <td class="mono text-right">{r.orders}</td>
               <td class="mono text-right">{dollars(r.total_cents)}</td>
               <td class="mono text-right {r.over_short_cents && r.over_short_cents < 0 ? 'text-bad' : ''}">{signed(r.over_short_cents)}</td>
@@ -217,6 +217,7 @@
         <table class="tbl">
           <thead><tr><th>Tender</th><th class="!text-right">Count</th><th class="!text-right">Net</th><th class="!text-right">Main's check</th></tr></thead>
           <tbody>
+            {#if !(r.tenders ?? []).length}<tr><td colspan="4" class="text-muted">No money taken that day.</td></tr>{/if}
             {#each r.tenders ?? [] as t (t.tender)}
               {@const m = z.main_check?.find((x) => x.tender === t.tender)}
               <tr>
@@ -265,6 +266,9 @@
   }
   .kv > span:nth-child(odd) {
     color: var(--text2);
+  }
+  .kv > span:nth-child(even) {
+    text-align: right;
   }
   .sec {
     font-size: 11px;

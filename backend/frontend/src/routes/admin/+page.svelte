@@ -69,7 +69,7 @@
         store: r.tenant.name,
         text:
           (r.lastSeen ? `Pi hasn't checked in for ${durationSince(r.lastSeen)}` : "Pi has a key but hasn't connected yet") +
-          (r.kitchenOffline ? ' — online orders are being refused; if its Pi was retired, revoke the old key' : ''),
+          (r.kitchenOffline ? '; its online orders are refused (a retired Pi? revoke its key)' : ''),
         href: `${base}/admin/tenants/${r.tenant.id}`,
         cta: 'Open store'
       });

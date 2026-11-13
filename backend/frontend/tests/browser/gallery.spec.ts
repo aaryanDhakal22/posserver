@@ -33,6 +33,8 @@ type Shot = {
   act?: (page: Page, ctx: Ctx) => Promise<void>;
   /** The gate only (it changes something, or needs the seeded orders' ids). */
   gateOnly?: boolean;
+  /** The owner's review only (needs data a throwaway store hasn't got, e.g. a day close). */
+  galleryOnly?: boolean;
   /** Viewport-only (a panel over the page: the whole-page resize would stretch it). */
   viewport?: boolean;
 };
@@ -55,7 +57,7 @@ const SHOTS: Shot[] = [
   { slug: 'orders', page: 'Orders', state: 'all orders', path: '/store/orders' },
   {
     slug: 'orders-search', page: 'Orders', state: 'search', path: '/store/orders',
-    act: async (page) => { await page.locator('#order-search').fill('pizza'); }
+    act: async (page) => { await page.locator('#order-search').fill('Lopez'); }
   },
   { slug: 'orders-detail', page: 'Orders', state: 'order detail panel', path: '/store/orders', act: firstOrder, viewport: true },
   {
@@ -71,6 +73,10 @@ const SHOTS: Shot[] = [
     act: async (page, ctx) => { await page.goto(`/app/store/orders?order=${ctx.orders.voided}`); await expect(page.getByRole('dialog')).toBeVisible(); }
   },
   { slug: 'reports', page: 'Reports', state: 'default', path: '/store/reports' },
+  {
+    slug: 'reports-z', page: 'Reports', state: 'a day close opened', path: '/store/reports', galleryOnly: true, viewport: true,
+    act: async (page) => { await page.getByRole('button', { name: 'Open' }).first().click(); await expect(page.getByTestId('z-detail')).toBeVisible(); }
+  },
   { slug: 'menu-items', page: 'Menu', state: 'Items', path: '/store/menu' },
   {
     slug: 'menu-item-panel', page: 'Menu', state: 'item panel', path: '/store/menu', viewport: true,
@@ -301,7 +307,7 @@ if (GALLERY) {
   const test = base.extend<{ ctx: Ctx }>({
     ctx: async ({ store }, use) => use({ orders: await seedOrders(store), tenantId: store.tenantId })
   });
-  for (const shot of SHOTS) {
+  for (const shot of SHOTS.filter((s) => !s.galleryOnly)) {
     test.describe(() => {
       // Decided before the fixtures run: a skipped phone shot makes no store.
       test.skip(({ isMobile }) => isMobile && !PHONE.has(shot.slug), 'desktop only');
