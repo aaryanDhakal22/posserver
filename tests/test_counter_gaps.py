@@ -2,9 +2,9 @@
 §2.5zb terminal settings + counter orders):
 
   * double / triple toppings: a group with allow_multiple takes the same
-    option again; each pick is priced on its half / whole and the quote
-    reads "2× Pepperoni"; the order line has one child "2x Pepperoni" (ASCII:
-    the printers' code page has no ×) at twice the price
+    option again; each pick is priced on its half / whole and (since
+    2026-11-14, mods never stack) the quote and the order line read each pick
+    on its own: "Pepperoni", "Pepperoni" (base_cents + mod_prices on the quote)
   * custom lines (Quicc Add): a counter channel prices one at the store
     rate; a website refuses it (custom_line); a counter channel's order
     keeps it as a line with sku "custom"; the Pi's order.placed carries one
@@ -97,7 +97,9 @@ def test_doubles_custom_lines_and_required_warnings(admin, store, mgr) -> None:
     # The counter: doubles priced per pick, the custom line at the store rate, the missed side a warning.
     q = _quote(counter, [pizza, club, custom])
     assert q["errors"] == [], q["errors"]
-    assert q["lines"][0]["mods"] == ["12 Medium", "2× Pepperoni", "2× Onion (1st half)"]
+    # Mods never stack (the owner, 2026-11-14; agent contract 2.10an): each pick its own mod.
+    assert q["lines"][0]["mods"] == ["12 Medium", "Pepperoni", "Pepperoni", "Onion (1st half)", "Onion (1st half)"]
+    assert q["lines"][0]["base_cents"] == 999 and [m["price_cents"] for m in q["lines"][0]["mod_prices"]] == [150, 150, 125, 125]
     assert q["lines"][0]["unit_cents"] == 999 + 2 * 150 + 2 * 125
     assert q["lines"][2] == {**q["lines"][2], "name": "Extra dough ball", "unit_cents": 250, "total_cents": 500, "custom": True}
     assert q["warnings"] == ["Club Sandwich: choose a side."]
@@ -116,7 +118,8 @@ def test_doubles_custom_lines_and_required_warnings(admin, store, mgr) -> None:
     assert r.status_code == 201, r.text
     got = _ok(requests.get(f"{API_V1}/orders/{o['id']}", headers=store_key(store.key), timeout=5))
     pz, cl = got["items"]
-    assert [(c["name"], c["unit_price_cents"]) for c in pz["children"]] == [("2x Pepperoni", 300), ("2x Onion (1st half)", 250)]
+    assert [(c["name"], c["unit_price_cents"]) for c in pz["children"]] == [
+        ("Pepperoni", 150), ("Pepperoni", 150), ("Onion (1st half)", 125), ("Onion (1st half)", 125)]
     assert pz["line_total_cents"] == 999 + 300 + 250
     assert (cl["name"], cl.get("sku"), cl["quantity"], cl["unit_price_cents"], cl["line_total_cents"]) == ("Extra dough ball", "custom", 2, 250, 500)
     assert cl.get("menu_item_id") is None and cl["routing"] == "unmatched" and cl["notes"] == "on the side"

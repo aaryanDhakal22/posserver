@@ -3162,7 +3162,9 @@
           "custom": {
             "type": "boolean",
             "description": "A custom line (absent otherwise)"
-          }
+          },
+          "base_cents": {"type": "integer", "description": "An item line's own price for one without its mods (absent on custom and deal lines; the owner 2026-11-14)"},
+          "mod_prices": {"type": "array", "description": "Each cart option's own price for one, by its index in the line's options; included = one of the item's included toppings (absent when none)", "items": {"type": "object", "required": ["pick", "price_cents"], "additionalProperties": false, "properties": {"pick": {"type": "integer"}, "price_cents": {"type": "integer"}, "included": {"type": "boolean"}}}}
         },
         "additionalProperties": false
       },
