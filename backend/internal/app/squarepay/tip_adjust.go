@@ -16,7 +16,9 @@ import (
 // driver's card tip, typed before the close, on the counter's Square
 // payment. tip_cents is the payment's WHOLE tip. Square changes a tip only
 // while the payment is APPROVED (a delayed capture): a completed payment is
-// answered not_adjustable and the Pi pages the floor.
+// answered not_adjustable and the Pi pages the floor. A counter delivery's
+// hold (agent §2.10ao) keeps the tip on its card_holds row: the capture puts
+// it on the card first (cardhold), so a capture right after never races it.
 
 // MsgSquareTipAdjust is the RPC's type.
 const MsgSquareTipAdjust = "square.tip_adjust"
@@ -74,6 +76,19 @@ func (s *Service) HandleTipAdjust(ctx context.Context, scope sseBroker.Scope, pa
 	}
 	if p.LocationID != "" && p.LocationID != sqLoc {
 		return refused("square_refused", "", "That payment belongs to another Square location.")
+	}
+	if p.Status == square.StatusApproved && s.counterHolds != nil {
+		// A counter delivery's hold (agent §2.10ao): the tip is kept on the
+		// hold and goes on the card when the hold machine captures it (the
+		// driver's clock-out, Close batch or 24 h), in that order.
+		ok, err := s.counterHolds.CounterTip(ctx, scope.LocationID, p.ID, b.TipCents)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			log.Info().Msg("driver tip kept on the counter card hold (put on the card at its capture)")
+			return TipAdjustReply{TerminalReply: TerminalReply{OK: true, Status: p.Status}, TipCents: b.TipCents}, nil
+		}
 	}
 	if currentTip(p) == b.TipCents {
 		return TipAdjustReply{TerminalReply: TerminalReply{OK: true, Status: p.Status}, TipCents: b.TipCents}, nil

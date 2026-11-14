@@ -96,3 +96,25 @@ def test_a_real_store_with_only_a_general_refund_holds_money(admin, make_store) 
     body = r.json()
     assert r.status_code == 409 and body["code"] == "has_money_records" and body["money"]["payments"] == 1, body
     # The teardown purges it (dev only): the unlinked row goes with the store.
+
+
+def test_a_general_card_refund_is_stored_on_its_method_and_balances_the_z(store) -> None:
+    """Batch J (agent §2.10x "A general refund to a card"): the Pi's refund.general with method manual_card, Square's
+    refund id as ref, the card's last 4 and brand → an unlinked counter refund on that method; main's Z check counts it
+    with the batch's manual_card tender (never the cash), so a Z whose manual_card net is −$7.50 balances."""
+    mgr = store.manager_session()
+    ev = _general(750, batch=11, method="manual_card", ref="ref_square_123", last4="1111", brand="visa",
+                  client_key="gen-card-1", reason="Overcharged yesterday")
+    assert _send(store.key, [ev]) == {ev["event_id"]: "applied"}
+    again = {**ev, "event_id": str(uuid.uuid4())}
+    assert _send(store.key, [again]) == {again["event_id"]: "duplicate"}
+    zid = str(uuid.uuid4())
+    report = {"id": zid, "batch_id": 11, "business_date": "2026-11-14", "tenders": [
+        {"tender": "manual_card", "count": 0, "collected_cents": 0, "refunded_cents": 750, "tips_cents": 0, "net_cents": -750}],
+        "reconcile": {"difference_cents": 0, "general_refunds_cents": 750}, "sales": {"total_cents": 0},
+        "general_refunds": {"count": 1, "cents": 750}}
+    z = {"event_id": str(uuid.uuid4()), "type": "z.report", "at": _now(), "report": report}
+    assert _send(store.key, [z]) == {z["event_id"]: "applied"}
+    got = _ok(mgr.get(f"{ME}/reports/z/{zid}", timeout=5))
+    assert got["flagged"] is False and got["main_difference_cents"] == 0, got
+    assert got["main_check"] == [{"tender": "manual_card", "pi_cents": -750, "main_cents": -750}], got["main_check"]

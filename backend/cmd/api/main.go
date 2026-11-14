@@ -469,11 +469,17 @@ func main() {
 	requester.RegisterInbound(squarepay.MsgSquareKeyedPayment, squareService.HandleKeyedPayment)
 	requester.RegisterInbound(squarepay.MsgSquareRefund, squareService.HandleRefund)
 	requester.RegisterInbound(squarepay.MsgSquareTipAdjust, squareService.HandleTipAdjust) // batch F (§2.10am)
+	// A general refund to a card (batch J, agent §2.10x): Square's unlinked
+	// refund, and the fallback's list of the store's recent card payments.
+	requester.RegisterInbound(squarepay.MsgSquareGeneralRefund, squareService.HandleGeneralRefund)
+	requester.RegisterInbound(squarepay.MsgSquareCardPayments, squareService.HandleCardPayments)
 	if squareService.Enabled() {
 		gateways[payment.MethodCard] = squareService.CardRouter(testCard)
 		safego.Loop(ctx, "square.refresh", squareService.RunRefresh)
 	}
-	cardHolds := cardholdApp.NewService(squareRepo, map[string]payment.Holder{squarepay.GatewayName: squareService.Gateway()}, repo, lgr)
+	cardHolds := cardholdApp.NewService(squareRepo, map[string]payment.Holder{squarepay.GatewayName: squareService.Gateway(),
+		squarepay.CounterGatewayName: squareService.CounterGateway()}, repo, lgr) // + counter delivery holds (agent §2.10ao)
+	squareService.SetCounterHolds(cardHolds)
 	cardHolds.SetNotifier(notifier)
 	cardHolds.SetMeters(&meters) // L-3: captures, voids, refunds, failures
 	safego.Loop(ctx, "cardhold.worker", cardHolds.Run)

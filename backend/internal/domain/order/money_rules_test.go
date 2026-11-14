@@ -36,7 +36,9 @@ type ruleCase struct {
 	Note  string `json:"note"`
 	By    string `json:"by"`
 	Cents int64  `json:"cents"`
-	Order struct {
+	// Tender: a general refund's (batch J: a card one; "" = cash).
+	Tender string `json:"tender"`
+	Order  struct {
 		Batch    string    `json:"batch"`
 		Payments []rulePay `json:"payments"`
 	} `json:"order"`
@@ -150,7 +152,11 @@ func TestMoneyRules(t *testing.T) {
 	t.Run("general refunds", func(t *testing.T) {
 		for _, c := range tab.GeneralRefunds {
 			check(t, c, func(approvedBy string) []MoneyFlag {
-				p := CheckedPayment{Method: "cash", Amount: Money(-c.Cents), StaffID: staffOf(c.By), ApprovedBy: approvedBy}
+				method := c.Tender
+				if method == "" {
+					method = "cash"
+				}
+				p := CheckedPayment{Method: method, Amount: Money(-c.Cents), StaffID: staffOf(c.By), ApprovedBy: approvedBy}
 				return GeneralRefundFlags(p, Who(people, p.StaffID))
 			})
 		}

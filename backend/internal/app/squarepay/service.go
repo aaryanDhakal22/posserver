@@ -96,6 +96,8 @@ type Service struct {
 	logger   zerolog.Logger
 	now      func() time.Time
 	grants   grants // the stores' OAuth scopes (terminal.go)
+
+	counterHolds CounterHolds // counter delivery holds (counter_hold.go; nil = none)
 }
 
 func NewService(cfg Config, client *square.Client, repo Repo, locs LocationReader, lg zerolog.Logger) (*Service, error) {

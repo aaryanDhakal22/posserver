@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"quiccpos/main/internal/domain/payment"
 	"quiccpos/main/internal/infra/database/models"
 
 	"github.com/google/uuid"
@@ -417,4 +418,121 @@ func (r *SquareRepository) HoldRows(ctx context.Context, locationID uuid.UUID, s
 			Type: x.FulfillmentType, PlacedAt: x.PlacedAt.Time, OrderStatus: x.OrderStatus})
 	}
 	return out, nil
+}
+
+// --- counter delivery holds (agent contract §2.10ao) -------------------------------------
+
+// CounterHoldIn is a counter delivery's held card payment, as the Pi recorded it.
+type CounterHoldIn struct {
+	OrderID, TenantID, LocationID uuid.UUID
+	PaymentRef                    string // Square's payment id
+	AmountCents, TipCents         int64
+	DueAt                         time.Time
+}
+
+// CounterHoldOut says what InsertCounterHold found.
+type CounterHoldOut struct {
+	Inserted bool
+	// Tracked: a hold row for this payment exists (inserted now or before).
+	Tracked bool
+	// Delivery: the order is a delivery (else the hold is captured at once).
+	Delivery bool
+	// OrderGone: no such order in the store.
+	OrderGone bool
+}
+
+// InsertCounterHold records a counter delivery's held card payment on the
+// card hold machine (gateway square_counter). Idempotent by the payment:
+// the same payment again is Tracked, not Inserted. One hold per order: a
+// second held payment on an order that has one is not Tracked (the caller
+// captures it at once). A hold whose order isn't a delivery is asked to be
+// captured at once (capture_reason not_delivery).
+func (r *SquareRepository) InsertCounterHold(ctx context.Context, h CounterHoldIn) (CounterHoldOut, error) {
+	var out CounterHoldOut
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return out, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var kind string
+	err = tx.QueryRow(ctx, `SELECT fulfillment_type FROM orders WHERE id = $1 AND tenant_id = $2 AND location_id = $3`,
+		h.OrderID, h.TenantID, h.LocationID).Scan(&kind)
+	if NoRows(err) {
+		out.OrderGone = true
+		return out, nil
+	}
+	if err != nil {
+		return out, err
+	}
+	out.Delivery = kind == "delivery"
+	tag, err := tx.Exec(ctx, `INSERT INTO card_holds (order_id, tenant_id, location_id, gateway, payment_ref, amount_cents, tip_cents, due_at,
+			capture_requested_at, capture_reason)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $9::bool THEN NULL ELSE now() END, CASE WHEN $9::bool THEN '' ELSE 'not_delivery' END)
+		ON CONFLICT DO NOTHING`,
+		h.OrderID, h.TenantID, h.LocationID, payment.GatewaySquareCounter, h.PaymentRef, h.AmountCents, h.TipCents, h.DueAt, out.Delivery)
+	if err != nil {
+		return out, err
+	}
+	out.Inserted = tag.RowsAffected() == 1
+	if !out.Inserted {
+		var n int
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM card_holds WHERE location_id = $1 AND gateway = $2 AND payment_ref = $3`,
+			h.LocationID, payment.GatewaySquareCounter, h.PaymentRef).Scan(&n); err != nil {
+			return out, err
+		}
+		out.Tracked = n > 0
+	} else {
+		out.Tracked = true
+	}
+	return out, tx.Commit(ctx)
+}
+
+// CounterHoldTip keeps a counter hold's whole tip (added = whole − the tip
+// taken with the payment) for its capture. false = no waiting counter hold
+// for the payment, or a tip below the one taken with it (Square changes that
+// directly).
+func (r *SquareRepository) CounterHoldTip(ctx context.Context, locationID uuid.UUID, ref string, whole int64) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `UPDATE card_holds SET added_tip_cents = $4 - tip_cents, updated_at = now()
+		WHERE location_id = $1 AND gateway = $2 AND payment_ref = $3 AND status = 'held' AND cancel_requested_at IS NULL
+		  AND $4 >= tip_cents`, locationID, payment.GatewaySquareCounter, ref, whole)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// CounterHoldReleased marks a waiting counter hold cancelled (Square voided
+// it: the tender's money back at the counter). false = none waiting.
+func (r *SquareRepository) CounterHoldReleased(ctx context.Context, locationID uuid.UUID, ref, note string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `UPDATE card_holds SET status = 'cancelled', cancelled_at = now(), last_error = $4, updated_at = now()
+		WHERE location_id = $1 AND gateway = $2 AND payment_ref = $3 AND status = 'held'`,
+		locationID, payment.GatewaySquareCounter, ref, note)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// CounterHoldRefunded marks the waiting counter hold of the Pi payment
+// refundOf cancelled when a refund of at least the whole hold (amount + its
+// tip) came back on it (the Pi's tender void / refund through Square, which
+// cancelled the hold). false = no such waiting hold, or only part of it.
+func (r *SquareRepository) CounterHoldRefunded(ctx context.Context, locationID, orderID, refundOf uuid.UUID, cents int64, note string) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `UPDATE card_holds h SET status = 'cancelled', cancelled_at = now(), last_error = $5, updated_at = now()
+		FROM payments p
+		WHERE p.id = $3 AND p.order_id = $2 AND h.order_id = $2 AND h.location_id = $1 AND h.gateway = $6
+		  AND h.payment_ref = p.token AND h.status = 'held' AND $4 >= h.amount_cents + h.tip_cents`,
+		locationID, orderID, refundOf, cents, note, payment.GatewaySquareCounter)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// ClearUndo drops a void / refund the worker owes without doing it (a
+// captured counter hold: the Pi gave the money back itself, through Square).
+func (r *SquareRepository) ClearUndo(ctx context.Context, orderID uuid.UUID, note string) error {
+	_, err := r.pool.Exec(ctx, `UPDATE card_holds SET cancel_requested_at = NULL, refund_requested_at = NULL, last_error = $2,
+		updated_at = now() WHERE order_id = $1`, orderID, note)
+	return err
 }

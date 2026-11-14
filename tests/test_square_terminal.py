@@ -98,3 +98,43 @@ def test_session_keyed_payment_and_refund(store, mgr) -> None:
 def test_bad_keyed_payment_is_400(store, body) -> None:
     code, _ = _rpc(store, "square.keyed_payment", body)
     assert code == 400
+
+
+def test_general_card_refund_unlinked_and_the_fallback(store, mgr) -> None:
+    """Batch J (agent §2.10x, main §2.5e): square.general_refund = Square's unlinked refund to the card field's token
+    (the same key = the same refund; a seller Square refuses = unlinked_unsupported; Square away = 500, not known);
+    square.card_payments = the store's recent card payments with that last 4 that still hold the amount, then an
+    ordinary linked square.refund on the one the manager picked."""
+    code, nl = _rpc(store, "square.general_refund", {"nonce": "cnon:card-nonce-ok", "amount_cents": 100, "idempotency_key": "g-nl"})
+    assert code == 200 and nl["ok"] is False and nl["code"] == "square_not_linked", nl
+    st = _connect(mgr)
+    key = f"gr{uuid.uuid4().hex[:20]}"
+    body = {"nonce": "cnon:card-nonce-ok", "amount_cents": 650, "idempotency_key": key, "reason": "Overcharged"}
+    code, g = _rpc(store, "square.general_refund", body)
+    assert code == 200 and g["ok"] and g["unlinked"] is True and g["status"] == "PENDING" and g["last4"] == "1111", g
+    code, g2 = _rpc(store, "square.general_refund", body)
+    assert code == 200 and g2["refund_id"] == g["refund_id"], g2
+    code, un = _rpc(store, "square.general_refund", {**body, "nonce": "cnon:unlinked-refund-unsupported", "idempotency_key": key + "u"})
+    assert code == 200 and not un["ok"] and un["code"] == "unlinked_unsupported", un
+    r = requests.post(f"{FAKE}/_fake/fail", json={"op": "refund", "status": 503, "code": "TEMPORARY_ERROR",
+                                                  "merchant": st["merchant_id"]}, timeout=5)
+    assert r.status_code == 204
+    code, _ = _rpc(store, "square.general_refund", {**body, "idempotency_key": key + "t"})
+    assert code == 500  # the Pi answers 503: not known, nothing recorded
+    code, bad = _rpc(store, "square.general_refund", {**body, "nonce": ""})
+    assert code == 400
+
+    # The fallback: a typed card's payment of $20, listed for last 4 1111 and $6.50, refunded linked.
+    pk = f"att-{uuid.uuid4().hex[:8]}-k1"
+    code, k = _rpc(store, "square.keyed_payment", _keyed("cnon:card-nonce-ok", pk, 2000))
+    assert code == 200 and k["ok"], k
+    code, lst = _rpc(store, "square.card_payments", {"last4": "1111", "amount_cents": 650})
+    assert code == 200 and lst["ok"], lst
+    mine = [p for p in lst["payments"] if p["square_payment_id"] == k["payment"]["id"]]
+    assert mine and mine[0]["refundable_cents"] == 2000 and mine[0]["entry"] == "keyed", lst
+    code, ref = _rpc(store, "square.refund", {"payment_id": mine[0]["square_payment_id"], "amount_cents": 650,
+                                              "idempotency_key": f"lr{uuid.uuid4().hex[:20]}", "reason": "Overcharged"})
+    assert code == 200 and ref["ok"], ref
+    assert _fake_payment(k["payment"]["id"])["refunded_money"]["amount"] == 650
+    code, bad = _rpc(store, "square.card_payments", {"last4": "11", "amount_cents": 650})
+    assert code == 400

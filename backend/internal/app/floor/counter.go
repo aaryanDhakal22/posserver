@@ -9,6 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"quiccpos/main/internal/app/cardhold"
 	"quiccpos/main/internal/app/customers"
 	"quiccpos/main/internal/app/dayclose"
 	"quiccpos/main/internal/domain/notify"
@@ -45,6 +46,11 @@ func (s *Service) applyPlaced(ctx context.Context, sc order.Scope, eid uuid.UUID
 	res, flags, err := s.counter.CreateCounterOrder(ctx, sc, eid, ev.Type, co, ev.AgentStatus, ev.BatchID)
 	if err != nil {
 		return "", err
+	}
+	if res == order.FloorApplied || res == order.FloorDuplicate {
+		for _, p := range co.Payments {
+			s.counterHold(ctx, sc, uuid.UUID(co.Order.ID()), p)
+		}
 	}
 	if res == order.FloorApplied {
 		s.logger.Info().Ctx(ctx).Str("order_id", snap.ID).Str("status", string(co.Order.Status())).
@@ -86,6 +92,9 @@ func (s *Service) applyPayment(ctx context.Context, sc order.Scope, eid uuid.UUI
 	res, flags, err := s.counter.AddCounterPayment(ctx, sc, eid, ev.Type, oid, cp)
 	if err != nil {
 		return "", err
+	}
+	if res == order.FloorApplied || res == order.FloorDuplicate {
+		s.counterHold(ctx, sc, oid, cp)
 	}
 	switch res {
 	case order.FloorApplied:
@@ -389,4 +398,29 @@ func (s *Service) flagged(ctx context.Context, sc order.Scope, eid uuid.UUID, ty
 	s.flagPages.Add(key)
 	_ = s.notifier.Notify(context.WithoutCancel(ctx), notify.Notice{LocationID: uuid.UUID(sc.LocationID), Kind: notify.KindPaymentProblem,
 		Title: "Money to check", Message: fmt.Sprintf("main stored a %s it doesn't agree with (%s). See Store › Reports › Money notes.", typ, strings.Join(codes, ", "))})
+}
+
+// CounterHolds records counter delivery card holds (agent contract §2.10ao,
+// cardhold.Service); type-asserted from the card holds so older fakes needn't
+// implement it.
+type CounterHolds interface {
+	CounterHold(ctx context.Context, p cardhold.CounterPayment)
+	CounterRefunded(ctx context.Context, locationID, orderID, refundOf uuid.UUID, cents int64)
+}
+
+// counterHold hands a payment the Pi marked held to the card hold machine
+// (a replay too: idempotent by the payment), and a refund of a held payment
+// (a tender void cancelled the hold at Square) likewise.
+func (s *Service) counterHold(ctx context.Context, sc order.Scope, orderID uuid.UUID, p order.CheckedPayment) {
+	h, ok := s.holds.(CounterHolds)
+	if !ok || s.holds == nil {
+		return
+	}
+	switch {
+	case p.Held:
+		h.CounterHold(ctx, cardhold.CounterPayment{TenantID: uuid.UUID(sc.TenantID), LocationID: uuid.UUID(sc.LocationID),
+			OrderID: orderID, Ref: strings.TrimSpace(p.Ref), AmountCents: int64(p.Amount), TipCents: int64(p.Tip)})
+	case p.Amount < 0 && p.RefundOf != nil && (p.Method == "card" || p.Method == "manual_card"):
+		h.CounterRefunded(ctx, uuid.UUID(sc.LocationID), orderID, *p.RefundOf, -int64(p.Amount))
+	}
 }

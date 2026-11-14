@@ -165,6 +165,21 @@ type Refund struct {
 	Status      string `json:"status"`
 	PaymentID   string `json:"payment_id"`
 	AmountMoney *Money `json:"amount_money"`
+	// An unlinked refund (no payment: the counter's general card refund,
+	// agent contract §2.10x): the card it went to.
+	Unlinked           bool   `json:"unlinked,omitempty"`
+	LocationID         string `json:"location_id,omitempty"`
+	DestinationDetails *struct {
+		CardDetails *CardDetailsLite `json:"card_details,omitempty"`
+	} `json:"destination_details,omitempty"`
+}
+
+// Card is the refund's destination card (nil when Square named none).
+func (r *Refund) Card() *CardDetailsLite {
+	if r == nil || r.DestinationDetails == nil {
+		return nil
+	}
+	return r.DestinationDetails.CardDetails
 }
 
 // Location is one of the seller's Square locations.
@@ -429,11 +444,15 @@ func (c *Client) Locations(ctx context.Context, token string) ([]Location, error
 
 // CreatePayment is a CreatePayment request (Autocomplete false = a hold).
 type CreatePayment struct {
-	IdempotencyKey    string `json:"idempotency_key"`
-	SourceID          string `json:"source_id"`
-	AmountMoney       *Money `json:"amount_money"`
-	TipMoney          *Money `json:"tip_money,omitempty"`
-	Autocomplete      bool   `json:"autocomplete"`
+	IdempotencyKey string `json:"idempotency_key"`
+	SourceID       string `json:"source_id"`
+	AmountMoney    *Money `json:"amount_money"`
+	TipMoney       *Money `json:"tip_money,omitempty"`
+	Autocomplete   bool   `json:"autocomplete"`
+	// DelayAction is what Square does with a hold (autocomplete false)
+	// nobody captured or voided by its delay (CANCEL by default; COMPLETE =
+	// Square charges it itself: a counter delivery's hold, agent §2.10ao).
+	DelayAction       string `json:"delay_action,omitempty"`
 	LocationID        string `json:"location_id,omitempty"`
 	CustomerID        string `json:"customer_id,omitempty"`
 	ReferenceID       string `json:"reference_id,omitempty"`
@@ -527,6 +546,25 @@ func (c *Client) RefundPayment(ctx context.Context, token, idempotencyKey, payme
 		Refund *Refund `json:"refund"`
 	}
 	body := map[string]any{"idempotency_key": idempotencyKey, "payment_id": paymentID, "amount_money": amount}
+	if reason != "" {
+		body["reason"] = reason
+	}
+	if err := c.do(ctx, http.MethodPost, "/v2/refunds", bearer(token), body, &out); err != nil {
+		return nil, err
+	}
+	return out.Refund, nil
+}
+
+// RefundUnlinked gives money back to a card with no original payment
+// (Square's unlinked refund: no payment_id, unlinked true, destination_id =
+// the card field's token, the location; agent contract §2.10x, a general
+// refund to a card). The same idempotency key is the same refund.
+func (c *Client) RefundUnlinked(ctx context.Context, token, idempotencyKey, location, nonce string, amount *Money, reason string) (*Refund, error) {
+	var out struct {
+		Refund *Refund `json:"refund"`
+	}
+	body := map[string]any{"idempotency_key": idempotencyKey, "amount_money": amount, "unlinked": true,
+		"destination_id": nonce, "location_id": location}
 	if reason != "" {
 		body["reason"] = reason
 	}

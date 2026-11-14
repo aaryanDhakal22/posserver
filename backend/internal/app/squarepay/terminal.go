@@ -121,6 +121,9 @@ type TerminalReply struct {
 	// square.refund
 	RefundID string `json:"refund_id,omitempty"`
 	Status   string `json:"status,omitempty"`
+	// Voided (agent §2.10ao): the whole of a held (uncaptured) payment came
+	// back by cancelling it (refund_id = the payment's id, status CANCELED).
+	Voided bool `json:"voided,omitempty"`
 }
 
 // KeyedPayment is the slice of Square's payment the terminal records.
@@ -134,6 +137,8 @@ type KeyedPayment struct {
 	Entry         string `json:"entry"`
 	AmountCents   int64  `json:"amount_cents"`
 	TipCents      int64  `json:"tip_cents"`
+	// Held: authorized only (a delivery's hold, status APPROVED, §2.10ao).
+	Held bool `json:"held,omitempty"`
 }
 
 func notLinked(msg string) TerminalReply {
@@ -205,12 +210,17 @@ type keyedBody struct {
 	IdempotencyKey string `json:"idempotency_key"`
 	ReferenceID    string `json:"reference_id"`
 	OrderID        string `json:"order_id"`
+	// Hold (agent §2.10ao): a delivery's card, decided by the Pi from the
+	// order's fulfilment: authorized only (autocomplete false, Square's
+	// delay_action COMPLETE), captured later by the card hold machine.
+	Hold bool `json:"hold"`
 }
 
 // HandleKeyedPayment is square.keyed_payment: CreatePayment for a typed card
 // (Square's card field gave the terminal a single-use nonce), completed at
 // once, MOTO (customer_details {customer_initiated: false, seller_keyed_in:
-// true}). The same idempotency key again is the same payment.
+// true}); a delivery's (hold: true, agent §2.10ao) is authorized only. The
+// same idempotency key again is the same payment.
 func (s *Service) HandleKeyedPayment(ctx context.Context, scope sseBroker.Scope, payload json.RawMessage) (any, error) {
 	var b keyedBody
 	if err := json.Unmarshal(payload, &b); err != nil {
@@ -227,7 +237,7 @@ func (s *Service) HandleKeyedPayment(ctx context.Context, scope sseBroker.Scope,
 	}
 	b.ReferenceID = clip(b.ReferenceID, maxReferenceID) // Square's limit: a longer order key still pays
 	log := s.logger.With().Str("location_id", scope.LocationID.String()).Int64("amount_cents", b.AmountCents).
-		Int64("tip_cents", b.TipCents).Str("reference_id", b.ReferenceID).Str("order_id", clip(b.OrderID, 64)).Logger()
+		Int64("tip_cents", b.TipCents).Str("reference_id", b.ReferenceID).Str("order_id", clip(b.OrderID, 64)).Bool("hold", b.Hold).Logger()
 	tok, sqLoc, _, refusal, err := s.terminalConn(ctx, scope.LocationID)
 	if err != nil {
 		return nil, err
@@ -236,8 +246,11 @@ func (s *Service) HandleKeyedPayment(ctx context.Context, scope sseBroker.Scope,
 		return *refusal, nil
 	}
 	req := square.CreatePayment{IdempotencyKey: b.IdempotencyKey, SourceID: b.Nonce, AmountMoney: square.USD(b.AmountCents),
-		Autocomplete: true, LocationID: sqLoc, ReferenceID: b.ReferenceID, Note: keyedPaymentNote,
+		Autocomplete: !b.Hold, LocationID: sqLoc, ReferenceID: b.ReferenceID, Note: keyedPaymentNote,
 		CustomerDetails: &square.CustomerDetails{CustomerInitiated: false, SellerKeyedIn: true}}
+	if b.Hold {
+		req.DelayAction = DelayComplete
+	}
 	if b.TipCents > 0 {
 		req.TipMoney = square.USD(b.TipCents)
 	}
@@ -265,7 +278,8 @@ func (s *Service) HandleKeyedPayment(ctx context.Context, scope sseBroker.Scope,
 		return TerminalReply{Code: CodeCardDeclined, SquareCode: st, Error: "Square didn't approve the card."}, nil
 	}
 	out := &KeyedPayment{ID: p.ID, Status: p.Status, Brand: p.Brand(), Last4: p.Last4(), AuthCode: p.AuthCode(),
-		ReceiptNumber: p.ReceiptNumber, Entry: entryOf(p.Entry()), AmountCents: b.AmountCents, TipCents: b.TipCents}
+		ReceiptNumber: p.ReceiptNumber, Entry: entryOf(p.Entry()), AmountCents: b.AmountCents, TipCents: b.TipCents,
+		Held: p.Status == square.StatusApproved}
 	log.Info().Str("square_payment_id", p.ID).Str("status", p.Status).Msg("terminal keyed payment approved")
 	return TerminalReply{OK: true, Payment: out}, nil
 }
@@ -338,6 +352,32 @@ func (s *Service) HandleRefund(ctx context.Context, scope sseBroker.Scope, paylo
 	if p.LocationID != "" && p.LocationID != sqLoc {
 		log.Warn().Str("payment_location", p.LocationID).Msg("terminal refund refused: another Square location's payment")
 		return TerminalReply{Code: CodeRefundFailed, Error: "That payment belongs to another Square location."}, nil
+	}
+	if p.Status == square.StatusApproved {
+		// A counter delivery's hold (§2.10ao): the whole back = the hold is
+		// cancelled (nothing was charged); part of it = captured, then refunded.
+		total := b.AmountCents
+		if p.TotalMoney != nil {
+			total = p.TotalMoney.Amount
+		}
+		if b.AmountCents >= total {
+			if _, err := s.client.CancelPayment(ctx, tok, p.ID); err != nil {
+				return refundRefused(log, err, "")
+			}
+			if s.counterHolds != nil {
+				s.counterHolds.CounterReleased(context.WithoutCancel(ctx), scope.LocationID, p.ID, "voided at the counter (the tender's money back)")
+			}
+			log.Info().Msg("terminal refund of a held card: the hold was cancelled")
+			return TerminalReply{OK: true, RefundID: p.ID, Status: square.StatusCanceled, Voided: true}, nil
+		}
+		cp, err := s.client.CompletePayment(ctx, tok, p.ID)
+		if err != nil {
+			return refundRefused(log, err, "")
+		}
+		if cp != nil {
+			p = cp
+		}
+		log.Info().Msg("terminal refund of part of a held card: captured first")
 	}
 	if p.Status != square.StatusCompleted {
 		log.Warn().Str("status", p.Status).Msg("terminal refund refused: the payment isn't completed")
