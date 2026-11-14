@@ -122,7 +122,9 @@ func PaymentFlags(o RuleOrder, p CheckedPayment, by Refunder) []MoneyFlag {
 			cashierRefunded += -x.Amount
 		}
 	}
-	limited := by.Known && !by.Unlimited && p.ApprovedBy == ""
+	// A tender voided at Cash Out is any cashier's to do (the owner 2026-11-14,
+	// money-rules tender_voids): never limited like a refund.
+	limited := by.Known && !by.Unlimited && p.ApprovedBy == "" && p.Kind != KindTenderVoid
 	if tip > 0 && amount >= 0 && !IsCardMethod(p.Method) {
 		flags = append(flags, MoneyFlag{Code: FlagCashTip, Detail: map[string]any{"method": p.Method, "tip_cents": tip}})
 	}
