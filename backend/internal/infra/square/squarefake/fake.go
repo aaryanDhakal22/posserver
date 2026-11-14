@@ -26,9 +26,15 @@
 // answers them (a test drops PAYMENTS_WRITE_IN_PERSON from the link to play a
 // store connected before the reader's scope existed).
 //
+// Refunds: linked (payment_id) or **unlinked** (unlinked: true +
+// destination_id = a card token + location_id: the counter's general card
+// refund, batch J), see unlinkedRefund; cnon:unlinked-refund-unsupported plays
+// a seller Square won't make unlinked refunds for. GET /v2/payments with
+// last_4 also lists the card payments CreatePayment made (pos.go).
+//
 // Test hooks (no auth): GET _fake/payments/{id}, GET _fake/state,
 // POST _fake/fail {op, code, status, count, merchant?} makes the next count
-// calls of op (create|update|complete|cancel|refund|card|customer|token) fail
+// calls of op (create|update|complete|cancel|refund|card|customer|token|list) fail
 // (merchant set: only that merchant's calls, so parallel tests don't take each
 // other's failures), POST _fake/expire {payment_id} plays Square's 7-day delay
 // action (cancel).
@@ -42,6 +48,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -528,13 +535,26 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 			Amount         *struct {
 				Amount int64 `json:"amount"`
 			} `json:"amount_money"`
+			Unlinked      bool   `json:"unlinked"`
+			DestinationID string `json:"destination_id"`
+			LocationID    string `json:"location_id"`
+			Reason        string `json:"reason"`
 		}
 		if !decode(r, &b) || b.IdempotencyKey == "" || b.Amount == nil {
 			sqErr(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "BAD_REQUEST", "idempotency_key, payment_id, amount_money")
 			return
 		}
 		if rid, ok := f.byKey["ref:"+b.IdempotencyKey]; ok {
-			writeJSON(w, http.StatusOK, map[string]any{"refund": f.refunds[rid]})
+			if ref := f.refunds[rid]; b.Unlinked && ref["destination_id"] != b.DestinationID {
+				// Square: the same key with another body.
+				sqErr(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "IDEMPOTENCY_KEY_REUSED", "idempotency key reused with another request")
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"refund": public(f.refunds[rid])})
+			return
+		}
+		if b.Unlinked {
+			f.unlinkedRefund(w, m, b.IdempotencyKey, b.DestinationID, b.LocationID, b.Reason, b.Amount.Amount)
 			return
 		}
 		pay, ok := f.payments[b.PaymentID]
@@ -698,4 +718,98 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 		w.WriteHeader(http.StatusNoContent)
 	})
 	return mux
+}
+
+// public is a refund as Square answers it (the fake's own keys dropped).
+func public(ref map[string]any) map[string]any {
+	out := make(map[string]any, len(ref))
+	for k, v := range ref {
+		if k != "destination_id" {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// unlinkedRefund is RefundPayment with unlinked: true (no payment: money back
+// to the card a card field token names; agent contract §2.10x, a general
+// refund to a card). Like Square's sandbox (2026-11-14): location_id is
+// required, an unknown token is 404 NOT_FOUND, a good one answers PENDING with
+// the card in destination_details. cnon:unlinked-refund-unsupported plays a
+// seller Square won't make unlinked refunds for (400, field "unlinked").
+// Callers hold mu.
+func (f *Fake) unlinkedRefund(w http.ResponseWriter, merchant, key, dest, loc, reason string, cents int64) {
+	switch {
+	case loc == "":
+		writeJSON(w, http.StatusBadRequest, map[string]any{"errors": []map[string]string{{"category": "INVALID_REQUEST_ERROR",
+			"code": "MISSING_REQUIRED_PARAMETER", "detail": "Must supply location_id when creating an unlinked refund", "field": "location_id"}}})
+		return
+	case cents <= 0:
+		sqErr(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "REFUND_AMOUNT_INVALID", "bad refund amount")
+		return
+	case dest == "cnon:unlinked-refund-unsupported":
+		writeJSON(w, http.StatusBadRequest, map[string]any{"errors": []map[string]string{{"category": "INVALID_REQUEST_ERROR",
+			"code": "BAD_REQUEST", "detail": "Unlinked refunds are not supported for this seller", "field": "unlinked"}}})
+		return
+	case !strings.HasPrefix(dest, "cnon:card-nonce-") && !strings.HasPrefix(dest, "cnon:card-edit-"):
+		sqErr(w, http.StatusNotFound, "INVALID_REQUEST_ERROR", "NOT_FOUND", "Card nonce not found")
+		return
+	}
+	mine := false
+	for _, l := range f.locations[merchant] {
+		if l["id"] == loc {
+			mine = true
+		}
+	}
+	if !mine {
+		sqErr(w, http.StatusBadRequest, "INVALID_REQUEST_ERROR", "NOT_FOUND", "location not found")
+		return
+	}
+	ref := map[string]any{"id": id("ref_"), "status": "PENDING", "location_id": loc, "unlinked": true, "reason": reason,
+		"destination_type": "CARD", "destination_id": dest,
+		"amount_money": map[string]any{"amount": cents, "currency": "USD"},
+		"destination_details": map[string]any{"card_details": map[string]any{"entry_method": "KEYED",
+			"card": map[string]string{"last_4": "1111", "card_brand": "VISA"}}}}
+	f.refunds[ref["id"].(string)] = ref
+	f.byKey["ref:"+key] = ref["id"].(string)
+	writeJSON(w, http.StatusOK, map[string]any{"refund": public(ref)})
+}
+
+// Refund is a refund's state as JSON-able fields (tests).
+func (f *Fake) Refund(id string) (map[string]any, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r, ok := f.refunds[id]
+	return r, ok
+}
+
+// keyedListed: the card payments CreatePayment made for merchant (in one of
+// its locations, loc when set) with last4, as ListPayments lists them, newest
+// first. Callers hold mu.
+func (f *Fake) keyedListed(merchant, loc, last4 string, begin, end time.Time) []map[string]any {
+	locs := map[string]bool{}
+	for _, l := range f.locations[merchant] {
+		if id, _ := l["id"].(string); id != "" {
+			locs[id] = true
+		}
+	}
+	var pays []*payment
+	for _, p := range f.payments {
+		if !locs[p.Location] || (loc != "" && p.Location != loc) || p.Created.Before(begin.Add(-time.Second)) || p.Created.After(end) {
+			continue
+		}
+		if last4 != "" && last4 != "1111" { // every fake card is a VISA ··1111
+			continue
+		}
+		pays = append(pays, p)
+	}
+	sort.Slice(pays, func(i, j int) bool { return pays[i].Created.After(pays[j].Created) })
+	out := make([]map[string]any, 0, len(pays))
+	for _, p := range pays {
+		v := f.view(p)
+		v["created_at"] = p.Created.UTC().Format(time.RFC3339Nano)
+		v["source_type"] = "CARD"
+		out = append(out, v)
+	}
+	return out
 }

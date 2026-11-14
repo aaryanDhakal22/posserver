@@ -117,6 +117,7 @@ func (f *Fake) mountPOS(mux *http.ServeMux, p string) {
 		if err != nil {
 			end = time.Now().Add(time.Hour)
 		}
+		last4 := q.Get("last_4")
 		b := f.pos()
 		b.mu.Lock()
 		out := []map[string]any{}
@@ -128,9 +129,24 @@ func (f *Fake) mountPOS(mux *http.ServeMux, p string) {
 			if loc := q.Get("location_id"); loc != "" && pp.Location != "" && pp.Location != loc {
 				continue
 			}
+			if last4 != "" && last4 != "1111" { // every fake card is a VISA ··1111
+				continue
+			}
 			out = append(out, pp.payment())
 		}
 		b.mu.Unlock()
+		// The card payments CreatePayment made (the reader / manual entry,
+		// batch J's general card refund fallback) only when the call filters
+		// by a card (last_4): the Point of Sale lookup lists as before.
+		if last4 != "" {
+			f.mu.Lock()
+			if f.failed(w, "list", m) {
+				f.mu.Unlock()
+				return
+			}
+			out = append(f.keyedListed(m, q.Get("location_id"), last4, begin, end), out...)
+			f.mu.Unlock()
+		}
 		writeJSON(w, http.StatusOK, map[string]any{"payments": out})
 	})
 }

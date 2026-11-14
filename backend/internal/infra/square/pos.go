@@ -56,6 +56,7 @@ type ListedPayment struct {
 	AmountMoney   *Money           `json:"amount_money,omitempty"`
 	TipMoney      *Money           `json:"tip_money,omitempty"`
 	TotalMoney    *Money           `json:"total_money,omitempty"`
+	RefundedMoney *Money           `json:"refunded_money,omitempty"`
 	CardDetails   *CardDetailsLite `json:"card_details,omitempty"`
 }
 
@@ -88,6 +89,33 @@ func (c *Client) ListPayments(ctx context.Context, token, location string, begin
 		return nil, err
 	}
 	return out.Payments, nil
+}
+
+// ListCardPayments is one page of ListPayments for a location over [begin,
+// end] with the card's last 4 (Square's last_4 filter), newest first; the
+// cursor continues it ("" = the first page; the answer's "" = no more). The
+// general card refund's fallback (agent contract §2.10x).
+func (c *Client) ListCardPayments(ctx context.Context, token, location, last4 string, begin, end time.Time, cursor string) ([]ListedPayment, string, error) {
+	q := url.Values{}
+	q.Set("begin_time", begin.UTC().Format(time.RFC3339))
+	q.Set("end_time", end.UTC().Format(time.RFC3339))
+	q.Set("sort_order", "DESC")
+	q.Set("limit", strconv.Itoa(100))
+	q.Set("last_4", last4)
+	if location != "" {
+		q.Set("location_id", location)
+	}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	var out struct {
+		Payments []ListedPayment `json:"payments"`
+		Cursor   string          `json:"cursor"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/v2/payments?"+q.Encode(), bearer(token), nil, &out); err != nil {
+		return nil, "", err
+	}
+	return out.Payments, out.Cursor, nil
 }
 
 // FakePOSCharge makes a Point of Sale transaction in the fake Square (dev:
