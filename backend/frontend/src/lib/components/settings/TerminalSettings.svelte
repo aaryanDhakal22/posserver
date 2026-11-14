@@ -257,6 +257,19 @@
       <Section title="Cash drawers">
         {@render num('drawerStart')}
       </Section>
+      <Section
+        title="Driver reports"
+        description="What each driver hands in at Close batch, on his clock-out slip and on his report: the cash he collected less his card tips after the tip tax."
+      >
+        <div class="stack">
+          <label class="sw-row"><Switch bind:checked={sf.driverPayFromCash} label="Driver delivery pay comes out of the cash at close" />Driver delivery pay comes out of the cash at close</label>
+          <p class="help !mt-0 max-w-[60ch]">
+            Off: drivers are paid for their deliveries at the end of the week, so the report only counts the deliveries and nothing
+            comes off the cash for them. On: the driver’s share of the delivery fee (Fees and tips) for every delivery he made comes
+            off the cash he hands in too. Default off.
+          </p>
+        </div>
+      </Section>
     {:else if group === 'receipts'}
       <Section
         title="Customer copies"

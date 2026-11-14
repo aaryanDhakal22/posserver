@@ -117,7 +117,7 @@ func TestTerminalAppDefaults(t *testing.T) {
 	d := DefaultSettings()
 	if d.DefaultTab != "info" || d.ShowHistory || d.ButtonFont != "barlow" || d.CashierPriceDropPct != 20 || d.ClickSound ||
 		d.PricesOnButtons || d.OutOfAreaMarginMi != 1 || d.NameOnPaidCounter || d.CardTips ||
-		!reflect.DeepEqual(d.CardTipPercents, []int{15, 18, 20}) || d.EmployeeMealPct != 20 || d.TakeoutTwoCopies {
+		!reflect.DeepEqual(d.CardTipPercents, []int{15, 18, 20}) || d.EmployeeMealPct != 20 || d.TakeoutTwoCopies || d.DriverPayFromCash {
 		t.Fatalf("defaults: %+v", d)
 	}
 	for _, tab := range DefaultTabs {

@@ -247,6 +247,23 @@ def test_takeout_two_copies_setting(store, mgr) -> None:
     assert _config(store.key)["settings"]["takeout_two_copies"] is False
 
 
+def test_driver_pay_from_cash_setting(store, mgr) -> None:
+    """driver_pay_from_cash (the owner, 2026-11-13; main 4.0.8, agent 2.5.8; Store › Settings › End of day "Driver
+    delivery pay comes out of the cash at close"): off by default (the delivery pay is paid weekly: the Pi's driver
+    reports only count the deliveries), kept when a save leaves it out, a non-boolean refused, sent to the Pi in
+    terminal-config (the Pi reads it when it counts a driver report)."""
+    assert _ok(mgr.get(SETTINGS, timeout=5))["driver_pay_from_cash"] is False
+    assert _config(store.key)["settings"]["driver_pay_from_cash"] is False
+    assert _ok(mgr.put(SETTINGS, json={"driver_pay_from_cash": True}, timeout=5))["driver_pay_from_cash"] is True
+    assert _ok(mgr.put(SETTINGS, json={"auto_lock_minutes": 6}, timeout=5))["driver_pay_from_cash"] is True
+    assert _config(store.key)["settings"]["driver_pay_from_cash"] is True
+    for bad in ("yes", 2):
+        assert _code(mgr.put(SETTINGS, json={"driver_pay_from_cash": bad}, timeout=5), 400) in ("bad_settings", "bad_request"), bad
+    assert _config(store.key)["settings"]["driver_pay_from_cash"] is True
+    assert _ok(mgr.put(SETTINGS, json={"driver_pay_from_cash": False}, timeout=5))["driver_pay_from_cash"] is False
+    assert _config(store.key)["settings"]["driver_pay_from_cash"] is False
+
+
 def test_kitchen_start_setting(store, mgr) -> None:
     """kitchen_start (the owner's X, 2026-11-13; agent contract 2.10ae): where the online / kitchen numbers start
     (default 1100), counter_start below it (S-6), kept when a save leaves it out, sent to the Pi in terminal-config."""
