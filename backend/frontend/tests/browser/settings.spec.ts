@@ -179,9 +179,12 @@ test('terminal settings: one group per page, the defaults, every field saves, a 
   await page.getByRole('radio', { name: /Carry them over/ }).check();
   await save(page).click();
   await expect.poll(async () => (await saved()).close_unpaid_counter_action).toBe('carry');
+  // The page reloads the saved answer after each save: a click before that lands on the old form and is lost.
+  await expect(bar(page)).toContainText('All changes saved');
   await page.getByRole('switch', { name: 'Close the batch by itself' }).click();
   await save(page).click();
   await expect.poll(async () => (await saved()).auto_close_batch_at).toBe('');
+  await expect(bar(page)).toContainText('All changes saved');
   // Driver reports (the owner, 2026-11-13): the delivery pay is paid weekly by default (off); on = it comes off the cash.
   const pay = page.getByRole('switch', { name: 'Driver delivery pay comes out of the cash at close' });
   await expect(pay).toHaveAttribute('aria-checked', 'false');
@@ -189,10 +192,23 @@ test('terminal settings: one group per page, the defaults, every field saves, a 
   await pay.click();
   await save(page).click();
   await expect.poll(async () => (await saved()).driver_pay_from_cash).toBe(true);
+  await expect(bar(page)).toContainText('All changes saved');
   await shot(page, info, 'end-of-day');
   await pay.click();
   await save(page).click();
   await expect.poll(async () => (await saved()).driver_pay_from_cash).toBe(false);
+  await expect(bar(page)).toContainText('All changes saved');
+  // Old deliveries for every driver (the owner 2026-11-14, #27): default 60 min, 0 = off, at most 720.
+  const old = field(page, 'Old deliveries show for every driver after');
+  await expect(old).toHaveValue('60');
+  await old.fill('721');
+  await save(page).click();
+  await expect(bar(page).getByRole('alert')).toContainText('Old deliveries show for every driver after');
+  await expect(old).toHaveAttribute('aria-invalid', 'true');
+  await old.fill('45');
+  await save(page).click();
+  await expect.poll(async () => (await saved()).driver_old_delivery_minutes).toBe(45);
+  await expect(bar(page)).toContainText('All changes saved');
 
   // Receipts and printing (the owner, 2026-11-13): takeout prints 2 customer copies, off by default; the tile says so.
   await open('/store/settings/receipts');
