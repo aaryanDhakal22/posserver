@@ -473,7 +473,9 @@ func main() {
 		gateways[payment.MethodCard] = squareService.CardRouter(testCard)
 		safego.Loop(ctx, "square.refresh", squareService.RunRefresh)
 	}
-	cardHolds := cardholdApp.NewService(squareRepo, map[string]payment.Holder{squarepay.GatewayName: squareService.Gateway()}, repo, lgr)
+	cardHolds := cardholdApp.NewService(squareRepo, map[string]payment.Holder{squarepay.GatewayName: squareService.Gateway(),
+		squarepay.CounterGatewayName: squareService.CounterGateway()}, repo, lgr) // + counter delivery holds (agent §2.10ao)
+	squareService.SetCounterHolds(cardHolds)
 	cardHolds.SetNotifier(notifier)
 	cardHolds.SetMeters(&meters) // L-3: captures, voids, refunds, failures
 	safego.Loop(ctx, "cardhold.worker", cardHolds.Run)

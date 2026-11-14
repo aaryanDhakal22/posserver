@@ -429,11 +429,15 @@ func (c *Client) Locations(ctx context.Context, token string) ([]Location, error
 
 // CreatePayment is a CreatePayment request (Autocomplete false = a hold).
 type CreatePayment struct {
-	IdempotencyKey    string `json:"idempotency_key"`
-	SourceID          string `json:"source_id"`
-	AmountMoney       *Money `json:"amount_money"`
-	TipMoney          *Money `json:"tip_money,omitempty"`
-	Autocomplete      bool   `json:"autocomplete"`
+	IdempotencyKey string `json:"idempotency_key"`
+	SourceID       string `json:"source_id"`
+	AmountMoney    *Money `json:"amount_money"`
+	TipMoney       *Money `json:"tip_money,omitempty"`
+	Autocomplete   bool   `json:"autocomplete"`
+	// DelayAction is what Square does with a hold (autocomplete false)
+	// nobody captured or voided by its delay (CANCEL by default; COMPLETE =
+	// Square charges it itself: a counter delivery's hold, agent §2.10ao).
+	DelayAction       string `json:"delay_action,omitempty"`
 	LocationID        string `json:"location_id,omitempty"`
 	CustomerID        string `json:"customer_id,omitempty"`
 	ReferenceID       string `json:"reference_id,omitempty"`

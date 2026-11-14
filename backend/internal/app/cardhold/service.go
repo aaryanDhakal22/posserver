@@ -235,6 +235,16 @@ func (s *Service) undo(ctx context.Context, h repositories.CardHold) {
 		s.logger.Info().Ctx(ctx).Str("order_id", h.OrderID.String()).Str("payment_ref", h.PaymentRef).
 			Int64("cents", h.AmountCents+h.TipCents).Str("reason", "order cancelled").Msg("card hold voided")
 	case "captured":
+		if h.Gateway == payment.GatewaySquareCounter {
+			// A counter card's money back is the Pi's (its refund-first rule
+			// gave it back through Square before the void): never twice.
+			if r, ok := s.counterRepo(); ok {
+				if err := r.ClearUndo(ctx, h.OrderID, "order cancelled after capture: the Pi refunds counter cards itself"); err != nil {
+					s.logger.Error().Ctx(ctx).Err(err).Str("order_id", h.OrderID.String()).Msg("card hold: could not clear the owed refund")
+				}
+			}
+			return
+		}
 		main := h.CapturedCents - tipCharged(h) - h.RefundedCents
 		if main > 0 {
 			if err := gw.Refund(ctx, h.LocationID, h.PaymentRef, main); err != nil {
@@ -418,7 +428,11 @@ func (s *Service) capture(ctx context.Context, h repositories.CardHold) {
 			// The hold is captured; retry only the tip (the keys keep it to one charge).
 			ref, terr = gw.ChargeTip(ctx, hold, separateTip, buyer)
 		}
-		if terr != nil {
+		if terr != nil && h.Gateway == payment.GatewaySquareCounter {
+			tipNote = "driver tip " + money(separateTip) + " NOT on the card: " + terr.Error()
+			s.page(ctx, h.LocationID, "Card tip not on the charge", fmt.Sprintf("A %s driver tip couldn't go on the counter card (Square wouldn't raise it). The %s was captured (payment %s): add the tip in Square.",
+				money(separateTip), money(cents), h.PaymentRef))
+		} else if terr != nil {
 			tipNote = "added tip " + money(separateTip) + " NOT charged: " + terr.Error()
 			s.page(ctx, h.LocationID, "Tip not charged", fmt.Sprintf("A %s tip added after the order couldn't be charged on the card (%v). The order's %s was captured (payment %s). Settle the tip with the driver.",
 				money(separateTip), terr, money(cents), h.PaymentRef))
@@ -451,7 +465,7 @@ func (s *Service) capture(ctx context.Context, h repositories.CardHold) {
 	s.count(ctx, h.LocationID, "captured", "capture", cents)
 	s.logger.Info().Ctx(ctx).Str("order_id", h.OrderID.String()).Str("payment_ref", h.PaymentRef).Int64("cents", cents).
 		Str("reason", reasonOr(h.CaptureReason, "safety")).Msg("card hold captured")
-	if s.final != nil && cents != h.AmountCents+h.TipCents {
+	if s.final != nil && cents != h.AmountCents+h.TipCents && h.Gateway != payment.GatewaySquareCounter { // a website customer's final receipt
 		s.final(ctx, h.OrderID)
 	}
 }

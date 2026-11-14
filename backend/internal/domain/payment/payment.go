@@ -115,6 +115,13 @@ type Buyer struct {
 	Name, Phone, Email string
 }
 
+// GatewaySquareCounter labels a counter delivery's Square card hold
+// (card_holds.gateway, agent contract §2.10ao): taken at the store by the call
+// center, Manual Entry or the reader, held so the driver's typed tip goes on
+// it, captured by the same hold machine as a website hold. Its tip is never
+// charged on a saved card, and once captured the Pi gives refunds back itself.
+const GatewaySquareCounter = "square_counter"
+
 // Holder is a gateway whose card charges are holds (Square): captured with
 // the final tip at the driver's clock-out / Close batch, or voided.
 type Holder interface {

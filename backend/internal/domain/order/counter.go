@@ -116,6 +116,11 @@ type CounterPayment struct {
 	// tender, any cashier's to do (money-rules tender_voids): never a refund that
 	// needed a manager. "" = an ordinary payment / refund.
 	Kind string `json:"kind"`
+	// Held (agent 2.10ao, 2026-11-14): Square only authorized this card (a
+	// delivery's hold, captured later by main's card hold machine with the
+	// driver's tip). Kept only on a card / manual_card sale with Square's id
+	// in ref. The money is the same as a captured card's.
+	Held bool `json:"held"`
 }
 
 // MoneyFlag is a problem main found in money it stored anyway (M-2 / M-7 /
@@ -222,6 +227,8 @@ type CheckedPayment struct {
 	Brand string
 	// Kind: "tender_void" (CounterPayment.Kind) or "".
 	Kind string
+	// Held: a card Square only authorized (CounterPayment.Held, checked).
+	Held bool
 	// Flags found by Check (the repo adds its own). By = who took / gave it
 	// and People = the store's staff (for the refunds before it), both from
 	// main's staff table: PaymentFlags reads them (money_rules.go).
@@ -302,7 +309,8 @@ func (p CounterPayment) Check() (CheckedPayment, error) {
 	return CheckedPayment{ID: id, Method: p.Method, Status: st, Amount: Money(p.AmountCents), Tip: Money(p.TipCents),
 		Last4: p.Last4, AuthCode: p.AuthCode, Ref: p.Ref, At: at, StaffID: staffID,
 		ClientKey: strings.TrimSpace(p.ClientKey), RefundOf: refundOf, ApprovedBy: p.ApprovedBy, BatchID: p.BatchID, EarlierDay: p.EarlierDay, Flags: flags,
-		Brand: cardBrandOf(p.Method, p.Brand), Kind: tenderVoidKind(p.Kind)}, nil
+		Brand: cardBrandOf(p.Method, p.Brand), Kind: tenderVoidKind(p.Kind),
+		Held: p.Held && (p.Method == "card" || p.Method == "manual_card") && p.AmountCents > 0 && strings.TrimSpace(p.Ref) != ""}, nil
 }
 
 // Card brands (payments.card_brand): what Square calls a card, as the Pi

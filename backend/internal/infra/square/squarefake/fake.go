@@ -80,6 +80,7 @@ type payment struct {
 	Created                                           time.Time
 	Version                                           int
 	Card                                              string // ccof id when charged on a saved card
+	DelayAction                                       string // what the request asked Square to do with an uncaptured hold
 }
 
 func New(appID, appSecret string) *Fake {
@@ -178,6 +179,7 @@ func (f *Fake) view(p *payment) map[string]any {
 		"id": p.ID, "status": p.Status, "location_id": p.Location, "reference_id": p.Reference, "customer_id": p.Customer,
 		"receipt_number":  receipt,
 		"seller_keyed_in": p.Keyed, // the fake's own field: the request said MOTO
+		"delay_action":    p.DelayAction,
 		"amount_money":    map[string]any{"amount": p.Amount, "currency": "USD"},
 		"tip_money":       map[string]any{"amount": p.Tip, "currency": "USD"},
 		"total_money":     map[string]any{"amount": p.Amount + p.Tip, "currency": "USD"},
@@ -338,6 +340,7 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 				Amount int64 `json:"amount"`
 			} `json:"tip_money"`
 			Autocomplete    *bool  `json:"autocomplete"`
+			DelayAction     string `json:"delay_action"`
 			LocationID      string `json:"location_id"`
 			CustomerID      string `json:"customer_id"`
 			ReferenceID     string `json:"reference_id"`
@@ -396,7 +399,7 @@ func (f *Fake) Handler(prefix, redirect string) http.Handler {
 		}
 		pay := &payment{ID: id("pay_"), Status: "APPROVED", Location: loc, Customer: b.CustomerID, Reference: b.ReferenceID,
 			Source: b.SourceID, Amount: b.Amount.Amount, CanEdit: canEdit, Created: time.Now(), Card: card,
-			Keyed: b.CustomerDetails != nil && b.CustomerDetails.SellerKeyedIn}
+			Keyed: b.CustomerDetails != nil && b.CustomerDetails.SellerKeyedIn, DelayAction: b.DelayAction}
 		if b.Tip != nil {
 			pay.Tip = b.Tip.Amount
 		}
