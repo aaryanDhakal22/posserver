@@ -154,6 +154,15 @@ type Settings struct {
 	// counter (dine-in) and delivery are unchanged. Default off. Edited on
 	// Store › Settings › Receipts and printing.
 	TakeoutTwoCopies bool `json:"takeout_two_copies"`
+
+	// DriverPayFromCash (the owner, 2026-11-13; main 4.0.8, agent 2.5.8):
+	// "Driver delivery pay comes out of the cash at close". On, the Pi's
+	// driver reports take the store's delivery_driver_cents (Fees and tips)
+	// x every delivered delivery off the cash the driver hands in (agent
+	// 2.5.2's rule). Off (the default): the delivery pay is paid weekly, so
+	// the report only counts the deliveries and hand in = cash collected -
+	// card tips after the tip tax. Edited on Store › Settings › End of day.
+	DriverPayFromCash bool `json:"driver_pay_from_cash"`
 }
 
 // The close_unpaid_counter_action choices (default CloseUnpaidWaste).

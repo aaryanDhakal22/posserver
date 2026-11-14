@@ -182,7 +182,17 @@ test('terminal settings: one group per page, the defaults, every field saves, a 
   await page.getByRole('switch', { name: 'Close the batch by itself' }).click();
   await save(page).click();
   await expect.poll(async () => (await saved()).auto_close_batch_at).toBe('');
+  // Driver reports (the owner, 2026-11-13): the delivery pay is paid weekly by default (off); on = it comes off the cash.
+  const pay = page.getByRole('switch', { name: 'Driver delivery pay comes out of the cash at close' });
+  await expect(pay).toHaveAttribute('aria-checked', 'false');
+  expect((await saved()).driver_pay_from_cash).toBe(false);
+  await pay.click();
+  await save(page).click();
+  await expect.poll(async () => (await saved()).driver_pay_from_cash).toBe(true);
   await shot(page, info, 'end-of-day');
+  await pay.click();
+  await save(page).click();
+  await expect.poll(async () => (await saved()).driver_pay_from_cash).toBe(false);
 
   // Receipts and printing (the owner, 2026-11-13): takeout prints 2 customer copies, off by default; the tile says so.
   await open('/store/settings/receipts');

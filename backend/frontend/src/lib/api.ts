@@ -942,6 +942,8 @@ export interface TerminalSettings {
   close_unpaid_counter_action: 'waste' | 'carry';
   /** Every takeout / pickup order prints two Customer Copies: Centurion's and the Pi's (Receipts and printing; default off). */
   takeout_two_copies: boolean;
+  /** The driver reports take the delivery pay (Fees and tips' driver share × deliveries) off the driver's cash (End of day; default off = paid weekly, only counted). */
+  driver_pay_from_cash: boolean;
 }
 /** A browser the store's login opened the call-center app on. */
 export interface CallcenterDevice {
@@ -971,5 +973,6 @@ export const TERMINAL_DEFAULTS: TerminalSettings = {
   callcenter_idle_lock_minutes: 15,
   quibase_counter_min_cents: 500,
   close_unpaid_counter_action: 'waste',
-  takeout_two_copies: false
+  takeout_two_copies: false,
+  driver_pay_from_cash: false
 };

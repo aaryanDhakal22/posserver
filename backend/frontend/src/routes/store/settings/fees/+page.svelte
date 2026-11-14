@@ -101,7 +101,7 @@
   onundo={() => form && (form = JSON.parse(savedForm))}
 >
   {#if form}
-    <Section title="Fees" description="The customer pays the delivery fee total; the driver share shows on the driver reports.">
+    <Section title="Fees" description="The customer pays the delivery fee total. The driver share is the driver’s pay for each delivery: paid weekly, or taken off the cash he hands in at close when Store › Settings › End of day says so.">
       {@render feeFields(form.fees, 'pr-st')}
     </Section>
     <Section title="Tips" description="Asked for on the website and the call center (the counter’s card reader has its own, in Card payments).">
