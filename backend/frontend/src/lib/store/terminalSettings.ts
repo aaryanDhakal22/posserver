@@ -12,7 +12,7 @@ export type SettingsForm = {
   priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean; toppingMax: string;
   cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string; drawerStart: string;
   wasteReasons: string; voidReasons: string; phoneTimeout: string; quibaseMin: string; closeUnpaid: string; // 'waste' | 'carry'
-  takeoutTwoCopies: boolean; driverPayFromCash: boolean;
+  takeoutTwoCopies: boolean; driverPayFromCash: boolean; oldDelivery: string;
 };
 export type FormKey = keyof SettingsForm;
 export type TextKey = { [K in FormKey]: SettingsForm[K] extends string ? K : never }[FormKey];
@@ -22,10 +22,10 @@ export type TerminalGroup = 'cashier' | 'screen' | 'counter' | 'voids' | 'card' 
 export const GROUP_KEYS: Record<TerminalGroup, FormKey[]> = {
   cashier: ['refund', 'discount', 'priceDrop', 'payout'],
   screen: ['lock', 'defaultTab', 'receiptDone', 'font', 'showHistory', 'pricesOnButtons', 'clickSound'],
-  counter: ['meal', 'pickupMinutes', 'counterStart', 'kitchenStart', 'toppingMax', 'quibaseMin', 'areaCodes', 'nameOnPaid', 'margin'],
+  counter: ['meal', 'pickupMinutes', 'counterStart', 'toppingMax', 'quibaseMin', 'areaCodes', 'nameOnPaid', 'margin'],
   voids: ['wasteReasons', 'voidReasons'],
   card: ['cardTips', 'tipPercents', 'phoneTimeout'],
-  endofday: ['autoClose', 'autoCloseAt', 'closeUnpaid', 'drawerStart', 'driverPayFromCash'],
+  endofday: ['autoClose', 'autoCloseAt', 'closeUnpaid', 'drawerStart', 'driverPayFromCash', 'oldDelivery'],
   receipts: ['takeoutTwoCopies']
 };
 
@@ -81,7 +81,8 @@ export function settingsForm(raw: Partial<TerminalSettings>): SettingsForm {
     voidReasons: (s.void_reasons ?? []).join('\n'),
     closeUnpaid: s.close_unpaid_counter_action === 'carry' ? 'carry' : 'waste',
     takeoutTwoCopies: !!s.takeout_two_copies,
-    driverPayFromCash: !!s.driver_pay_from_cash
+    driverPayFromCash: !!s.driver_pay_from_cash,
+    oldDelivery: String(s.driver_old_delivery_minutes ?? TERMINAL_DEFAULTS.driver_old_delivery_minutes)
   };
 }
 
@@ -131,10 +132,10 @@ export function settingsOf(f: SettingsForm, keep: Partial<TerminalSettings> = {}
   const voids = reasons(f.voidReasons);
   if (voids.length < 1 || voids.length > 20 || voids.some((x) => x.length > 40))
     throw new FieldError('voidReasons', 'Void reasons: 1 to 20 reasons, one per line, up to 40 characters each.');
-  const counterStart = int(f, 'counterStart', 'Counter numbers start at', 1, 999_998);
-  const kitchenStart = int(f, 'kitchenStart', 'Online and kitchen numbers start at', 2, 999_999);
-  if (counterStart >= kitchenStart)
-    throw new FieldError('counterStart', `Counter numbers start at: below the online and kitchen numbers (${kitchenStart}), so the two never look alike.`);
+  // One sequence for every order (agent §2.10ae, 2026-11-14): below 10000 (the future orders' placeholders).
+  const counterStart = int(f, 'counterStart', 'Ticket numbers start at', 1, 9_999);
+  // kitchen_start is retired (an older Pi still reads it): not on the page, saved as it was.
+  const kitchenStart = Number(f.kitchenStart) >= 2 ? Math.trunc(Number(f.kitchenStart)) : TERMINAL_DEFAULTS.kitchen_start;
   return {
     ...TERMINAL_DEFAULTS,
     ...keep, // fields these pages don't edit (the call center's idle lock) go back as they were
@@ -167,7 +168,8 @@ export function settingsOf(f: SettingsForm, keep: Partial<TerminalSettings> = {}
     void_reasons: voids,
     close_unpaid_counter_action: f.closeUnpaid === 'carry' ? 'carry' : 'waste',
     takeout_two_copies: f.takeoutTwoCopies,
-    driver_pay_from_cash: f.driverPayFromCash
+    driver_pay_from_cash: f.driverPayFromCash,
+    driver_old_delivery_minutes: int(f, 'oldDelivery', 'Old deliveries show for every driver after', 0, 720)
   };
 }
 
@@ -184,16 +186,16 @@ export const NUM_FIELDS: Partial<Record<TextKey, NumField>> = Object.fromEntries
       help: `Paying cash in is always allowed. Default ${dollars(D.cashier_payout_cents)}.` },
     { key: 'drawerStart', label: 'Cash left in each drawer at opening', unit: '$', prefix: true, decimal: true,
       help: `Every terminal's drawer starts the day with this; the drawer report's Expected in Drawer counts from it. Default ${dollars(D.drawer_start_cents)}.` },
+    { key: 'oldDelivery', label: 'Old deliveries show for every driver after', unit: 'min',
+      help: `A delivery still not delivered this long after it went to the kitchen shows on every driver's first tab on the terminal (Waiting for a driver), whoever has it, and stays there; the driver who claims it gets it, delivered. 0 = off. Default ${D.driver_old_delivery_minutes} min.` },
     { key: 'lock', label: 'Lock the terminal after', unit: 'min', help: `Idle this long, the terminal goes back to the PIN pad. Default ${D.auto_lock_minutes} min.` },
     { key: 'receiptDone', label: 'Close the receipt screen after', unit: 'sec', help: `0 = it stays until Done is pressed. Default ${D.receipt_auto_done_seconds} sec.` },
     { key: 'phoneTimeout', label: 'A charge sent to a phone expires after', unit: 'sec',
       help: `Send to phone: nobody finished it in Square by then, it expires (a late tap is still recorded). 30–1800. Default ${D.phone_charge_timeout_seconds} sec.` },
     { key: 'meal', label: 'Employee meal', unit: '% off', help: `The Employee meal button. A cashier can give it without a manager. Default ${D.employee_meal_pct}%.` },
     { key: 'pickupMinutes', label: 'Pickups are ready in', unit: 'min', help: `The time a pickup is quoted. Default ${D.default_pickup_minutes} min.` },
-    { key: 'counterStart', label: 'Counter numbers start at', unit: '#',
-      help: `Counter orders count up from here. They start again once a day: with the first order of a new business day after Close batch (a second close the same day carries on). Below the online and kitchen numbers. Default ${D.counter_start}.` },
-    { key: 'kitchenStart', label: 'Online and kitchen numbers start at', unit: '#',
-      help: `Online and website orders get their kitchen number from here when the counter accepts them (the call center’s and the terminals’ orders take counter numbers). They start again once a day like the counter numbers. Default ${D.kitchen_start}.` },
+    { key: 'counterStart', label: 'Ticket numbers start at', unit: '#',
+      help: `Every order takes the next number from here: counter, phone, call center, website and online, one sequence. Every Close batch starts it again here. A future order shows a 5-digit number until its time comes, then takes the next one. 1–9999. Default ${D.counter_start}.` },
     { key: 'toppingMax', label: 'Most of one topping', unit: '×', help: `Tapping a topping again adds one more (2×, 3×). 1 = no doubles. Default ${D.topping_max_count}.` },
     { key: 'quibaseMin', label: 'Counter orders on Quibase over', unit: '$', prefix: true, decimal: true,
       help: `An order rung at a terminal shows on the counter tablet only when its total is over this and something on it goes to a kitchen station (a drink-only sale stays off). It still counts on every report. Call-center, online and website orders always show. 0 = any total. Default ${dollars(D.quibase_counter_min_cents)}.` },

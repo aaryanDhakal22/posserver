@@ -112,6 +112,10 @@ type CounterPayment struct {
 	// Square named it (amex | discover | mastercard | visa | other); absent
 	// from an older Pi (kept blank).
 	Brand string `json:"brand"`
+	// Kind (agent 2.10al, batch C 2026-11-14): "tender_void" = Cash Out's Void on one
+	// tender, any cashier's to do (money-rules tender_voids): never a refund that
+	// needed a manager. "" = an ordinary payment / refund.
+	Kind string `json:"kind"`
 }
 
 // MoneyFlag is a problem main found in money it stored anyway (M-2 / M-7 /
@@ -216,6 +220,8 @@ type CheckedPayment struct {
 	EarlierDay bool
 	// Brand: a card payment's brand (NormCardBrand; "" = not given).
 	Brand string
+	// Kind: "tender_void" (CounterPayment.Kind) or "".
+	Kind string
 	// Flags found by Check (the repo adds its own). By = who took / gave it
 	// and People = the store's staff (for the refunds before it), both from
 	// main's staff table: PaymentFlags reads them (money_rules.go).
@@ -296,7 +302,7 @@ func (p CounterPayment) Check() (CheckedPayment, error) {
 	return CheckedPayment{ID: id, Method: p.Method, Status: st, Amount: Money(p.AmountCents), Tip: Money(p.TipCents),
 		Last4: p.Last4, AuthCode: p.AuthCode, Ref: p.Ref, At: at, StaffID: staffID,
 		ClientKey: strings.TrimSpace(p.ClientKey), RefundOf: refundOf, ApprovedBy: p.ApprovedBy, BatchID: p.BatchID, EarlierDay: p.EarlierDay, Flags: flags,
-		Brand: cardBrandOf(p.Method, p.Brand)}, nil
+		Brand: cardBrandOf(p.Method, p.Brand), Kind: tenderVoidKind(p.Kind)}, nil
 }
 
 // Card brands (payments.card_brand): what Square calls a card, as the Pi
@@ -567,3 +573,15 @@ func (o *Order) ApplyVoid(reason string, staffID *uuid.UUID, at time.Time) strin
 	})
 	return FloorApplied
 }
+
+// tenderVoidKind keeps only the kinds main knows (a tender void); anything
+// else is an ordinary payment.
+func tenderVoidKind(k string) string {
+	if strings.TrimSpace(k) == KindTenderVoid {
+		return KindTenderVoid
+	}
+	return ""
+}
+
+// KindTenderVoid is a counter payment's kind for a tender voided at Cash Out.
+const KindTenderVoid = "tender_void"

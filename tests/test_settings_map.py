@@ -16,4 +16,5 @@ def test_settings_map_is_open_and_complete():
     fields = {f["id"]: (p, f) for p in doc["pages"] for f in p["fields"]}
     p, f = fields["counter.counter_start"]
     assert (p["path"], f["anchor"], p["crumb"]) == ("/app/store/settings/counter", "counter_start", "Store › Settings › Counter orders")
-    assert "map.delivery_radius" in fields and "counter.kitchen_start" in fields
+    assert f["label"] == "Ticket numbers start at"  # one sequence for every order (agent §2.10ae, 2026-11-14)
+    assert "map.delivery_radius" in fields and "counter.kitchen_start" not in fields  # kitchen_start is retired

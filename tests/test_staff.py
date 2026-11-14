@@ -121,10 +121,10 @@ def _known(got: dict, want: dict) -> dict:
 
 
 def test_terminal_settings(mgr) -> None:
-    first = {"cashier_refund_cents": 2000, "cashier_discount_pct": 20, "auto_lock_minutes": 5, "counter_start": 1,
+    first = {"cashier_refund_cents": 2000, "cashier_discount_pct": 20, "auto_lock_minutes": 5, "counter_start": 100,
              "receipt_auto_done_seconds": 15, "auto_close_batch_at": "04:00", **APP_DEFAULTS}
     assert _known(_ok(mgr.get(SETTINGS, timeout=5)), first) == first
-    want = {"cashier_refund_cents": 2000, "cashier_discount_pct": 15, "auto_lock_minutes": 3, "counter_start": 100,
+    want = {"cashier_refund_cents": 2000, "cashier_discount_pct": 15, "auto_lock_minutes": 3, "counter_start": 250,
             "receipt_auto_done_seconds": 0, "auto_close_batch_at": "03:30"}
     assert _known(_ok(mgr.put(SETTINGS, json=want, timeout=5)), {**want, **APP_DEFAULTS}) == {**want, **APP_DEFAULTS}
     assert _known(_ok(mgr.get(SETTINGS, timeout=5)), {**want, **APP_DEFAULTS}) == {**want, **APP_DEFAULTS}
@@ -265,18 +265,22 @@ def test_driver_pay_from_cash_setting(store, mgr) -> None:
 
 
 def test_kitchen_start_setting(store, mgr) -> None:
-    """kitchen_start (the owner's X, 2026-11-13; agent contract 2.10ae): where the online / kitchen numbers start
-    (default 1100), counter_start below it (S-6), kept when a save leaves it out, sent to the Pi in terminal-config."""
+    """Batch E (the owner, final 2026-11-14; agent contract 2.10ae): ONE ticket sequence from counter_start, default
+    100, below the future orders' 5-digit placeholders (≤ 9999), sent to the Pi in terminal-config. kitchen_start is
+    retired: still served, saved, kept when a save leaves it out and sent (an older Pi reads it), but no longer tied to
+    counter_start (S-6 is gone)."""
     got = _ok(mgr.get(SETTINGS, timeout=5))
-    assert got["kitchen_start"] == 1100 and got["counter_start"] == 1
+    assert got["kitchen_start"] == 1100 and got["counter_start"] == 100
+    assert _config(store.key)["settings"]["counter_start"] == 100
     assert _config(store.key)["settings"]["kitchen_start"] == 1100
-    saved = _ok(mgr.put(SETTINGS, json={"counter_start": 20, "kitchen_start": 300}, timeout=5))
-    assert (saved["counter_start"], saved["kitchen_start"]) == (20, 300)
+    saved = _ok(mgr.put(SETTINGS, json={"counter_start": 300, "kitchen_start": 300}, timeout=5))  # S-6 gone: equal is fine
+    assert (saved["counter_start"], saved["kitchen_start"]) == (300, 300)
     assert _ok(mgr.put(SETTINGS, json={"auto_lock_minutes": 6}, timeout=5))["kitchen_start"] == 300
     assert _config(store.key)["settings"]["kitchen_start"] == 300
-    for bad in ({"counter_start": 300}, {"counter_start": 301}, {"kitchen_start": 20}, {"kitchen_start": 1},
-                {"kitchen_start": 1_000_000}):
+    assert _ok(mgr.put(SETTINGS, json={"counter_start": 9_999}, timeout=5))["counter_start"] == 9_999
+    for bad in ({"counter_start": 10_000}, {"counter_start": 0}, {"kitchen_start": 1}, {"kitchen_start": 1_000_000}):
         assert _code(mgr.put(SETTINGS, json=bad, timeout=5), 400) == "bad_settings", bad
+    assert _config(store.key)["settings"]["counter_start"] == 9_999
     assert _config(store.key)["settings"]["kitchen_start"] == 300
 
 

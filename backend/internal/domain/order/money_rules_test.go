@@ -45,6 +45,8 @@ type ruleCase struct {
 	TipAfter       bool      `json:"tip_after"`
 	Main           *[]string `json:"main"`
 	MainIfApproved []string  `json:"main_if_approved"`
+	// Void: the index of the tender a tender_voids case voids.
+	Void *int `json:"void"`
 }
 
 type ruleTable struct {
@@ -54,6 +56,7 @@ type ruleTable struct {
 	Comps          []ruleCase            `json:"comps"`
 	Voids          []ruleCase            `json:"voids"`
 	Tips           []ruleCase            `json:"tips"`
+	TenderVoids    []ruleCase            `json:"tender_voids"`
 }
 
 func loadRules(t *testing.T) ruleTable {
@@ -175,6 +178,36 @@ func TestMoneyRules(t *testing.T) {
 			check(t, c, func(approvedBy string) []MoneyFlag {
 				p := CheckedPayment{Method: "comp", Amount: Money(c.Cents), StaffID: staffOf(c.By), ApprovedBy: approvedBy}
 				return PaymentFlags(RuleOrder{Total: c.Cents}, p, Who(people, p.StaffID))
+			})
+		}
+	})
+	t.Run("tender voids", func(t *testing.T) {
+		if len(tab.TenderVoids) == 0 {
+			t.Fatal("the table has no tender_voids section")
+		}
+		for _, c := range tab.TenderVoids {
+			if c.Void == nil || *c.Void >= len(c.Order.Payments) {
+				continue
+			}
+			o := RuleOrder{}
+			for _, p := range c.Order.Payments {
+				a, tip := wire(p)
+				x := PriorPayment{Method: p.Tender, Amount: a, Tip: tip, By: Who(people, staffOf(p.By))}
+				if p.Approved {
+					x.ApprovedBy = mgr
+				}
+				if !p.Refund {
+					o.Total += p.Cents
+				}
+				o.Prior = append(o.Prior, x)
+			}
+			v := c.Order.Payments[*c.Void]
+			v.Refund = true
+			check(t, c, func(approvedBy string) []MoneyFlag {
+				a, tip := wire(v)
+				p := CheckedPayment{Method: v.Tender, Amount: Money(a), Tip: Money(tip), StaffID: staffOf(c.By),
+					ApprovedBy: approvedBy, Kind: KindTenderVoid}
+				return PaymentFlags(o, p, Who(people, p.StaffID))
 			})
 		}
 	})

@@ -468,6 +468,7 @@ func main() {
 	requester.RegisterInbound(squarepay.MsgSquareSession, squareService.HandleSession)
 	requester.RegisterInbound(squarepay.MsgSquareKeyedPayment, squareService.HandleKeyedPayment)
 	requester.RegisterInbound(squarepay.MsgSquareRefund, squareService.HandleRefund)
+	requester.RegisterInbound(squarepay.MsgSquareTipAdjust, squareService.HandleTipAdjust) // batch F (§2.10am)
 	if squareService.Enabled() {
 		gateways[payment.MethodCard] = squareService.CardRouter(testCard)
 		safego.Loop(ctx, "square.refresh", squareService.RunRefresh)

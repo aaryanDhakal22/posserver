@@ -605,8 +605,9 @@ func (s *Service) build(ctx context.Context, ch channelDom.Channel, req Request,
 		li := order.LineItem{ID: uuid.Must(uuid.NewV7()), Position: pos, Name: name, Size: r.SizeName, Quantity: qty,
 			UnitPrice: order.Money(r.BaseCents), Notes: note}
 		total := r.BaseCents * int64(qty)
-		// A double / triple topping is one child "2x Pepperoni" at its price × 2.
-		for k, o := range pricing.FoldRepeats(r.Options) {
+		// One child per mod line (the owner, 2026-11-14: mods never stack; a
+		// qualifier joins its pick: "Lite Fried Onions").
+		for k, o := range pricing.ModLines(r.Options) {
 			// The name reads on its own ("Pepperoni (1st half)", "NO Onion")
 			// for Pis that don't read portion / mode.
 			child := order.LineItem{ID: uuid.Must(uuid.NewV7()), ParentID: &li.ID, Position: k, Quantity: qty,

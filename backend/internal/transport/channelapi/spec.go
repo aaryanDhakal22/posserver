@@ -3,8 +3,9 @@
 // counter terminal, vendor — is built against. main serves it at
 // GET /channel/v1/openapi.json and pytest validates every /channel/v1 answer
 // against it, so the document can't drift from what main does (Air doesn't
-// watch .json: change this file after editing the document.) Last: the
-// order placements: 202 pending, by-key, expires_at (DURABILITY-PLAN.md).
+// watch .json: change this file after editing the document.) Last: quote
+// lines' base_cents + mod_prices (batch A, 2026-11-14: mods keep their own
+// price).
 package channelapi
 
 import _ "embed"

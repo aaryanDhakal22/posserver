@@ -107,7 +107,17 @@ export interface QuoteLine {
   list_cents?: number;
   /** A custom line. */
   custom?: boolean;
+  /** An item line's own price for one without its mods, and each cart option's own price (mods keep their own price, the owner
+   *  2026-11-14); absent on custom and deal lines. */
+  base_cents?: number;
+  mod_prices?: ModPrice[];
 }
+/** One cart option's price on its quote line: pick = its index in the line's options; included = one of the item's included toppings. */
+export interface ModPrice { pick: number; price_cents: number; included?: boolean }
+
+/** Option names that qualify the next pick of their group ("Lite Fried Onions"; the owner, 2026-11-14), trimmed, any case. */
+export const QUALIFIER_NAMES = ['lite', 'light', 'extra', 'xtra', 'easy', 'less', 'heavy'];
+export const isQualifier = (name: string): boolean => QUALIFIER_NAMES.includes(name.trim().toLowerCase());
 /** item_cents: the coupon price on the carrier (0 on the others) + upcharge_cents (its part's upcharge_over, absent when none). */
 export interface CouponUnit {
   line: number; part: number; carrier: boolean; item_cents: number; upcharge_cents?: number; mods_cents: number; free_mods: string[];
@@ -199,6 +209,8 @@ interface Priced {
   list?: number;
   /** Charged picks (price > 0, not an included topping) for coupons, in pick order. */
   cmods?: { price: number; option: string; label: string }[];
+  /** Every pick with its own price, in resolved order (QuoteLine.mod_prices). */
+  picks?: { pick: number; price: number; c?: { included: boolean } }[];
 }
 
 /** An open price's ceiling ($10,000). */
@@ -394,15 +406,24 @@ class Engine {
     for (const gid of groupIds) {
       const g = this.groups.get(gid);
       if (!g) continue;
-      const picks = opts.filter((pk) => pk.group_id === g.id);
+      const at = opts.map((pk, k) => ({ pk, k })).filter((x) => x.pk.group_id === g.id);
+      const picks = at.map((x) => x.pk);
       const seen = new Set<string>(); // options picked (any portion or mode)
       const twice = new Set<string>(); // option + portion + mode
       const reps = new Map<string, number>(); // option + portion + mode → picks so far
-      const modAt = new Map<string, number>(); // option + portion + mode → its p.mods index
       let count = 0; // picks that put something on (NO doesn't count)
-      for (const pk of picks) {
+      // Mods never stack (the owner, 2026-11-14): every pick is its own mod; a qualifier ("Lite") joins the next pick of this group.
+      const found = picks.map((pk) => {
         let o: BuildOption | undefined;
         for (const x of g.options ?? []) if (x.id === pk.option_id) o = x;
+        return o;
+      });
+      const isQual = (k: number): boolean => !!found[k] && modeOf(picks[k].mode) === 'add' && isQualifier(found[k]!.name);
+      const qual = picks.map((_, k) => isQual(k) && picks.some((_, j) => j > k && !!found[j] && !isQual(j)));
+      let prefix = ''; // qualifiers waiting for their pick
+      for (let pi = 0; pi < picks.length; pi++) {
+        const pk = picks[pi];
+        const o = found[pi];
         if (!o) {
           p.issues.push(issueOf('unknown_option', `${it.name}: an option is no longer available.`));
           continue;
@@ -410,27 +431,32 @@ class Engine {
         const por = g.portions ? portionOf(pk.portion) : '';
         const mode = modeOf(pk.mode);
         const key = `${pk.option_id}/${por}/${mode}`;
-        if (twice.has(key) && !g.allow_multiple) p.issues.push(issueOf('option_rules', `${it.name}: ${o.name} only once.`));
-        twice.add(key);
-        const n = (reps.get(key) ?? 0) + 1;
-        reps.set(key, n);
-        const maxRepeat = Math.trunc(this.ctx.max_repeat ?? 0);
-        if (g.allow_multiple && maxRepeat > 0 && n === maxRepeat + 1) p.issues.push(issueOf('option_rules', `${it.name}: up to ${maxRepeat}× ${o.name}.`));
+        const q = isQual(pi);
+        if (!q) {
+          // A qualifier may repeat anywhere and counts nowhere.
+          if (twice.has(key) && !g.allow_multiple) p.issues.push(issueOf('option_rules', `${it.name}: ${o.name} only once.`));
+          twice.add(key);
+          const n = (reps.get(key) ?? 0) + 1;
+          reps.set(key, n);
+          const maxRepeat = Math.trunc(this.ctx.max_repeat ?? 0);
+          if (g.allow_multiple && maxRepeat > 0 && n === maxRepeat + 1) p.issues.push(issueOf('option_rules', `${it.name}: up to ${maxRepeat}× ${o.name}.`));
+        }
         seen.add(pk.option_id);
         if (mode !== 'no') {
-          count++;
+          if (!q) count++;
           if (o.sold_out) p.issues.push(issueOf('sold_out', `${o.name} is sold out right now.`));
         }
-        const label = optionLabel(o.name, por, mode);
-        // A repeat (allow_multiple: a double / triple) reads once, "2× Pepperoni".
-        const at = modAt.get(key);
-        if (at !== undefined && g.allow_multiple) p.mods[at] = `${n}× ${label}`;
-        else if (n > 1 && g.allow_multiple) {
-          modAt.set(key, p.mods.length);
-          p.mods.push(`${n}× ${label}`);
-        } else if (!o.is_default || por !== '' || mode !== 'add') {
-          modAt.set(key, p.mods.length);
-          p.mods.push(label);
+        let label = optionLabel(o.name, por, mode);
+        if (qual[pi]) prefix += o.name + ' '; // joins the next pick: no mod of its own
+        else if (q) p.mods.push(label); // a qualifier with nothing after it stands alone
+        else {
+          const qualified = prefix !== '';
+          if (qualified) {
+            label = prefix + label;
+            prefix = '';
+          }
+          // A default left as it is reads nothing; picked again (a double: extra cheese) each repeat reads on its own.
+          if (qualified || !o.is_default || por !== '' || mode !== 'add' || (reps.get(key) ?? 0) > 1) p.mods.push(label);
         }
         let price = o.price_cents;
         for (const op of o.prices ?? []) if (p.size !== '' && op.size_id === p.size) price = op.price_cents;
@@ -439,7 +465,9 @@ class Engine {
         // A kept option price (the Pi's kept line): the pick as it was rung.
         const kp = pk.price_cents;
         if (kp != null && this.ctx.price_overrides && mode !== 'no' && Number.isInteger(kp) && kp >= 0 && kp <= MAX_OPEN_PRICE_CENTS) price = kp;
-        if (price > 0) charged.push({ price, option: pk.option_id, label, half: por !== '', included: false });
+        const ch = { price, option: pk.option_id, label, half: por !== '', included: false };
+        if (price > 0) charged.push(ch);
+        (p.picks ??= []).push({ pick: at[pi].k, price, c: price > 0 ? ch : undefined });
         if (mode === 'only') {
           if (por === '') only[1] = only[2] = true;
           else only[por === 'second' ? 2 : 1] = true;
@@ -801,6 +829,8 @@ export function price(ctx: Context, cart: Cart, at: Date): Quote {
       if (note) mods.push(`“${note}”`);
       const ql: QuoteLine = { index: i, name: p.name, mods, qty, unit_cents: p.unit, total_cents: p.unit * qty, regular_cents: null, deal_id: '' };
       if (p.list != null) ql.list_cents = p.list;
+      ql.base_cents = p.base + p.halfUp;
+      if (p.picks?.length) ql.mod_prices = p.picks.map((x) => (x.c?.included ? { pick: x.pick, price_cents: x.price, included: true } : { pick: x.pick, price_cents: x.price }));
       q.lines.push(ql);
       taxAt[i] = lineTax.length;
       lineTax.push({ total: p.unit * qty, rate: e.rate(p.rateItem) });

@@ -13,12 +13,13 @@ test('search: a word finds the setting, Enter opens its page with the field lit 
   const box = page.getByTestId('settings-search');
   await box.fill('ticket');
   const hits = page.getByTestId('settings-search-hits');
-  await expect(hits.getByRole('option').first()).toContainText('Counter numbers start at');
-  await expect(hits).toContainText('Online and kitchen numbers start at');
+  await expect(hits.getByRole('option').first()).toContainText('Ticket numbers start at');
+  // One ticket sequence for every order (agent §2.10ae, 2026-11-14): the online / kitchen start is retired.
+  await expect(hits).not.toContainText('Online and kitchen numbers start at');
   await box.press('Enter');
   await expect(page).toHaveURL(/\/app\/store\/settings\/counter#counter_start$/);
-  await expect(page.locator('.setting-hit', { hasText: 'Counter numbers start at' })).toBeVisible();
-  await expect(page.locator('input').and(page.getByLabel('Counter numbers start at', { exact: false }))).toBeFocused();
+  await expect(page.locator('.setting-hit', { hasText: 'Ticket numbers start at' })).toBeVisible();
+  await expect(page.locator('input').and(page.getByLabel('Ticket numbers start at', { exact: false }))).toBeFocused();
 
   // Arrow keys pick another hit; synonyms count ("radius" → the delivery area).
   await open('/store/settings');
