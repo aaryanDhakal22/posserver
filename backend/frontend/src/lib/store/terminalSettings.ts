@@ -12,7 +12,7 @@ export type SettingsForm = {
   priceDrop: string; clickSound: boolean; pricesOnButtons: boolean; margin: string; nameOnPaid: boolean; toppingMax: string;
   cardTips: boolean; tipPercents: string; meal: string; payout: string; pickupMinutes: string; areaCodes: string; drawerStart: string;
   wasteReasons: string; voidReasons: string; phoneTimeout: string; quibaseMin: string; closeUnpaid: string; // 'waste' | 'carry'
-  takeoutTwoCopies: boolean; driverPayFromCash: boolean;
+  takeoutTwoCopies: boolean; driverPayFromCash: boolean; oldDelivery: string;
 };
 export type FormKey = keyof SettingsForm;
 export type TextKey = { [K in FormKey]: SettingsForm[K] extends string ? K : never }[FormKey];
@@ -25,7 +25,7 @@ export const GROUP_KEYS: Record<TerminalGroup, FormKey[]> = {
   counter: ['meal', 'pickupMinutes', 'counterStart', 'kitchenStart', 'toppingMax', 'quibaseMin', 'areaCodes', 'nameOnPaid', 'margin'],
   voids: ['wasteReasons', 'voidReasons'],
   card: ['cardTips', 'tipPercents', 'phoneTimeout'],
-  endofday: ['autoClose', 'autoCloseAt', 'closeUnpaid', 'drawerStart', 'driverPayFromCash'],
+  endofday: ['autoClose', 'autoCloseAt', 'closeUnpaid', 'drawerStart', 'driverPayFromCash', 'oldDelivery'],
   receipts: ['takeoutTwoCopies']
 };
 
@@ -81,7 +81,8 @@ export function settingsForm(raw: Partial<TerminalSettings>): SettingsForm {
     voidReasons: (s.void_reasons ?? []).join('\n'),
     closeUnpaid: s.close_unpaid_counter_action === 'carry' ? 'carry' : 'waste',
     takeoutTwoCopies: !!s.takeout_two_copies,
-    driverPayFromCash: !!s.driver_pay_from_cash
+    driverPayFromCash: !!s.driver_pay_from_cash,
+    oldDelivery: String(s.driver_old_delivery_minutes ?? TERMINAL_DEFAULTS.driver_old_delivery_minutes)
   };
 }
 
@@ -167,7 +168,8 @@ export function settingsOf(f: SettingsForm, keep: Partial<TerminalSettings> = {}
     void_reasons: voids,
     close_unpaid_counter_action: f.closeUnpaid === 'carry' ? 'carry' : 'waste',
     takeout_two_copies: f.takeoutTwoCopies,
-    driver_pay_from_cash: f.driverPayFromCash
+    driver_pay_from_cash: f.driverPayFromCash,
+    driver_old_delivery_minutes: int(f, 'oldDelivery', 'Old deliveries show for every driver after', 0, 720)
   };
 }
 
@@ -184,6 +186,8 @@ export const NUM_FIELDS: Partial<Record<TextKey, NumField>> = Object.fromEntries
       help: `Paying cash in is always allowed. Default ${dollars(D.cashier_payout_cents)}.` },
     { key: 'drawerStart', label: 'Cash left in each drawer at opening', unit: '$', prefix: true, decimal: true,
       help: `Every terminal's drawer starts the day with this; the drawer report's Expected in Drawer counts from it. Default ${dollars(D.drawer_start_cents)}.` },
+    { key: 'oldDelivery', label: 'Old deliveries show for every driver after', unit: 'min',
+      help: `A delivery still not delivered this long after it went to the kitchen shows on every driver's first tab on the terminal (Waiting for a driver), whoever has it, and stays there; the driver who claims it gets it, delivered. 0 = off. Default ${D.driver_old_delivery_minutes} min.` },
     { key: 'lock', label: 'Lock the terminal after', unit: 'min', help: `Idle this long, the terminal goes back to the PIN pad. Default ${D.auto_lock_minutes} min.` },
     { key: 'receiptDone', label: 'Close the receipt screen after', unit: 'sec', help: `0 = it stays until Done is pressed. Default ${D.receipt_auto_done_seconds} sec.` },
     { key: 'phoneTimeout', label: 'A charge sent to a phone expires after', unit: 'sec',

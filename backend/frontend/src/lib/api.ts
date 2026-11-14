@@ -944,6 +944,8 @@ export interface TerminalSettings {
   takeout_two_copies: boolean;
   /** The driver reports take the delivery pay (Fees and tips' driver share × deliveries) off the driver's cash (End of day; default off = paid weekly, only counted). */
   driver_pay_from_cash: boolean;
+  /** An undelivered delivery older than this shows for every driver on the terminal (End of day; default 60, 0 = off; batch F #27). */
+  driver_old_delivery_minutes: number;
 }
 /** A browser the store's login opened the call-center app on. */
 export interface CallcenterDevice {
@@ -974,5 +976,6 @@ export const TERMINAL_DEFAULTS: TerminalSettings = {
   quibase_counter_min_cents: 500,
   close_unpaid_counter_action: 'waste',
   takeout_two_copies: false,
-  driver_pay_from_cash: false
+  driver_pay_from_cash: false,
+  driver_old_delivery_minutes: 60
 };

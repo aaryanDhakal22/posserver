@@ -268,6 +268,7 @@
             comes off the cash for them. On: the driver’s share of the delivery fee (Fees and tips) for every delivery he made comes
             off the cash he hands in too. Default off.
           </p>
+          {@render num('oldDelivery')}
         </div>
       </Section>
     {:else if group === 'receipts'}

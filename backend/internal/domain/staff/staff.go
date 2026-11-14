@@ -163,7 +163,21 @@ type Settings struct {
 	// the report only counts the deliveries and hand in = cash collected -
 	// card tips after the tip tax. Edited on Store › Settings › End of day.
 	DriverPayFromCash bool `json:"driver_pay_from_cash"`
+
+	// DriverOldDeliveryMinutes (the owner's X, 2026-11-14 #27, batch F;
+	// agent contract 2.10am): a delivery still not delivered this many
+	// minutes after it went to the kitchen shows on every driver's first
+	// tab on the terminal and stays there; a claim makes it the claimer's
+	// and delivered. 0 = off. Store › Settings › End of day.
+	DriverOldDeliveryMinutes int64 `json:"driver_old_delivery_minutes"`
 }
+
+// DefaultDriverOldDeliveryMinutes / MaxDriverOldDeliveryMinutes bound
+// driver_old_delivery_minutes (the owner: default 60).
+const (
+	DefaultDriverOldDeliveryMinutes = 60
+	MaxDriverOldDeliveryMinutes     = 720
+)
 
 // The close_unpaid_counter_action choices (default CloseUnpaidWaste).
 const (
@@ -274,7 +288,7 @@ func DefaultSettings() Settings {
 		CashierPayoutCents: 2000, DefaultPickupMinutes: 15, AreaCodes: DefaultAreaCodes(), DrawerStartCents: 10000,
 		WasteReasons: DefaultWasteReasons(), VoidReasons: DefaultVoidReasons(), PhoneChargeTimeoutSeconds: DefaultPhoneChargeTimeoutS,
 		CallcenterIdleLockMinutes: DefaultCallcenterIdleLock, QuibaseCounterMinCents: DefaultQuibaseCounterMinCents,
-		CloseUnpaidCounterAction: CloseUnpaidWaste}
+		CloseUnpaidCounterAction: CloseUnpaidWaste, DriverOldDeliveryMinutes: DefaultDriverOldDeliveryMinutes}
 }
 
 // Ranges.
@@ -405,6 +419,8 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: cashier_payout_cents must be 0–%d", ErrBadSettings, MaxPayoutCents)
 	case s.QuibaseCounterMinCents < 0 || s.QuibaseCounterMinCents > MaxQuibaseCounterMinCents:
 		return fmt.Errorf("%w: quibase_counter_min_cents must be 0–%d", ErrBadSettings, MaxQuibaseCounterMinCents)
+	case s.DriverOldDeliveryMinutes < 0 || s.DriverOldDeliveryMinutes > MaxDriverOldDeliveryMinutes:
+		return fmt.Errorf("%w: driver_old_delivery_minutes must be 0–%d", ErrBadSettings, MaxDriverOldDeliveryMinutes)
 	case s.CloseUnpaidCounterAction != CloseUnpaidWaste && s.CloseUnpaidCounterAction != CloseUnpaidCarry:
 		return fmt.Errorf("%w: close_unpaid_counter_action must be waste or carry", ErrBadSettings)
 	case s.DrawerStartCents < 0 || s.DrawerStartCents > MaxDrawerStartCents:
