@@ -29,7 +29,7 @@ const norm = (s: string) =>
 
 export const hrefOf = (page: MapPage, field?: MapField) => page.path + (field ? '#' + field.anchor : '');
 
-/** "Store › Settings › Counter orders › Counter numbers start at". */
+/** "Store › Settings › Counter orders › Ticket numbers start at". */
 export const crumbOf = (page: MapPage, field?: MapField) => page.crumb + (field ? ' › ' + field.label : '');
 
 function score(q: string, words: string[], label: string, extra: string[]): number {

@@ -15,10 +15,14 @@ func TestEmbeddedMapIsValid(t *testing.T) {
 	if len(m.Pages) < 20 {
 		t.Fatalf("only %d pages", len(m.Pages))
 	}
-	for _, id := range []string{"counter.counter_start", "counter.kitchen_start", "map.delivery_radius", "map.delivery_fee_bands"} {
+	for _, id := range []string{"counter.counter_start", "map.delivery_radius", "map.delivery_fee_bands"} {
 		if _, _, ok := m.Field(id); !ok {
 			t.Errorf("field %s missing", id)
 		}
+	}
+	// kitchen_start is retired (one sequence from counter_start, agent §2.10ae, 2026-11-14).
+	if _, _, ok := m.Field("counter.kitchen_start"); ok {
+		t.Error("counter.kitchen_start is still in the map")
 	}
 	p, f, _ := m.Field("counter.counter_start")
 	if got := Link("https://main.example/", p, f); got != "https://main.example/app/store/settings/counter#counter_start" {

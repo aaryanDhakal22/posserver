@@ -36,7 +36,7 @@
           </td>
           <td class="whitespace-nowrap">
             <span class="mono font-bold">{orderNumber(o)}</span>
-            <span class="block text-[11.5px] text-muted">{numberKind(o) === 'Ticket' ? 'Ticket' : numberKind(o) === 'Kitchen' ? 'Kitchen' : 'Not accepted'}{externalRef(o) ? ' · ' + externalRef(o) : ''}</span>
+            <span class="block text-[11.5px] text-muted">{numberKind(o) === 'Ticket' ? 'Ticket' : numberKind(o) === 'Future' ? 'Future (until it is placed)' : 'Not accepted'}{externalRef(o) ? ' · ' + externalRef(o) : ''}</span>
           </td>
           <td>{customerName(o)}</td>
           <td class="whitespace-nowrap">{typeLabel(o.fulfillment?.type)}<span class="block text-[11.5px] text-muted">{channelLabel(o)}</span></td>

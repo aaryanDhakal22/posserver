@@ -175,19 +175,19 @@ export function channelLabel(o: Pick<StoreOrder, 'source_metadata'> & { source?:
 }
 
 /**
- * The order's number as the store says it. Counter and call-center orders are numbered by the counter (their
- * check / ticket number, 1, 2, 3… each day); online and website orders get a kitchen number when the kitchen
- * accepts them (from 1100). Before that (or with none): a short code from the order's id.
+ * The order's number as the store says it: one ticket sequence for every order (agent §2.10ae, 2026-11-14:
+ * counter, call center, website and online, from the store's start, 100 by default, again after each Close
+ * batch). A future order holds a 5-digit placeholder until it is placed. With none: a short code from the id.
  */
 export function orderNumber(o: Pick<StoreOrder, 'id' | 'kitchen_order_number'>): string {
   if (o.kitchen_order_number != null) return String(o.kitchen_order_number);
   return shortCode(o.id);
 }
 
-/** What the number is: "Ticket" for the counter's own numbering, "Kitchen" for the online range. */
-export function numberKind(o: Pick<StoreOrder, 'kitchen_order_number'> & { source?: string }): string {
+/** What the number is: "Ticket" (one sequence for every order), "Future" for a future order's 5-digit placeholder. */
+export function numberKind(o: Pick<StoreOrder, 'kitchen_order_number'> & { source?: string; status?: string }): string {
   if (o.kitchen_order_number == null) return 'Code';
-  return o.source === 'counter' ? 'Ticket' : 'Kitchen';
+  return o.status === 'scheduled' && o.kitchen_order_number >= 10_000 ? 'Future' : 'Ticket';
 }
 
 /** A short, stable code for an order (the last 6 characters of its id, upper case). */

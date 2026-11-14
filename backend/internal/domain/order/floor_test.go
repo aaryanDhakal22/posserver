@@ -295,3 +295,33 @@ func TestApplyFloorUpdateClearsTheDriverOnlyWhenKnown(t *testing.T) {
 		t.Fatalf("reassigned: %s %q", r, o.DriverName())
 	}
 }
+
+// Batch E (agent contract §2.10ae, the owner 2026-11-14): a future order's
+// scheduled event carries its 5-digit placeholder; when it fires, the
+// accepted event's real number (the next of the store's one sequence)
+// replaces it in main's mirror, and a late scheduled event never brings the
+// placeholder back.
+func TestFloorMirrorReplacesTheFuturePlaceholderWithTheRealNumber(t *testing.T) {
+	o, _ := NewOrder(stubInput())
+	o.PullEvents()
+	at := time.Now().UTC().Truncate(time.Millisecond)
+	ph, real := 54_321, 101
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusScheduled, KitchenNumber: &ph, At: at}); r != FloorApplied {
+		t.Fatalf("scheduled: %s", r)
+	}
+	if o.Status() != StatusScheduled || o.KitchenNumber() == nil || *o.KitchenNumber() != ph {
+		t.Fatalf("scheduled mirror: %s %v", o.Status(), o.KitchenNumber())
+	}
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusAccepted, KitchenNumber: &real, At: at.Add(2 * time.Hour)}); r != FloorApplied {
+		t.Fatalf("accepted: %s", r)
+	}
+	if o.Status() != StatusAccepted || *o.KitchenNumber() != real || *o.Snapshot().KitchenNumber != real {
+		t.Fatalf("after the fire main shows %v, want %d", o.KitchenNumber(), real)
+	}
+	if r := o.ApplyFloorUpdate(FloorUpdate{Status: StatusScheduled, KitchenNumber: &ph, At: at.Add(time.Minute)}); r != FloorStale {
+		t.Fatalf("a late scheduled event: %s", r)
+	}
+	if *o.KitchenNumber() != real {
+		t.Fatalf("the placeholder came back: %d", *o.KitchenNumber())
+	}
+}

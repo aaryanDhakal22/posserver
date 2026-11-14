@@ -22,7 +22,7 @@ export type TerminalGroup = 'cashier' | 'screen' | 'counter' | 'voids' | 'card' 
 export const GROUP_KEYS: Record<TerminalGroup, FormKey[]> = {
   cashier: ['refund', 'discount', 'priceDrop', 'payout'],
   screen: ['lock', 'defaultTab', 'receiptDone', 'font', 'showHistory', 'pricesOnButtons', 'clickSound'],
-  counter: ['meal', 'pickupMinutes', 'counterStart', 'kitchenStart', 'toppingMax', 'quibaseMin', 'areaCodes', 'nameOnPaid', 'margin'],
+  counter: ['meal', 'pickupMinutes', 'counterStart', 'toppingMax', 'quibaseMin', 'areaCodes', 'nameOnPaid', 'margin'],
   voids: ['wasteReasons', 'voidReasons'],
   card: ['cardTips', 'tipPercents', 'phoneTimeout'],
   endofday: ['autoClose', 'autoCloseAt', 'closeUnpaid', 'drawerStart', 'driverPayFromCash', 'oldDelivery'],
@@ -132,10 +132,10 @@ export function settingsOf(f: SettingsForm, keep: Partial<TerminalSettings> = {}
   const voids = reasons(f.voidReasons);
   if (voids.length < 1 || voids.length > 20 || voids.some((x) => x.length > 40))
     throw new FieldError('voidReasons', 'Void reasons: 1 to 20 reasons, one per line, up to 40 characters each.');
-  const counterStart = int(f, 'counterStart', 'Counter numbers start at', 1, 999_998);
-  const kitchenStart = int(f, 'kitchenStart', 'Online and kitchen numbers start at', 2, 999_999);
-  if (counterStart >= kitchenStart)
-    throw new FieldError('counterStart', `Counter numbers start at: below the online and kitchen numbers (${kitchenStart}), so the two never look alike.`);
+  // One sequence for every order (agent §2.10ae, 2026-11-14): below 10000 (the future orders' placeholders).
+  const counterStart = int(f, 'counterStart', 'Ticket numbers start at', 1, 9_999);
+  // kitchen_start is retired (an older Pi still reads it): not on the page, saved as it was.
+  const kitchenStart = Number(f.kitchenStart) >= 2 ? Math.trunc(Number(f.kitchenStart)) : TERMINAL_DEFAULTS.kitchen_start;
   return {
     ...TERMINAL_DEFAULTS,
     ...keep, // fields these pages don't edit (the call center's idle lock) go back as they were
@@ -194,10 +194,8 @@ export const NUM_FIELDS: Partial<Record<TextKey, NumField>> = Object.fromEntries
       help: `Send to phone: nobody finished it in Square by then, it expires (a late tap is still recorded). 30–1800. Default ${D.phone_charge_timeout_seconds} sec.` },
     { key: 'meal', label: 'Employee meal', unit: '% off', help: `The Employee meal button. A cashier can give it without a manager. Default ${D.employee_meal_pct}%.` },
     { key: 'pickupMinutes', label: 'Pickups are ready in', unit: 'min', help: `The time a pickup is quoted. Default ${D.default_pickup_minutes} min.` },
-    { key: 'counterStart', label: 'Counter numbers start at', unit: '#',
-      help: `Counter orders count up from here. They start again once a day: with the first order of a new business day after Close batch (a second close the same day carries on). Below the online and kitchen numbers. Default ${D.counter_start}.` },
-    { key: 'kitchenStart', label: 'Online and kitchen numbers start at', unit: '#',
-      help: `Online and website orders get their kitchen number from here when the counter accepts them (the call center’s and the terminals’ orders take counter numbers). They start again once a day like the counter numbers. Default ${D.kitchen_start}.` },
+    { key: 'counterStart', label: 'Ticket numbers start at', unit: '#',
+      help: `Every order takes the next number from here: counter, phone, call center, website and online, one sequence. Every Close batch starts it again here. A future order shows a 5-digit number until its time comes, then takes the next one. 1–9999. Default ${D.counter_start}.` },
     { key: 'toppingMax', label: 'Most of one topping', unit: '×', help: `Tapping a topping again adds one more (2×, 3×). 1 = no doubles. Default ${D.topping_max_count}.` },
     { key: 'quibaseMin', label: 'Counter orders on Quibase over', unit: '$', prefix: true, decimal: true,
       help: `An order rung at a terminal shows on the counter tablet only when its total is over this and something on it goes to a kitchen station (a drink-only sale stays off). It still counts on every report. Call-center, online and website orders always show. 0 = any total. Default ${dollars(D.quibase_counter_min_cents)}.` },

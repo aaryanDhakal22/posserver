@@ -64,14 +64,17 @@ type Settings struct {
 	CashierRefundCents     int64 `json:"cashier_refund_cents"`
 	CashierDiscountPct     int   `json:"cashier_discount_pct"`
 	AutoLockMinutes        int   `json:"auto_lock_minutes"`
-	CounterStart           int   `json:"counter_start"`
-	// KitchenStart (the owner's X, 2026-11-13): where the online / kitchen
-	// numbers start (an accepted online, website or call-center-from-main
-	// order's kitchen #). Default DefaultKitchenStart (1100, the Pi's old
-	// fixed start). CounterStart stays below it (S-6: a counter number never
-	// looks like a kitchen number). Both restart once per business day, at
-	// the first order after a close on a new day (agent contract §2.10ae).
-	// Edited on Store › Settings › Counter orders.
+	// CounterStart (batch E, the owner's final rule 2026-11-14; agent contract
+	// §2.10ae): where the store's ONE ticket-number sequence starts - every
+	// order (terminal, call center, website, online) takes the next number,
+	// and every Close batch restarts it here. Default DefaultCounterStart
+	// (100), at most MaxCounterStart (the Pi's future orders hold 5-digit
+	// placeholders). Store › Settings › Counter orders › Ticket numbers start at.
+	CounterStart int `json:"counter_start"`
+	// KitchenStart is RETIRED by batch E (one sequence): still decoded, saved
+	// and sent in terminal-config for an older Pi (2.5.5-2.5.x numbered its
+	// online orders from it), no longer on the Store page, the settings map,
+	// or tied to CounterStart (the S-6 check is gone). Default 1100.
 	KitchenStart int `json:"kitchen_start"`
 	ReceiptAutoDoneSeconds int   `json:"receipt_auto_done_seconds"`
 	// AutoCloseBatchAt: the Pi closes a batch nobody closed at this store
@@ -192,9 +195,13 @@ const (
 	MaxQuibaseCounterMinCents     = 100_000
 )
 
-// DefaultKitchenStart is where the online / kitchen numbers start (the Pi's
-// fixed 1100 before the setting).
+// DefaultKitchenStart was where the online / kitchen numbers started (the
+// Pi's fixed 1100 before the setting); retired by batch E, kept for older Pis.
 const DefaultKitchenStart = 1100
+
+// DefaultCounterStart is where the store's one ticket-number sequence starts
+// (batch E, the owner 2026-11-14: "it starts at 100").
+const DefaultCounterStart = 100
 
 // DefaultCallcenterIdleLock is the call center's idle lock (minutes).
 const DefaultCallcenterIdleLock = 15
@@ -270,7 +277,7 @@ const DefaultAutoCloseBatchAt = "04:00"
 // DefaultSettings are every store's defaults (the owner, 2026-11-12: "everything
 // here is default, not just for one store"): a cashier refunds cash up to
 // $20 per order (card refunds are a manager's), discounts up to 20 %,
-// the terminal locks after 5 idle minutes, counter numbers start at 1, the
+// the terminal locks after 5 idle minutes, ticket numbers start at 100, the
 // receipt screen closes after 15 s; the app lands on Info with History
 // hidden, Barlow buttons without prices or clicks, a cashier lowers a price
 // up to 20 %, deliveries up to 1 mile past the radius go, no name on a paid
@@ -281,7 +288,7 @@ const DefaultAutoCloseBatchAt = "04:00"
 // 410 / 443 / 667. (Drivers claim a delivery nobody took once it is past
 // the order's promised time on the Pi: no setting since 2026-11-12.)
 func DefaultSettings() Settings {
-	return Settings{CashierRefundCents: DefaultCashierRefundCents, CashierDiscountPct: DefaultCashierDiscountPct, AutoLockMinutes: 5, CounterStart: 1, KitchenStart: DefaultKitchenStart, ReceiptAutoDoneSeconds: 15,
+	return Settings{CashierRefundCents: DefaultCashierRefundCents, CashierDiscountPct: DefaultCashierDiscountPct, AutoLockMinutes: 5, CounterStart: DefaultCounterStart, KitchenStart: DefaultKitchenStart, ReceiptAutoDoneSeconds: 15,
 		AutoCloseBatchAt: DefaultAutoCloseBatchAt,
 		DefaultTab:       "info", ButtonFont: "barlow", CashierPriceDropPct: 20, OutOfAreaMarginMi: 1,
 		CardTipPercents: []int{15, 18, 20}, EmployeeMealPct: DefaultEmployeeMealPct, ToppingMaxCount: 3,
@@ -297,7 +304,8 @@ const (
 	MaxNameLen       = 40
 	MaxStaff         = 200
 	MaxAutoLock      = 240
-	MaxCounterStart  = 999_999
+	MaxCounterStart  = 9_999 // the real numbers stay below the future orders' 5-digit placeholders (agent §2.10ae)
+	MaxKitchenStart  = 999_999
 	MaxReceiptDoneS  = 600
 	MaxReasonLen     = 200
 	MaxJournalBatch  = 200
@@ -389,10 +397,8 @@ func (s Settings) Validate() error {
 		return fmt.Errorf("%w: auto_lock_minutes must be 1–%d", ErrBadSettings, MaxAutoLock)
 	case s.CounterStart < 1 || s.CounterStart > MaxCounterStart:
 		return fmt.Errorf("%w: counter_start must be 1–%d", ErrBadSettings, MaxCounterStart)
-	case s.KitchenStart < 2 || s.KitchenStart > MaxCounterStart:
-		return fmt.Errorf("%w: kitchen_start must be 2–%d", ErrBadSettings, MaxCounterStart)
-	case s.CounterStart >= s.KitchenStart:
-		return fmt.Errorf("%w: counter_start must be below kitchen_start (counter numbers stay below the online / kitchen numbers)", ErrBadSettings)
+	case s.KitchenStart < 2 || s.KitchenStart > MaxKitchenStart:
+		return fmt.Errorf("%w: kitchen_start must be 2–%d", ErrBadSettings, MaxKitchenStart)
 	case s.CallcenterIdleLockMinutes != 0 && (s.CallcenterIdleLockMinutes < 1 || s.CallcenterIdleLockMinutes > MaxAutoLock):
 		return fmt.Errorf("%w: callcenter_idle_lock_minutes must be 1–%d", ErrBadSettings, MaxAutoLock)
 	case s.PhoneChargeTimeoutSeconds != 0 && (s.PhoneChargeTimeoutSeconds < MinPhoneChargeTimeoutS || s.PhoneChargeTimeoutSeconds > MaxPhoneChargeTimeoutS):

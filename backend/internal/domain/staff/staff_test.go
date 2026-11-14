@@ -279,19 +279,26 @@ func TestCloseUnpaidCounterAction(t *testing.T) {
 	}
 }
 
-// The owner's X of 2026-11-13: the online / kitchen numbers start at
-// kitchen_start (default 1100); counter_start stays below it (S-6).
+// Batch E (the owner, final 2026-11-14; agent §2.10ae): counter_start is the
+// store's ONE sequence's start, default 100, below the 5-digit future
+// placeholders; kitchen_start is retired (kept, its own range, no longer tied
+// to counter_start: the S-6 check is gone).
 func TestKitchenStart(t *testing.T) {
 	d := DefaultSettings()
 	if DefaultKitchenStart != 1100 || d.KitchenStart != DefaultKitchenStart || d.Validate() != nil {
 		t.Fatalf("default %d", d.KitchenStart)
 	}
-	ok := DefaultSettings()
-	ok.CounterStart, ok.KitchenStart = 100, 500
-	if err := ok.Validate(); err != nil {
-		t.Fatal(err)
+	if DefaultCounterStart != 100 || d.CounterStart != 100 || MaxCounterStart != 9_999 {
+		t.Fatalf("counter_start default %d max %d, want 100 and 9999", d.CounterStart, MaxCounterStart)
 	}
-	for _, c := range []struct{ counter, kitchen int }{{500, 500}, {600, 500}, {1, 1}, {1, MaxCounterStart + 1}} {
+	for _, c := range []struct{ counter, kitchen int }{{100, 500}, {500, 500}, {600, 500}, {1, 2}, {9_999, 1100}} {
+		ok := DefaultSettings()
+		ok.CounterStart, ok.KitchenStart = c.counter, c.kitchen
+		if err := ok.Validate(); err != nil {
+			t.Fatalf("counter %d kitchen %d refused (S-6 is gone): %v", c.counter, c.kitchen, err)
+		}
+	}
+	for _, c := range []struct{ counter, kitchen int }{{1, 1}, {1, MaxKitchenStart + 1}, {MaxCounterStart + 1, 1100}, {0, 1100}} {
 		s := DefaultSettings()
 		s.CounterStart, s.KitchenStart = c.counter, c.kitchen
 		if err := s.Validate(); err == nil {

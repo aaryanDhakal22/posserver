@@ -923,7 +923,7 @@ export type ButtonFont =
   | 'fira_sans_condensed' | 'ibm_plex_sans_condensed' | 'atkinson_hyperlegible';
 export interface TerminalSettings {
   cashier_refund_cents: number; cashier_discount_pct: number; auto_lock_minutes: number; counter_start: number;
-  /** Where the online / kitchen numbers start (default 1100); counter_start stays below it. Both restart once a business day (agent §2.10ae). */
+  /** Retired (agent §2.10ae, 2026-11-14: one sequence from counter_start, default 100, restarted by every Close batch); kept for older Pis. */
   kitchen_start: number;
   receipt_auto_done_seconds: number; auto_close_batch_at: string;
   default_tab: TerminalTabName; show_history: boolean; button_font: ButtonFont; cashier_price_drop_pct: number;
@@ -964,7 +964,7 @@ export interface CallcenterReport {
 }
 /** The owner's defaults (main's staff.DefaultSettings): a field main doesn't send yet shows these. */
 export const TERMINAL_DEFAULTS: TerminalSettings = {
-  cashier_refund_cents: 2000, cashier_discount_pct: 20, auto_lock_minutes: 5, counter_start: 1, kitchen_start: 1100, receipt_auto_done_seconds: 15,
+  cashier_refund_cents: 2000, cashier_discount_pct: 20, auto_lock_minutes: 5, counter_start: 100, kitchen_start: 1100, receipt_auto_done_seconds: 15,
   auto_close_batch_at: '04:00', default_tab: 'info', show_history: false, button_font: 'barlow', cashier_price_drop_pct: 20,
   click_sound: false, prices_on_buttons: false, out_of_area_margin_mi: 1, name_on_paid_counter: false, card_tips: false,
   card_tip_percents: [15, 18, 20], employee_meal_pct: 20, topping_max_count: 3,
