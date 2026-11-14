@@ -127,6 +127,8 @@ test('terminal settings: one group per page, the defaults, every field saves, a 
   await expect(field(page, 'Pickups are ready in')).toHaveValue('15');
   await expect(field(page, 'Local area codes')).toHaveValue('410, 443, 667');
   await expect(field(page, 'Counter orders on Quibase over')).toHaveValue('5.00'); // the owner's X, 2026-11-13
+  await expect(field(page, 'Ticket numbers start at')).toHaveValue('100'); // one sequence for every order (2026-11-14)
+  await expect(page.getByText('Online and kitchen numbers start at')).toHaveCount(0); // kitchen_start retired
   await field(page, 'Pickups are ready in').fill('241');
   await save(page).click();
   await expect(bar(page).getByRole('alert')).toContainText('Pickups are ready in: a whole number from 0 to 240.');
@@ -137,7 +139,10 @@ test('terminal settings: one group per page, the defaults, every field saves, a 
   await expect(bar(page).getByRole('alert')).toContainText('Area codes');
   await expect(field(page, 'Local area codes')).toBeFocused();
   await field(page, 'Local area codes').fill('410, 443, 410, 202');
-  await field(page, 'Counter numbers start at').fill('100');
+  await field(page, 'Ticket numbers start at').fill('10000');
+  await save(page).click();
+  await expect(bar(page).getByRole('alert')).toContainText('Ticket numbers start at'); // below the 5-digit placeholders
+  await field(page, 'Ticket numbers start at').fill('250');
   await field(page, 'Employee meal').fill('40');
   await field(page, 'Most of one topping').fill('4');
   await field(page, 'Counter orders on Quibase over').fill('7.50');
@@ -145,7 +150,7 @@ test('terminal settings: one group per page, the defaults, every field saves, a 
   await page.getByRole('switch', { name: 'Ask a name for a paid counter order' }).click();
   await save(page).click();
   await expect(bar(page)).toContainText('All changes saved');
-  await expect.poll(saved).toMatchObject({ default_pickup_minutes: 20, area_codes: ['410', '443', '202'], counter_start: 100,
+  await expect.poll(saved).toMatchObject({ default_pickup_minutes: 20, area_codes: ['410', '443', '202'], counter_start: 250,
     employee_meal_pct: 40, topping_max_count: 4, quibase_counter_min_cents: 750, out_of_area_margin_mi: 1.5, name_on_paid_counter: true });
   await expect(field(page, 'Local area codes')).toHaveValue('410, 443, 202'); // as main saved it
   await shot(page, info, 'counter');
